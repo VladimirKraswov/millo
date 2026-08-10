@@ -11,18 +11,20 @@ milling without tying the application to one machine type.
 The current slices form this path:
 
 ```text
-Serial / Mock transport -> GRBL messages -> lifecycle state machine -> Tauri polling -> React
+Serial / Mock -> command arbiter -> GRBL lifecycle/parser -> typed Tauri IPC -> React
 ```
 
-The controller now handles periodic status polling, bounded response timeouts,
+The command arbiter now owns the active transport, periodic status polling, and
+all controller requests. The controller handles bounded response timeouts,
 reset banners, persistent alarm state, and automatic reconnection after repeated
 communication failures.
 
 The desktop app discovers native serial ports and can connect to a GRBL
-controller at a selected baud rate. This slice deliberately sends only the GRBL
-realtime status byte `?`; queued G-code transmission belongs to the next sender
-slice. Mock GRBL remains the default, so development and lifecycle tests do not
-require hardware.
+controller at a selected baud rate. Device Inspector automatically reads `$I`,
+`$$`, `$G`, and `$#`, then displays parsed firmware, settings, modal state, and
+coordinate parameters. No arbitrary line, motion, or spindle command is exposed
+by the desktop API. Mock GRBL remains the default, so development and lifecycle
+tests do not require hardware.
 
 ## Run
 
@@ -67,14 +69,17 @@ successful GRBL status exchange.
 | `millo-mock` | Deterministic virtual machine for tests |
 | `millo-serial` | Native asynchronous serial discovery and byte/line I/O |
 | `millo-controller` | Connection lifecycle and state orchestration |
+| `millo-command` | Single-owner command actor, polling, and response arbitration |
 | `millo-desktop` | Thin Tauri command/event adapter |
 
 See [Architecture](docs/ARCHITECTURE.md), the decisions for the
 [modular core](docs/decisions/0001-modular-core.md) and
 [controller lifecycle](docs/decisions/0002-controller-lifecycle.md), plus the
 [project naming decision](docs/decisions/0003-project-name-millo.md) and
-[native serial boundary](docs/decisions/0004-native-serial-transport.md). The
-required verification workflow is recorded in [Testing](docs/TESTING.md).
+[native serial boundary](docs/decisions/0004-native-serial-transport.md), and
+[command arbiter](docs/decisions/0005-command-arbiter-device-inspector.md). The
+required verification workflow is recorded in [Testing](docs/TESTING.md); the
+known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).
 
 ## Reference policy
 

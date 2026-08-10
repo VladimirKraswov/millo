@@ -14,6 +14,10 @@
                         +---------+--------+
                                   |
                         +---------v--------+
+                        | command arbiter  |
+                        +---------+--------+
+                                  |
+                        +---------v--------+
                         | controller       |
                         +----+---------+---+
                              |         |
@@ -28,8 +32,9 @@
 
 Dependencies point inward. Domain types do not import Tauri, an I/O library, or
 a controller protocol. A transport moves bytes and lines; it does not interpret
-GRBL. The controller orchestrates both and owns the current snapshot. Tauri only
-converts application calls into commands and events.
+GRBL. The command actor owns the controller and active transport; the controller
+owns protocol state and the current snapshot. Tauri only converts application
+calls into commands and events.
 
 ## Rules
 
@@ -49,14 +54,14 @@ discovered native serial port, sends the GRBL realtime `?` byte, parses the retu
 `ControllerSnapshot`, emits `machine-state`, and returns the same snapshot to the
 caller. The UI treats the event as authoritative.
 
-The lifecycle slice adds a periodic driver in the Tauri adapter. Every tick calls
-one core method: a connected controller is polled, while a recovering controller
-attempts disconnect/connect/status synchronization. The adapter owns scheduling;
-the core owns every state transition.
+The command arbiter owns the periodic driver. Every tick calls one core method:
+a connected controller is polled, while a recovering controller attempts
+disconnect/connect/status synchronization. Tauri subscribes to snapshots and
+does not schedule or execute controller I/O.
 
 ### Lifecycle invariants
 
-- Only one polling task exists for an active desktop connection.
+- Only one actor task owns controller I/O and periodic polling.
 - Poll ticks use skip semantics and never build a backlog.
 - Every status transaction has a bounded timeout.
 - A successful transport connection starts polling even if the initial status
@@ -69,8 +74,8 @@ the core owns every state transition.
   operator acknowledges it.
 - An `ALARM:n` line and `<Alarm|...>` status are machine state, not transport
   failure. Alarm clears only after a non-alarm status arrives.
-- Disconnect stops polling before closing the transport and clears session
-  telemetry.
+- Disconnect changes actor lifecycle state, closes the transport, and clears
+  session telemetry; the dormant ticker performs no I/O while disconnected.
 
 ### Native serial boundary
 
@@ -78,7 +83,7 @@ the core owns every state transition.
   writes, and CR/LF line framing.
 - It implements the same `Transport` contract as `millo-mock`; neither serial
   nor mock parses GRBL or changes machine state.
-- The Tauri session stores `Controller<BoxedTransport>`, so transport selection
+- The command actor stores `Controller<BoxedTransport>`, so transport selection
   changes construction only, not controller policy.
 - Serial targets are checked against fresh native discovery before opening.
 - The default UI filter uses only discovery metadata: USB transport kind,
@@ -94,11 +99,26 @@ the core owns every state transition.
   deduplicated in `millo-serial`; the callout (`cu`) path wins before descriptors
   reach Tauri.
 
+### Command and inspection boundary
+
+- A bounded FIFO channel is the only path to the active controller.
+- Realtime bytes and newline-terminated commands are distinct request types.
+- Status `?` consumes its matching status frame before another request runs.
+- Device Inspector permits only `$I`, `$$`, `$G`, and `$#`.
+- `ok`, `error:n`, `ALARM:n`, and reset terminate and classify the active line
+  request; asynchronous status/reset information still updates the snapshot.
+- Rust parses firmware, settings, modal state, and coordinate parameters. The UI
+  never receives a responsibility to interpret wire lines.
+- Tauri exposes no raw command, G-code motion, or spindle-control endpoint.
+
 ## Near-term sequence
 
-1. Command queue and sender state machine.
-2. G-code domain, parser fixtures, and program model.
-3. Visualization read model and Three.js adapter.
+1. Safety controls and hardware-profile validation.
+2. Short-distance step jog with explicit no-homing constraints.
+3. Work coordinates and touch-probe validation.
+4. Command queue and sender state machine.
+5. G-code domain, parser fixtures, and program model.
+6. Visualization read model and Three.js adapter.
 
 Ant Design and Three.js are intentionally absent from the first slice. They will
 be added when the first operator workflow and visualizer require them, keeping

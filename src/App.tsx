@@ -7,6 +7,7 @@ import {
   disconnect,
   getActiveTransport,
   getControllerSnapshot,
+  inspectDevice,
   isDesktopRuntime,
   listTransports,
   onMachineState,
@@ -19,6 +20,7 @@ import {
 import {
   emptySnapshot,
   type ControllerSnapshot,
+  type DeviceInspection,
   type Position,
   type TransportDescriptor,
 } from "./shared/machine";
@@ -76,6 +78,8 @@ export default function App() {
     useState<TransportDescriptor>(mockTransport);
   const [baudRate, setBaudRate] = useState(115_200);
   const [likelyGrblOnly, setLikelyGrblOnly] = useState(true);
+  const [inspection, setInspection] = useState<DeviceInspection>();
+  const [inspecting, setInspecting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [uiError, setUiError] = useState<string>();
@@ -183,12 +187,34 @@ export default function App() {
     activeTransport;
   const displayedTransport = transportLocked ? activeTransport : selectedTransport;
   const displayedError = uiError ?? snapshot.lastError;
+  const controlsBusy = busy || inspecting;
+
+  const readDeviceInspection = async () => {
+    setInspecting(true);
+    setUiError(undefined);
+    try {
+      setInspection(await inspectDevice());
+    } catch (error) {
+      setUiError(String(error));
+    } finally {
+      setInspecting(false);
+    }
+  };
 
   const connectSelectedTransport = async () => {
+    setInspection(undefined);
     const connected = await runAction(() =>
       connectTransport(selectedTransport.id, baudRate),
     );
-    if (connected) setActiveTransport(selectedTransport);
+    if (connected) {
+      setActiveTransport(selectedTransport);
+      await readDeviceInspection();
+    }
+  };
+
+  const disconnectController = async () => {
+    const disconnected = await runAction(disconnect);
+    if (disconnected) setInspection(undefined);
   };
 
   return (
@@ -264,6 +290,101 @@ export default function App() {
             <PositionReadout position={snapshot.machine.machinePosition} />
           </div>
 
+          <section className="device-inspector" aria-labelledby="inspector-title">
+            <div className="inspector-heading">
+              <div>
+                <span>Read-only</span>
+                <h2 id="inspector-title">Device Inspector</h2>
+              </div>
+              <button
+                disabled={!isConnected || controlsBusy}
+                onClick={() => void readDeviceInspection()}
+                type="button"
+              >
+                <span>{inspecting ? "Чтение" : "Считать"}</span>
+                <code>$I · $$ · $G · $#</code>
+              </button>
+            </div>
+
+            {inspection ? (
+              <div className="inspector-content">
+                <div className="inspector-identity">
+                  <div className="firmware-readout">
+                    <span>Firmware</span>
+                    <strong>{inspection.firmwareVersion ?? "Unknown GRBL"}</strong>
+                    <small>{inspection.firmwareBuildInfo ?? "No build info"}</small>
+                  </div>
+                  <dl className="inspection-meta">
+                    <div>
+                      <dt>Options</dt>
+                      <dd>{inspection.firmwareOptions ?? "--"}</dd>
+                    </div>
+                    <div>
+                      <dt>Settings</dt>
+                      <dd>{Object.keys(inspection.settings).length}</dd>
+                    </div>
+                    <div>
+                      <dt>Parameters</dt>
+                      <dd>{Object.keys(inspection.parameters).length}</dd>
+                    </div>
+                  </dl>
+                  <div className="modal-state">
+                    <span>Modal state</span>
+                    <div>
+                      {inspection.modalState.map((mode) => (
+                        <code key={mode}>{mode}</code>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="query-results" aria-label="Device query results">
+                    {inspection.responses.map((response) => (
+                      <div
+                        className={`is-${response.completion}`}
+                        key={response.command}
+                      >
+                        <code>{response.command}</code>
+                        <strong>
+                          {response.completion}
+                          {response.code !== undefined ? `:${response.code}` : ""}
+                        </strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="inspector-registers">
+                  <div>
+                    <span>Controller settings</span>
+                    <div className="register-list">
+                      {Object.entries(inspection.settings).map(([key, value]) => (
+                        <div key={key}>
+                          <code>{key}</code>
+                          <strong>{value}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <span>Coordinate parameters</span>
+                    <div className="register-list">
+                      {Object.entries(inspection.parameters).map(([key, value]) => (
+                        <div key={key}>
+                          <code>{key}</code>
+                          <strong>{value}</strong>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="inspector-empty">
+                <strong>Профиль контроллера не считан</strong>
+                <span>Движение и управление шпинделем недоступны</span>
+              </div>
+            )}
+          </section>
+
           <div className="telemetry-row">
             <div>
               <span>Feed</span>
@@ -288,7 +409,7 @@ export default function App() {
             <label className="transport-filter">
               <input
                 checked={likelyGrblOnly}
-                disabled={busy || discovering}
+                disabled={controlsBusy || discovering}
                 onChange={(event) => setLikelyGrblOnly(event.target.checked)}
                 type="checkbox"
               />
@@ -298,7 +419,9 @@ export default function App() {
             <div className="transport-select-row">
               <select
                 id="transport-select"
-                disabled={transportLocked || busy || discovering || !desktopRuntime}
+                disabled={
+                  transportLocked || controlsBusy || discovering || !desktopRuntime
+                }
                 onChange={(event) => setSelectedTransportId(event.target.value)}
                 value={selectedTransport.id}
               >
@@ -310,7 +433,9 @@ export default function App() {
               </select>
               <button
                 aria-label="Обновить список портов"
-                disabled={transportLocked || busy || discovering || !desktopRuntime}
+                disabled={
+                  transportLocked || controlsBusy || discovering || !desktopRuntime
+                }
                 onClick={() => void discoverTransports()}
                 title="Обновить список портов"
                 type="button"
@@ -330,7 +455,7 @@ export default function App() {
                 <span>Baud rate</span>
                 <select
                   id="baud-rate"
-                  disabled={transportLocked || busy}
+                  disabled={transportLocked || controlsBusy}
                   onChange={(event) => setBaudRate(Number(event.target.value))}
                   value={baudRate}
                 >
@@ -368,14 +493,14 @@ export default function App() {
           <div className="actions">
             <button
               className="primary-action"
-              disabled={busy || hasConnection || !desktopRuntime}
+              disabled={controlsBusy || hasConnection || !desktopRuntime}
               onClick={() => void connectSelectedTransport()}
               type="button"
             >
               Подключить
             </button>
             <button
-              disabled={busy || !isConnected}
+              disabled={controlsBusy || !isConnected}
               onClick={() => void runAction(refreshStatus)}
               type="button"
             >
@@ -383,8 +508,8 @@ export default function App() {
               <kbd>?</kbd>
             </button>
             <button
-              disabled={busy || !canDisconnect}
-              onClick={() => void runAction(disconnect)}
+              disabled={controlsBusy || !canDisconnect}
+              onClick={() => void disconnectController()}
               type="button"
             >
               Отключить
@@ -396,35 +521,35 @@ export default function App() {
               <span>Mock scenarios</span>
               <div>
                 <button
-                  disabled={!isConnected}
+                  disabled={controlsBusy || !isConnected}
                   onClick={() => void runMockAction(triggerMockReset)}
                   type="button"
                 >
                   Reset banner
                 </button>
                 <button
-                  disabled={!isConnected}
+                  disabled={controlsBusy || !isConnected}
                   onClick={() => void runMockAction(() => triggerMockAlarm(3))}
                   type="button"
                 >
                   ALARM:3
                 </button>
                 <button
-                  disabled={!isConnected || !snapshot.alarm}
+                  disabled={controlsBusy || !isConnected || !snapshot.alarm}
                   onClick={() => void runMockAction(clearMockAlarm)}
                   type="button"
                 >
                   Clear alarm
                 </button>
                 <button
-                  disabled={!isConnected}
+                  disabled={controlsBusy || !isConnected}
                   onClick={() => void runMockAction(triggerMockTimeout)}
                   type="button"
                 >
                   Timeout ×2
                 </button>
                 <button
-                  disabled={!isConnected}
+                  disabled={controlsBusy || !isConnected}
                   onClick={() => void runMockAction(triggerMockDisconnect)}
                   type="button"
                 >

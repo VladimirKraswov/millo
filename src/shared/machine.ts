@@ -73,6 +73,25 @@ export interface TransportDescriptor {
   matchReason?: string;
 }
 
+export type CommandCompletion = "ok" | "error" | "alarm" | "reset";
+
+export interface CommandResponse {
+  command: string;
+  completion: CommandCompletion;
+  lines: string[];
+  code?: number;
+}
+
+export interface DeviceInspection {
+  firmwareVersion?: string;
+  firmwareBuildInfo?: string;
+  firmwareOptions?: string;
+  settings: Record<string, string>;
+  modalState: string[];
+  parameters: Record<string, string>;
+  responses: CommandResponse[];
+}
+
 export const emptySnapshot: ControllerSnapshot = {
   connection: "disconnected",
   machine: {

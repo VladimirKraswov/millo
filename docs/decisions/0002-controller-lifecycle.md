@@ -1,9 +1,13 @@
 # ADR 0002: Core-owned lifecycle with adapter-owned scheduling
 
-- Status: accepted
+- Status: superseded for scheduling by ADR 0005
 - Date: 2026-08-10
 
 ## Context
+
+ADR 0005 moves the polling timer from Tauri into the single-owner command
+actor. The lifecycle states, timeout policy, reset/alarm behavior, and recovery
+rules established here remain in force.
 
 Periodic polling requires a runtime timer, while timeout, reset, alarm, and
 reconnection behavior must remain deterministic and testable without Tauri.

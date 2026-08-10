@@ -45,7 +45,21 @@ Tauri, UI, and documentation naming consistent.
 - Likely-GRBL discovery accepts explicit controller metadata and common USB-UART
   vendors while rejecting Bluetooth and unidentified USB fixtures.
 - macOS callout/TTY alias pairs collapse to `/dev/cu.*`; unpaired and non-macOS
-  port names remain untouched.
+port names remain untouched.
+
+## Current command arbiter and inspector coverage
+
+- One worker serializes polling, realtime bytes, and line queries.
+- Actor-owned periodic polling publishes lifecycle snapshots.
+- Realtime `?` consumes its status response; `!`, `~`, and `Ctrl-X` use their
+  exact one-byte representation.
+- `$I`, `$$`, `$G`, and `$#` execute in deterministic order and stop at their
+  correlated terminal response.
+- `error:n` and `ALARM:n` retain both active command and numeric code.
+- Recorded Inspector fixtures parse firmware/build/options, numbered settings,
+  modal state, WCS/TLO, and probe parameters.
+- Mock Inspector responses cover the full Rust-to-UI happy path without motion.
+- The Tauri command surface contains no raw-line or movement endpoint.
 
 CI does not require a physical controller. For a hardware smoke test, launch
 `npm run tauri dev`, refresh the device list, connect at the controller's baud

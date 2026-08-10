@@ -33,7 +33,8 @@ select:focus-visible {
 .app-shell {
   display: grid;
   grid-template-rows: 66px minmax(0, 1fr) 32px;
-  min-height: 100vh;
+  height: 100vh;
+  min-height: 0;
   background: #0b0f12;
 }
 
@@ -171,6 +172,7 @@ select:focus-visible {
 
 .machine-panel,
 .control-panel {
+  min-height: 0;
   border: 1px solid #27323a;
   border-radius: 8px;
   background: #11171b;
@@ -180,6 +182,7 @@ select:focus-visible {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  overflow: hidden;
 }
 
 .section-heading {
@@ -301,6 +304,267 @@ select:focus-visible {
   padding: 22px;
 }
 
+.device-inspector {
+  flex: 1 1 auto;
+  min-height: 170px;
+  padding: 18px 22px;
+  overflow: auto;
+  border-top: 1px solid #27323a;
+}
+
+.inspector-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 15px;
+}
+
+.inspector-heading > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.inspector-heading span,
+.firmware-readout span,
+.modal-state > span,
+.inspector-registers > div > span {
+  color: #7f8d96;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.inspector-heading h2 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.inspector-heading button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid #3b4a53;
+  border-radius: 4px;
+  color: #d9e2e6;
+  background: #182127;
+  cursor: pointer;
+}
+
+.inspector-heading button:hover:not(:disabled) {
+  border-color: #668078;
+  background: #1d292e;
+}
+
+.inspector-heading button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.inspector-heading button code {
+  color: #77d6b3;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+}
+
+.inspector-content {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(300px, 1.3fr);
+  gap: 22px;
+  min-height: 140px;
+}
+
+.inspector-identity {
+  min-width: 0;
+  padding-right: 20px;
+  border-right: 1px solid #29353d;
+}
+
+.firmware-readout {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.firmware-readout strong {
+  overflow: hidden;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 16px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.firmware-readout small {
+  overflow: hidden;
+  color: #7c8992;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspection-meta {
+  display: grid;
+  grid-template-columns: 1fr repeat(2, 62px);
+  margin: 12px 0;
+  border-top: 1px solid #29353d;
+  border-bottom: 1px solid #29353d;
+}
+
+.inspection-meta > div {
+  min-width: 0;
+  padding: 7px 7px 7px 0;
+  border-right: 1px solid #29353d;
+}
+
+.inspection-meta > div:not(:first-child) {
+  padding-left: 7px;
+}
+
+.inspection-meta > div:last-child {
+  border-right: 0;
+}
+
+.inspection-meta dt {
+  color: #6f7d86;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.inspection-meta dd {
+  margin: 3px 0 0;
+  overflow: hidden;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modal-state > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 5px;
+}
+
+.modal-state code {
+  color: #a7b5bd;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+}
+
+.query-results {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 10px;
+  border-top: 1px solid #29353d;
+  border-bottom: 1px solid #29353d;
+}
+
+.query-results > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 5px;
+  border-right: 1px solid #29353d;
+}
+
+.query-results > div:last-child {
+  border-right: 0;
+}
+
+.query-results code,
+.query-results strong {
+  overflow: hidden;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.query-results code {
+  color: #829099;
+}
+
+.query-results strong {
+  color: #77d6b3;
+  font-weight: 500;
+}
+
+.query-results .is-error strong,
+.query-results .is-alarm strong,
+.query-results .is-reset strong {
+  color: #ff9696;
+}
+
+.inspector-registers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  min-width: 0;
+}
+
+.register-list {
+  max-height: 126px;
+  margin-top: 5px;
+  overflow: auto;
+  border-top: 1px solid #29353d;
+}
+
+.register-list > div {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 25px;
+  align-items: center;
+  border-bottom: 1px solid #202a30;
+}
+
+.register-list code,
+.register-list strong {
+  overflow: hidden;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.register-list code {
+  color: #77d6b3;
+}
+
+.register-list strong {
+  color: #bdc8ce;
+  font-weight: 400;
+}
+
+.inspector-empty {
+  display: flex;
+  min-height: 90px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  border-top: 1px solid #29353d;
+  color: #718089;
+}
+
+.inspector-empty strong {
+  color: #929fa7;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.inspector-empty span {
+  font-size: 10px;
+}
+
 .readout-label {
   display: flex;
   align-items: center;
@@ -362,6 +626,7 @@ select:focus-visible {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px;
   margin-top: auto;
+  flex: 0 0 auto;
   border-top: 1px solid #27323a;
   background: #27323a;
 }
@@ -386,6 +651,7 @@ select:focus-visible {
 .control-panel {
   display: flex;
   flex-direction: column;
+  overflow: auto;
   padding: 16px;
 }
 
@@ -666,6 +932,7 @@ kbd {
   }
 
   .app-shell {
+    height: auto;
     min-height: 100vh;
   }
 
@@ -694,6 +961,18 @@ kbd {
   .operator-notice {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .inspector-content,
+  .inspector-registers {
+    grid-template-columns: 1fr;
+  }
+
+  .inspector-identity {
+    padding-right: 0;
+    padding-bottom: 14px;
+    border-right: 0;
+    border-bottom: 1px solid #29353d;
   }
 
   .alarm-notice > small {

@@ -1,7 +1,6 @@
-use std::sync::Arc;
-
-use millo_controller::Controller;
-use millo_domain::{ConnectionState, ControllerSnapshot};
+use millo_command::CommandArbiter;
+use millo_controller::ControllerConfig;
+use millo_domain::{ControllerSnapshot, DeviceInspection};
 use millo_mock::{MockControl, MockTransport};
 use millo_serial::{
     SerialConfig, SerialPortDescriptor, SerialPortKind, SerialTransport,
@@ -10,11 +9,7 @@ use millo_serial::{
 use millo_transport::BoxedTransport;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
-use tokio::{
-    sync::Mutex,
-    task::JoinHandle,
-    time::{MissedTickBehavior, interval},
-};
+use tokio::{sync::Mutex, task::JoinHandle};
 
 const MOCK_TRANSPORT_ID: &str = "mock";
 const SERIAL_TRANSPORT_PREFIX: &str = "serial:";
@@ -38,68 +33,64 @@ pub struct TransportDescriptor {
     pub match_reason: Option<String>,
 }
 
-struct ControllerSession {
-    controller: Controller<BoxedTransport>,
-    active_transport: TransportDescriptor,
+struct ResolvedTransport {
+    transport: BoxedTransport,
+    descriptor: TransportDescriptor,
     mock: Option<MockControl>,
 }
 
-impl ControllerSession {
+impl ResolvedTransport {
     fn mock() -> Self {
         let transport = MockTransport::default();
         let mock = transport.control();
         Self {
-            controller: Controller::new(Box::new(transport)),
-            active_transport: mock_descriptor(),
+            transport: Box::new(transport),
+            descriptor: mock_descriptor(),
             mock: Some(mock),
         }
     }
 }
 
 pub struct AppState {
-    session: Arc<Mutex<ControllerSession>>,
-    poll_task: Mutex<Option<JoinHandle<()>>>,
+    arbiter: CommandArbiter,
+    active_transport: Mutex<TransportDescriptor>,
+    mock: Mutex<Option<MockControl>>,
+    transition_lock: Mutex<()>,
+    event_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
+        let initial = ResolvedTransport::mock();
+        let descriptor = initial.descriptor;
+        let mock = initial.mock;
+        let (arbiter, worker) = CommandArbiter::new(initial.transport, ControllerConfig::default());
+        tauri::async_runtime::spawn(worker);
+
         Self {
-            session: Arc::new(Mutex::new(ControllerSession::mock())),
-            poll_task: Mutex::new(None),
+            arbiter,
+            active_transport: Mutex::new(descriptor),
+            mock: Mutex::new(mock),
+            transition_lock: Mutex::new(()),
+            event_task: Mutex::new(None),
         }
     }
 }
 
 impl AppState {
-    async fn start_polling(&self, app: AppHandle) {
-        let mut poll_task = self.poll_task.lock().await;
-        if poll_task.as_ref().is_some_and(|task| !task.is_finished()) {
+    async fn start_event_bridge(&self, app: AppHandle) {
+        let mut event_task = self.event_task.lock().await;
+        if event_task.as_ref().is_some_and(|task| !task.is_finished()) {
             return;
         }
 
-        let session = Arc::clone(&self.session);
-        let poll_interval = session.lock().await.controller.poll_interval();
-        *poll_task = Some(tokio::spawn(async move {
-            let mut ticker = interval(poll_interval);
-            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            ticker.tick().await;
-
-            loop {
-                ticker.tick().await;
-                let snapshot = {
-                    let mut session = session.lock().await;
-                    let _ = session.controller.lifecycle_tick().await;
-                    session.controller.snapshot()
-                };
+        let mut snapshots = self.arbiter.subscribe();
+        *event_task = Some(tokio::spawn(async move {
+            while snapshots.changed().await.is_ok() {
+                let snapshot = snapshots.borrow_and_update().clone();
                 let _ = app.emit("machine-state", snapshot);
             }
         }));
-    }
-
-    async fn stop_polling(&self) {
-        if let Some(task) = self.poll_task.lock().await.take() {
-            task.abort();
-        }
     }
 }
 
@@ -117,12 +108,12 @@ pub async fn list_transports() -> Result<Vec<TransportDescriptor>, String> {
 
 #[tauri::command]
 pub async fn active_transport(state: State<'_, AppState>) -> Result<TransportDescriptor, String> {
-    Ok(state.session.lock().await.active_transport.clone())
+    Ok(state.active_transport.lock().await.clone())
 }
 
 #[tauri::command]
 pub async fn controller_snapshot(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
-    Ok(state.session.lock().await.controller.snapshot())
+    Ok(state.arbiter.snapshot())
 }
 
 #[tauri::command]
@@ -132,81 +123,65 @@ pub async fn connect_transport(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ControllerSnapshot, String> {
-    state.stop_polling().await;
+    let _transition = state.transition_lock.lock().await;
+    state.start_event_bridge(app).await;
     let replacement = resolve_transport(&transport_id, baud_rate).await?;
 
-    let (connect_error, snapshot) = {
-        let mut session = state.session.lock().await;
-        if session.controller.snapshot().connection != ConnectionState::Disconnected {
-            let _ = session.controller.disconnect().await;
-        }
-        *session = replacement;
-
-        let connect_error = session
-            .controller
-            .connect()
-            .await
-            .err()
-            .map(|error| error.to_string());
-        (connect_error, session.controller.snapshot())
-    };
-    publish_snapshot(&app, &snapshot)?;
-    if let Some(error) = connect_error {
-        return Err(error);
-    }
-
-    let (sync_result, snapshot) = {
-        let mut session = state.session.lock().await;
-        let result = session.controller.refresh_status().await;
-        (result, session.controller.snapshot())
-    };
-    publish_snapshot(&app, &snapshot)?;
-    state.start_polling(app).await;
-    sync_result.map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub async fn refresh_status(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<ControllerSnapshot, String> {
-    let (result, snapshot) = {
-        let mut session = state.session.lock().await;
-        let result = session.controller.refresh_status().await;
-        (result, session.controller.snapshot())
-    };
-
-    publish_snapshot(&app, &snapshot)?;
-    result.map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub async fn disconnect(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<ControllerSnapshot, String> {
-    state.stop_polling().await;
-    let snapshot = state
-        .session
-        .lock()
-        .await
-        .controller
-        .disconnect()
+    state
+        .arbiter
+        .replace_transport(replacement.transport)
         .await
         .map_err(|error| error.to_string())?;
+    *state.active_transport.lock().await = replacement.descriptor;
+    *state.mock.lock().await = replacement.mock;
 
-    publish_snapshot(&app, &snapshot)?;
-    Ok(snapshot)
+    state
+        .arbiter
+        .connect()
+        .await
+        .map_err(|error| error.to_string())?;
+    state
+        .arbiter
+        .refresh_status()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-pub async fn acknowledge_reset(
-    app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<ControllerSnapshot, String> {
-    let snapshot = state.session.lock().await.controller.acknowledge_reset();
-    publish_snapshot(&app, &snapshot)?;
-    Ok(snapshot)
+pub async fn refresh_status(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
+    state
+        .arbiter
+        .refresh_status()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn inspect_device(state: State<'_, AppState>) -> Result<DeviceInspection, String> {
+    state
+        .arbiter
+        .inspect_device()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn disconnect(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
+    let _transition = state.transition_lock.lock().await;
+    state
+        .arbiter
+        .disconnect()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn acknowledge_reset(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
+    state
+        .arbiter
+        .acknowledge_reset()
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -243,10 +218,9 @@ pub async fn mock_trigger_disconnect(state: State<'_, AppState>) -> Result<(), S
 
 async fn active_mock(state: &State<'_, AppState>) -> Result<MockControl, String> {
     state
-        .session
+        .mock
         .lock()
         .await
-        .mock
         .clone()
         .ok_or_else(|| "mock scenarios require the Mock GRBL transport".to_owned())
 }
@@ -254,9 +228,9 @@ async fn active_mock(state: &State<'_, AppState>) -> Result<MockControl, String>
 async fn resolve_transport(
     transport_id: &str,
     baud_rate: u32,
-) -> Result<ControllerSession, String> {
+) -> Result<ResolvedTransport, String> {
     if transport_id == MOCK_TRANSPORT_ID {
-        return Ok(ControllerSession::mock());
+        return Ok(ResolvedTransport::mock());
     }
 
     let port_name = serial_port_name(transport_id)?;
@@ -271,9 +245,9 @@ async fn resolve_transport(
     let config =
         SerialConfig::new(&port.port_name, baud_rate).map_err(|error| error.to_string())?;
 
-    Ok(ControllerSession {
-        controller: Controller::new(Box::new(SerialTransport::new(config))),
-        active_transport: serial_descriptor(port),
+    Ok(ResolvedTransport {
+        transport: Box::new(SerialTransport::new(config)),
+        descriptor: serial_descriptor(port),
         mock: None,
     })
 }
@@ -373,11 +347,6 @@ fn serial_port_name(transport_id: &str) -> Result<&str, String> {
         .strip_prefix(SERIAL_TRANSPORT_PREFIX)
         .filter(|name| !name.is_empty())
         .ok_or_else(|| format!("unknown transport: {transport_id}"))
-}
-
-fn publish_snapshot(app: &AppHandle, snapshot: &ControllerSnapshot) -> Result<(), String> {
-    app.emit("machine-state", snapshot)
-        .map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

@@ -21,6 +21,7 @@ struct MockState {
     connected: bool,
     status_line: String,
     planned_cycles: VecDeque<VecDeque<MockRead>>,
+    planned_queries: VecDeque<VecDeque<MockRead>>,
     active_reads: VecDeque<MockRead>,
     writes: Vec<Vec<u8>>,
 }
@@ -70,6 +71,18 @@ impl MockControl {
             .push_back(VecDeque::from([MockRead::Disconnect]));
     }
 
+    pub fn queue_query_error(&self, code: u16) {
+        self.lock()
+            .planned_queries
+            .push_back(VecDeque::from([MockRead::Line(format!("error:{code}"))]));
+    }
+
+    pub fn queue_query_alarm(&self, code: u16) {
+        self.lock()
+            .planned_queries
+            .push_back(VecDeque::from([MockRead::Line(format!("ALARM:{code}"))]));
+    }
+
     pub fn writes(&self) -> Vec<Vec<u8>> {
         self.lock().writes.clone()
     }
@@ -98,6 +111,7 @@ impl MockTransport {
                     connected: false,
                     status_line: status_line.into(),
                     planned_cycles: VecDeque::new(),
+                    planned_queries: VecDeque::new(),
                     active_reads: VecDeque::new(),
                     writes: Vec::new(),
                 })),
@@ -141,6 +155,12 @@ impl Transport for MockTransport {
                 .pop_front()
                 .unwrap_or_else(|| VecDeque::from([MockRead::Line(state.status_line.clone())]));
             state.active_reads.extend(cycle);
+        } else if let Some(default_response) = device_query_response(data) {
+            let response = state
+                .planned_queries
+                .pop_front()
+                .unwrap_or(default_response);
+            state.active_reads.extend(response);
         }
         Ok(())
     }
@@ -169,6 +189,42 @@ impl Transport for MockTransport {
 
     fn is_connected(&self) -> bool {
         self.lock().connected
+    }
+}
+
+fn lines(values: &[&str]) -> VecDeque<MockRead> {
+    values
+        .iter()
+        .map(|line| MockRead::Line((*line).to_owned()))
+        .collect()
+}
+
+fn device_query_response(command: &[u8]) -> Option<VecDeque<MockRead>> {
+    match command {
+        b"$I\n" => Some(lines(&[
+            "[VER:1.1h.20240101:Millo Mock]",
+            "[OPT:V,15,128]",
+            "ok",
+        ])),
+        b"$$\n" => Some(lines(&[
+            "$0=10",
+            "$10=3",
+            "$30=12000",
+            "$31=0",
+            "$130=300.000",
+            "$131=180.000",
+            "$132=80.000",
+            "ok",
+        ])),
+        b"$G\n" => Some(lines(&["[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]", "ok"])),
+        b"$#\n" => Some(lines(&[
+            "[G54:0.000,0.000,0.000]",
+            "[G92:0.000,0.000,0.000]",
+            "[TLO:0.000]",
+            "[PRB:0.000,0.000,0.000:0]",
+            "ok",
+        ])),
+        _ => None,
     }
 }
 
@@ -235,5 +291,16 @@ mod tests {
         control.clear_alarm();
         transport.write(b"?").await.unwrap();
         assert_eq!(transport.read_line().await.unwrap(), DEFAULT_STATUS);
+    }
+
+    #[tokio::test]
+    async fn answers_device_inspector_queries_in_command_order() {
+        let mut transport = MockTransport::default();
+        transport.connect().await.unwrap();
+        transport.write(b"$I\n").await.unwrap();
+
+        assert!(transport.read_line().await.unwrap().starts_with("[VER:"));
+        assert!(transport.read_line().await.unwrap().starts_with("[OPT:"));
+        assert_eq!(transport.read_line().await.unwrap(), "ok");
     }
 }

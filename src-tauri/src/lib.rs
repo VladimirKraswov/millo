@@ -2,8 +2,8 @@ mod commands;
 
 use commands::{
     AppState, acknowledge_reset, active_transport, connect_transport, controller_snapshot,
-    disconnect, list_transports, mock_clear_alarm, mock_trigger_alarm, mock_trigger_disconnect,
-    mock_trigger_reset, mock_trigger_timeout, refresh_status,
+    disconnect, inspect_device, list_transports, mock_clear_alarm, mock_trigger_alarm,
+    mock_trigger_disconnect, mock_trigger_reset, mock_trigger_timeout, refresh_status,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -16,6 +16,7 @@ pub fn run() {
             active_transport,
             connect_transport,
             refresh_status,
+            inspect_device,
             disconnect,
             acknowledge_reset,
             mock_trigger_reset,

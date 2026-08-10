@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,4 +91,38 @@ pub struct ControllerSnapshot {
     pub failure_threshold: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CommandCompletion {
+    Ok,
+    Error,
+    Alarm,
+    Reset,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandResponse {
+    pub command: String,
+    pub completion: CommandCompletion,
+    pub lines: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<u16>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeviceInspection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firmware_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firmware_build_info: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub firmware_options: Option<String>,
+    pub settings: BTreeMap<String, String>,
+    pub modal_state: Vec<String>,
+    pub parameters: BTreeMap<String, String>,
+    pub responses: Vec<CommandResponse>,
 }

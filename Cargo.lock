@@ -1815,6 +1815,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "millo-command"
+version = "0.1.0"
+dependencies = [
+ "millo-controller",
+ "millo-domain",
+ "millo-mock",
+ "millo-transport",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "millo-controller"
 version = "0.1.0"
 dependencies = [
@@ -1830,6 +1842,7 @@ dependencies = [
 name = "millo-desktop"
 version = "0.1.0"
 dependencies = [
+ "millo-command",
  "millo-controller",
  "millo-domain",
  "millo-mock",

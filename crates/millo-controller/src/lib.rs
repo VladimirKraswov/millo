@@ -1,9 +1,10 @@
 use std::time::Duration;
 
 use millo_domain::{
-    AlarmState, ConnectionState, ControllerSnapshot, MachineMode, MachineState, ResetNotice,
+    AlarmState, CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot,
+    DeviceInspection, MachineMode, MachineState, ResetNotice,
 };
-use millo_grbl::{IncomingLine, StatusParseError, parse_incoming_line};
+use millo_grbl::{IncomingLine, StatusParseError, build_device_inspection, parse_incoming_line};
 use millo_transport::{Transport, TransportError};
 use thiserror::Error;
 
@@ -11,6 +12,7 @@ use thiserror::Error;
 pub struct ControllerConfig {
     pub poll_interval: Duration,
     pub status_timeout: Duration,
+    pub command_timeout: Duration,
     pub failures_before_recovery: u32,
 }
 
@@ -19,6 +21,7 @@ impl Default for ControllerConfig {
         Self {
             poll_interval: Duration::from_millis(250),
             status_timeout: Duration::from_millis(500),
+            command_timeout: Duration::from_secs(2),
             failures_before_recovery: 2,
         }
     }
@@ -32,10 +35,57 @@ pub enum ControllerError {
     Status(#[from] StatusParseError),
     #[error("controller status timed out after {timeout_ms} ms")]
     StatusTimeout { timeout_ms: u64 },
+    #[error("controller command timed out after {timeout_ms} ms")]
+    CommandTimeout { timeout_ms: u64 },
     #[error("controller is not ready for polling: {0:?}")]
     NotReady(ConnectionState),
     #[error("controller rejected status request: {0}")]
     Device(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeviceQuery {
+    BuildInfo,
+    Settings,
+    ModalState,
+    Parameters,
+}
+
+impl DeviceQuery {
+    pub const ALL: [Self; 4] = [
+        Self::BuildInfo,
+        Self::Settings,
+        Self::ModalState,
+        Self::Parameters,
+    ];
+
+    pub const fn command(self) -> &'static str {
+        match self {
+            Self::BuildInfo => "$I",
+            Self::Settings => "$$",
+            Self::ModalState => "$G",
+            Self::Parameters => "$#",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RealtimeCommand {
+    Status,
+    FeedHold,
+    CycleStart,
+    SoftReset,
+}
+
+impl RealtimeCommand {
+    const fn byte(self) -> u8 {
+        match self {
+            Self::Status => b'?',
+            Self::FeedHold => b'!',
+            Self::CycleStart => b'~',
+            Self::SoftReset => 0x18,
+        }
+    }
 }
 
 pub struct Controller<T> {
@@ -146,6 +196,57 @@ impl<T: Transport> Controller<T> {
         }
     }
 
+    pub async fn inspect_device(&mut self) -> Result<DeviceInspection, ControllerError> {
+        let mut responses = Vec::with_capacity(DeviceQuery::ALL.len());
+        for query in DeviceQuery::ALL {
+            responses.push(self.query_device(query).await?);
+        }
+        Ok(build_device_inspection(responses))
+    }
+
+    pub async fn query_device(
+        &mut self,
+        query: DeviceQuery,
+    ) -> Result<CommandResponse, ControllerError> {
+        if self.snapshot.connection != ConnectionState::Connected {
+            return Err(ControllerError::NotReady(self.snapshot.connection));
+        }
+
+        let timeout = self.config.command_timeout;
+        let result = match tokio::time::timeout(timeout, self.query_device_inner(query)).await {
+            Ok(result) => result,
+            Err(_) => Err(ControllerError::CommandTimeout {
+                timeout_ms: duration_ms(timeout),
+            }),
+        };
+
+        match result {
+            Ok(response) => {
+                self.snapshot.consecutive_failures = 0;
+                self.snapshot.last_error = None;
+                Ok(response)
+            }
+            Err(error) => {
+                self.record_poll_failure(&error);
+                Err(error)
+            }
+        }
+    }
+
+    pub async fn send_realtime(
+        &mut self,
+        command: RealtimeCommand,
+    ) -> Result<ControllerSnapshot, ControllerError> {
+        if command == RealtimeCommand::Status {
+            return self.refresh_status().await;
+        }
+        if self.snapshot.connection != ConnectionState::Connected {
+            return Err(ControllerError::NotReady(self.snapshot.connection));
+        }
+        self.transport.write(&[command.byte()]).await?;
+        Ok(self.snapshot())
+    }
+
     async fn recover(&mut self) -> Result<ControllerSnapshot, ControllerError> {
         self.snapshot.connection = ConnectionState::Recovering;
         let _ = self.transport.disconnect().await;
@@ -195,6 +296,63 @@ impl<T: Transport> Controller<T> {
                     return Err(ControllerError::Device(raw));
                 }
                 IncomingLine::Ok | IncomingLine::Message(_) => {}
+            }
+        }
+    }
+
+    async fn query_device_inner(
+        &mut self,
+        query: DeviceQuery,
+    ) -> Result<CommandResponse, ControllerError> {
+        let command = query.command();
+        self.transport
+            .write(format!("{command}\n").as_bytes())
+            .await?;
+        let mut lines = Vec::new();
+
+        loop {
+            let line = self.transport.read_line().await?;
+            match parse_incoming_line(&line)? {
+                IncomingLine::Status(state) => self.apply_status(state),
+                IncomingLine::ResetBanner { raw, version } => {
+                    self.apply_reset_banner(raw.clone(), version);
+                    lines.push(raw);
+                    return Ok(CommandResponse {
+                        command: command.to_owned(),
+                        completion: CommandCompletion::Reset,
+                        lines,
+                        code: None,
+                    });
+                }
+                IncomingLine::Alarm { code, raw } => {
+                    self.apply_alarm(code, raw.clone());
+                    lines.push(raw);
+                    return Ok(CommandResponse {
+                        command: command.to_owned(),
+                        completion: CommandCompletion::Alarm,
+                        lines,
+                        code,
+                    });
+                }
+                IncomingLine::Error { code, raw } => {
+                    lines.push(raw);
+                    return Ok(CommandResponse {
+                        command: command.to_owned(),
+                        completion: CommandCompletion::Error,
+                        lines,
+                        code,
+                    });
+                }
+                IncomingLine::Ok => {
+                    return Ok(CommandResponse {
+                        command: command.to_owned(),
+                        completion: CommandCompletion::Ok,
+                        lines,
+                        code: None,
+                    });
+                }
+                IncomingLine::Message(line) if !line.is_empty() => lines.push(line),
+                IncomingLine::Message(_) => {}
             }
         }
     }
@@ -278,6 +436,7 @@ mod tests {
             ControllerConfig {
                 poll_interval: Duration::from_millis(10),
                 status_timeout: Duration::from_millis(5),
+                command_timeout: Duration::from_millis(20),
                 failures_before_recovery: 2,
             },
         );
@@ -385,5 +544,83 @@ mod tests {
         assert_eq!(recovered.consecutive_failures, 0);
         assert_eq!(recovered.reconnect_count, 1);
         assert!(recovered.last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn inspects_device_through_read_only_queries() {
+        let mut controller = Controller::new(MockTransport::default());
+        controller.connect().await.unwrap();
+
+        let inspection = controller.inspect_device().await.unwrap();
+
+        assert_eq!(
+            inspection.firmware_version.as_deref(),
+            Some("1.1h.20240101")
+        );
+        assert_eq!(
+            inspection.settings.get("$30").map(String::as_str),
+            Some("12000")
+        );
+        assert!(inspection.modal_state.contains(&"G54".to_owned()));
+        assert_eq!(inspection.responses.len(), 4);
+        assert!(
+            inspection
+                .responses
+                .iter()
+                .all(|response| response.completion == CommandCompletion::Ok)
+        );
+    }
+
+    #[tokio::test]
+    async fn routes_realtime_commands_as_single_bytes() {
+        let transport = MockTransport::default();
+        let control = transport.control();
+        let mut controller = Controller::new(transport);
+        controller.connect().await.unwrap();
+
+        controller
+            .send_realtime(RealtimeCommand::FeedHold)
+            .await
+            .unwrap();
+        controller
+            .send_realtime(RealtimeCommand::CycleStart)
+            .await
+            .unwrap();
+        controller
+            .send_realtime(RealtimeCommand::SoftReset)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            control.writes(),
+            vec![b"!".to_vec(), b"~".to_vec(), vec![0x18]]
+        );
+    }
+
+    #[tokio::test]
+    async fn correlates_error_and_alarm_with_the_active_query() {
+        let transport = MockTransport::default();
+        let control = transport.control();
+        let mut controller = Controller::new(transport);
+        controller.connect().await.unwrap();
+
+        control.queue_query_error(2);
+        let rejected = controller
+            .query_device(DeviceQuery::BuildInfo)
+            .await
+            .unwrap();
+        assert_eq!(rejected.command, "$I");
+        assert_eq!(rejected.completion, CommandCompletion::Error);
+        assert_eq!(rejected.code, Some(2));
+
+        control.queue_query_alarm(3);
+        let alarmed = controller
+            .query_device(DeviceQuery::Parameters)
+            .await
+            .unwrap();
+        assert_eq!(alarmed.command, "$#");
+        assert_eq!(alarmed.completion, CommandCompletion::Alarm);
+        assert_eq!(alarmed.code, Some(3));
+        assert_eq!(controller.snapshot().alarm.unwrap().code, Some(3));
     }
 }

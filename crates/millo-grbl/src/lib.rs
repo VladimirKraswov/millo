@@ -1,4 +1,4 @@
-use millo_domain::{MachineMode, MachineState, Position};
+use millo_domain::{CommandResponse, DeviceInspection, MachineMode, MachineState, Position};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -120,6 +120,79 @@ pub fn parse_status_line(line: &str) -> Result<MachineState, StatusParseError> {
     Ok(state)
 }
 
+pub fn build_device_inspection(responses: Vec<CommandResponse>) -> DeviceInspection {
+    let mut inspection = DeviceInspection::default();
+
+    for response in &responses {
+        for line in &response.lines {
+            match response.command.as_str() {
+                "$I" => parse_identity_line(line, &mut inspection),
+                "$$" => parse_setting_line(line, &mut inspection),
+                "$G" => parse_modal_line(line, &mut inspection),
+                "$#" => parse_parameter_line(line, &mut inspection),
+                _ => {}
+            }
+        }
+    }
+
+    inspection.responses = responses;
+    inspection
+}
+
+fn parse_identity_line(line: &str, inspection: &mut DeviceInspection) {
+    if let Some(value) = bracket_value(line, "VER") {
+        let (version, build_info) = value.split_once(':').unwrap_or((value, ""));
+        inspection.firmware_version = non_empty(version);
+        inspection.firmware_build_info = non_empty(build_info);
+    } else if let Some(value) = bracket_value(line, "OPT") {
+        inspection.firmware_options = non_empty(value);
+    }
+}
+
+fn parse_setting_line(line: &str, inspection: &mut DeviceInspection) {
+    let Some((key, value)) = line.strip_prefix('$').and_then(|line| line.split_once('=')) else {
+        return;
+    };
+    if !key.is_empty() && !value.is_empty() && key.bytes().all(|byte| byte.is_ascii_digit()) {
+        inspection
+            .settings
+            .insert(format!("${key}"), value.to_owned());
+    }
+}
+
+fn parse_modal_line(line: &str, inspection: &mut DeviceInspection) {
+    let Some(value) = bracket_value(line, "GC") else {
+        return;
+    };
+    inspection.modal_state = value.split_whitespace().map(str::to_owned).collect();
+}
+
+fn parse_parameter_line(line: &str, inspection: &mut DeviceInspection) {
+    let Some(payload) = line
+        .strip_prefix('[')
+        .and_then(|line| line.strip_suffix(']'))
+    else {
+        return;
+    };
+    let Some((key, value)) = payload.split_once(':') else {
+        return;
+    };
+    if !key.is_empty() && key != "GC" && key != "VER" && key != "OPT" {
+        inspection
+            .parameters
+            .insert(key.to_owned(), value.to_owned());
+    }
+}
+
+fn bracket_value<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+    line.strip_prefix(&format!("[{key}:"))
+        .and_then(|line| line.strip_suffix(']'))
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_owned())
+}
+
 fn parse_mode(value: &str) -> Result<(&str, Option<u8>), StatusParseError> {
     let Some((name, substate)) = value.split_once(':') else {
         return Ok((value, None));
@@ -180,6 +253,8 @@ fn parse_numbers(field: &str, value: &str) -> Result<Vec<f64>, StatusParseError>
 
 #[cfg(test)]
 mod tests {
+    use millo_domain::{CommandCompletion, CommandResponse};
+
     use super::*;
 
     #[test]
@@ -225,5 +300,46 @@ mod tests {
                 raw: "ALARM:3".to_owned(),
             }
         );
+    }
+
+    #[test]
+    fn builds_device_inspection_from_grbl_queries() {
+        let responses = vec![
+            response("$I", &["[VER:1.1h.20240101:Millo Mock]", "[OPT:V,15,128]"]),
+            response("$$", &["$0=10", "$30=12000", "not-a-setting"]),
+            response("$G", &["[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]"]),
+            response("$#", &["[G54:1.000,2.000,3.000]", "[TLO:0.000]"]),
+        ];
+
+        let inspection = build_device_inspection(responses);
+
+        assert_eq!(
+            inspection.firmware_version.as_deref(),
+            Some("1.1h.20240101")
+        );
+        assert_eq!(
+            inspection.firmware_build_info.as_deref(),
+            Some("Millo Mock")
+        );
+        assert_eq!(inspection.firmware_options.as_deref(), Some("V,15,128"));
+        assert_eq!(
+            inspection.settings.get("$30").map(String::as_str),
+            Some("12000")
+        );
+        assert_eq!(inspection.modal_state[1], "G54");
+        assert_eq!(
+            inspection.parameters.get("G54").map(String::as_str),
+            Some("1.000,2.000,3.000")
+        );
+        assert_eq!(inspection.responses.len(), 4);
+    }
+
+    fn response(command: &str, lines: &[&str]) -> CommandResponse {
+        CommandResponse {
+            command: command.to_owned(),
+            completion: CommandCompletion::Ok,
+            lines: lines.iter().map(|line| (*line).to_owned()).collect(),
+            code: None,
+        }
     }
 }
