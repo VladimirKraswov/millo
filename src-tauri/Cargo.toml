@@ -1,0 +1,21 @@
+[package]
+name = "gantryon-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Gantryon desktop adapter"
+
+[lib]
+name = "gantryon_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+gantryon-controller = { path = "../crates/gantryon-controller" }
+gantryon-domain = { path = "../crates/gantryon-domain" }
+gantryon-mock = { path = "../crates/gantryon-mock" }
+serde.workspace = true
+tauri = { version = "2", features = [] }
+tokio.workspace = true

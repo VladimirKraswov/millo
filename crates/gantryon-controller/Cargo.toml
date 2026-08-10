@@ -1,0 +1,15 @@
+[package]
+name = "gantryon-controller"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+gantryon-domain = { path = "../gantryon-domain" }
+gantryon-grbl = { path = "../gantryon-grbl" }
+gantryon-transport = { path = "../gantryon-transport" }
+thiserror.workspace = true
+
+[dev-dependencies]
+gantryon-mock = { path = "../gantryon-mock" }
+tokio.workspace = true

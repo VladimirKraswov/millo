@@ -1,0 +1,27 @@
+[
+  {
+    "name": "idle at origin",
+    "input": "<Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:0,0>",
+    "mode": "Idle",
+    "machinePosition": [0.0, 0.0, 0.0],
+    "feedRate": 0.0,
+    "spindleSpeed": 0.0
+  },
+  {
+    "name": "running with work offset",
+    "input": "<Run|MPos:12.500,-3.250,1.000|WCO:10.000,-5.000,0.000|FS:420.5,12000>",
+    "mode": "Run",
+    "machinePosition": [12.5, -3.25, 1.0],
+    "feedRate": 420.5,
+    "spindleSpeed": 12000.0
+  },
+  {
+    "name": "hold substate",
+    "input": "<Hold:0|MPos:4.000,5.000,6.000|F:100>",
+    "mode": "Hold",
+    "substate": 0,
+    "machinePosition": [4.0, 5.0, 6.0],
+    "feedRate": 100.0,
+    "spindleSpeed": 0.0
+  }
+]

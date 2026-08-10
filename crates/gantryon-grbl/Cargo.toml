@@ -1,0 +1,13 @@
+[package]
+name = "gantryon-grbl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+gantryon-domain = { path = "../gantryon-domain" }
+thiserror.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true

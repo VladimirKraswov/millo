@@ -1,0 +1,12 @@
+[package]
+name = "gantryon-mock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+gantryon-transport = { path = "../gantryon-transport" }
+
+[dev-dependencies]
+tokio.workspace = true
