@@ -1,8 +1,14 @@
 use std::sync::Arc;
 
 use millo_controller::Controller;
-use millo_domain::ControllerSnapshot;
+use millo_domain::{ConnectionState, ControllerSnapshot};
 use millo_mock::{MockControl, MockTransport};
+use millo_serial::{
+    SerialConfig, SerialPortDescriptor, SerialPortKind, SerialTransport,
+    available_ports as available_serial_ports,
+};
+use millo_transport::BoxedTransport;
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 use tokio::{
     sync::Mutex,
@@ -10,19 +16,55 @@ use tokio::{
     time::{MissedTickBehavior, interval},
 };
 
+const MOCK_TRANSPORT_ID: &str = "mock";
+const SERIAL_TRANSPORT_PREFIX: &str = "serial:";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransportKind {
+    Mock,
+    Serial,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransportDescriptor {
+    pub id: String,
+    pub kind: TransportKind,
+    pub label: String,
+    pub detail: Option<String>,
+    pub port_name: Option<String>,
+    pub likely_grbl: bool,
+    pub match_reason: Option<String>,
+}
+
+struct ControllerSession {
+    controller: Controller<BoxedTransport>,
+    active_transport: TransportDescriptor,
+    mock: Option<MockControl>,
+}
+
+impl ControllerSession {
+    fn mock() -> Self {
+        let transport = MockTransport::default();
+        let mock = transport.control();
+        Self {
+            controller: Controller::new(Box::new(transport)),
+            active_transport: mock_descriptor(),
+            mock: Some(mock),
+        }
+    }
+}
+
 pub struct AppState {
-    controller: Arc<Mutex<Controller<MockTransport>>>,
-    mock: MockControl,
+    session: Arc<Mutex<ControllerSession>>,
     poll_task: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        let transport = MockTransport::default();
-        let mock = transport.control();
         Self {
-            controller: Arc::new(Mutex::new(Controller::new(transport))),
-            mock,
+            session: Arc::new(Mutex::new(ControllerSession::mock())),
             poll_task: Mutex::new(None),
         }
     }
@@ -35,8 +77,8 @@ impl AppState {
             return;
         }
 
-        let controller = Arc::clone(&self.controller);
-        let poll_interval = controller.lock().await.poll_interval();
+        let session = Arc::clone(&self.session);
+        let poll_interval = session.lock().await.controller.poll_interval();
         *poll_task = Some(tokio::spawn(async move {
             let mut ticker = interval(poll_interval);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -45,9 +87,9 @@ impl AppState {
             loop {
                 ticker.tick().await;
                 let snapshot = {
-                    let mut controller = controller.lock().await;
-                    let _ = controller.lifecycle_tick().await;
-                    controller.snapshot()
+                    let mut session = session.lock().await;
+                    let _ = session.controller.lifecycle_tick().await;
+                    session.controller.snapshot()
                 };
                 let _ = app.emit("machine-state", snapshot);
             }
@@ -62,26 +104,62 @@ impl AppState {
 }
 
 #[tauri::command]
-pub async fn controller_snapshot(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
-    Ok(state.controller.lock().await.snapshot())
+pub async fn list_transports() -> Result<Vec<TransportDescriptor>, String> {
+    let serial_ports = tokio::task::spawn_blocking(available_serial_ports)
+        .await
+        .map_err(|error| format!("serial discovery task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
+
+    let mut transports = vec![mock_descriptor()];
+    transports.extend(serial_ports.into_iter().map(serial_descriptor));
+    Ok(transports)
 }
 
 #[tauri::command]
-pub async fn connect_mock(
+pub async fn active_transport(state: State<'_, AppState>) -> Result<TransportDescriptor, String> {
+    Ok(state.session.lock().await.active_transport.clone())
+}
+
+#[tauri::command]
+pub async fn controller_snapshot(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
+    Ok(state.session.lock().await.controller.snapshot())
+}
+
+#[tauri::command]
+pub async fn connect_transport(
+    transport_id: String,
+    baud_rate: u32,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ControllerSnapshot, String> {
     state.stop_polling().await;
-    let (sync_result, snapshot) = {
-        let mut controller = state.controller.lock().await;
-        controller
+    let replacement = resolve_transport(&transport_id, baud_rate).await?;
+
+    let (connect_error, snapshot) = {
+        let mut session = state.session.lock().await;
+        if session.controller.snapshot().connection != ConnectionState::Disconnected {
+            let _ = session.controller.disconnect().await;
+        }
+        *session = replacement;
+
+        let connect_error = session
+            .controller
             .connect()
             .await
-            .map_err(|error| error.to_string())?;
-        let result = controller.refresh_status().await;
-        (result, controller.snapshot())
+            .err()
+            .map(|error| error.to_string());
+        (connect_error, session.controller.snapshot())
     };
+    publish_snapshot(&app, &snapshot)?;
+    if let Some(error) = connect_error {
+        return Err(error);
+    }
 
+    let (sync_result, snapshot) = {
+        let mut session = state.session.lock().await;
+        let result = session.controller.refresh_status().await;
+        (result, session.controller.snapshot())
+    };
     publish_snapshot(&app, &snapshot)?;
     state.start_polling(app).await;
     sync_result.map_err(|error| error.to_string())
@@ -93,9 +171,9 @@ pub async fn refresh_status(
     state: State<'_, AppState>,
 ) -> Result<ControllerSnapshot, String> {
     let (result, snapshot) = {
-        let mut controller = state.controller.lock().await;
-        let result = controller.refresh_status().await;
-        (result, controller.snapshot())
+        let mut session = state.session.lock().await;
+        let result = session.controller.refresh_status().await;
+        (result, session.controller.snapshot())
     };
 
     publish_snapshot(&app, &snapshot)?;
@@ -109,9 +187,10 @@ pub async fn disconnect(
 ) -> Result<ControllerSnapshot, String> {
     state.stop_polling().await;
     let snapshot = state
-        .controller
+        .session
         .lock()
         .await
+        .controller
         .disconnect()
         .await
         .map_err(|error| error.to_string())?;
@@ -125,38 +204,269 @@ pub async fn acknowledge_reset(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ControllerSnapshot, String> {
-    let snapshot = state.controller.lock().await.acknowledge_reset();
+    let snapshot = state.session.lock().await.controller.acknowledge_reset();
     publish_snapshot(&app, &snapshot)?;
     Ok(snapshot)
 }
 
 #[tauri::command]
-pub fn mock_trigger_reset(state: State<'_, AppState>) {
-    state.mock.queue_reset("1.1h");
+pub async fn mock_trigger_reset(state: State<'_, AppState>) -> Result<(), String> {
+    active_mock(&state).await?.queue_reset("1.1h");
+    Ok(())
 }
 
 #[tauri::command]
-pub fn mock_trigger_alarm(code: u16, state: State<'_, AppState>) {
-    state.mock.queue_alarm(code);
+pub async fn mock_trigger_alarm(code: u16, state: State<'_, AppState>) -> Result<(), String> {
+    active_mock(&state).await?.queue_alarm(code);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn mock_clear_alarm(state: State<'_, AppState>) {
-    state.mock.clear_alarm();
+pub async fn mock_clear_alarm(state: State<'_, AppState>) -> Result<(), String> {
+    active_mock(&state).await?.clear_alarm();
+    Ok(())
 }
 
 #[tauri::command]
-pub fn mock_trigger_timeout(state: State<'_, AppState>) {
-    state.mock.queue_stall();
-    state.mock.queue_stall();
+pub async fn mock_trigger_timeout(state: State<'_, AppState>) -> Result<(), String> {
+    let mock = active_mock(&state).await?;
+    mock.queue_stall();
+    mock.queue_stall();
+    Ok(())
 }
 
 #[tauri::command]
-pub fn mock_trigger_disconnect(state: State<'_, AppState>) {
-    state.mock.queue_disconnect();
+pub async fn mock_trigger_disconnect(state: State<'_, AppState>) -> Result<(), String> {
+    active_mock(&state).await?.queue_disconnect();
+    Ok(())
+}
+
+async fn active_mock(state: &State<'_, AppState>) -> Result<MockControl, String> {
+    state
+        .session
+        .lock()
+        .await
+        .mock
+        .clone()
+        .ok_or_else(|| "mock scenarios require the Mock GRBL transport".to_owned())
+}
+
+async fn resolve_transport(
+    transport_id: &str,
+    baud_rate: u32,
+) -> Result<ControllerSession, String> {
+    if transport_id == MOCK_TRANSPORT_ID {
+        return Ok(ControllerSession::mock());
+    }
+
+    let port_name = serial_port_name(transport_id)?;
+    let available = tokio::task::spawn_blocking(available_serial_ports)
+        .await
+        .map_err(|error| format!("serial discovery task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
+    let port = available
+        .into_iter()
+        .find(|port| port.port_name == port_name)
+        .ok_or_else(|| format!("serial port is no longer available: {port_name}"))?;
+    let config =
+        SerialConfig::new(&port.port_name, baud_rate).map_err(|error| error.to_string())?;
+
+    Ok(ControllerSession {
+        controller: Controller::new(Box::new(SerialTransport::new(config))),
+        active_transport: serial_descriptor(port),
+        mock: None,
+    })
+}
+
+fn mock_descriptor() -> TransportDescriptor {
+    TransportDescriptor {
+        id: MOCK_TRANSPORT_ID.to_owned(),
+        kind: TransportKind::Mock,
+        label: "Mock GRBL".to_owned(),
+        detail: Some("Deterministic test controller".to_owned()),
+        port_name: None,
+        likely_grbl: true,
+        match_reason: Some("Built-in test controller".to_owned()),
+    }
+}
+
+fn serial_descriptor(port: SerialPortDescriptor) -> TransportDescriptor {
+    let match_reason = grbl_match_reason(&port).map(str::to_owned);
+    let detail = match port.kind {
+        SerialPortKind::Usb => port
+            .product
+            .clone()
+            .or(port.manufacturer.clone())
+            .or_else(|| {
+                Some(format!(
+                    "USB {:04X}:{:04X}",
+                    port.vendor_id.unwrap_or_default(),
+                    port.product_id.unwrap_or_default()
+                ))
+            }),
+        SerialPortKind::Bluetooth => Some("Bluetooth serial port".to_owned()),
+        SerialPortKind::Pci => Some("PCI serial port".to_owned()),
+        SerialPortKind::Unknown => Some("Serial port".to_owned()),
+    };
+
+    TransportDescriptor {
+        id: format!("{SERIAL_TRANSPORT_PREFIX}{}", port.port_name),
+        kind: TransportKind::Serial,
+        label: port.port_name.clone(),
+        detail,
+        port_name: Some(port.port_name),
+        likely_grbl: match_reason.is_some(),
+        match_reason,
+    }
+}
+
+fn grbl_match_reason(port: &SerialPortDescriptor) -> Option<&'static str> {
+    if port.kind != SerialPortKind::Usb {
+        return None;
+    }
+
+    let searchable = [
+        Some(port.port_name.as_str()),
+        port.manufacturer.as_deref(),
+        port.product.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_ascii_lowercase();
+
+    if ["grbl", "fluidnc", "cnc", "woodpecker", "xpro"]
+        .iter()
+        .any(|needle| searchable.contains(needle))
+    {
+        return Some("GRBL/CNC metadata");
+    }
+
+    if [
+        "arduino",
+        "usbserial",
+        "usbmodem",
+        "ch340",
+        "ch341",
+        "cp210",
+        "ftdi",
+        "usb serial",
+        "usb2.0-serial",
+    ]
+    .iter()
+    .any(|needle| searchable.contains(needle))
+    {
+        return Some("Common CNC USB serial interface");
+    }
+
+    match port.vendor_id {
+        Some(0x0403 | 0x10C4 | 0x1A86 | 0x2341 | 0x2A03 | 0x303A) => {
+            Some("Known controller or USB-UART vendor")
+        }
+        _ => None,
+    }
+}
+
+fn serial_port_name(transport_id: &str) -> Result<&str, String> {
+    transport_id
+        .strip_prefix(SERIAL_TRANSPORT_PREFIX)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| format!("unknown transport: {transport_id}"))
 }
 
 fn publish_snapshot(app: &AppHandle, snapshot: &ControllerSnapshot) -> Result<(), String> {
     app.emit("machine-state", snapshot)
         .map_err(|error| error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn serial_transport_id_preserves_the_native_port_name() {
+        assert_eq!(
+            serial_port_name("serial:/dev/cu.usbserial-1420").unwrap(),
+            "/dev/cu.usbserial-1420"
+        );
+        assert!(serial_port_name("serial:").is_err());
+        assert!(serial_port_name("network:localhost").is_err());
+    }
+
+    #[test]
+    fn usb_descriptor_keeps_device_identity() {
+        let descriptor = serial_descriptor(SerialPortDescriptor {
+            port_name: "/dev/cu.usbmodem101".to_owned(),
+            kind: SerialPortKind::Usb,
+            vendor_id: Some(0x2341),
+            product_id: Some(0x0043),
+            manufacturer: Some("Arduino".to_owned()),
+            product: Some("Uno".to_owned()),
+            serial_number: None,
+        });
+
+        assert_eq!(descriptor.kind, TransportKind::Serial);
+        assert_eq!(descriptor.id, "serial:/dev/cu.usbmodem101");
+        assert_eq!(descriptor.label, "/dev/cu.usbmodem101");
+        assert_eq!(descriptor.detail.as_deref(), Some("Uno"));
+        assert!(descriptor.likely_grbl);
+        assert_eq!(
+            descriptor.match_reason.as_deref(),
+            Some("Common CNC USB serial interface")
+        );
+    }
+
+    #[test]
+    fn grbl_filter_rejects_non_usb_and_unidentified_ports() {
+        let bluetooth = SerialPortDescriptor {
+            port_name: "/dev/cu.Bluetooth-Incoming-Port".to_owned(),
+            kind: SerialPortKind::Bluetooth,
+            vendor_id: None,
+            product_id: None,
+            manufacturer: None,
+            product: None,
+            serial_number: None,
+        };
+        let unidentified_usb = SerialPortDescriptor {
+            port_name: "COM8".to_owned(),
+            kind: SerialPortKind::Usb,
+            vendor_id: Some(0x9999),
+            product_id: Some(0x0001),
+            manufacturer: Some("Measurement Devices Inc.".to_owned()),
+            product: Some("Lab interface".to_owned()),
+            serial_number: None,
+        };
+
+        assert_eq!(grbl_match_reason(&bluetooth), None);
+        assert_eq!(grbl_match_reason(&unidentified_usb), None);
+    }
+
+    #[test]
+    fn grbl_filter_accepts_common_bridges_and_explicit_metadata() {
+        let ch340 = SerialPortDescriptor {
+            port_name: "COM4".to_owned(),
+            kind: SerialPortKind::Usb,
+            vendor_id: Some(0x1A86),
+            product_id: Some(0x7523),
+            manufacturer: None,
+            product: None,
+            serial_number: None,
+        };
+        let fluidnc = SerialPortDescriptor {
+            port_name: "COM6".to_owned(),
+            kind: SerialPortKind::Usb,
+            vendor_id: Some(0x9999),
+            product_id: Some(0x0002),
+            manufacturer: None,
+            product: Some("FluidNC controller".to_owned()),
+            serial_number: None,
+        };
+
+        assert_eq!(
+            grbl_match_reason(&ch340),
+            Some("Known controller or USB-UART vendor")
+        );
+        assert_eq!(grbl_match_reason(&fluidnc), Some("GRBL/CNC metadata"));
+    }
 }

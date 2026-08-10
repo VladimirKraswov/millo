@@ -61,6 +61,18 @@ export interface ControllerSnapshot {
   lastError?: string;
 }
 
+export type TransportKind = "mock" | "serial";
+
+export interface TransportDescriptor {
+  id: string;
+  kind: TransportKind;
+  label: string;
+  detail?: string;
+  portName?: string;
+  likelyGrbl: boolean;
+  matchReason?: string;
+}
+
 export const emptySnapshot: ControllerSnapshot = {
   connection: "disconnected",
   machine: {

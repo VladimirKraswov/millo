@@ -3,10 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import {
   acknowledgeReset,
   clearMockAlarm,
-  connectMock,
+  connectTransport,
   disconnect,
+  getActiveTransport,
   getControllerSnapshot,
   isDesktopRuntime,
+  listTransports,
   onMachineState,
   refreshStatus,
   triggerMockAlarm,
@@ -18,6 +20,7 @@ import {
   emptySnapshot,
   type ControllerSnapshot,
   type Position,
+  type TransportDescriptor,
 } from "./shared/machine";
 
 const connectionLabels = {
@@ -27,6 +30,17 @@ const connectionLabels = {
   recovering: "Восстановление",
   faulted: "Ошибка",
 } as const;
+
+const mockTransport: TransportDescriptor = {
+  id: "mock",
+  kind: "mock",
+  label: "Mock GRBL",
+  detail: "Deterministic test controller",
+  likelyGrbl: true,
+  matchReason: "Built-in test controller",
+};
+
+const baudRates = [9_600, 19_200, 38_400, 57_600, 115_200, 230_400];
 
 const formatCoordinate = (value: number | undefined): string =>
   value === undefined ? "--" : value.toFixed(3);
@@ -54,7 +68,16 @@ function PositionReadout({ position }: { position?: Position }) {
 
 export default function App() {
   const [snapshot, setSnapshot] = useState<ControllerSnapshot>(emptySnapshot);
+  const [transports, setTransports] = useState<TransportDescriptor[]>([
+    mockTransport,
+  ]);
+  const [selectedTransportId, setSelectedTransportId] = useState("mock");
+  const [activeTransport, setActiveTransport] =
+    useState<TransportDescriptor>(mockTransport);
+  const [baudRate, setBaudRate] = useState(115_200);
+  const [likelyGrblOnly, setLikelyGrblOnly] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
   const [uiError, setUiError] = useState<string>();
   const desktopRuntime = useMemo(isDesktopRuntime, []);
 
@@ -69,6 +92,19 @@ export default function App() {
     void getControllerSnapshot().then((value) => {
       if (active) setSnapshot(value);
     });
+    void getActiveTransport().then((value) => {
+      if (active) {
+        setActiveTransport(value);
+        setSelectedTransportId(value.id);
+      }
+    });
+    void listTransports()
+      .then((value) => {
+        if (active) setTransports(value);
+      })
+      .catch((error: unknown) => {
+        if (active) setUiError(String(error));
+      });
     void onMachineState((value) => {
       if (active) {
         setSnapshot(value);
@@ -86,13 +122,17 @@ export default function App() {
     };
   }, [desktopRuntime]);
 
-  const runAction = async (action: () => Promise<ControllerSnapshot>) => {
+  const runAction = async (
+    action: () => Promise<ControllerSnapshot>,
+  ): Promise<boolean> => {
     setBusy(true);
     setUiError(undefined);
     try {
       setSnapshot(await action());
+      return true;
     } catch (error) {
       setUiError(String(error));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -107,12 +147,49 @@ export default function App() {
     }
   };
 
+  const discoverTransports = async () => {
+    setDiscovering(true);
+    setUiError(undefined);
+    try {
+      const discovered = await listTransports();
+      setTransports(
+        activeTransport.kind === "serial" &&
+          !discovered.some((transport) => transport.id === activeTransport.id)
+          ? [...discovered, activeTransport]
+          : discovered,
+      );
+    } catch (error) {
+      setUiError(String(error));
+    } finally {
+      setDiscovering(false);
+    }
+  };
+
   const isConnected = snapshot.connection === "connected";
   const hasConnection =
     snapshot.connection === "connected" || snapshot.connection === "recovering";
   const canDisconnect =
     snapshot.connection !== "disconnected" && snapshot.connection !== "connecting";
+  const transportLocked = hasConnection || snapshot.connection === "connecting";
+  const visibleTransports = transports.filter(
+    (transport) =>
+      !likelyGrblOnly ||
+      transport.likelyGrbl ||
+      (transportLocked && transport.id === activeTransport.id),
+  );
+  const selectedTransport =
+    visibleTransports.find((transport) => transport.id === selectedTransportId) ??
+    visibleTransports[0] ??
+    activeTransport;
+  const displayedTransport = transportLocked ? activeTransport : selectedTransport;
   const displayedError = uiError ?? snapshot.lastError;
+
+  const connectSelectedTransport = async () => {
+    const connected = await runAction(() =>
+      connectTransport(selectedTransport.id, baudRate),
+    );
+    if (connected) setActiveTransport(selectedTransport);
+  };
 
   return (
     <div className="app-shell">
@@ -130,7 +207,7 @@ export default function App() {
         <div className={`connection-state is-${snapshot.connection}`}>
           <span className="state-dot" />
           <div>
-            <small>Mock transport</small>
+            <small>{displayedTransport.label}</small>
             <strong>{connectionLabels[snapshot.connection]}</strong>
           </div>
         </div>
@@ -159,10 +236,7 @@ export default function App() {
                 <span>Controller reset</span>
                 <strong>{snapshot.resetNotice.banner}</strong>
               </div>
-              <button
-                type="button"
-                onClick={() => void runAction(acknowledgeReset)}
-              >
+              <button type="button" onClick={() => void runAction(acknowledgeReset)}>
                 Подтвердить
               </button>
             </div>
@@ -207,7 +281,67 @@ export default function App() {
         <aside className="control-panel" aria-label="Connection controls">
           <div className="panel-title">
             <span>Transport</span>
-            <strong>Mock GRBL</strong>
+            <strong>{displayedTransport.label}</strong>
+          </div>
+
+          <div className="transport-config">
+            <label className="transport-filter">
+              <input
+                checked={likelyGrblOnly}
+                disabled={busy || discovering}
+                onChange={(event) => setLikelyGrblOnly(event.target.checked)}
+                type="checkbox"
+              />
+              <span>Только вероятные GRBL</span>
+            </label>
+            <label htmlFor="transport-select">Device</label>
+            <div className="transport-select-row">
+              <select
+                id="transport-select"
+                disabled={transportLocked || busy || discovering || !desktopRuntime}
+                onChange={(event) => setSelectedTransportId(event.target.value)}
+                value={selectedTransport.id}
+              >
+                {visibleTransports.map((transport) => (
+                  <option key={transport.id} value={transport.id}>
+                    {transport.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                aria-label="Обновить список портов"
+                disabled={transportLocked || busy || discovering || !desktopRuntime}
+                onClick={() => void discoverTransports()}
+                title="Обновить список портов"
+                type="button"
+              >
+                ↻
+              </button>
+            </div>
+            <small>
+              {selectedTransport.detail}
+              {selectedTransport.kind === "serial" &&
+                selectedTransport.matchReason &&
+                ` · ${selectedTransport.matchReason}`}
+            </small>
+
+            {selectedTransport.kind === "serial" && (
+              <label className="baud-field" htmlFor="baud-rate">
+                <span>Baud rate</span>
+                <select
+                  id="baud-rate"
+                  disabled={transportLocked || busy}
+                  onChange={(event) => setBaudRate(Number(event.target.value))}
+                  value={baudRate}
+                >
+                  {baudRates.map((rate) => (
+                    <option key={rate} value={rate}>
+                      {rate.toLocaleString("en-US", { useGrouping: false })}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </div>
 
           <div className="lifecycle-metrics">
@@ -235,7 +369,7 @@ export default function App() {
             <button
               className="primary-action"
               disabled={busy || hasConnection || !desktopRuntime}
-              onClick={() => void runAction(connectMock)}
+              onClick={() => void connectSelectedTransport()}
               type="button"
             >
               Подключить
@@ -257,49 +391,51 @@ export default function App() {
             </button>
           </div>
 
-          <div className="mock-scenarios">
-            <span>Mock scenarios</span>
-            <div>
-              <button
-                disabled={!isConnected}
-                onClick={() => void runMockAction(triggerMockReset)}
-                type="button"
-              >
-                Reset banner
-              </button>
-              <button
-                disabled={!isConnected}
-                onClick={() => void runMockAction(() => triggerMockAlarm(3))}
-                type="button"
-              >
-                ALARM:3
-              </button>
-              <button
-                disabled={!isConnected || !snapshot.alarm}
-                onClick={() => void runMockAction(clearMockAlarm)}
-                type="button"
-              >
-                Clear alarm
-              </button>
-              <button
-                disabled={!isConnected}
-                onClick={() => void runMockAction(triggerMockTimeout)}
-                type="button"
-              >
-                Timeout ×2
-              </button>
-              <button
-                disabled={!isConnected}
-                onClick={() => void runMockAction(triggerMockDisconnect)}
-                type="button"
-              >
-                Link drop
-              </button>
+          {displayedTransport.kind === "mock" && (
+            <div className="mock-scenarios">
+              <span>Mock scenarios</span>
+              <div>
+                <button
+                  disabled={!isConnected}
+                  onClick={() => void runMockAction(triggerMockReset)}
+                  type="button"
+                >
+                  Reset banner
+                </button>
+                <button
+                  disabled={!isConnected}
+                  onClick={() => void runMockAction(() => triggerMockAlarm(3))}
+                  type="button"
+                >
+                  ALARM:3
+                </button>
+                <button
+                  disabled={!isConnected || !snapshot.alarm}
+                  onClick={() => void runMockAction(clearMockAlarm)}
+                  type="button"
+                >
+                  Clear alarm
+                </button>
+                <button
+                  disabled={!isConnected}
+                  onClick={() => void runMockAction(triggerMockTimeout)}
+                  type="button"
+                >
+                  Timeout ×2
+                </button>
+                <button
+                  disabled={!isConnected}
+                  onClick={() => void runMockAction(triggerMockDisconnect)}
+                  type="button"
+                >
+                  Link drop
+                </button>
+              </div>
             </div>
-          </div>
+          )}
 
           <div className="pipeline" aria-label="Active data path">
-            <span>Mock</span>
+            <span>{displayedTransport.kind === "serial" ? "Serial" : "Mock"}</span>
             <i />
             <span>GRBL</span>
             <i />

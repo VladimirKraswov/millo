@@ -1,15 +1,27 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-import type { ControllerSnapshot } from "../shared/machine";
+import type {
+  ControllerSnapshot,
+  TransportDescriptor,
+} from "../shared/machine";
 
 export const isDesktopRuntime = (): boolean => "__TAURI_INTERNALS__" in window;
 
 export const getControllerSnapshot = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("controller_snapshot");
 
-export const connectMock = (): Promise<ControllerSnapshot> =>
-  invoke<ControllerSnapshot>("connect_mock");
+export const listTransports = (): Promise<TransportDescriptor[]> =>
+  invoke<TransportDescriptor[]>("list_transports");
+
+export const getActiveTransport = (): Promise<TransportDescriptor> =>
+  invoke<TransportDescriptor>("active_transport");
+
+export const connectTransport = (
+  transportId: string,
+  baudRate: number,
+): Promise<ControllerSnapshot> =>
+  invoke<ControllerSnapshot>("connect_transport", { transportId, baudRate });
 
 export const refreshStatus = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("refresh_status");

@@ -11,12 +11,18 @@ milling without tying the application to one machine type.
 The current slices form this path:
 
 ```text
-Mock transport -> GRBL messages -> lifecycle state machine -> Tauri polling -> React
+Serial / Mock transport -> GRBL messages -> lifecycle state machine -> Tauri polling -> React
 ```
 
 The controller now handles periodic status polling, bounded response timeouts,
 reset banners, persistent alarm state, and automatic reconnection after repeated
 communication failures.
+
+The desktop app discovers native serial ports and can connect to a GRBL
+controller at a selected baud rate. This slice deliberately sends only the GRBL
+realtime status byte `?`; queued G-code transmission belongs to the next sender
+slice. Mock GRBL remains the default, so development and lifecycle tests do not
+require hardware.
 
 ## Run
 
@@ -36,6 +42,21 @@ The mock panel can inject reset, alarm, timeout, and link-drop scenarios. Alarm
 remains active until `Clear alarm`; two consecutive silent polls exercise the
 automatic recovery path.
 
+To use hardware, choose a discovered serial device, select its baud rate
+(`115200` is the common GRBL 1.1 default), and connect. Refresh re-runs native
+port discovery. Port access is controlled by the operating system; close other
+serial monitors before connecting.
+
+On macOS, the same USB interface is normally exposed as both `/dev/cu.*` and
+`/dev/tty.*`. Millo collapses that pair and keeps the `/dev/cu.*` callout path,
+which is the appropriate endpoint for initiating a controller connection.
+
+`Только вероятные GRBL` is enabled by default. It keeps Mock GRBL and USB ports
+whose metadata or vendor ID resembles common GRBL/FluidNC controllers and
+USB-UART bridges. Disable it to inspect every serial port. This is discovery
+filtering, not device authentication: Millo confirms the protocol only after a
+successful GRBL status exchange.
+
 ## Workspace
 
 | Package | Responsibility |
@@ -44,14 +65,16 @@ automatic recovery path.
 | `millo-grbl` | GRBL wire-format parsing and encoding |
 | `millo-transport` | Controller-independent I/O contract |
 | `millo-mock` | Deterministic virtual machine for tests |
+| `millo-serial` | Native asynchronous serial discovery and byte/line I/O |
 | `millo-controller` | Connection lifecycle and state orchestration |
 | `millo-desktop` | Thin Tauri command/event adapter |
 
 See [Architecture](docs/ARCHITECTURE.md), the decisions for the
 [modular core](docs/decisions/0001-modular-core.md) and
 [controller lifecycle](docs/decisions/0002-controller-lifecycle.md), plus the
-[project naming decision](docs/decisions/0003-project-name-millo.md). The required
-verification workflow is recorded in [Testing](docs/TESTING.md).
+[project naming decision](docs/decisions/0003-project-name-millo.md) and
+[native serial boundary](docs/decisions/0004-native-serial-transport.md). The
+required verification workflow is recorded in [Testing](docs/TESTING.md).
 
 ## Reference policy
 

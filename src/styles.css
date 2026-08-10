@@ -19,11 +19,13 @@ body {
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
-button:focus-visible {
+button:focus-visible,
+select:focus-visible {
   outline: 2px solid #77d6b3;
   outline-offset: 2px;
 }
@@ -394,6 +396,97 @@ button:focus-visible {
 
 .panel-title strong {
   font-size: 16px;
+}
+
+.transport-config {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 14px 0;
+  border-bottom: 1px solid #27323a;
+}
+
+.transport-config > label,
+.baud-field > span {
+  color: #75838c;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.transport-config > label.transport-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  color: #b8c3c9;
+  cursor: pointer;
+  font-size: 11px;
+  text-transform: none;
+}
+
+.transport-filter input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #77d6b3;
+}
+
+.transport-filter:has(input:disabled) {
+  opacity: 0.48;
+  cursor: default;
+}
+
+.transport-config > small {
+  min-height: 15px;
+  color: #78868f;
+  font-size: 10px;
+  line-height: 15px;
+  overflow-wrap: anywhere;
+}
+
+.transport-select-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 6px;
+}
+
+.transport-config select,
+.transport-select-row button {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid #394750;
+  border-radius: 4px;
+  color: #dce4e9;
+  background: #151d22;
+}
+
+.transport-config select {
+  width: 100%;
+  padding: 0 9px;
+}
+
+.transport-select-row button {
+  padding: 0;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.transport-select-row button:hover:not(:disabled) {
+  border-color: #657983;
+  background: #1d282e;
+}
+
+.transport-config select:disabled,
+.transport-select-row button:disabled {
+  opacity: 0.46;
+  cursor: default;
+}
+
+.baud-field {
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  align-items: center;
+  gap: 10px;
 }
 
 .lifecycle-metrics {

@@ -16,6 +16,8 @@ tauri-build = { version = "2", features = [] }
 millo-controller = { path = "../crates/millo-controller" }
 millo-domain = { path = "../crates/millo-domain" }
 millo-mock = { path = "../crates/millo-mock" }
+millo-serial = { path = "../crates/millo-serial" }
+millo-transport = { path = "../crates/millo-transport" }
 serde.workspace = true
 tauri = { version = "2", features = [] }
 tokio.workspace = true

@@ -44,8 +44,8 @@ converts application calls into commands and events.
 
 ## Implemented vertical slices
 
-The desktop command `connect_mock` connects a deterministic transport, sends the
-GRBL realtime `?` byte, parses the returned status frame, updates
+The desktop command `connect_transport` selects either a deterministic mock or a
+discovered native serial port, sends the GRBL realtime `?` byte, parses the returned status frame, updates
 `ControllerSnapshot`, emits `machine-state`, and returns the same snapshot to the
 caller. The UI treats the event as authoritative.
 
@@ -72,12 +72,33 @@ the core owns every state transition.
 - Disconnect stops polling before closing the transport and clears session
   telemetry.
 
+### Native serial boundary
+
+- `millo-serial` owns OS port discovery, baud configuration, asynchronous byte
+  writes, and CR/LF line framing.
+- It implements the same `Transport` contract as `millo-mock`; neither serial
+  nor mock parses GRBL or changes machine state.
+- The Tauri session stores `Controller<BoxedTransport>`, so transport selection
+  changes construction only, not controller policy.
+- Serial targets are checked against fresh native discovery before opening.
+- The default UI filter uses only discovery metadata: USB transport kind,
+  GRBL/CNC/FluidNC names, common board and USB-UART names, and known vendor IDs.
+  It is intentionally advisory and can be disabled to expose every port.
+- EOF and pre-connect I/O become `TransportError::NotConnected`; platform I/O
+  failures preserve their message as `TransportError::Io`.
+- Reconnection drops and reopens the native handle through the existing
+  controller lifecycle.
+- Physical hardware is not required by the automated suite. Native enumeration
+  and an operator hardware smoke test cover the OS boundary.
+- macOS `/dev/cu.*` and `/dev/tty.*` aliases with the same device suffix are
+  deduplicated in `millo-serial`; the callout (`cu`) path wins before descriptors
+  reach Tauri.
+
 ## Near-term sequence
 
-1. Native serial transport with the same `Transport` contract.
-2. Command queue and sender state machine.
-3. G-code domain, parser fixtures, and program model.
-4. Visualization read model and Three.js adapter.
+1. Command queue and sender state machine.
+2. G-code domain, parser fixtures, and program model.
+3. Visualization read model and Three.js adapter.
 
 Ant Design and Three.js are intentionally absent from the first slice. They will
 be added when the first operator workflow and visualizer require them, keeping

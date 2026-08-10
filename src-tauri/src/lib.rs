@@ -1,9 +1,9 @@
 mod commands;
 
 use commands::{
-    AppState, acknowledge_reset, connect_mock, controller_snapshot, disconnect, mock_clear_alarm,
-    mock_trigger_alarm, mock_trigger_disconnect, mock_trigger_reset, mock_trigger_timeout,
-    refresh_status,
+    AppState, acknowledge_reset, active_transport, connect_transport, controller_snapshot,
+    disconnect, list_transports, mock_clear_alarm, mock_trigger_alarm, mock_trigger_disconnect,
+    mock_trigger_reset, mock_trigger_timeout, refresh_status,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -12,7 +12,9 @@ pub fn run() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             controller_snapshot,
-            connect_mock,
+            list_transports,
+            active_transport,
+            connect_transport,
             refresh_status,
             disconnect,
             acknowledge_reset,
