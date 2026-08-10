@@ -1,12 +1,9 @@
 [package]
-name = "gantryon-mock"
+name = "millo-transport"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
 async-trait.workspace = true
-gantryon-transport = { path = "../gantryon-transport" }
-
-[dev-dependencies]
-tokio.workspace = true
+thiserror.workspace = true

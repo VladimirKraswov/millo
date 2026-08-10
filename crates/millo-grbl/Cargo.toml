@@ -1,11 +1,11 @@
 [package]
-name = "gantryon-grbl"
+name = "millo-grbl"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-gantryon-domain = { path = "../gantryon-domain" }
+millo-domain = { path = "../millo-domain" }
 thiserror.workspace = true
 
 [dev-dependencies]

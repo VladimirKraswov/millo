@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use gantryon_controller::Controller;
-use gantryon_domain::ControllerSnapshot;
-use gantryon_mock::{MockControl, MockTransport};
+use millo_controller::Controller;
+use millo_domain::ControllerSnapshot;
+use millo_mock::{MockControl, MockTransport};
 use tauri::{AppHandle, Emitter, State};
 use tokio::{
     sync::Mutex,

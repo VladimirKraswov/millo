@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
-  "crates/gantryon-controller",
-  "crates/gantryon-domain",
-  "crates/gantryon-grbl",
-  "crates/gantryon-mock",
-  "crates/gantryon-transport",
+  "crates/millo-controller",
+  "crates/millo-domain",
+  "crates/millo-grbl",
+  "crates/millo-mock",
+  "crates/millo-transport",
   "src-tauri",
 ]
 

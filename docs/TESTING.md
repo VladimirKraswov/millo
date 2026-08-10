@@ -10,6 +10,9 @@ npm run verify
 It runs TypeScript type checking, all Rust workspace tests, the production Vite
 build, Rust formatting checks, and Clippy with warnings denied.
 
+The test phase also runs `scripts/check-brand.mjs`, which keeps npm, Cargo,
+Tauri, UI, and documentation naming consistent.
+
 ## Slice checklist
 
 1. Capture new protocol or compatibility behavior as a fixture where possible.

@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    gantryon_desktop_lib::run();
+    millo_desktop_lib::run();
 }

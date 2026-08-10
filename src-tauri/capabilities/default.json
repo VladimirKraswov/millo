@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Base capability for the Gantryon desktop window",
+  "description": "Base capability for the Millo desktop window",
   "windows": ["main"],
   "permissions": ["core:default"]
 }

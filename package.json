@@ -1,5 +1,5 @@
 {
-  "name": "gantryon",
+  "name": "millo",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -7,8 +7,9 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "test:brand": "node scripts/check-brand.mjs",
     "test:rust": "cargo test --workspace",
-    "test": "npm run typecheck && npm run test:rust",
+    "test": "npm run typecheck && npm run test:brand && npm run test:rust",
     "lint:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
     "verify": "npm test && npm run build && npm run lint:rust",
     "tauri": "tauri"

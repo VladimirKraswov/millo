@@ -921,65 +921,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gantryon-controller"
-version = "0.1.0"
-dependencies = [
- "gantryon-domain",
- "gantryon-grbl",
- "gantryon-mock",
- "gantryon-transport",
- "thiserror 2.0.20",
- "tokio",
-]
-
-[[package]]
-name = "gantryon-desktop"
-version = "0.1.0"
-dependencies = [
- "gantryon-controller",
- "gantryon-domain",
- "gantryon-mock",
- "serde",
- "tauri",
- "tauri-build",
- "tokio",
-]
-
-[[package]]
-name = "gantryon-domain"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "gantryon-grbl"
-version = "0.1.0"
-dependencies = [
- "gantryon-domain",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "gantryon-mock"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "gantryon-transport",
- "tokio",
-]
-
-[[package]]
-name = "gantryon-transport"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "thiserror 2.0.20",
-]
-
-[[package]]
 name = "gdk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1846,6 +1787,65 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
+]
+
+[[package]]
+name = "millo-controller"
+version = "0.1.0"
+dependencies = [
+ "millo-domain",
+ "millo-grbl",
+ "millo-mock",
+ "millo-transport",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
+name = "millo-desktop"
+version = "0.1.0"
+dependencies = [
+ "millo-controller",
+ "millo-domain",
+ "millo-mock",
+ "serde",
+ "tauri",
+ "tauri-build",
+ "tokio",
+]
+
+[[package]]
+name = "millo-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "millo-grbl"
+version = "0.1.0"
+dependencies = [
+ "millo-domain",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "millo-mock"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "millo-transport",
+ "tokio",
+]
+
+[[package]]
+name = "millo-transport"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

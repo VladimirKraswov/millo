@@ -23,5 +23,5 @@ pub fn run() {
             mock_trigger_disconnect
         ])
         .run(tauri::generate_context!())
-        .expect("failed to run Gantryon");
+        .expect("failed to run Millo");
 }

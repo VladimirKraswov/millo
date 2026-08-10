@@ -1,4 +1,4 @@
-use gantryon_domain::{MachineMode, MachineState, Position};
+use millo_domain::{MachineMode, MachineState, Position};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq)]

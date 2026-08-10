@@ -7,7 +7,7 @@
 
 The previous port demonstrated broad Candle compatibility, but it also showed
 that translating a mature UI-centered architecture carries forward accidental
-coupling. Gantryon needs deterministic tests, multiple transports, and CNC safety
+coupling. Millo needs deterministic tests, multiple transports, and CNC safety
 logic that does not depend on a desktop framework.
 
 ## Decision

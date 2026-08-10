@@ -1,4 +1,4 @@
-use gantryon_grbl::parse_status_line;
+use millo_grbl::parse_status_line;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

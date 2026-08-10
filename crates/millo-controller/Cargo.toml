@@ -1,0 +1,15 @@
+[package]
+name = "millo-controller"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+millo-domain = { path = "../millo-domain" }
+millo-grbl = { path = "../millo-grbl" }
+millo-transport = { path = "../millo-transport" }
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+millo-mock = { path = "../millo-mock" }

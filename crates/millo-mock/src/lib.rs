@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use gantryon_transport::{Transport, TransportError};
+use millo_transport::{Transport, TransportError};
 
 const DEFAULT_STATUS: &str = "<Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:0,0>";
 

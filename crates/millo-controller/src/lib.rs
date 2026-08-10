@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use gantryon_domain::{
+use millo_domain::{
     AlarmState, ConnectionState, ControllerSnapshot, MachineMode, MachineState, ResetNotice,
 };
-use gantryon_grbl::{IncomingLine, StatusParseError, parse_incoming_line};
-use gantryon_transport::{Transport, TransportError};
+use millo_grbl::{IncomingLine, StatusParseError, parse_incoming_line};
+use millo_transport::{Transport, TransportError};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy)]
@@ -265,8 +265,8 @@ fn duration_ms(duration: Duration) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use gantryon_domain::{ConnectionState, MachineMode};
-    use gantryon_mock::{MockControl, MockTransport};
+    use millo_domain::{ConnectionState, MachineMode};
+    use millo_mock::{MockControl, MockTransport};
 
     use super::*;
 

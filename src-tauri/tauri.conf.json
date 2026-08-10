@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Gantryon",
+  "productName": "Millo",
   "version": "0.1.0",
-  "identifier": "io.gantryon.desktop",
+  "identifier": "io.millo.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://127.0.0.1:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Gantryon",
+        "title": "Millo",
         "width": 1180,
         "height": 760,
         "minWidth": 860,

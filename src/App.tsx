@@ -122,7 +122,7 @@ export default function App() {
             <i />
           </span>
           <div>
-            <strong>Gantryon</strong>
+            <strong>Millo</strong>
             <span>Machine control</span>
           </div>
         </div>
