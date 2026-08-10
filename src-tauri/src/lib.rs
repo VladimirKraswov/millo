@@ -1,6 +1,10 @@
 mod commands;
 
-use commands::{AppState, connect_mock, controller_snapshot, disconnect, refresh_status};
+use commands::{
+    AppState, acknowledge_reset, connect_mock, controller_snapshot, disconnect, mock_clear_alarm,
+    mock_trigger_alarm, mock_trigger_disconnect, mock_trigger_reset, mock_trigger_timeout,
+    refresh_status,
+};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -10,7 +14,13 @@ pub fn run() {
             controller_snapshot,
             connect_mock,
             refresh_status,
-            disconnect
+            disconnect,
+            acknowledge_reset,
+            mock_trigger_reset,
+            mock_trigger_alarm,
+            mock_clear_alarm,
+            mock_trigger_timeout,
+            mock_trigger_disconnect
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Gantryon");

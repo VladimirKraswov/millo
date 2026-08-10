@@ -2,6 +2,7 @@ export type ConnectionState =
   | "disconnected"
   | "connecting"
   | "connected"
+  | "recovering"
   | "faulted";
 
 export type MachineMode =
@@ -34,9 +35,29 @@ export interface MachineState {
   spindleSpeed: number;
 }
 
+export interface ResetNotice {
+  banner: string;
+  version?: string;
+  sequence: number;
+}
+
+export interface AlarmState {
+  code?: number;
+  message: string;
+}
+
 export interface ControllerSnapshot {
   connection: ConnectionState;
   machine: MachineState;
+  resetNotice?: ResetNotice;
+  alarm?: AlarmState;
+  consecutiveFailures: number;
+  reconnectCount: number;
+  pollSequence: number;
+  resetCount: number;
+  pollIntervalMs: number;
+  statusTimeoutMs: number;
+  failureThreshold: number;
   lastError?: string;
 }
 
@@ -48,4 +69,11 @@ export const emptySnapshot: ControllerSnapshot = {
     feedRate: 0,
     spindleSpeed: 0,
   },
+  consecutiveFailures: 0,
+  reconnectCount: 0,
+  pollSequence: 0,
+  resetCount: 0,
+  pollIntervalMs: 0,
+  statusTimeoutMs: 0,
+  failureThreshold: 0,
 };

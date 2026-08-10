@@ -1,6 +1,25 @@
 use gantryon_domain::{MachineMode, MachineState, Position};
 use thiserror::Error;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum IncomingLine {
+    Status(MachineState),
+    ResetBanner {
+        raw: String,
+        version: Option<String>,
+    },
+    Alarm {
+        code: Option<u16>,
+        raw: String,
+    },
+    Ok,
+    Error {
+        code: Option<u16>,
+        raw: String,
+    },
+    Message(String),
+}
+
 #[derive(Debug, Error, PartialEq)]
 pub enum StatusParseError {
     #[error("status frame must be enclosed in '<' and '>'")]
@@ -11,6 +30,42 @@ pub enum StatusParseError {
     InvalidNumber { field: String, value: String },
     #[error("field '{field}' must contain three or four coordinates")]
     InvalidPosition { field: String },
+}
+
+pub fn parse_incoming_line(line: &str) -> Result<IncomingLine, StatusParseError> {
+    let line = line.trim();
+
+    if line.starts_with('<') {
+        return parse_status_line(line).map(IncomingLine::Status);
+    }
+
+    if let Some(remainder) = line.strip_prefix("Grbl ") {
+        let version = remainder.split_whitespace().next().map(str::to_owned);
+        return Ok(IncomingLine::ResetBanner {
+            raw: line.to_owned(),
+            version,
+        });
+    }
+
+    if let Some(value) = line.strip_prefix("ALARM:") {
+        return Ok(IncomingLine::Alarm {
+            code: value.trim().parse().ok(),
+            raw: line.to_owned(),
+        });
+    }
+
+    if line == "ok" {
+        return Ok(IncomingLine::Ok);
+    }
+
+    if let Some(value) = line.strip_prefix("error:") {
+        return Ok(IncomingLine::Error {
+            code: value.trim().parse().ok(),
+            raw: line.to_owned(),
+        });
+    }
+
+    Ok(IncomingLine::Message(line.to_owned()))
 }
 
 pub fn parse_status_line(line: &str) -> Result<MachineState, StatusParseError> {
@@ -144,5 +199,31 @@ mod tests {
         assert_eq!(state.machine_position.unwrap().a, Some(4.0));
         assert_eq!(state.feed_rate, 120.0);
         assert_eq!(state.spindle_speed, 9000.0);
+    }
+
+    #[test]
+    fn classifies_reset_banner() {
+        let line = parse_incoming_line("Grbl 1.1h ['$' for help]").unwrap();
+
+        assert_eq!(
+            line,
+            IncomingLine::ResetBanner {
+                raw: "Grbl 1.1h ['$' for help]".to_owned(),
+                version: Some("1.1h".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn classifies_alarm_with_code() {
+        let line = parse_incoming_line("ALARM:3").unwrap();
+
+        assert_eq!(
+            line,
+            IncomingLine::Alarm {
+                code: Some(3),
+                raw: "ALARM:3".to_owned(),
+            }
+        );
     }
 }

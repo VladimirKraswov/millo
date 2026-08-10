@@ -5,11 +5,15 @@ TypeScript user interface. The project is being built in small vertical slices;
 each slice must work end to end and remain testable without a desktop window or
 physical machine.
 
-The first slice is intentionally narrow:
+The current slices form this path:
 
 ```text
-Mock transport -> GRBL status parser -> controller state -> Tauri event -> React
+Mock transport -> GRBL messages -> lifecycle state machine -> Tauri polling -> React
 ```
+
+The controller now handles periodic status polling, bounded response timeouts,
+reset banners, persistent alarm state, and automatic reconnection after repeated
+communication failures.
 
 ## Run
 
@@ -18,12 +22,16 @@ Tauri 2.
 
 ```bash
 npm install
-npm test
+npm run verify
 npm run tauri dev
 ```
 
 The Vite-only preview (`npm run dev`) renders the interface, but controller
 commands are enabled only inside Tauri.
+
+The mock panel can inject reset, alarm, timeout, and link-drop scenarios. Alarm
+remains active until `Clear alarm`; two consecutive silent polls exercise the
+automatic recovery path.
 
 ## Workspace
 
@@ -36,8 +44,10 @@ commands are enabled only inside Tauri.
 | `gantryon-controller` | Connection lifecycle and state orchestration |
 | `gantryon-desktop` | Thin Tauri command/event adapter |
 
-See [Architecture](docs/ARCHITECTURE.md) and the project
-[decisions](docs/decisions/0001-modular-core.md).
+See [Architecture](docs/ARCHITECTURE.md), the decisions for the
+[modular core](docs/decisions/0001-modular-core.md) and
+[controller lifecycle](docs/decisions/0002-controller-lifecycle.md). The
+required verification workflow is recorded in [Testing](docs/TESTING.md).
 
 ## Reference policy
 

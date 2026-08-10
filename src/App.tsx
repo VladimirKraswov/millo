@@ -1,12 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  acknowledgeReset,
+  clearMockAlarm,
   connectMock,
   disconnect,
   getControllerSnapshot,
   isDesktopRuntime,
   onMachineState,
   refreshStatus,
+  triggerMockAlarm,
+  triggerMockDisconnect,
+  triggerMockReset,
+  triggerMockTimeout,
 } from "./api/controller";
 import {
   emptySnapshot,
@@ -18,6 +24,7 @@ const connectionLabels = {
   disconnected: "Отключено",
   connecting: "Подключение",
   connected: "Подключено",
+  recovering: "Восстановление",
   faulted: "Ошибка",
 } as const;
 
@@ -63,7 +70,12 @@ export default function App() {
       if (active) setSnapshot(value);
     });
     void onMachineState((value) => {
-      if (active) setSnapshot(value);
+      if (active) {
+        setSnapshot(value);
+        if (value.connection === "connected" && value.consecutiveFailures === 0) {
+          setUiError(undefined);
+        }
+      }
     }).then((cleanup) => {
       unlisten = cleanup;
     });
@@ -86,7 +98,20 @@ export default function App() {
     }
   };
 
+  const runMockAction = async (action: () => Promise<void>) => {
+    setUiError(undefined);
+    try {
+      await action();
+    } catch (error) {
+      setUiError(String(error));
+    }
+  };
+
   const isConnected = snapshot.connection === "connected";
+  const hasConnection =
+    snapshot.connection === "connected" || snapshot.connection === "recovering";
+  const canDisconnect =
+    snapshot.connection !== "disconnected" && snapshot.connection !== "connecting";
   const displayedError = uiError ?? snapshot.lastError;
 
   return (
@@ -128,6 +153,35 @@ export default function App() {
             </span>
           </div>
 
+          {snapshot.resetNotice && (
+            <div className="operator-notice reset-notice" role="status">
+              <div>
+                <span>Controller reset</span>
+                <strong>{snapshot.resetNotice.banner}</strong>
+              </div>
+              <button
+                type="button"
+                onClick={() => void runAction(acknowledgeReset)}
+              >
+                Подтвердить
+              </button>
+            </div>
+          )}
+
+          {snapshot.alarm && (
+            <div className="operator-notice alarm-notice" role="alert">
+              <div>
+                <span>Alarm</span>
+                <strong>
+                  {snapshot.alarm.code !== undefined
+                    ? `ALARM:${snapshot.alarm.code}`
+                    : snapshot.alarm.message}
+                </strong>
+              </div>
+              <small>Требуется проверка состояния станка</small>
+            </div>
+          )}
+
           <div className="readout-section">
             <div className="readout-label">
               <span>Machine position</span>
@@ -156,10 +210,31 @@ export default function App() {
             <strong>Mock GRBL</strong>
           </div>
 
+          <div className="lifecycle-metrics">
+            <div>
+              <span>Polling</span>
+              <strong>{snapshot.pollIntervalMs || "--"} ms</strong>
+            </div>
+            <div>
+              <span>Timeout</span>
+              <strong>{snapshot.statusTimeoutMs || "--"} ms</strong>
+            </div>
+            <div>
+              <span>Failures</span>
+              <strong>
+                {snapshot.consecutiveFailures}/{snapshot.failureThreshold || "--"}
+              </strong>
+            </div>
+            <div>
+              <span>Reconnects</span>
+              <strong>{snapshot.reconnectCount}</strong>
+            </div>
+          </div>
+
           <div className="actions">
             <button
               className="primary-action"
-              disabled={busy || isConnected || !desktopRuntime}
+              disabled={busy || hasConnection || !desktopRuntime}
               onClick={() => void runAction(connectMock)}
               type="button"
             >
@@ -174,12 +249,53 @@ export default function App() {
               <kbd>?</kbd>
             </button>
             <button
-              disabled={busy || !isConnected}
+              disabled={busy || !canDisconnect}
               onClick={() => void runAction(disconnect)}
               type="button"
             >
               Отключить
             </button>
+          </div>
+
+          <div className="mock-scenarios">
+            <span>Mock scenarios</span>
+            <div>
+              <button
+                disabled={!isConnected}
+                onClick={() => void runMockAction(triggerMockReset)}
+                type="button"
+              >
+                Reset banner
+              </button>
+              <button
+                disabled={!isConnected}
+                onClick={() => void runMockAction(() => triggerMockAlarm(3))}
+                type="button"
+              >
+                ALARM:3
+              </button>
+              <button
+                disabled={!isConnected || !snapshot.alarm}
+                onClick={() => void runMockAction(clearMockAlarm)}
+                type="button"
+              >
+                Clear alarm
+              </button>
+              <button
+                disabled={!isConnected}
+                onClick={() => void runMockAction(triggerMockTimeout)}
+                type="button"
+              >
+                Timeout ×2
+              </button>
+              <button
+                disabled={!isConnected}
+                onClick={() => void runMockAction(triggerMockDisconnect)}
+                type="button"
+              >
+                Link drop
+              </button>
+            </div>
           </div>
 
           <div className="pipeline" aria-label="Active data path">
@@ -201,8 +317,8 @@ export default function App() {
 
       <footer className="statusbar">
         <span>Protocol: GRBL status v1.1</span>
+        <span>Poll: #{snapshot.pollSequence}</span>
         <span>Core: Rust</span>
-        <span>UI: TypeScript</span>
       </footer>
     </div>
   );

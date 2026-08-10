@@ -7,6 +7,7 @@ pub enum ConnectionState {
     Disconnected,
     Connecting,
     Connected,
+    Recovering,
     Faulted,
 }
 
@@ -53,11 +54,39 @@ pub struct MachineState {
     pub spindle_speed: f64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetNotice {
+    pub banner: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    pub sequence: u64,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlarmState {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<u16>,
+    pub message: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ControllerSnapshot {
     pub connection: ConnectionState,
     pub machine: MachineState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset_notice: Option<ResetNotice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alarm: Option<AlarmState>,
+    pub consecutive_failures: u32,
+    pub reconnect_count: u32,
+    pub poll_sequence: u64,
+    pub reset_count: u64,
+    pub poll_interval_ms: u64,
+    pub status_timeout_ms: u64,
+    pub failure_threshold: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
 }

@@ -9,7 +9,7 @@ gantryon-domain = { path = "../gantryon-domain" }
 gantryon-grbl = { path = "../gantryon-grbl" }
 gantryon-transport = { path = "../gantryon-transport" }
 thiserror.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 gantryon-mock = { path = "../gantryon-mock" }
-tokio.workspace = true

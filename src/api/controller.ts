@@ -17,6 +17,23 @@ export const refreshStatus = (): Promise<ControllerSnapshot> =>
 export const disconnect = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("disconnect");
 
+export const acknowledgeReset = (): Promise<ControllerSnapshot> =>
+  invoke<ControllerSnapshot>("acknowledge_reset");
+
+export const triggerMockReset = (): Promise<void> =>
+  invoke<void>("mock_trigger_reset");
+
+export const triggerMockAlarm = (code = 3): Promise<void> =>
+  invoke<void>("mock_trigger_alarm", { code });
+
+export const clearMockAlarm = (): Promise<void> => invoke<void>("mock_clear_alarm");
+
+export const triggerMockTimeout = (): Promise<void> =>
+  invoke<void>("mock_trigger_timeout");
+
+export const triggerMockDisconnect = (): Promise<void> =>
+  invoke<void>("mock_trigger_disconnect");
+
 export const onMachineState = (
   handler: (snapshot: ControllerSnapshot) => void,
 ): Promise<UnlistenFn> =>

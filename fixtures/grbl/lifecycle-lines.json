@@ -1,0 +1,37 @@
+[
+  {
+    "name": "reset banner",
+    "input": "Grbl 1.1h ['$' for help]",
+    "kind": "reset",
+    "version": "1.1h"
+  },
+  {
+    "name": "hard limit alarm",
+    "input": "ALARM:1",
+    "kind": "alarm",
+    "code": 1
+  },
+  {
+    "name": "homing failure alarm",
+    "input": "ALARM:9",
+    "kind": "alarm",
+    "code": 9
+  },
+  {
+    "name": "locked command error",
+    "input": "error:9",
+    "kind": "error",
+    "code": 9
+  },
+  {
+    "name": "alarm status",
+    "input": "<Alarm|MPos:0.000,0.000,0.000|FS:0,0>",
+    "kind": "status",
+    "mode": "Alarm"
+  },
+  {
+    "name": "acknowledgement",
+    "input": "ok",
+    "kind": "ok"
+  }
+]
