@@ -74,6 +74,11 @@ interface ActivePlugin extends PluginLoadResult {
   readonly resources: PluginResourceScope;
 }
 
+interface LoadingPlugin {
+  readonly resources: PluginResourceScope;
+  cancelled: boolean;
+}
+
 interface InMemoryPluginLoaderOptions {
   readonly uiRegistry: UiExtensionRegistry;
   readonly machineCommands?: MachineCommandGateway;
@@ -96,7 +101,7 @@ export class InMemoryPluginLoader {
   private readonly grants: CapabilityGrantStore;
   private readonly onPluginError?: (pluginId: string, error: unknown) => void;
   private readonly active = new Map<string, ActivePlugin>();
-  private readonly loading = new Set<string>();
+  private readonly loading = new Map<string, LoadingPlugin>();
 
   constructor(options: InMemoryPluginLoaderOptions) {
     this.uiRegistry = options.uiRegistry;
@@ -144,7 +149,8 @@ export class InMemoryPluginLoader {
     });
 
     const resources = new PluginResourceScope(manifest.id);
-    this.loading.add(manifest.id);
+    const loading = { resources, cancelled: false };
+    this.loading.set(manifest.id, loading);
     try {
       const deactivate = await plugin.activate(
         this.activationContext(manifest, grantedCapabilities, resources),
@@ -156,6 +162,17 @@ export class InMemoryPluginLoader {
       }
       const deactivateHandler =
         typeof deactivate === "function" ? deactivate : undefined;
+      if (loading.cancelled) {
+        try {
+          await deactivateHandler?.();
+        } finally {
+          resources.dispose();
+          this.uiRegistry.unregisterOwner(manifest.id);
+        }
+        throw new PluginLoadError(
+          `plugin was unloaded during activation: ${manifest.id}`,
+        );
+      }
       this.active.set(manifest.id, {
         ...result,
         deactivate: deactivateHandler,
@@ -172,11 +189,23 @@ export class InMemoryPluginLoader {
       }
       throw error;
     } finally {
-      this.loading.delete(manifest.id);
+      if (this.loading.get(manifest.id) === loading) {
+        this.loading.delete(manifest.id);
+      }
     }
   }
 
   async unload(pluginId: string): Promise<boolean> {
+    const loading = this.loading.get(pluginId);
+    if (loading) {
+      loading.cancelled = true;
+      try {
+        loading.resources.dispose();
+      } finally {
+        this.uiRegistry.unregisterOwner(pluginId);
+      }
+      return true;
+    }
     const plugin = this.active.get(pluginId);
     if (!plugin) return false;
     this.active.delete(pluginId);

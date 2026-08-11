@@ -256,6 +256,40 @@ describe("InMemoryPluginLoader", () => {
     await expect(unloading).resolves.toBe(true);
   });
 
+  it("cancels capabilities and UI when unloaded during activation", async () => {
+    const pluginId = "dev.millo.slow-activation";
+    const uiRegistry = createUiExtensionRegistry();
+    let finishActivation: (() => void) | undefined;
+    const deactivate = vi.fn();
+    const loader = new InMemoryPluginLoader({
+      uiRegistry,
+      grants: new CapabilityGrantStore([
+        { pluginId, capabilities: ["ui.contribute"] },
+      ]),
+    });
+    const plugin = moduleWith(pluginId, ["ui.contribute"], (context) => {
+      context.ui?.register({
+        id: `${pluginId}.panel`,
+        slot: uiSlots.controlMachine,
+        render: () => "pending",
+      });
+      return new Promise<() => void>((resolve) => {
+        finishActivation = () => resolve(deactivate);
+      });
+    });
+
+    const loading = loader.load(plugin);
+    await expect(loader.unload(pluginId)).resolves.toBe(true);
+    expect(uiRegistry.list(uiSlots.controlMachine)).toEqual([]);
+
+    finishActivation?.();
+    await expect(loading).rejects.toThrow(
+      `plugin was unloaded during activation: ${pluginId}`,
+    );
+    expect(deactivate).toHaveBeenCalledOnce();
+    expect(loader.list()).toEqual([]);
+  });
+
   it("removes subscriptions registered before activation fails", async () => {
     const pluginId = "dev.millo.failed-observer";
     const machineState = new MachineSnapshotStore(controllerSnapshot(0));

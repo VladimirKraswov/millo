@@ -44,7 +44,9 @@ deeply frozen, publication stops after an idempotent unsubscribe, and a state
 source does not imply a grant. Loader tests cover current/future read access,
 subscriber-error isolation, cleanup after activation failure, automatic
 unsubscribe on unload, and rejection through retained capability proxies after
-their plugin is gone.
+their plugin is gone. A delayed-activation fixture unloads the plugin before its
+promise resolves and verifies immediate UI cleanup, late deactivation, and an
+empty active registry.
 
 PluginHost bootstrap tests verify that core UI and the machine source share one
 composition root, no plugin is activated implicitly, and an explicitly loaded

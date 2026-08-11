@@ -596,6 +596,10 @@ does not schedule or execute controller I/O.
   waiting for plugin deactivation. Retained UI, read, and jog proxies reject use
   after that scope closes. Subscriber failures are isolated and may be reported
   through the host error callback without interrupting other listeners.
+- Loading plugins are also registered with their resource scope. An unload that
+  races asynchronous activation closes capabilities and removes UI immediately;
+  a late activation result runs its deactivation handler and is rejected instead
+  of becoming active after the operator already removed it.
 - UI plugins receive a registrar that binds contributions to the manifest owner
   and enforces an owner-prefixed ID. They do not receive the shell's internal UI
   context. Activation failure and unload remove every contribution owned by the
