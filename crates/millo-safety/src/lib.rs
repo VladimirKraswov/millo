@@ -215,9 +215,11 @@ mod tests {
                 profile: HardwareProfile {
                     name: "test".to_owned(),
                     axes: vec!["X".to_owned(), "Y".to_owned(), "Z".to_owned()],
+                    travel_mm: None,
                     spindle_control: SpindleControl::Manual,
                     homing_installed: false,
                     limit_switches_installed: false,
+                    probe_installed: false,
                     emergency_stop_installed: false,
                 },
                 test_jog_ready: true,

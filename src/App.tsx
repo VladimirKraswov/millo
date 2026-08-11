@@ -17,11 +17,18 @@ import {
   triggerMockReset,
   triggerMockTimeout,
 } from "./api/controller";
+import {
+  createMachineProfile,
+  detectMachineProfile,
+  getMachineProfiles,
+  selectMachineProfile,
+} from "./api/profiles";
 import { ReadinessPanel } from "./components/ReadinessPanel";
 import { SafetyControls } from "./components/SafetyControls";
 import { previewFixtureProgram } from "./features/program/previewFixtureProgram";
 import { previewFixturePreflightGateway } from "./features/program/previewFixturePreflight";
 import { ProgramWorkspace } from "./features/program/ProgramWorkspace";
+import { MachineProfiles } from "./features/machine-profiles/MachineProfiles";
 import { bindMachineStateStream } from "./platform/machine/MachineStateEventStream";
 import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineCommandGateway";
 import { tauriMachineStateEventStream } from "./platform/machine/tauriMachineStateEventStream";
@@ -36,6 +43,8 @@ import {
   type Position,
   type TransportDescriptor,
 } from "./shared/machine";
+import type { MachineProfileDraft, MachineProfileState } from "./shared/profile";
+import { selectedMachineProfile } from "./shared/profile";
 
 const connectionLabels = {
   disconnected: "Отключено",
@@ -63,6 +72,23 @@ const developmentPreviewFixture =
     ? previewFixtureProgram
     : undefined;
 const developmentPreflightFixture = developmentFixture === "preflight";
+const developmentProfileFixture: MachineProfileState = {
+  profiles: [
+    {
+      id: "machine-0001",
+      name: "LUNYEE CNC",
+      travelMm: { x: 300, y: 180, z: 45 },
+      spindleControl: "manual",
+      homingInstalled: false,
+      limitSwitchesInstalled: false,
+      probeInstalled: false,
+      emergencyStopInstalled: false,
+      connection: { transportId: "mock", baudRate: 115_200 },
+      detectedController: { firmwareVersion: "1.1f.20230316" },
+    },
+  ],
+  selectedProfileId: "machine-0001",
+};
 
 const formatCoordinate = (value: number | undefined): string =>
   value === undefined ? "--" : value.toFixed(3);
@@ -111,6 +137,12 @@ export default function App() {
   const [baudRate, setBaudRate] = useState(115_200);
   const [likelyGrblOnly, setLikelyGrblOnly] = useState(true);
   const [inspection, setInspection] = useState<HardwareInspection>();
+  const [machineProfiles, setMachineProfiles] = useState<MachineProfileState>(
+    developmentFixture === "profiles"
+      ? developmentProfileFixture
+      : { profiles: [] },
+  );
+  const [profileBusy, setProfileBusy] = useState(false);
   const [inspecting, setInspecting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
@@ -156,6 +188,13 @@ export default function App() {
     void listTransports()
       .then((value) => {
         if (active) setTransports(value);
+      })
+      .catch((error: unknown) => {
+        if (active) setUiError(String(error));
+      });
+    void getMachineProfiles()
+      .then((value) => {
+        if (active) setMachineProfiles(value);
       })
       .catch((error: unknown) => {
         if (active) setUiError(String(error));
@@ -227,7 +266,14 @@ export default function App() {
     activeTransport;
   const displayedTransport = transportLocked ? activeTransport : selectedTransport;
   const displayedError = uiError ?? snapshot.lastError;
-  const controlsBusy = busy || inspecting;
+  const controlsBusy = busy || inspecting || profileBusy;
+  const selectedMachine = selectedMachineProfile(machineProfiles);
+
+  useEffect(() => {
+    if (transportLocked || !selectedMachine?.connection) return;
+    setSelectedTransportId(selectedMachine.connection.transportId);
+    setBaudRate(selectedMachine.connection.baudRate);
+  }, [selectedMachine, transportLocked]);
 
   const readDeviceInspection = async () => {
     setInspecting(true);
@@ -257,6 +303,74 @@ export default function App() {
     if (disconnected) setInspection(undefined);
   };
 
+  const chooseMachineProfile = async (profileId: string) => {
+    setProfileBusy(true);
+    setUiError(undefined);
+    try {
+      if (desktopRuntime) {
+        setMachineProfiles(await selectMachineProfile(profileId));
+      } else {
+        setMachineProfiles((current) => ({
+          ...current,
+          selectedProfileId: profileId,
+        }));
+      }
+      setInspection(undefined);
+    } catch (error) {
+      setUiError(String(error));
+      throw error;
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  const addMachineProfile = async (draft: MachineProfileDraft) => {
+    setProfileBusy(true);
+    setUiError(undefined);
+    try {
+      if (desktopRuntime) {
+        setMachineProfiles(await createMachineProfile(draft));
+      } else if (developmentFixture === "profiles") {
+        const id = `machine-${String(machineProfiles.profiles.length + 1).padStart(4, "0")}`;
+        setMachineProfiles((current) => ({
+          profiles: [...current.profiles, { ...draft, id }],
+          selectedProfileId: id,
+        }));
+      } else {
+        throw new Error("Machine profiles require the desktop runtime");
+      }
+      setInspection(undefined);
+    } catch (error) {
+      setUiError(String(error));
+      throw error;
+    } finally {
+      setProfileBusy(false);
+    }
+  };
+
+  const detectSelectedMachine = async (): Promise<MachineProfileDraft> => {
+    if (!desktopRuntime) {
+      if (developmentFixture === "profiles") {
+        const fixture = developmentProfileFixture.profiles[0];
+        return {
+          name: fixture.name,
+          travelMm: { ...fixture.travelMm },
+          spindleControl: fixture.spindleControl,
+          homingInstalled: fixture.homingInstalled,
+          limitSwitchesInstalled: fixture.limitSwitchesInstalled,
+          probeInstalled: fixture.probeInstalled,
+          emergencyStopInstalled: fixture.emergencyStopInstalled,
+          connection: fixture.connection ? { ...fixture.connection } : undefined,
+          detectedController: fixture.detectedController
+            ? { ...fixture.detectedController }
+            : undefined,
+        };
+      }
+      throw new Error("GRBL detection requires the desktop runtime");
+    }
+    return detectMachineProfile(selectedTransport.id, baudRate);
+  };
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -269,6 +383,16 @@ export default function App() {
             <span>Machine control</span>
           </div>
         </div>
+
+        <MachineProfiles
+          busy={profileBusy}
+          canDetect={desktopRuntime && !transportLocked && !controlsBusy}
+          locked={transportLocked}
+          onCreate={addMachineProfile}
+          onDetect={detectSelectedMachine}
+          onSelect={chooseMachineProfile}
+          state={machineProfiles}
+        />
 
         <div className={`connection-state is-${snapshot.connection}`}>
           <span className="state-dot" />
@@ -537,6 +661,11 @@ export default function App() {
           <div className="panel-title">
             <span>Transport</span>
             <strong>{displayedTransport.label}</strong>
+            <small>
+              {selectedMachine
+                ? `Станок: ${selectedMachine.name}`
+                : "Сначала добавьте или выберите станок"}
+            </small>
           </div>
 
           <SafetyControls
@@ -638,7 +767,9 @@ export default function App() {
           <div className="actions">
             <button
               className="primary-action"
-              disabled={controlsBusy || hasConnection || !desktopRuntime}
+              disabled={
+                controlsBusy || hasConnection || !desktopRuntime || !selectedMachine
+              }
               onClick={() => void connectSelectedTransport()}
               type="button"
             >

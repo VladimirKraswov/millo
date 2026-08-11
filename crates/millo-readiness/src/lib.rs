@@ -41,7 +41,7 @@ pub fn assess(
         milling_mode(inspection),
         modal_units(inspection),
         spindle_state(profile, inspection),
-        probe_input(inspection),
+        probe_input(profile, inspection),
         emergency_stop(profile),
     ];
 
@@ -284,7 +284,7 @@ fn spindle_state(profile: &HardwareProfile, inspection: &DeviceInspection) -> Re
     )
 }
 
-fn probe_input(inspection: &DeviceInspection) -> ReadinessCheck {
+fn probe_input(profile: &HardwareProfile, inspection: &DeviceInspection) -> ReadinessCheck {
     let invert = binary_setting(inspection, "$6");
     let last_probe = inspection
         .parameters
@@ -294,18 +294,24 @@ fn probe_input(inspection: &DeviceInspection) -> ReadinessCheck {
 
     check(
         "probe-input",
-        if invert.is_some() && last_probe != "missing" {
+        if !profile.probe_installed || (invert.is_some() && last_probe != "missing") {
             ReadinessLevel::Caution
         } else {
             ReadinessLevel::Blocker
         },
         "Probe input",
-        if invert.is_some() && last_probe != "missing" {
+        if !profile.probe_installed {
+            "No probe is declared in the selected machine profile"
+        } else if invert.is_some() && last_probe != "missing" {
             "Electrical polarity still requires a dedicated stationary probe test"
         } else {
             "Probe configuration or state is unavailable"
         },
-        Some(format!("$6={} · PRB={last_probe}", binary_label(invert))),
+        Some(format!(
+            "installed={} · $6={} · PRB={last_probe}",
+            profile.probe_installed,
+            binary_label(invert)
+        )),
     )
 }
 

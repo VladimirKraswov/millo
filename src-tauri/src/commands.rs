@@ -8,6 +8,9 @@ use millo_domain::{
 use millo_dry_run::{DryRunPlan, DryRunPolicyError, build_dry_run_plan};
 use millo_gcode::{GcodeProgram, ProgramParseRequest, parse_program};
 use millo_mock::{MockControl, MockTransport};
+use millo_profile::{
+    MachineConnectionPreset, MachineProfileDraft, MachineProfileState, MachineProfileStore,
+};
 use millo_run::RunPreflightReport;
 use millo_sender::SenderSnapshot;
 use millo_serial::{
@@ -63,6 +66,7 @@ impl ResolvedTransport {
 
 pub struct AppState {
     arbiter: CommandArbiter,
+    profiles: Mutex<MachineProfileStore>,
     active_transport: Mutex<TransportDescriptor>,
     mock: Mutex<Option<MockControl>>,
     transition_lock: Mutex<()>,
@@ -71,28 +75,44 @@ pub struct AppState {
 
 impl Default for AppState {
     fn default() -> Self {
+        Self::from_profile_store(MachineProfileStore::in_memory())
+    }
+}
+
+impl AppState {
+    pub fn load(profile_path: impl Into<std::path::PathBuf>) -> Result<Self, String> {
+        let profiles =
+            MachineProfileStore::load(profile_path).map_err(|error| error.to_string())?;
+        Ok(Self::from_profile_store(profiles))
+    }
+
+    fn from_profile_store(profiles: MachineProfileStore) -> Self {
         let initial = ResolvedTransport::mock();
         let descriptor = initial.descriptor;
         let mock = initial.mock;
+        let hardware_profile = profiles
+            .state()
+            .selected()
+            .map(|profile| profile.hardware_profile())
+            .unwrap_or_else(HardwareProfile::first_machine);
         let (arbiter, worker) = CommandArbiter::new_with_execution_target(
             initial.transport,
             ControllerConfig::default(),
-            HardwareProfile::first_machine(),
+            hardware_profile,
             initial.execution_target,
         );
         tauri::async_runtime::spawn(worker);
 
         Self {
             arbiter,
+            profiles: Mutex::new(profiles),
             active_transport: Mutex::new(descriptor),
             mock: Mutex::new(mock),
             transition_lock: Mutex::new(()),
             event_task: Mutex::new(None),
         }
     }
-}
 
-impl AppState {
     async fn start_event_bridge(&self, app: AppHandle) {
         let mut event_task = self.event_task.lock().await;
         if event_task.as_ref().is_some_and(|task| !task.is_finished()) {
@@ -125,6 +145,112 @@ impl AppState {
 }
 
 #[tauri::command]
+pub async fn machine_profiles(state: State<'_, AppState>) -> Result<MachineProfileState, String> {
+    Ok(state.profiles.lock().await.state())
+}
+
+#[tauri::command]
+pub async fn create_machine_profile(
+    draft: MachineProfileDraft,
+    state: State<'_, AppState>,
+) -> Result<MachineProfileState, String> {
+    let _transition = state.transition_lock.lock().await;
+    ensure_profile_change_available(&state)?;
+    let next = state
+        .profiles
+        .lock()
+        .await
+        .create_and_select(draft)
+        .map_err(|error| error.to_string())?;
+    let profile = next
+        .selected()
+        .expect("create_and_select must produce a selected profile")
+        .hardware_profile();
+    state
+        .arbiter
+        .set_hardware_profile(profile)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(next)
+}
+
+#[tauri::command]
+pub async fn select_machine_profile(
+    profile_id: String,
+    state: State<'_, AppState>,
+) -> Result<MachineProfileState, String> {
+    let _transition = state.transition_lock.lock().await;
+    ensure_profile_change_available(&state)?;
+    let next = state
+        .profiles
+        .lock()
+        .await
+        .select(&profile_id)
+        .map_err(|error| error.to_string())?;
+    let profile = next
+        .selected()
+        .expect("select must preserve a selected profile")
+        .hardware_profile();
+    state
+        .arbiter
+        .set_hardware_profile(profile)
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(next)
+}
+
+#[tauri::command]
+pub async fn detect_machine_profile(
+    transport_id: String,
+    baud_rate: u32,
+    state: State<'_, AppState>,
+) -> Result<MachineProfileDraft, String> {
+    let _transition = state.transition_lock.lock().await;
+    ensure_profile_change_available(&state)?;
+    let resolved = resolve_transport(&transport_id, baud_rate).await?;
+    let descriptor = resolved.descriptor.clone();
+    let (arbiter, worker) = CommandArbiter::new_with_execution_target(
+        resolved.transport,
+        ControllerConfig::default(),
+        HardwareProfile::first_machine(),
+        resolved.execution_target,
+    );
+    let worker = tokio::spawn(worker);
+
+    let result = async {
+        arbiter.connect().await.map_err(|error| error.to_string())?;
+        let snapshot = arbiter
+            .refresh_status()
+            .await
+            .map_err(|error| error.to_string())?;
+        if snapshot.reset_notice.is_some() {
+            arbiter
+                .acknowledge_reset()
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        let inspection = arbiter
+            .inspect_device()
+            .await
+            .map_err(|error| error.to_string())?;
+        MachineProfileDraft::from_grbl_inspection(
+            suggested_machine_name(&descriptor, &inspection.device),
+            &inspection.device,
+            MachineConnectionPreset {
+                transport_id: descriptor.id.clone(),
+                baud_rate,
+            },
+        )
+        .map_err(|error| error.to_string())
+    }
+    .await;
+
+    let _ = arbiter.disconnect().await;
+    worker.abort();
+    result
+}
+
+#[tauri::command]
 pub async fn list_transports() -> Result<Vec<TransportDescriptor>, String> {
     let serial_ports = tokio::task::spawn_blocking(available_serial_ports)
         .await
@@ -154,6 +280,9 @@ pub async fn connect_transport(
     state: State<'_, AppState>,
 ) -> Result<ControllerSnapshot, String> {
     let _transition = state.transition_lock.lock().await;
+    if state.profiles.lock().await.state().selected().is_none() {
+        return Err("select or create a machine profile before connecting".to_owned());
+    }
     state.start_event_bridge(app).await;
     let replacement = resolve_transport(&transport_id, baud_rate).await?;
 
@@ -178,6 +307,32 @@ pub async fn connect_transport(
         .refresh_status()
         .await
         .map_err(|error| error.to_string())
+}
+
+fn ensure_profile_change_available(state: &AppState) -> Result<(), String> {
+    let connection = state.arbiter.snapshot().connection;
+    if connection == millo_domain::ConnectionState::Disconnected {
+        Ok(())
+    } else {
+        Err(format!(
+            "machine profiles can be changed only while disconnected, current state is {connection:?}"
+        ))
+    }
+}
+
+fn suggested_machine_name(
+    descriptor: &TransportDescriptor,
+    inspection: &millo_domain::DeviceInspection,
+) -> String {
+    let source = descriptor
+        .detail
+        .as_deref()
+        .filter(|value| !matches!(*value, "Serial port" | "Bluetooth serial port"))
+        .or(inspection.firmware_build_info.as_deref())
+        .or(inspection.firmware_version.as_deref())
+        .unwrap_or("GRBL machine");
+    let normalized = source.replace(['_', '-'], " ");
+    normalized.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[tauri::command]
@@ -703,5 +858,27 @@ mod tests {
             Some("Known controller or USB-UART vendor")
         );
         assert_eq!(grbl_match_reason(&fluidnc), Some("GRBL/CNC metadata"));
+    }
+
+    #[test]
+    fn detected_name_prefers_and_normalizes_usb_product_metadata() {
+        let descriptor = TransportDescriptor {
+            id: "serial:/dev/cu.test".to_owned(),
+            kind: TransportKind::Serial,
+            label: "/dev/cu.test".to_owned(),
+            detail: Some("LUNYEE_4axis_Control".to_owned()),
+            port_name: Some("/dev/cu.test".to_owned()),
+            likely_grbl: true,
+            match_reason: Some("GRBL/CNC metadata".to_owned()),
+        };
+        let inspection = millo_domain::DeviceInspection {
+            firmware_build_info: Some("fallback".to_owned()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            suggested_machine_name(&descriptor, &inspection),
+            "LUNYEE 4axis Control"
+        );
     }
 }

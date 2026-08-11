@@ -127,21 +127,33 @@ pub struct DeviceInspection {
     pub responses: Vec<CommandResponse>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SpindleControl {
+    #[default]
     Manual,
     Controller,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineTravel {
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HardwareProfile {
     pub name: String,
     pub axes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub travel_mm: Option<MachineTravel>,
     pub spindle_control: SpindleControl,
     pub homing_installed: bool,
     pub limit_switches_installed: bool,
+    pub probe_installed: bool,
     pub emergency_stop_installed: bool,
 }
 
@@ -150,9 +162,11 @@ impl HardwareProfile {
         Self {
             name: "First XYZ router".to_owned(),
             axes: vec!["X".to_owned(), "Y".to_owned(), "Z".to_owned()],
+            travel_mm: None,
             spindle_control: SpindleControl::Manual,
             homing_installed: false,
             limit_switches_installed: false,
+            probe_installed: false,
             emergency_stop_installed: false,
         }
     }
@@ -177,7 +191,7 @@ pub struct ReadinessCheck {
     pub evidence: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadinessReport {
     pub profile: HardwareProfile,

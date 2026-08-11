@@ -22,15 +22,20 @@ all controller requests. The controller handles bounded response timeouts,
 reset banners, persistent alarm state, and automatic reconnection after repeated
 communication failures.
 
-The desktop app discovers native serial ports and can connect to a GRBL
-controller at a selected baud rate. Device Inspector automatically reads `$I`,
-`$$`, `$G`, and `$#`, then displays parsed firmware, settings, modal state, and
-coordinate parameters. A separate Rust readiness policy evaluates those values
-against the first-machine profile: XYZ motion, manual spindle, no homing, no
-limit switches, and no physical emergency stop. It reports blockers and
-cautions for a guarded test jog; probing remains locked. No arbitrary line,
-general motion, or spindle command is exposed by the desktop API. Mock GRBL
-remains the default, so development and lifecycle tests do not require hardware.
+The desktop app discovers native serial ports and connects only after the
+operator selects a persistent machine profile. `millo-profile` validates the
+machine name, positive XYZ travel, spindle workflow, and declared homing,
+limits, probe, and emergency-stop hardware before storing a versioned JSON file.
+The compact header switcher keeps that safety context visible throughout the
+app. A disconnected read-only detection flow can query `$I`, `$$`, `$G`, and
+`$#`, prefill XYZ from `$130/$131/$132`, and retain the matching serial/baud
+preset. It never infers a physical probe or emergency stop from firmware.
+
+Device Inspector displays parsed firmware, settings, modal state, and coordinate
+parameters. A separate Rust readiness policy evaluates those values against the
+selected profile. No arbitrary line, general motion, or spindle command is
+exposed by the desktop API. Mock GRBL remains available for development and
+lifecycle tests without hardware.
 
 The first safety controls are now available without opening a G-code endpoint.
 Feed Hold sends the GRBL realtime `!` byte when the controller reports active
@@ -160,6 +165,7 @@ successful GRBL status exchange.
 | `millo-grbl` | GRBL wire-format parsing and encoding |
 | `millo-transport` | Controller-independent I/O contract |
 | `millo-mock` | Deterministic virtual machine for tests |
+| `millo-profile` | Validated machine profiles, GRBL-derived drafts, and JSON persistence |
 | `millo-serial` | Native asynchronous serial discovery and byte/line I/O |
 | `millo-controller` | Connection lifecycle and state orchestration |
 | `millo-dry-run` | Fail-closed program policy and opaque approved plans |
@@ -189,7 +195,8 @@ and [PluginHost bootstrap](docs/decisions/0013-plugin-host-bootstrap.md), then t
 [G-code program boundary](docs/decisions/0015-gcode-program-boundary.md), then
 the [Mock-only bounded sender](docs/decisions/0016-mock-dry-run-sender.md) and
 [immutable line selection](docs/decisions/0017-program-line-selection.md), then
-the [serial real-run preflight](docs/decisions/0018-real-run-preflight.md).
+the [serial real-run preflight](docs/decisions/0018-real-run-preflight.md), and
+the [persistent machine-profile boundary](docs/decisions/0019-machine-profiles.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

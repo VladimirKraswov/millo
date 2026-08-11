@@ -1856,6 +1856,7 @@ dependencies = [
  "millo-dry-run",
  "millo-gcode",
  "millo-mock",
+ "millo-profile",
  "millo-run",
  "millo-sender",
  "millo-serial",
@@ -1908,6 +1909,16 @@ dependencies = [
  "async-trait",
  "millo-transport",
  "tokio",
+]
+
+[[package]]
+name = "millo-profile"
+version = "0.1.0"
+dependencies = [
+ "millo-domain",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

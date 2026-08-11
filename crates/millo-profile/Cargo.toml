@@ -1,0 +1,12 @@
+[package]
+name = "millo-profile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Validated persistent machine profiles for Millo"
+
+[dependencies]
+millo-domain = { path = "../millo-domain" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

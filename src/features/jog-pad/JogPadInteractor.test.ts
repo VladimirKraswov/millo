@@ -28,6 +28,7 @@ const outcome: JogPadStepOutcome = {
         spindleControl: "manual",
         homingInstalled: false,
         limitSwitchesInstalled: false,
+        probeInstalled: false,
         emergencyStopInstalled: false,
       },
       testJogReady: true,

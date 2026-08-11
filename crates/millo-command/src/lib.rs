@@ -58,6 +58,8 @@ pub enum ArbiterError {
     DryRunTransportUnavailable,
     #[error("real-run preflight requires the serial transport target")]
     RealRunTransportUnavailable,
+    #[error("machine profile can be changed only while disconnected, current state is {0:?}")]
+    ProfileChangeUnavailable(ConnectionState),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -169,6 +171,14 @@ impl CommandArbiter {
 
     pub async fn connect(&self) -> Result<ControllerSnapshot, ArbiterError> {
         self.call(|response| Request::Connect { response }).await
+    }
+
+    pub async fn set_hardware_profile(
+        &self,
+        profile: HardwareProfile,
+    ) -> Result<HardwareProfile, ArbiterError> {
+        self.call(|response| Request::SetHardwareProfile { profile, response })
+            .await
     }
 
     pub async fn disconnect(&self) -> Result<ControllerSnapshot, ArbiterError> {
@@ -310,6 +320,10 @@ enum Request {
     },
     Connect {
         response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
+    },
+    SetHardwareProfile {
+        profile: HardwareProfile,
+        response: oneshot::Sender<Result<HardwareProfile, ArbiterError>>,
     },
     Disconnect {
         response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
@@ -453,6 +467,17 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             cancel_active_sender(sender, sender_snapshots);
             let result = controller.connect().await.map_err(ArbiterError::from);
             publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::SetHardwareProfile { profile, response } => {
+            let connection = controller.snapshot().connection;
+            let result = if connection == ConnectionState::Disconnected {
+                safety.invalidate_test_jog();
+                *hardware_profile = profile;
+                Ok(hardware_profile.clone())
+            } else {
+                Err(ArbiterError::ProfileChangeUnavailable(connection))
+            };
             let _ = response.send(result);
         }
         Request::Disconnect { response } => {
@@ -1090,6 +1115,36 @@ mod tests {
                 b"$#\n".to_vec(),
             ]
         );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn changes_the_hardware_profile_only_while_disconnected() {
+        let (arbiter, _, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        let mut profile = HardwareProfile::first_machine();
+        profile.name = "Selected bench router".to_owned();
+        profile.travel_mm = Some(millo_domain::MachineTravel {
+            x: 300.0,
+            y: 180.0,
+            z: 45.0,
+        });
+
+        let selected = arbiter.set_hardware_profile(profile.clone()).await.unwrap();
+        assert_eq!(selected, profile);
+
+        arbiter.connect().await.unwrap();
+        let error = arbiter
+            .set_hardware_profile(HardwareProfile::first_machine())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ArbiterError::ProfileChangeUnavailable(ConnectionState::Connected)
+        ));
+        let inspection = arbiter.inspect_device().await.unwrap();
+        assert_eq!(inspection.readiness.profile.name, "Selected bench router");
+        assert_eq!(inspection.readiness.profile.travel_mm, profile.travel_mm);
         task.abort();
     }
 

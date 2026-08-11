@@ -55,6 +55,14 @@ the asynchronous Tauri listener resolves after disposal.
 The test phase also runs `scripts/check-brand.mjs`, which keeps npm, Cargo,
 Tauri, UI, and documentation naming consistent.
 
+Machine-profile tests cover required names, bounded positive XYZ travel,
+case-insensitive duplicate rejection, stable selection, JSON reload, corrupt
+selection rejection, and conservative derivation from GRBL settings. Actor
+tests prove the active profile changes while disconnected and cannot be replaced
+after connection. TypeScript tests keep every unverified hardware flag off and
+mirror the required-field gate. The `/?fixture=profiles` visual fixture is
+checked at 1440 × 900 and 390 × 844 with the add-machine dialog open.
+
 ## Slice checklist
 
 1. Capture new protocol or compatibility behavior as a fixture where possible.
@@ -204,6 +212,19 @@ port names remain untouched.
   the command actor and typed Tauri response.
 - The Tauri mock smoke test confirms a ready report is invalidated after an
   injected alarm rather than leaving stale green readiness on screen.
+
+## Current machine-profile coverage
+
+- An empty store blocks connection until a validated profile is created and
+  selected.
+- The selected profile loads into the command actor at startup; later selection
+  is allowed only while disconnected.
+- Schema version 1 uses stable IDs, a bounded 64-profile list, and temporary-file
+  replacement persistence.
+- Detection uses only `?`, `$I`, `$$`, `$G`, and `$#`, and rejects invalid
+  `$130/$131/$132` before a draft reaches React.
+- The physical import helper exposes no movement, setting-write, spindle, or
+  coolant operation. It stored the first real profile on 2026-08-11.
 
 ## Current realtime safety coverage
 

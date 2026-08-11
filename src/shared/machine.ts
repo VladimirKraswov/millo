@@ -94,12 +94,20 @@ export interface DeviceInspection {
 
 export type SpindleControl = "manual" | "controller";
 
+export interface MachineTravel {
+  x: number;
+  y: number;
+  z: number;
+}
+
 export interface HardwareProfile {
   name: string;
   axes: string[];
+  travelMm?: MachineTravel;
   spindleControl: SpindleControl;
   homingInstalled: boolean;
   limitSwitchesInstalled: boolean;
+  probeInstalled: boolean;
   emergencyStopInstalled: boolean;
 }
 

@@ -13,6 +13,8 @@ until they are read from the controller or measured before cutting.
 - Homing: not installed.
 - Limit switches: not installed.
 - Physical emergency stop: not installed.
+- Selected profile: `LUNYEE CNC` (`machine-0001`).
+- Firmware-configured travel: X `500.000 mm`, Y `500.000 mm`, Z `200.000 mm`.
 
 ## Safety consequences
 
@@ -81,6 +83,8 @@ Observed through the read-only Inspector on 2026-08-11:
 - USB identity: `LUNYEE_4axis_Control`; this label alone does not prove an A
   axis is configured or reported.
 - Firmware: `1.1f.20230316`, options `VMZHL,35,254`.
+- A dedicated profile import later read `$130=500.000`, `$131=500.000`, and
+  `$132=200.000` and stored those values as the selected machine travel.
 - All `$I`, `$$`, `$G`, and `$#` queries completed successfully.
 - The controller reported 41 settings, 11 coordinate parameters, `G21`, `G54`,
   `G91`, and `M5` while idle.
@@ -102,9 +106,10 @@ Observed through the read-only Inspector on 2026-08-11:
   Y `+0.100`, Z `+0.000 mm`; only after its successful `Idle` return, Z reported
   X `+0.000`, Y `+0.000`, Z `+0.100 mm`. Both used `10 mm/min`.
 
-Only values visible in the operator capture are recorded here. The automated
-fixture uses representative, explicitly synthetic XYZ values rather than
-inventing the unseen portion of the physical controller's `$$` response.
+The persistent profile also stores `/dev/cu.usbmodem11101` and 115200 baud as a
+connection preset. That path is convenience metadata, not cryptographic device
+identity. The automated Mock fixture continues to use representative synthetic
+XYZ values.
 
 ## Test-jog preflight
 

@@ -3,31 +3,31 @@
 ## Direction of dependencies
 
 ```text
-                        +------------------+
-                        |   React / TS UI   |
-                        +---------+--------+
-                                  |
-                           typed IPC/events
-                                  |
-                        +---------v--------+
-                        |  Tauri adapter    |
-                        +---------+--------+
-                                  |
-                        +---------v--------+
-                        | command arbiter  |
-                        +----+--------+----+-+
-                             |        |    |
-                      +------v--+ +---v--+ +v----------+
-                      |readiness| |safety| |controller |
-                      +----+----+ +---+--+ +--+------+--+
-                           |          |       |      |
-                      +----v----------v-+ +---v---+ +v---------+
-                      | Domain          | | GRBL  | |Transport |
-                      +-----------------+ +---+---+ +----+-----+
-                                              |          |
-                                          +---v---+ +----v-----+
-                                          |Domain | |Mock/Serial|
-                                          +-------+ +-----------+
+                     +------------------+
+                     |   React / TS UI   |
+                     +---------+--------+
+                               |
+                        typed IPC/events
+                               |
+                     +---------v--------+
+                     |  Tauri adapter    |
+                     +----+---------+----+
+                          |         |
+                +---------v--+   +--v---------------+
+                |profile store|   | command arbiter  |
+                +------+-----+   +---+-------+-------+
+                       |             |       |
+                  +----v----+   +----v---+ +-v---------+
+                  | Domain  |   |readiness| |controller|
+                  +---------+   +---+----+ +-----+-----+
+                                    |            |
+                               +----v----+  +----v-----+
+                               | Domain  |  |Transport |
+                               +---------+  +----+-----+
+                                                  |
+                                             +----v-----+
+                                             |Mock/Serial|
+                                             +-----------+
 ```
 
 Dependencies point inward. Domain types do not import Tauri, an I/O library, or
@@ -88,6 +88,23 @@ The desktop command `connect_transport` selects either a deterministic mock or a
 discovered native serial port, sends the GRBL realtime `?` byte, parses the returned status frame, updates
 `ControllerSnapshot`, emits `machine-state`, and returns the same snapshot to the
 caller. The UI treats the event as authoritative.
+
+### Machine profiles
+
+- `millo-profile` owns validation, schema versioning, stable IDs, selected state,
+  GRBL-derived drafts, and JSON I/O without depending on Tauri or serial code.
+- A profile requires a name and finite positive XYZ travel. Spindle workflow,
+  homing, limits, probe, and physical emergency-stop declarations are explicit;
+  unverified hardware defaults to absent.
+- Tauri resolves the application configuration path and exposes typed
+  list/create/select/detect operations. The command actor accepts a profile only
+  while disconnected, and connection fails when no persistent profile is
+  selected.
+- Detection opens a temporary controller session, performs only status and
+  Inspector reads, derives travel from `$130/$131/$132`, and closes the port.
+  `$21/$22` may prefill configured limits/homing. `$6` cannot prove physical
+  probe presence and never enables it automatically.
+- A serial/baud preset is convenience metadata, not device authentication.
 
 The command arbiter owns the periodic driver. Every tick calls one core method:
 a connected controller is polled, while a recovering controller attempts

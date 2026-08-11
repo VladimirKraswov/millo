@@ -88,9 +88,13 @@ const checkCopy: Record<string, { title: string; pass: string; caution: string; 
 function profileFacts(profile: HardwareProfile): string[] {
   return [
     profile.axes.join("/"),
+    profile.travelMm
+      ? `${profile.travelMm.x} × ${profile.travelMm.y} × ${profile.travelMm.z} mm`
+      : "Ход не задан",
     profile.spindleControl === "manual" ? "Ручной шпиндель" : "Управляемый шпиндель",
     profile.homingInstalled ? "Homing установлен" : "Без homing",
     profile.limitSwitchesInstalled ? "Limits установлены" : "Без limits",
+    profile.probeInstalled ? "Probe установлен" : "Без probe",
   ];
 }
 
