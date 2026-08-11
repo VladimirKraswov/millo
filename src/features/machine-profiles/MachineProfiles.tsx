@@ -1,4 +1,4 @@
-import { Gauge, Plus, Router, ScanLine, X } from "lucide-react";
+import { Gauge, Plus, Router, ScanLine, Settings, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type {
@@ -20,13 +20,23 @@ interface MachineProfilesProps {
   canDetect: boolean;
   onCreate: (draft: MachineProfileDraft) => Promise<void>;
   onDetect: () => Promise<MachineProfileDraft>;
+  onEdit: () => void;
+  onOnboardingDismiss: () => void;
   onSelect: (profileId: string) => Promise<void>;
+  onboardingDraft?: MachineProfileDraft;
 }
 
 const copyDraft = (draft: MachineProfileDraft): MachineProfileDraft => ({
   ...draft,
   travelMm: { ...draft.travelMm },
-  connection: draft.connection ? { ...draft.connection } : undefined,
+  connection: draft.connection
+    ? {
+        ...draft.connection,
+        fingerprint: draft.connection.fingerprint
+          ? { ...draft.connection.fingerprint }
+          : undefined,
+      }
+    : undefined,
   detectedController: draft.detectedController
     ? { ...draft.detectedController }
     : undefined,
@@ -39,7 +49,10 @@ export function MachineProfiles({
   canDetect,
   onCreate,
   onDetect,
+  onEdit,
+  onOnboardingDismiss,
   onSelect,
+  onboardingDraft,
 }: MachineProfilesProps) {
   const selected = selectedMachineProfile(state);
   const [open, setOpen] = useState(false);
@@ -48,6 +61,13 @@ export function MachineProfiles({
   );
   const [dialogBusy, setDialogBusy] = useState(false);
   const [formError, setFormError] = useState<string>();
+
+  useEffect(() => {
+    if (!onboardingDraft) return;
+    setDraft(copyDraft(onboardingDraft));
+    setFormError(undefined);
+    setOpen(true);
+  }, [onboardingDraft]);
 
   useEffect(() => {
     if (!open) {
@@ -88,6 +108,7 @@ export function MachineProfiles({
     try {
       await onCreate(copyDraft(draft));
       setOpen(false);
+      onOnboardingDismiss();
     } catch (submitError) {
       setFormError(String(submitError));
     } finally {
@@ -117,6 +138,15 @@ export function MachineProfiles({
         </label>
         <small>{selected ? formatMachineTravel(selected) : "Нужен профиль"}</small>
         <button
+          aria-label="Настройки станка"
+          disabled={busy || !selected || Boolean(onboardingDraft)}
+          onClick={onEdit}
+          title="Настройки станка"
+          type="button"
+        >
+          <Settings aria-hidden="true" size={16} />
+        </button>
+        <button
           aria-label="Добавить станок"
           disabled={locked || busy}
           onClick={() => setOpen(true)}
@@ -138,12 +168,17 @@ export function MachineProfiles({
             <header>
               <div>
                 <span>Machine profile</span>
-                <h2 id="machine-dialog-title">Новый станок</h2>
+                <h2 id="machine-dialog-title">
+                  {onboardingDraft ? "Подключён новый станок" : "Новый станок"}
+                </h2>
               </div>
               <button
                 aria-label="Закрыть"
                 disabled={dialogBusy}
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  setOpen(false);
+                  onOnboardingDismiss();
+                }}
                 title="Закрыть"
                 type="button"
               >
@@ -152,7 +187,7 @@ export function MachineProfiles({
             </header>
 
             <div className="machine-dialog-body">
-              <button
+              {!onboardingDraft && <button
                 className="detect-machine-action"
                 disabled={!canDetect || dialogBusy}
                 onClick={() => void detect()}
@@ -160,7 +195,14 @@ export function MachineProfiles({
               >
                 <ScanLine aria-hidden="true" size={17} />
                 {dialogBusy ? "Чтение контроллера" : "Считать из выбранного GRBL"}
-              </button>
+              </button>}
+
+              {onboardingDraft && (
+                <div className="onboarding-machine-note">
+                  <ScanLine aria-hidden="true" size={17} />
+                  <span>Параметры считаны из GRBL. Задайте локальное имя и фактическое оснащение.</span>
+                </div>
+              )}
 
               <label className="machine-name-field">
                 <span>Название</span>
@@ -189,6 +231,7 @@ export function MachineProfiles({
                     <input
                       inputMode="decimal"
                       min="0.001"
+                      readOnly={Boolean(onboardingDraft)}
                       onChange={(event) =>
                         setDraft((current) => ({
                           ...current,
@@ -282,7 +325,10 @@ export function MachineProfiles({
             <footer>
               <button
                 disabled={dialogBusy}
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  setOpen(false);
+                  onOnboardingDismiss();
+                }}
                 type="button"
               >
                 Отмена
@@ -293,7 +339,7 @@ export function MachineProfiles({
                 onClick={() => void submit()}
                 type="button"
               >
-                Добавить и выбрать
+                {onboardingDraft ? "Добавить и привязать" : "Добавить и выбрать"}
               </button>
             </footer>
           </section>

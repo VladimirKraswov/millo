@@ -3,6 +3,15 @@ import type { MachineTravel, SpindleControl } from "./machine";
 export interface MachineConnectionPreset {
   transportId: string;
   baudRate: number;
+  fingerprint?: MachineFingerprint;
+}
+
+export type IdentityConfidence = "strong" | "portBound" | "synthetic";
+
+export interface MachineFingerprint {
+  key: string;
+  confidence: IdentityConfidence;
+  label: string;
 }
 
 export interface DetectedController {
@@ -29,6 +38,15 @@ export interface MachineProfile extends MachineProfileDraft {
 export interface MachineProfileState {
   profiles: MachineProfile[];
   selectedProfileId?: string;
+}
+
+export interface MachineLocalSettingsUpdate {
+  name: string;
+  spindleControl: SpindleControl;
+  homingInstalled: boolean;
+  limitSwitchesInstalled: boolean;
+  probeInstalled: boolean;
+  emergencyStopInstalled: boolean;
 }
 
 export const selectedMachineProfile = (

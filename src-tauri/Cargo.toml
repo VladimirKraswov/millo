@@ -22,8 +22,10 @@ millo-mock = { path = "../crates/millo-mock" }
 millo-profile = { path = "../crates/millo-profile" }
 millo-run = { path = "../crates/millo-run" }
 millo-serial = { path = "../crates/millo-serial" }
+millo-settings = { path = "../crates/millo-settings" }
 millo-sender = { path = "../crates/millo-sender" }
 millo-transport = { path = "../crates/millo-transport" }
 serde.workspace = true
+serde_json.workspace = true
 tauri = { version = "2", features = [] }
 tokio.workspace = true

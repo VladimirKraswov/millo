@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted. Connection ordering and identity resolution are amended by ADR 0020.
 
 ## Context
 
@@ -27,13 +27,15 @@ physical probe is installed.
   profile in the application configuration directory.
 - Keep an optional connection preset and detected firmware identity as
   convenience metadata.
-- Allow create/select only while the controller is disconnected. Load the
-  selected profile into the command actor before connection and reject
-  connection when no profile is selected.
+- Allow manual create/select while disconnected. ADR 0020 additionally permits
+  controller-derived onboarding and actor binding after a read-only connection;
+  motion remains blocked until binding succeeds.
 - Provide a temporary disconnected detection session that performs only status
-  and Inspector reads. It may derive XYZ and configured limits/homing, but never
-  infer probe or emergency-stop hardware.
-- Leave edit, delete, and stronger profile-device identity for later slices.
+  and Inspector reads. It derives XYZ but does not treat enabled firmware
+  settings as proof of installed limits, homing, probe, or emergency-stop
+  hardware.
+- Leave delete for a later slice. Local edit and profile-device identity are
+  defined by ADR 0020.
 
 ## Consequences
 

@@ -1,0 +1,12 @@
+[package]
+name = "millo-settings"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "GRBL settings catalog and validated write boundary for Millo"
+
+[dependencies]
+millo-domain = { path = "../millo-domain" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

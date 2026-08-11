@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  MachineLocalSettingsUpdate,
   MachineProfileDraft,
   MachineProfileState,
 } from "../shared/profile";
@@ -17,6 +18,15 @@ export const selectMachineProfile = (
   profileId: string,
 ): Promise<MachineProfileState> =>
   invoke<MachineProfileState>("select_machine_profile", { profileId });
+
+export const updateMachineLocalSettings = (
+  profileId: string,
+  update: MachineLocalSettingsUpdate,
+): Promise<MachineProfileState> =>
+  invoke<MachineProfileState>("update_machine_local_settings", {
+    profileId,
+    update,
+  });
 
 export const detectMachineProfile = (
   transportId: string,

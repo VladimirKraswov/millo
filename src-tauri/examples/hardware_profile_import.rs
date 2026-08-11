@@ -52,6 +52,7 @@ async fn import_profile(
         MachineConnectionPreset {
             transport_id: format!("serial:{port}"),
             baud_rate: 115_200,
+            fingerprint: None,
         },
     )?;
     let mut store = MachineProfileStore::load(profile_path)?;

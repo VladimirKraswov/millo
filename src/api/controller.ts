@@ -15,6 +15,11 @@ import type {
   WorkZeroOutcome,
   WorkZeroRequest,
 } from "../shared/machine";
+import type {
+  ConnectOutcome,
+  ControllerSettingEditRequest,
+  ControllerSettingsState,
+} from "../shared/settings";
 
 export const isDesktopRuntime = (): boolean => "__TAURI_INTERNALS__" in window;
 
@@ -30,8 +35,25 @@ export const getActiveTransport = (): Promise<TransportDescriptor> =>
 export const connectTransport = (
   transportId: string,
   baudRate: number,
-): Promise<ControllerSnapshot> =>
-  invoke<ControllerSnapshot>("connect_transport", { transportId, baudRate });
+): Promise<ConnectOutcome> =>
+  invoke<ConnectOutcome>("connect_transport", { transportId, baudRate });
+
+export const getControllerSettings = (): Promise<ControllerSettingsState> =>
+  invoke<ControllerSettingsState>("controller_settings");
+
+export const updateControllerSetting = (
+  request: ControllerSettingEditRequest,
+): Promise<ControllerSettingsState> =>
+  invoke<ControllerSettingsState>("update_controller_setting", { request });
+
+export const rollbackControllerSetting = (
+  key: string,
+  expectedRevision: number,
+): Promise<ControllerSettingsState> =>
+  invoke<ControllerSettingsState>("rollback_controller_setting", {
+    key,
+    expectedRevision,
+  });
 
 export const refreshStatus = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("refresh_status");

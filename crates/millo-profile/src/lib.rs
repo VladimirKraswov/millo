@@ -17,6 +17,24 @@ const MAX_TRAVEL_MM: f64 = 100_000.0;
 pub struct MachineConnectionPreset {
     pub transport_id: String,
     pub baud_rate: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<MachineFingerprint>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IdentityConfidence {
+    Strong,
+    PortBound,
+    Synthetic,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineFingerprint {
+    pub key: String,
+    pub confidence: IdentityConfidence,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,6 +99,17 @@ pub struct MachineProfileDraft {
     pub detected_controller: Option<DetectedController>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineLocalSettingsUpdate {
+    pub name: String,
+    pub spindle_control: SpindleControl,
+    pub homing_installed: bool,
+    pub limit_switches_installed: bool,
+    pub probe_installed: bool,
+    pub emergency_stop_installed: bool,
+}
+
 impl MachineProfileDraft {
     pub fn from_grbl_inspection(
         suggested_name: impl Into<String>,
@@ -95,8 +124,8 @@ impl MachineProfileDraft {
                 z: positive_setting(inspection, "$132")?,
             },
             spindle_control: SpindleControl::Manual,
-            homing_installed: enabled_setting(inspection, "$22"),
-            limit_switches_installed: enabled_setting(inspection, "$21"),
+            homing_installed: false,
+            limit_switches_installed: false,
             probe_installed: false,
             emergency_stop_installed: false,
             connection: Some(connection),
@@ -241,6 +270,57 @@ impl MachineProfileStore {
         Ok(self.state())
     }
 
+    pub fn update_local_settings(
+        &mut self,
+        profile_id: &str,
+        update: MachineLocalSettingsUpdate,
+    ) -> Result<MachineProfileState, ProfileError> {
+        validate_name(&update.name)?;
+        if self.document.profiles.iter().any(|profile| {
+            profile.id != profile_id && profile.name.eq_ignore_ascii_case(update.name.trim())
+        }) {
+            return Err(ProfileError::DuplicateName(update.name.trim().to_owned()));
+        }
+        let mut next = self.document.clone();
+        let profile = next
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == profile_id)
+            .ok_or_else(|| ProfileError::UnknownProfile(profile_id.to_owned()))?;
+        profile.name = update.name.trim().to_owned();
+        profile.spindle_control = update.spindle_control;
+        profile.homing_installed = update.homing_installed;
+        profile.limit_switches_installed = update.limit_switches_installed;
+        profile.probe_installed = update.probe_installed;
+        profile.emergency_stop_installed = update.emergency_stop_installed;
+        self.commit(next)?;
+        Ok(self.state())
+    }
+
+    pub fn record_controller_observation(
+        &mut self,
+        profile_id: &str,
+        travel_mm: MachineTravel,
+        connection: MachineConnectionPreset,
+        detected_controller: DetectedController,
+    ) -> Result<MachineProfileState, ProfileError> {
+        validate_travel("X", travel_mm.x)?;
+        validate_travel("Y", travel_mm.y)?;
+        validate_travel("Z", travel_mm.z)?;
+        let mut next = self.document.clone();
+        let profile = next
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == profile_id)
+            .ok_or_else(|| ProfileError::UnknownProfile(profile_id.to_owned()))?;
+        profile.travel_mm = travel_mm;
+        profile.connection = Some(connection);
+        profile.detected_controller = Some(detected_controller);
+        next.selected_profile_id = Some(profile_id.to_owned());
+        self.commit(next)?;
+        Ok(self.state())
+    }
+
     fn commit(&mut self, next: StoredProfiles) -> Result<(), ProfileError> {
         if let Some(path) = &self.path {
             save_document(path, &next)?;
@@ -310,16 +390,21 @@ fn validate_document(document: &StoredProfiles) -> Result<(), ProfileError> {
 }
 
 fn validate_draft(draft: &MachineProfileDraft) -> Result<(), ProfileError> {
-    let name = draft.name.trim();
+    validate_name(&draft.name)?;
+    validate_travel("X", draft.travel_mm.x)?;
+    validate_travel("Y", draft.travel_mm.y)?;
+    validate_travel("Z", draft.travel_mm.z)
+}
+
+fn validate_name(name: &str) -> Result<(), ProfileError> {
+    let name = name.trim();
     if name.is_empty() {
         return Err(ProfileError::MissingName);
     }
     if name.len() > MAX_NAME_BYTES {
         return Err(ProfileError::NameTooLong);
     }
-    validate_travel("X", draft.travel_mm.x)?;
-    validate_travel("Y", draft.travel_mm.y)?;
-    validate_travel("Z", draft.travel_mm.z)
+    Ok(())
 }
 
 fn validate_travel(axis: &'static str, value: f64) -> Result<(), ProfileError> {
@@ -337,13 +422,6 @@ fn positive_setting(inspection: &DeviceInspection, key: &str) -> Result<f64, Pro
         .and_then(|value| value.parse::<f64>().ok())
         .filter(|value| value.is_finite() && *value > 0.0 && *value <= MAX_TRAVEL_MM)
         .ok_or_else(|| ProfileError::InvalidControllerSetting(key.to_owned()))
-}
-
-fn enabled_setting(inspection: &DeviceInspection, key: &str) -> bool {
-    inspection
-        .settings
-        .get(key)
-        .is_some_and(|value| value == "1")
 }
 
 fn save_document(path: &Path, document: &StoredProfiles) -> Result<(), ProfileError> {
@@ -468,12 +546,13 @@ mod tests {
             MachineConnectionPreset {
                 transport_id: "serial:/dev/cu.test".to_owned(),
                 baud_rate: 115_200,
+                fingerprint: None,
             },
         )
         .unwrap();
 
         assert_eq!(detected.travel_mm.x, 301.5);
-        assert!(detected.homing_installed);
+        assert!(!detected.homing_installed);
         assert!(!detected.limit_switches_installed);
         assert!(!detected.probe_installed);
         assert!(!detected.emergency_stop_installed);
@@ -485,6 +564,32 @@ mod tests {
                 .as_deref(),
             Some("1.1f.20230316")
         );
+    }
+
+    #[test]
+    fn updates_local_facts_without_overwriting_controller_observations() {
+        let mut store = MachineProfileStore::in_memory();
+        let created = store.create_and_select(draft("Router")).unwrap();
+        let id = created.selected_profile_id.unwrap();
+        let next = store
+            .update_local_settings(
+                &id,
+                MachineLocalSettingsUpdate {
+                    name: "Workshop router".to_owned(),
+                    spindle_control: SpindleControl::Controller,
+                    homing_installed: false,
+                    limit_switches_installed: false,
+                    probe_installed: true,
+                    emergency_stop_installed: false,
+                },
+            )
+            .unwrap();
+
+        let profile = next.selected().unwrap();
+        assert_eq!(profile.name, "Workshop router");
+        assert!(profile.probe_installed);
+        assert_eq!(profile.travel_mm.x, 300.0);
+        assert!(profile.connection.is_none());
     }
 
     #[test]

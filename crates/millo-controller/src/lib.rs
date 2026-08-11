@@ -10,6 +10,7 @@ use millo_grbl::{
     IncomingLine, JogValidationError, StatusParseError, build_device_inspection,
     encode_set_work_zero, encode_step_jog, parse_incoming_line,
 };
+use millo_settings::ValidatedSettingWrite;
 use millo_transport::{Transport, TransportError};
 use thiserror::Error;
 
@@ -284,6 +285,13 @@ impl<T: Transport> Controller<T> {
     ) -> Result<CommandResponse, ControllerError> {
         self.execute_acknowledged_line(setting.disable_command())
             .await
+    }
+
+    pub async fn write_setting(
+        &mut self,
+        setting: &ValidatedSettingWrite,
+    ) -> Result<CommandResponse, ControllerError> {
+        self.execute_acknowledged_line(setting.command()).await
     }
 
     pub async fn set_work_zero(

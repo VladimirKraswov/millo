@@ -1,21 +1,29 @@
+use std::{collections::BTreeMap, path::PathBuf};
+
 use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
-    ControllerSnapshot, HardwareInspection, HardwareProfile, JogPadStepOutcome, JogPadStepRequest,
-    OperatorConfirmation, ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation,
-    WorkZeroOutcome, WorkZeroRequest,
+    ControllerSnapshot, DeviceInspection, HardwareInspection, HardwareProfile, JogPadStepOutcome,
+    JogPadStepRequest, OperatorConfirmation, ResetChallenge, StepJogReceipt, StepJogRequest,
+    TestJogPreparation, WorkZeroOutcome, WorkZeroRequest,
 };
 use millo_dry_run::{DryRunPlan, DryRunPolicyError, build_dry_run_plan};
 use millo_gcode::{GcodeProgram, ProgramParseRequest, parse_program};
 use millo_mock::{MockControl, MockTransport};
 use millo_profile::{
-    MachineConnectionPreset, MachineProfileDraft, MachineProfileState, MachineProfileStore,
+    DetectedController, IdentityConfidence, MachineConnectionPreset, MachineFingerprint,
+    MachineLocalSettingsUpdate, MachineProfile, MachineProfileDraft, MachineProfileState,
+    MachineProfileStore,
 };
 use millo_run::RunPreflightReport;
 use millo_sender::SenderSnapshot;
 use millo_serial::{
     SerialConfig, SerialPortDescriptor, SerialPortKind, SerialTransport,
     available_ports as available_serial_ports,
+};
+use millo_settings::{
+    ControllerSettingEditRequest, ControllerSettingsSnapshot, MachineSettingsArchive,
+    build_settings_snapshot,
 };
 use millo_transport::BoxedTransport;
 use serde::Serialize;
@@ -42,6 +50,32 @@ pub struct TransportDescriptor {
     pub port_name: Option<String>,
     pub likely_grbl: bool,
     pub match_reason: Option<String>,
+    pub vendor_id: Option<u16>,
+    pub product_id: Option<u16>,
+    pub manufacturer: Option<String>,
+    pub product: Option<String>,
+    pub serial_number: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerSettingsState {
+    pub snapshot: ControllerSettingsSnapshot,
+    pub session_baseline: BTreeMap<String, String>,
+    pub previous_baseline: Option<BTreeMap<String, String>>,
+    pub revision_count: usize,
+    pub profile_id: Option<String>,
+    pub fingerprint: MachineFingerprint,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectOutcome {
+    pub snapshot: ControllerSnapshot,
+    pub inspection: HardwareInspection,
+    pub settings: ControllerSettingsState,
+    pub profiles: MachineProfileState,
+    pub onboarding_draft: Option<MachineProfileDraft>,
 }
 
 struct ResolvedTransport {
@@ -49,6 +83,15 @@ struct ResolvedTransport {
     descriptor: TransportDescriptor,
     mock: Option<MockControl>,
     execution_target: ExecutionTarget,
+}
+
+struct ActiveControllerSettings {
+    inspection: DeviceInspection,
+    fingerprint: MachineFingerprint,
+    connection: MachineConnectionPreset,
+    profile_id: Option<String>,
+    archive: Option<MachineSettingsArchive>,
+    revision: u64,
 }
 
 impl ResolvedTransport {
@@ -71,22 +114,26 @@ pub struct AppState {
     mock: Mutex<Option<MockControl>>,
     transition_lock: Mutex<()>,
     event_task: Mutex<Option<JoinHandle<()>>>,
+    settings_root: Option<PathBuf>,
+    settings_session: Mutex<Option<ActiveControllerSettings>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        Self::from_profile_store(MachineProfileStore::in_memory())
+        Self::from_profile_store(MachineProfileStore::in_memory(), None)
     }
 }
 
 impl AppState {
-    pub fn load(profile_path: impl Into<std::path::PathBuf>) -> Result<Self, String> {
+    pub fn load(profile_path: impl Into<PathBuf>) -> Result<Self, String> {
+        let profile_path = profile_path.into();
+        let settings_root = profile_path.parent().map(|parent| parent.join("machines"));
         let profiles =
             MachineProfileStore::load(profile_path).map_err(|error| error.to_string())?;
-        Ok(Self::from_profile_store(profiles))
+        Ok(Self::from_profile_store(profiles, settings_root))
     }
 
-    fn from_profile_store(profiles: MachineProfileStore) -> Self {
+    fn from_profile_store(profiles: MachineProfileStore, settings_root: Option<PathBuf>) -> Self {
         let initial = ResolvedTransport::mock();
         let descriptor = initial.descriptor;
         let mock = initial.mock;
@@ -110,6 +157,8 @@ impl AppState {
             mock: Mutex::new(mock),
             transition_lock: Mutex::new(()),
             event_task: Mutex::new(None),
+            settings_root,
+            settings_session: Mutex::new(None),
         }
     }
 
@@ -151,11 +200,31 @@ pub async fn machine_profiles(state: State<'_, AppState>) -> Result<MachineProfi
 
 #[tauri::command]
 pub async fn create_machine_profile(
-    draft: MachineProfileDraft,
+    mut draft: MachineProfileDraft,
     state: State<'_, AppState>,
 ) -> Result<MachineProfileState, String> {
     let _transition = state.transition_lock.lock().await;
-    ensure_profile_change_available(&state)?;
+    let connected =
+        state.arbiter.snapshot().connection != millo_domain::ConnectionState::Disconnected;
+    if connected {
+        let session = state.settings_session.lock().await;
+        let session = session
+            .as_ref()
+            .ok_or_else(|| "controller settings have not been synchronized".to_owned())?;
+        if session.profile_id.is_some() {
+            return Err(
+                "the connected controller is already bound to a machine profile".to_owned(),
+            );
+        }
+        let snapshot = build_settings_snapshot(&session.inspection, session.revision);
+        draft.travel_mm = snapshot
+            .travel_mm()
+            .ok_or_else(|| "controller did not report valid $130/$131/$132 travel".to_owned())?;
+        draft.connection = Some(session.connection.clone());
+        draft.detected_controller = Some(detected_controller(&session.inspection));
+    } else {
+        ensure_profile_change_available(&state)?;
+    }
     let next = state
         .profiles
         .lock()
@@ -166,11 +235,77 @@ pub async fn create_machine_profile(
         .selected()
         .expect("create_and_select must produce a selected profile")
         .hardware_profile();
-    state
-        .arbiter
-        .set_hardware_profile(profile)
+    if connected {
+        state
+            .arbiter
+            .bind_hardware_profile(profile)
+            .await
+            .map_err(|error| error.to_string())?;
+        let selected = next
+            .selected()
+            .expect("created profile must remain selected");
+        let mut session = state.settings_session.lock().await;
+        let active = session
+            .as_mut()
+            .ok_or_else(|| "controller settings session ended during onboarding".to_owned())?;
+        active.profile_id = Some(selected.id.clone());
+        active.archive = begin_settings_archive(&state, selected, active)?;
+    } else {
+        state
+            .arbiter
+            .set_hardware_profile(profile)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(next)
+}
+
+#[tauri::command]
+pub async fn update_machine_local_settings(
+    profile_id: String,
+    update: MachineLocalSettingsUpdate,
+    state: State<'_, AppState>,
+) -> Result<MachineProfileState, String> {
+    let _transition = state.transition_lock.lock().await;
+    let connected =
+        state.arbiter.snapshot().connection != millo_domain::ConnectionState::Disconnected;
+    if connected {
+        let session = state.settings_session.lock().await;
+        if session
+            .as_ref()
+            .and_then(|active| active.profile_id.as_deref())
+            != Some(profile_id.as_str())
+        {
+            return Err(
+                "only the profile bound to the connected controller can be edited".to_owned(),
+            );
+        }
+    }
+    let next = state
+        .profiles
+        .lock()
         .await
+        .update_local_settings(&profile_id, update)
         .map_err(|error| error.to_string())?;
+    let profile = next
+        .profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .expect("updated profile must exist")
+        .hardware_profile();
+    if connected {
+        state
+            .arbiter
+            .bind_hardware_profile(profile)
+            .await
+            .map_err(|error| error.to_string())?;
+    } else if next.selected_profile_id.as_deref() == Some(profile_id.as_str()) {
+        state
+            .arbiter
+            .set_hardware_profile(profile)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     Ok(next)
 }
 
@@ -233,12 +368,14 @@ pub async fn detect_machine_profile(
             .inspect_device()
             .await
             .map_err(|error| error.to_string())?;
+        let fingerprint = machine_fingerprint(&descriptor, &inspection.device);
         MachineProfileDraft::from_grbl_inspection(
             suggested_machine_name(&descriptor, &inspection.device),
             &inspection.device,
             MachineConnectionPreset {
                 transport_id: descriptor.id.clone(),
                 baud_rate,
+                fingerprint: Some(fingerprint),
             },
         )
         .map_err(|error| error.to_string())
@@ -278,13 +415,12 @@ pub async fn connect_transport(
     baud_rate: u32,
     app: AppHandle,
     state: State<'_, AppState>,
-) -> Result<ControllerSnapshot, String> {
+) -> Result<ConnectOutcome, String> {
     let _transition = state.transition_lock.lock().await;
-    if state.profiles.lock().await.state().selected().is_none() {
-        return Err("select or create a machine profile before connecting".to_owned());
-    }
     state.start_event_bridge(app).await;
     let replacement = resolve_transport(&transport_id, baud_rate).await?;
+    let descriptor = replacement.descriptor.clone();
+    *state.settings_session.lock().await = None;
 
     state
         .arbiter
@@ -294,7 +430,7 @@ pub async fn connect_transport(
         )
         .await
         .map_err(|error| error.to_string())?;
-    *state.active_transport.lock().await = replacement.descriptor;
+    *state.active_transport.lock().await = descriptor.clone();
     *state.mock.lock().await = replacement.mock;
 
     state
@@ -302,11 +438,121 @@ pub async fn connect_transport(
         .connect()
         .await
         .map_err(|error| error.to_string())?;
-    state
+    let snapshot = state
         .arbiter
         .refresh_status()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    state
+        .arbiter
+        .bind_hardware_profile(HardwareProfile::first_machine())
+        .await
+        .map_err(|error| error.to_string())?;
+    let initial_inspection = state
+        .arbiter
+        .inspect_device()
+        .await
+        .map_err(|error| error.to_string())?;
+    let fingerprint = machine_fingerprint(&descriptor, &initial_inspection.device);
+    let connection = MachineConnectionPreset {
+        transport_id: descriptor.id.clone(),
+        baud_rate,
+        fingerprint: Some(fingerprint.clone()),
+    };
+    let profile_match = if descriptor.kind == TransportKind::Serial {
+        let profiles = state.profiles.lock().await.state();
+        match_machine_profile(
+            &profiles,
+            &fingerprint,
+            &descriptor.id,
+            &initial_inspection.device,
+        )?
+    } else {
+        None
+    };
+
+    let mut profile_id = None;
+    let mut archive = None;
+    if let Some(profile) = profile_match.as_ref() {
+        state
+            .arbiter
+            .bind_hardware_profile(profile.hardware_profile())
+            .await
+            .map_err(|error| error.to_string())?;
+        let travel = build_settings_snapshot(&initial_inspection.device, 1)
+            .travel_mm()
+            .ok_or_else(|| "controller did not report valid $130/$131/$132 travel".to_owned())?;
+        let profiles = state
+            .profiles
+            .lock()
+            .await
+            .record_controller_observation(
+                &profile.id,
+                travel,
+                connection.clone(),
+                detected_controller(&initial_inspection.device),
+            )
+            .map_err(|error| error.to_string())?;
+        let refreshed_profile = profiles
+            .profiles
+            .iter()
+            .find(|candidate| candidate.id == profile.id)
+            .expect("observed profile must exist");
+        let temporary_session = ActiveControllerSettings {
+            inspection: initial_inspection.device.clone(),
+            fingerprint: fingerprint.clone(),
+            connection: connection.clone(),
+            profile_id: Some(profile.id.clone()),
+            archive: None,
+            revision: 1,
+        };
+        archive = begin_settings_archive(&state, refreshed_profile, &temporary_session)?;
+        profile_id = Some(profile.id.clone());
+    }
+
+    let inspection = if profile_id.is_some() {
+        state
+            .arbiter
+            .inspect_device()
+            .await
+            .map_err(|error| error.to_string())?
+    } else {
+        initial_inspection
+    };
+    let onboarding_draft = if descriptor.kind == TransportKind::Serial && profile_id.is_none() {
+        Some(
+            MachineProfileDraft::from_grbl_inspection(
+                suggested_machine_name(&descriptor, &inspection.device),
+                &inspection.device,
+                connection.clone(),
+            )
+            .map_err(|error| error.to_string())?,
+        )
+    } else {
+        None
+    };
+    if let Some(settings_archive) = archive.as_mut() {
+        settings_archive
+            .record_observation(&inspection.device)
+            .map_err(|error| error.to_string())?;
+    }
+    let active = ActiveControllerSettings {
+        inspection: inspection.device.clone(),
+        fingerprint,
+        connection,
+        profile_id,
+        archive,
+        revision: 1,
+    };
+    let settings = settings_state(&active);
+    *state.settings_session.lock().await = Some(active);
+    Ok(ConnectOutcome {
+        snapshot,
+        inspection,
+        settings,
+        profiles: state.profiles.lock().await.state(),
+        onboarding_draft,
+    })
 }
 
 fn ensure_profile_change_available(state: &AppState) -> Result<(), String> {
@@ -318,6 +564,269 @@ fn ensure_profile_change_available(state: &AppState) -> Result<(), String> {
             "machine profiles can be changed only while disconnected, current state is {connection:?}"
         ))
     }
+}
+
+async fn apply_controller_setting(
+    state: &AppState,
+    request: ControllerSettingEditRequest,
+) -> Result<ControllerSettingsState, String> {
+    ensure_machine_bound(state).await?;
+    let expected_revision = request
+        .expected_revision
+        .ok_or_else(|| "controller setting edit is missing its source revision".to_owned())?;
+    if request.expected_value.is_none() {
+        return Err("controller setting edit is missing its source value".to_owned());
+    }
+    {
+        let session = state.settings_session.lock().await;
+        let active = session
+            .as_ref()
+            .ok_or_else(|| "connect and synchronize a controller first".to_owned())?;
+        if active.revision != expected_revision {
+            return Err(format!(
+                "controller settings changed: expected revision {expected_revision}, current revision is {}",
+                active.revision
+            ));
+        }
+    }
+
+    let verified = state
+        .arbiter
+        .update_controller_setting(request)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut session = state.settings_session.lock().await;
+    let active = session
+        .as_mut()
+        .ok_or_else(|| "controller settings session ended during verification".to_owned())?;
+    if active.revision != expected_revision {
+        return Err("controller settings changed while the write was in flight".to_owned());
+    }
+    active.inspection = verified.inspection;
+    active.revision = active.revision.saturating_add(1);
+    if let Some(archive) = active.archive.as_mut() {
+        archive
+            .record_observation(&active.inspection)
+            .map_err(|error| error.to_string())?;
+    }
+
+    let profile_to_bind = if let Some(profile_id) = active.profile_id.as_deref() {
+        if let Some(travel) =
+            build_settings_snapshot(&active.inspection, active.revision).travel_mm()
+        {
+            let profiles = state
+                .profiles
+                .lock()
+                .await
+                .record_controller_observation(
+                    profile_id,
+                    travel,
+                    active.connection.clone(),
+                    detected_controller(&active.inspection),
+                )
+                .map_err(|error| error.to_string())?;
+            profiles
+                .profiles
+                .iter()
+                .find(|profile| profile.id == profile_id)
+                .map(MachineProfile::hardware_profile)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let next = settings_state(active);
+    drop(session);
+    if let Some(profile) = profile_to_bind {
+        state
+            .arbiter
+            .bind_hardware_profile(profile)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(next)
+}
+
+async fn ensure_machine_bound(state: &AppState) -> Result<(), String> {
+    if state.active_transport.lock().await.kind == TransportKind::Mock {
+        return Ok(());
+    }
+    if state
+        .settings_session
+        .lock()
+        .await
+        .as_ref()
+        .and_then(|session| session.profile_id.as_ref())
+        .is_some()
+    {
+        Ok(())
+    } else {
+        Err(
+            "the connected controller must be identified and bound to a machine profile first"
+                .to_owned(),
+        )
+    }
+}
+
+fn settings_state(active: &ActiveControllerSettings) -> ControllerSettingsState {
+    let (session_baseline, previous_baseline, revision_count) = active
+        .archive
+        .as_ref()
+        .map(|archive| {
+            let state = archive.state();
+            (
+                state.active.baseline.clone(),
+                state
+                    .revisions
+                    .last()
+                    .map(|revision| revision.values.clone()),
+                state.revisions.len(),
+            )
+        })
+        .unwrap_or_else(|| (active.inspection.settings.clone(), None, 0));
+    ControllerSettingsState {
+        snapshot: build_settings_snapshot(&active.inspection, active.revision),
+        session_baseline,
+        previous_baseline,
+        revision_count,
+        profile_id: active.profile_id.clone(),
+        fingerprint: active.fingerprint.clone(),
+    }
+}
+
+fn begin_settings_archive(
+    state: &AppState,
+    profile: &MachineProfile,
+    active: &ActiveControllerSettings,
+) -> Result<Option<MachineSettingsArchive>, String> {
+    let Some(root) = state.settings_root.as_ref() else {
+        return Ok(None);
+    };
+    MachineSettingsArchive::begin(
+        root.join(format!("{}.settings.json", profile.id)),
+        profile.id.clone(),
+        active.fingerprint.key.clone(),
+        &active.inspection,
+    )
+    .map(Some)
+    .map_err(|error| error.to_string())
+}
+
+fn detected_controller(inspection: &DeviceInspection) -> DetectedController {
+    DetectedController {
+        firmware_version: inspection.firmware_version.clone(),
+        firmware_build_info: inspection.firmware_build_info.clone(),
+    }
+}
+
+fn match_machine_profile(
+    profiles: &MachineProfileState,
+    fingerprint: &MachineFingerprint,
+    transport_id: &str,
+    inspection: &DeviceInspection,
+) -> Result<Option<MachineProfile>, String> {
+    let exact = profiles
+        .profiles
+        .iter()
+        .filter(|profile| {
+            profile
+                .connection
+                .as_ref()
+                .and_then(|connection| connection.fingerprint.as_ref())
+                .is_some_and(|stored| stored.key == fingerprint.key)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if exact.len() > 1 {
+        return Err("multiple machine profiles have the same controller fingerprint".to_owned());
+    }
+    if let Some(profile) = exact.into_iter().next() {
+        return Ok(Some(profile));
+    }
+
+    let legacy = profiles
+        .profiles
+        .iter()
+        .filter(|profile| {
+            let Some(connection) = profile.connection.as_ref() else {
+                return false;
+            };
+            if connection.fingerprint.is_some() || connection.transport_id != transport_id {
+                return false;
+            }
+            match (
+                profile
+                    .detected_controller
+                    .as_ref()
+                    .and_then(|controller| controller.firmware_version.as_deref()),
+                inspection.firmware_version.as_deref(),
+            ) {
+                (Some(stored), Some(observed)) => stored == observed,
+                _ => true,
+            }
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if legacy.len() > 1 {
+        return Err("the serial device matches more than one legacy machine profile".to_owned());
+    }
+    Ok(legacy.into_iter().next())
+}
+
+fn machine_fingerprint(
+    descriptor: &TransportDescriptor,
+    inspection: &DeviceInspection,
+) -> MachineFingerprint {
+    if descriptor.kind == TransportKind::Mock {
+        return MachineFingerprint {
+            key: "mock:built-in-grbl".to_owned(),
+            confidence: IdentityConfidence::Synthetic,
+            label: "Built-in Mock GRBL".to_owned(),
+        };
+    }
+    let vendor = descriptor.vendor_id.unwrap_or_default();
+    let product = descriptor.product_id.unwrap_or_default();
+    if let Some(serial) = descriptor
+        .serial_number
+        .as_deref()
+        .map(str::trim)
+        .filter(|serial| !serial.is_empty() && *serial != "0")
+    {
+        return MachineFingerprint {
+            key: format!("usb:{vendor:04x}:{product:04x}:{}", identity_token(serial)),
+            confidence: IdentityConfidence::Strong,
+            label: format!("USB {vendor:04X}:{product:04X} · {serial}"),
+        };
+    }
+    let product_name = descriptor
+        .product
+        .as_deref()
+        .or(descriptor.detail.as_deref())
+        .unwrap_or("serial");
+    let firmware = inspection.firmware_version.as_deref().unwrap_or("unknown");
+    MachineFingerprint {
+        key: format!(
+            "port:{vendor:04x}:{product:04x}:{}:{}",
+            identity_token(product_name),
+            identity_token(descriptor.port_name.as_deref().unwrap_or(&descriptor.id))
+        ),
+        confidence: IdentityConfidence::PortBound,
+        label: format!(
+            "{} · {} · {}",
+            product_name,
+            firmware,
+            descriptor.port_name.as_deref().unwrap_or(&descriptor.label)
+        ),
+    }
+}
+
+fn identity_token(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || matches!(character, '.' | '_'))
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn suggested_machine_name(
@@ -346,21 +855,90 @@ pub async fn refresh_status(state: State<'_, AppState>) -> Result<ControllerSnap
 
 #[tauri::command]
 pub async fn inspect_device(state: State<'_, AppState>) -> Result<HardwareInspection, String> {
-    state
+    let inspection = state
         .arbiter
         .inspect_device()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    if let Some(active) = state.settings_session.lock().await.as_mut() {
+        active.inspection = inspection.device.clone();
+        active.revision = active.revision.saturating_add(1);
+        if let Some(archive) = active.archive.as_mut() {
+            archive
+                .record_observation(&inspection.device)
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(inspection)
+}
+
+#[tauri::command]
+pub async fn controller_settings(
+    state: State<'_, AppState>,
+) -> Result<ControllerSettingsState, String> {
+    let session = state.settings_session.lock().await;
+    session
+        .as_ref()
+        .map(settings_state)
+        .ok_or_else(|| "connect and synchronize a controller first".to_owned())
+}
+
+#[tauri::command]
+pub async fn update_controller_setting(
+    request: ControllerSettingEditRequest,
+    state: State<'_, AppState>,
+) -> Result<ControllerSettingsState, String> {
+    let _transition = state.transition_lock.lock().await;
+    apply_controller_setting(&state, request).await
+}
+
+#[tauri::command]
+pub async fn rollback_controller_setting(
+    key: String,
+    expected_revision: u64,
+    state: State<'_, AppState>,
+) -> Result<ControllerSettingsState, String> {
+    let _transition = state.transition_lock.lock().await;
+    let (value, expected_value) = {
+        let session = state.settings_session.lock().await;
+        let active = session
+            .as_ref()
+            .ok_or_else(|| "connect and synchronize a controller first".to_owned())?;
+        let current = active
+            .inspection
+            .settings
+            .get(&key)
+            .ok_or_else(|| format!("controller did not report setting {key}"))?;
+        let baseline = active
+            .archive
+            .as_ref()
+            .and_then(|archive| archive.state().baseline_value(&key))
+            .unwrap_or(current);
+        (baseline.to_owned(), current.to_owned())
+    };
+    apply_controller_setting(
+        &state,
+        ControllerSettingEditRequest {
+            key,
+            value,
+            confirmed: true,
+            expected_value: Some(expected_value),
+            expected_revision: Some(expected_revision),
+        },
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn disconnect(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
     let _transition = state.transition_lock.lock().await;
-    state
+    let snapshot = state
         .arbiter
         .disconnect()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    *state.settings_session.lock().await = None;
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -407,6 +985,7 @@ pub async fn prepare_test_jog(
     confirmation: OperatorConfirmation,
     state: State<'_, AppState>,
 ) -> Result<TestJogPreparation, String> {
+    ensure_machine_bound(&state).await?;
     state
         .arbiter
         .prepare_test_jog(confirmation)
@@ -419,6 +998,7 @@ pub async fn step_jog(
     request: StepJogRequest,
     state: State<'_, AppState>,
 ) -> Result<StepJogReceipt, String> {
+    ensure_machine_bound(&state).await?;
     state
         .arbiter
         .step_jog(request)
@@ -431,6 +1011,7 @@ pub async fn jog_pad_step(
     request: JogPadStepRequest,
     state: State<'_, AppState>,
 ) -> Result<JogPadStepOutcome, String> {
+    ensure_machine_bound(&state).await?;
     state
         .arbiter
         .jog_pad_step(request)
@@ -443,6 +1024,7 @@ pub async fn set_work_zero(
     request: WorkZeroRequest,
     state: State<'_, AppState>,
 ) -> Result<WorkZeroOutcome, String> {
+    ensure_machine_bound(&state).await?;
     state
         .arbiter
         .set_work_zero(request)
@@ -464,6 +1046,7 @@ pub async fn preflight_real_run(
     state: State<'_, AppState>,
 ) -> Result<RunPreflightReport, String> {
     let _transition = state.transition_lock.lock().await;
+    ensure_machine_bound(&state).await?;
     if state.active_transport.lock().await.kind != TransportKind::Serial {
         return Err("real-run preflight requires an active serial transport".to_owned());
     }
@@ -644,6 +1227,11 @@ fn mock_descriptor() -> TransportDescriptor {
         port_name: None,
         likely_grbl: true,
         match_reason: Some("Built-in test controller".to_owned()),
+        vendor_id: None,
+        product_id: None,
+        manufacturer: None,
+        product: None,
+        serial_number: None,
     }
 }
 
@@ -674,6 +1262,11 @@ fn serial_descriptor(port: SerialPortDescriptor) -> TransportDescriptor {
         port_name: Some(port.port_name),
         likely_grbl: match_reason.is_some(),
         match_reason,
+        vendor_id: port.vendor_id,
+        product_id: port.product_id,
+        manufacturer: port.manufacturer,
+        product: port.product,
+        serial_number: port.serial_number,
     }
 }
 
@@ -870,6 +1463,11 @@ mod tests {
             port_name: Some("/dev/cu.test".to_owned()),
             likely_grbl: true,
             match_reason: Some("GRBL/CNC metadata".to_owned()),
+            vendor_id: Some(0x0483),
+            product_id: Some(0x5740),
+            manufacturer: Some("tomeko net".to_owned()),
+            product: Some("LUNYEE_4axis_Control".to_owned()),
+            serial_number: None,
         };
         let inspection = millo_domain::DeviceInspection {
             firmware_build_info: Some("fallback".to_owned()),
@@ -879,6 +1477,100 @@ mod tests {
         assert_eq!(
             suggested_machine_name(&descriptor, &inspection),
             "LUNYEE 4axis Control"
+        );
+    }
+
+    #[test]
+    fn fingerprint_prefers_a_real_usb_serial_and_rejects_zero_as_identity() {
+        let mut descriptor = serial_descriptor(SerialPortDescriptor {
+            port_name: "/dev/cu.usbmodem101".to_owned(),
+            kind: SerialPortKind::Usb,
+            vendor_id: Some(0x0483),
+            product_id: Some(0x5740),
+            manufacturer: Some("tomeko net".to_owned()),
+            product: Some("LUNYEE_4axis_Control".to_owned()),
+            serial_number: Some("ABC-123".to_owned()),
+        });
+        let inspection = DeviceInspection {
+            firmware_version: Some("1.1f".to_owned()),
+            ..Default::default()
+        };
+
+        let strong = machine_fingerprint(&descriptor, &inspection);
+        assert_eq!(strong.confidence, IdentityConfidence::Strong);
+        assert_eq!(strong.key, "usb:0483:5740:abc123");
+
+        descriptor.serial_number = Some("0".to_owned());
+        let fallback = machine_fingerprint(&descriptor, &inspection);
+        assert_eq!(fallback.confidence, IdentityConfidence::PortBound);
+        assert!(fallback.key.contains("usbmodem101"));
+
+        let upgraded = DeviceInspection {
+            firmware_version: Some("1.1h".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(
+            machine_fingerprint(&descriptor, &upgraded).key,
+            fallback.key
+        );
+    }
+
+    #[test]
+    fn profile_matching_migrates_one_legacy_port_but_rejects_ambiguity() {
+        let inspection = DeviceInspection {
+            firmware_version: Some("1.1f".to_owned()),
+            ..Default::default()
+        };
+        let fingerprint = MachineFingerprint {
+            key: "port:test".to_owned(),
+            confidence: IdentityConfidence::PortBound,
+            label: "Test controller".to_owned(),
+        };
+        let profile = MachineProfile {
+            id: "machine-0001".to_owned(),
+            name: "Router".to_owned(),
+            travel_mm: millo_domain::MachineTravel {
+                x: 300.0,
+                y: 200.0,
+                z: 80.0,
+            },
+            spindle_control: millo_domain::SpindleControl::Manual,
+            homing_installed: false,
+            limit_switches_installed: false,
+            probe_installed: false,
+            emergency_stop_installed: false,
+            connection: Some(MachineConnectionPreset {
+                transport_id: "serial:/dev/cu.test".to_owned(),
+                baud_rate: 115_200,
+                fingerprint: None,
+            }),
+            detected_controller: Some(DetectedController {
+                firmware_version: Some("1.1f".to_owned()),
+                firmware_build_info: None,
+            }),
+        };
+        let one = MachineProfileState {
+            profiles: vec![profile.clone()],
+            selected_profile_id: None,
+        };
+        assert_eq!(
+            match_machine_profile(&one, &fingerprint, "serial:/dev/cu.test", &inspection,)
+                .unwrap()
+                .unwrap()
+                .id,
+            "machine-0001"
+        );
+
+        let mut second = profile;
+        second.id = "machine-0002".to_owned();
+        second.name = "Other router".to_owned();
+        let ambiguous = MachineProfileState {
+            profiles: vec![one.profiles[0].clone(), second],
+            selected_profile_id: None,
+        };
+        assert!(
+            match_machine_profile(&ambiguous, &fingerprint, "serial:/dev/cu.test", &inspection,)
+                .is_err()
         );
     }
 }

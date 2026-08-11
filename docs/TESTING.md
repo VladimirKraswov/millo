@@ -56,12 +56,16 @@ The test phase also runs `scripts/check-brand.mjs`, which keeps npm, Cargo,
 Tauri, UI, and documentation naming consistent.
 
 Machine-profile tests cover required names, bounded positive XYZ travel,
-case-insensitive duplicate rejection, stable selection, JSON reload, corrupt
-selection rejection, and conservative derivation from GRBL settings. Actor
-tests prove the active profile changes while disconnected and cannot be replaced
-after connection. TypeScript tests keep every unverified hardware flag off and
-mirror the required-field gate. The `/?fixture=profiles` visual fixture is
-checked at 1440 × 900 and 390 × 844 with the add-machine dialog open.
+case-insensitive duplicate rejection, stable selection, JSON reload, local-only
+fact updates, corrupt selection rejection, and conservative derivation from
+GRBL settings. Settings tests cover the complete catalog, unknown firmware keys,
+numeric formatting, immutable connection baselines, bounded reconnect history,
+fresh-observation persistence, positive travel, and stale external changes.
+Actor tests prove profile binding does not dismiss a reset banner and that one
+setting edit executes the exact read/write/reread sequence. TypeScript tests keep
+unverified hardware flags off and cover settings search/value comparison. The
+`/?fixture=profiles` and `/?fixture=settings` screens are checked at desktop and
+mobile sizes.
 
 ## Slice checklist
 
@@ -213,18 +217,27 @@ port names remain untouched.
 - The Tauri mock smoke test confirms a ready report is invalidated after an
   injected alarm rather than leaving stale green readiness on screen.
 
-## Current machine-profile coverage
+## Current machine-profile and settings coverage
 
-- An empty store blocks connection until a validated profile is created and
-  selected.
-- The selected profile loads into the command actor at startup; later selection
-  is allowed only while disconnected.
+- An empty store permits read-only serial connection and inspection, but blocks
+  movement until controller-derived onboarding creates a validated profile.
+- A known exact fingerprint is selected automatically. One legacy exact-port
+  profile can be migrated; duplicate strong or legacy matches fail closed.
+- The selected profile loads into the command actor at startup; manual selection
+  remains available only while disconnected. Connected onboarding uses a
+  separate actor binding operation and cannot replace an already bound profile.
 - Schema version 1 uses stable IDs, a bounded 64-profile list, and temporary-file
   replacement persistence.
 - Detection uses only `?`, `$I`, `$$`, `$G`, and `$#`, and rejects invalid
   `$130/$131/$132` before a draft reaches React.
 - The physical import helper exposes no movement, setting-write, spindle, or
   coolant operation. It stored the first real profile on 2026-08-11.
+- `millo-settings` stores one JSON file per profile. Multiple verified edits keep
+  the first observed connection value as rollback baseline; reconnect promotes
+  the observed machine state to a new baseline and archives the old one.
+- Tauri requires both the source revision and source value. The actor compares
+  the source value with a new `$$`, sends only one validated setting command,
+  and verifies the result through another complete Inspector read.
 
 ## Current realtime safety coverage
 

@@ -107,9 +107,20 @@ Observed through the read-only Inspector on 2026-08-11:
   X `+0.000`, Y `+0.000`, Z `+0.100 mm`. Both used `10 mm/min`.
 
 The persistent profile also stores `/dev/cu.usbmodem11101` and 115200 baud as a
-connection preset. That path is convenience metadata, not cryptographic device
-identity. The automated Mock fixture continues to use representative synthetic
-XYZ values.
+connection preset. The USB device reports no usable unique serial number, so its
+identity confidence is `portBound`: VID/PID, product, and the `/dev/cu.*` path
+are combined. Firmware remains visible observation metadata but is not part of
+the stable key. This distinguishes the current setup but cannot
+reliably distinguish two identical controllers swapped onto the same port;
+Millo must ask the operator when matches are ambiguous. No ID is written into a
+GRBL startup block. The automated Mock fixture uses a synthetic fingerprint.
+
+At each connection Millo treats the controller's complete `$$` response as the
+truth and keeps a duplicate in
+`~/Library/Application Support/io.millo.desktop/machines/machine-0001.settings.json`.
+The session baseline supports rollback without pushing stale local values back
+to the machine. Reconnect creates a new baseline and retains the preceding one
+as a bounded revision.
 
 ## Test-jog preflight
 

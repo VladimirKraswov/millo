@@ -7,21 +7,25 @@ import {
   connectTransport,
   disconnect,
   getActiveTransport,
+  getControllerSettings,
   inspectDevice,
   isDesktopRuntime,
   listTransports,
   refreshStatus,
+  rollbackControllerSetting,
   triggerMockAlarm,
   triggerMockDisconnect,
   triggerMockRun,
   triggerMockReset,
   triggerMockTimeout,
+  updateControllerSetting,
 } from "./api/controller";
 import {
   createMachineProfile,
   detectMachineProfile,
   getMachineProfiles,
   selectMachineProfile,
+  updateMachineLocalSettings,
 } from "./api/profiles";
 import { ReadinessPanel } from "./components/ReadinessPanel";
 import { SafetyControls } from "./components/SafetyControls";
@@ -29,6 +33,7 @@ import { previewFixtureProgram } from "./features/program/previewFixtureProgram"
 import { previewFixturePreflightGateway } from "./features/program/previewFixturePreflight";
 import { ProgramWorkspace } from "./features/program/ProgramWorkspace";
 import { MachineProfiles } from "./features/machine-profiles/MachineProfiles";
+import { MachineSettingsDialog } from "./features/machine-settings/MachineSettingsDialog";
 import { bindMachineStateStream } from "./platform/machine/MachineStateEventStream";
 import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineCommandGateway";
 import { tauriMachineStateEventStream } from "./platform/machine/tauriMachineStateEventStream";
@@ -43,8 +48,16 @@ import {
   type Position,
   type TransportDescriptor,
 } from "./shared/machine";
-import type { MachineProfileDraft, MachineProfileState } from "./shared/profile";
+import type {
+  MachineProfile,
+  MachineProfileDraft,
+  MachineProfileState,
+} from "./shared/profile";
 import { selectedMachineProfile } from "./shared/profile";
+import type {
+  ControllerSettingEditRequest,
+  ControllerSettingsState,
+} from "./shared/settings";
 
 const connectionLabels = {
   disconnected: "Отключено",
@@ -77,7 +90,7 @@ const developmentProfileFixture: MachineProfileState = {
     {
       id: "machine-0001",
       name: "LUNYEE CNC",
-      travelMm: { x: 300, y: 180, z: 45 },
+      travelMm: { x: 500, y: 500, z: 200 },
       spindleControl: "manual",
       homingInstalled: false,
       limitSwitchesInstalled: false,
@@ -88,6 +101,43 @@ const developmentProfileFixture: MachineProfileState = {
     },
   ],
   selectedProfileId: "machine-0001",
+};
+const developmentSettingsFixture: ControllerSettingsState = {
+  snapshot: {
+    revision: 4,
+    firmwareVersion: "1.1f.20230316",
+    firmwareBuildInfo: "LUNYEE_4axis_Control",
+    values: [
+      { key: "$21", value: "0", title: "Hard limits", group: "safety", kind: "boolean", known: true },
+      { key: "$22", value: "0", title: "Homing cycle", group: "homing", kind: "boolean", known: true },
+      { key: "$100", value: "1600.000", title: "X steps per millimeter", group: "calibration", kind: "decimal", unit: "step/mm", known: true },
+      { key: "$110", value: "1000.000", title: "X maximum rate", group: "motion", kind: "decimal", unit: "mm/min", known: true },
+      { key: "$120", value: "600.000", title: "X acceleration", group: "motion", kind: "decimal", unit: "mm/s^2", known: true },
+      { key: "$130", value: "500.000", title: "X maximum travel", group: "travel", kind: "decimal", unit: "mm", known: true },
+      { key: "$131", value: "500.000", title: "Y maximum travel", group: "travel", kind: "decimal", unit: "mm", known: true },
+      { key: "$132", value: "200.000", title: "Z maximum travel", group: "travel", kind: "decimal", unit: "mm", known: true },
+      { key: "$200", value: "7.5", title: "Firmware setting 200", group: "advanced", kind: "decimal", known: false },
+    ],
+  },
+  sessionBaseline: {
+    "$21": "0",
+    "$22": "0",
+    "$100": "1600.000",
+    "$110": "1000.000",
+    "$120": "500.000",
+    "$130": "500.000",
+    "$131": "500.000",
+    "$132": "200.000",
+    "$200": "7.5",
+  },
+  previousBaseline: { "$120": "400.000" },
+  revisionCount: 2,
+  profileId: "machine-0001",
+  fingerprint: {
+    key: "port:0483:5740:lunyee_4axis_control:devcuusbmodem11101",
+    confidence: "portBound",
+    label: "LUNYEE_4axis_Control · 1.1f.20230316 · /dev/cu.usbmodem11101",
+  },
 };
 
 const formatCoordinate = (value: number | undefined): string =>
@@ -138,11 +188,17 @@ export default function App() {
   const [likelyGrblOnly, setLikelyGrblOnly] = useState(true);
   const [inspection, setInspection] = useState<HardwareInspection>();
   const [machineProfiles, setMachineProfiles] = useState<MachineProfileState>(
-    developmentFixture === "profiles"
+    developmentFixture === "profiles" || developmentFixture === "settings"
       ? developmentProfileFixture
       : { profiles: [] },
   );
   const [profileBusy, setProfileBusy] = useState(false);
+  const [controllerSettings, setControllerSettings] =
+    useState<ControllerSettingsState | undefined>(
+      developmentFixture === "settings" ? developmentSettingsFixture : undefined,
+    );
+  const [onboardingDraft, setOnboardingDraft] = useState<MachineProfileDraft>();
+  const [settingsOpen, setSettingsOpen] = useState(developmentFixture === "settings");
   const [inspecting, setInspecting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
@@ -267,7 +323,16 @@ export default function App() {
   const displayedTransport = transportLocked ? activeTransport : selectedTransport;
   const displayedError = uiError ?? snapshot.lastError;
   const controlsBusy = busy || inspecting || profileBusy;
-  const selectedMachine = selectedMachineProfile(machineProfiles);
+  const effectiveMachineProfiles =
+    hasConnection && controllerSettings
+      ? {
+          ...machineProfiles,
+          selectedProfileId: controllerSettings.profileId,
+        }
+      : machineProfiles;
+  const selectedMachine = selectedMachineProfile(effectiveMachineProfiles);
+  const machineBound =
+    activeTransport.kind === "mock" || controllerSettings?.profileId !== undefined;
 
   useEffect(() => {
     if (transportLocked || !selectedMachine?.connection) return;
@@ -280,6 +345,7 @@ export default function App() {
     setUiError(undefined);
     try {
       setInspection(await inspectDevice());
+      setControllerSettings(await getControllerSettings());
     } catch (error) {
       setUiError(String(error));
     } finally {
@@ -289,18 +355,38 @@ export default function App() {
 
   const connectSelectedTransport = async () => {
     setInspection(undefined);
-    const connected = await runAction(() =>
-      connectTransport(selectedTransport.id, baudRate),
-    );
-    if (connected) {
+    setControllerSettings(undefined);
+    setOnboardingDraft(undefined);
+    setBusy(true);
+    setUiError(undefined);
+    try {
+      const outcome = await connectTransport(selectedTransport.id, baudRate);
+      pluginHost.machineState.publish(outcome.snapshot);
       setActiveTransport(selectedTransport);
-      await readDeviceInspection();
+      setInspection(outcome.inspection);
+      setControllerSettings(outcome.settings);
+      setMachineProfiles(
+        outcome.onboardingDraft
+          ? { ...outcome.profiles, selectedProfileId: undefined }
+          : outcome.profiles,
+      );
+      setOnboardingDraft(outcome.onboardingDraft);
+    } catch (error) {
+      setUiError(String(error));
+    } finally {
+      setBusy(false);
     }
   };
 
   const disconnectController = async () => {
     const disconnected = await runAction(disconnect);
-    if (disconnected) setInspection(undefined);
+    if (disconnected) {
+      setInspection(undefined);
+      setControllerSettings(undefined);
+      setOnboardingDraft(undefined);
+      setSettingsOpen(false);
+      if (desktopRuntime) setMachineProfiles(await getMachineProfiles());
+    }
   };
 
   const chooseMachineProfile = async (profileId: string) => {
@@ -330,6 +416,7 @@ export default function App() {
     try {
       if (desktopRuntime) {
         setMachineProfiles(await createMachineProfile(draft));
+        if (hasConnection) setControllerSettings(await getControllerSettings());
       } else if (developmentFixture === "profiles") {
         const id = `machine-${String(machineProfiles.profiles.length + 1).padStart(4, "0")}`;
         setMachineProfiles((current) => ({
@@ -340,12 +427,47 @@ export default function App() {
         throw new Error("Machine profiles require the desktop runtime");
       }
       setInspection(undefined);
+      setOnboardingDraft(undefined);
     } catch (error) {
       setUiError(String(error));
       throw error;
     } finally {
       setProfileBusy(false);
     }
+  };
+
+  const updateLocalMachine = async (
+    profile: MachineProfile,
+  ): Promise<MachineProfileState> => {
+    const next = await updateMachineLocalSettings(profile.id, {
+      name: profile.name,
+      spindleControl: profile.spindleControl,
+      homingInstalled: profile.homingInstalled,
+      limitSwitchesInstalled: profile.limitSwitchesInstalled,
+      probeInstalled: profile.probeInstalled,
+      emergencyStopInstalled: profile.emergencyStopInstalled,
+    });
+    setMachineProfiles(next);
+    return next;
+  };
+
+  const writeControllerSetting = async (
+    request: ControllerSettingEditRequest,
+  ): Promise<ControllerSettingsState> => {
+    const next = await updateControllerSetting(request);
+    setControllerSettings(next);
+    setMachineProfiles(await getMachineProfiles());
+    return next;
+  };
+
+  const rollbackSetting = async (
+    key: string,
+    revision: number,
+  ): Promise<ControllerSettingsState> => {
+    const next = await rollbackControllerSetting(key, revision);
+    setControllerSettings(next);
+    setMachineProfiles(await getMachineProfiles());
+    return next;
   };
 
   const detectSelectedMachine = async (): Promise<MachineProfileDraft> => {
@@ -390,8 +512,11 @@ export default function App() {
           locked={transportLocked}
           onCreate={addMachineProfile}
           onDetect={detectSelectedMachine}
+          onEdit={() => setSettingsOpen(true)}
+          onOnboardingDismiss={() => setOnboardingDraft(undefined)}
           onSelect={chooseMachineProfile}
-          state={machineProfiles}
+          onboardingDraft={onboardingDraft}
+          state={effectiveMachineProfiles}
         />
 
         <div className={`connection-state is-${snapshot.connection}`}>
@@ -506,6 +631,7 @@ export default function App() {
                   snapshot.machine.mode === "idle" &&
                   snapshot.alarm === undefined &&
                   snapshot.resetNotice === undefined)
+                  && machineBound
               }
               realRunGateway={
                 developmentPreflightFixture
@@ -677,6 +803,7 @@ export default function App() {
             onInspection={setInspection}
             onSnapshot={pluginHost.machineState.publish}
             snapshot={snapshot}
+            machineBound={machineBound}
           />
 
           <div className="transport-config">
@@ -768,7 +895,7 @@ export default function App() {
             <button
               className="primary-action"
               disabled={
-                controlsBusy || hasConnection || !desktopRuntime || !selectedMachine
+                controlsBusy || hasConnection || !desktopRuntime
               }
               onClick={() => void connectSelectedTransport()}
               type="button"
@@ -864,6 +991,16 @@ export default function App() {
         <span>Poll: #{snapshot.pollSequence}</span>
         <span>Core: Rust</span>
       </footer>
+
+      <MachineSettingsDialog
+        onClose={() => setSettingsOpen(false)}
+        onLocalUpdate={updateLocalMachine}
+        onRollback={rollbackSetting}
+        onWrite={writeControllerSetting}
+        open={settingsOpen}
+        profile={selectedMachine}
+        settings={controllerSettings}
+      />
     </div>
   );
 }

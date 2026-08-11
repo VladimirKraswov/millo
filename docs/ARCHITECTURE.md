@@ -97,14 +97,48 @@ caller. The UI treats the event as authoritative.
   homing, limits, probe, and physical emergency-stop declarations are explicit;
   unverified hardware defaults to absent.
 - Tauri resolves the application configuration path and exposes typed
-  list/create/select/detect operations. The command actor accepts a profile only
-  while disconnected, and connection fails when no persistent profile is
-  selected.
+  list/create/select/detect/update operations. A disconnected operator may
+  select a profile; a connected unknown serial device may create and bind only
+  the draft derived from that live controller session.
 - Detection opens a temporary controller session, performs only status and
   Inspector reads, derives travel from `$130/$131/$132`, and closes the port.
-  `$21/$22` may prefill configured limits/homing. `$6` cannot prove physical
-  probe presence and never enables it automatically.
-- A serial/baud preset is convenience metadata, not device authentication.
+  `$21/$22` remain controller settings and do not prove physical switches;
+  limits, homing, probe, and emergency-stop facts all stay off until the
+  operator declares the installed hardware.
+- Connection now precedes identity resolution. Tauri performs a complete
+  Inspector read, builds a fingerprint, selects exactly one matching profile or
+  opens onboarding, and blocks Jog, Work Zero, and serial run preflight while a
+  serial controller is unbound.
+- A real USB serial number forms a strong fingerprint. Devices such as the
+  current LUNYEE controller that report no unique serial use a clearly labelled
+  port-bound fallback containing VID/PID, product, and native port. Firmware is
+  displayed as observed metadata but is deliberately excluded from the stable
+  key so a firmware update does not create a new machine.
+  Multiple matches fail closed and require operator resolution.
+
+### Controller settings synchronization
+
+- `millo-settings` is independent of Tauri, React, and serial I/O. It maps every
+  standard GRBL 1.1 `$` key to a group, type, and unit while retaining unknown
+  numeric firmware settings under Advanced.
+- The connected controller is always authoritative. The local file at
+  `machines/<profile-id>.settings.json` is a duplicate for rollback and history,
+  never an offline configuration pushed automatically on connect.
+- `connect_transport` reads all settings and starts an immutable session
+  baseline. Reconnecting archives the previous baseline when the session or
+  controller state changed, keeps at most 20 revisions, and starts a new
+  baseline from the newly observed controller values.
+- Controller edits carry the UI revision, expected old value, target value, and
+  explicit editing grant. The Tauri adapter rejects stale revisions. The actor
+  then performs `?`, complete Inspector, one typed `$n=value`, another `?`, and
+  another complete Inspector. A changed external value or mismatched stored
+  result fails the operation.
+- The archive's current values are replaced only after a successful fresh read.
+  A crash, timeout, `error`, or `ALARM` cannot manufacture a saved state.
+- Controller fields autosave after a 650 ms debounce. The UI serializes multiple
+  field edits, shows pending/writing/verified/error per field, rolls back to the
+  connection baseline, and can explicitly restore a value from the preceding
+  archived session.
 
 The command arbiter owns the periodic driver. Every tick calls one core method:
 a connected controller is polled, while a recovering controller attempts

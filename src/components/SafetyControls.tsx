@@ -25,6 +25,7 @@ interface SafetyControlsProps {
   extensionRegistry: UiExtensionRegistry;
   machineGateway: MachineCommandGateway;
   workCoordinateGateway: WorkCoordinateGateway;
+  machineBound: boolean;
   onSnapshot: (snapshot: ControllerSnapshot) => void;
   onInspection: (inspection?: HardwareInspection) => void;
   onError: (error?: string) => void;
@@ -39,6 +40,7 @@ export function SafetyControls({
   extensionRegistry,
   machineGateway,
   workCoordinateGateway,
+  machineBound,
   onSnapshot,
   onInspection,
   onError,
@@ -196,7 +198,7 @@ export function SafetyControls({
         context={{
           snapshot,
           desktopRuntime,
-          controlsDisabled: busy || holdPending,
+          controlsDisabled: busy || holdPending || !machineBound,
           machineCommands: machineGateway,
           workCoordinates: workCoordinateGateway,
           updateSnapshot: onSnapshot,
@@ -210,7 +212,7 @@ export function SafetyControls({
         context={{
           snapshot,
           desktopRuntime,
-          controlsDisabled: busy || holdPending,
+          controlsDisabled: busy || holdPending || !machineBound,
           machineCommands: machineGateway,
           workCoordinates: workCoordinateGateway,
           updateSnapshot: onSnapshot,

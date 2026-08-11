@@ -12,6 +12,7 @@ members = [
   "crates/millo-readiness",
   "crates/millo-run",
   "crates/millo-safety",
+  "crates/millo-settings",
   "crates/millo-sender",
   "crates/millo-serial",
   "crates/millo-transport",

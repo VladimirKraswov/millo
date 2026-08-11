@@ -8,6 +8,7 @@ rust-version.workspace = true
  millo-dry-run = { path = "../millo-dry-run" }
 millo-domain = { path = "../millo-domain" }
 millo-grbl = { path = "../millo-grbl" }
+millo-settings = { path = "../millo-settings" }
 millo-transport = { path = "../millo-transport" }
 thiserror.workspace = true
 tokio.workspace = true

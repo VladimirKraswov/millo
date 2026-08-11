@@ -18,6 +18,10 @@ use millo_readiness::assess;
 use millo_run::{RunPreflightReport, assess_real_run_preflight};
 use millo_safety::{SafetyError, SafetyManager};
 use millo_sender::{Sender, SenderError, SenderSnapshot, SenderState};
+use millo_settings::{
+    ControllerSettingEditRequest, SettingsError, VerifiedSettingUpdate, setting_values_equal,
+    validate_setting_edit,
+};
 use millo_transport::BoxedTransport;
 use thiserror::Error;
 use tokio::{
@@ -60,6 +64,16 @@ pub enum ArbiterError {
     RealRunTransportUnavailable,
     #[error("machine profile can be changed only while disconnected, current state is {0:?}")]
     ProfileChangeUnavailable(ConnectionState),
+    #[error(transparent)]
+    Settings(#[from] SettingsError),
+    #[error(
+        "controller setting verification failed for {key}: requested {requested}, read {stored}"
+    )]
+    SettingVerification {
+        key: String,
+        requested: String,
+        stored: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -178,6 +192,22 @@ impl CommandArbiter {
         profile: HardwareProfile,
     ) -> Result<HardwareProfile, ArbiterError> {
         self.call(|response| Request::SetHardwareProfile { profile, response })
+            .await
+    }
+
+    pub async fn bind_hardware_profile(
+        &self,
+        profile: HardwareProfile,
+    ) -> Result<HardwareProfile, ArbiterError> {
+        self.call(|response| Request::BindHardwareProfile { profile, response })
+            .await
+    }
+
+    pub async fn update_controller_setting(
+        &self,
+        request: ControllerSettingEditRequest,
+    ) -> Result<VerifiedSettingUpdate, ArbiterError> {
+        self.call(|response| Request::UpdateControllerSetting { request, response })
             .await
     }
 
@@ -324,6 +354,14 @@ enum Request {
     SetHardwareProfile {
         profile: HardwareProfile,
         response: oneshot::Sender<Result<HardwareProfile, ArbiterError>>,
+    },
+    BindHardwareProfile {
+        profile: HardwareProfile,
+        response: oneshot::Sender<Result<HardwareProfile, ArbiterError>>,
+    },
+    UpdateControllerSetting {
+        request: ControllerSettingEditRequest,
+        response: oneshot::Sender<Result<VerifiedSettingUpdate, ArbiterError>>,
     },
     Disconnect {
         response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
@@ -478,6 +516,20 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             } else {
                 Err(ArbiterError::ProfileChangeUnavailable(connection))
             };
+            let _ = response.send(result);
+        }
+        Request::BindHardwareProfile { profile, response } => {
+            let result = ensure_profile_binding_available(&controller.snapshot()).map(|()| {
+                safety.invalidate_test_jog();
+                *hardware_profile = profile;
+                hardware_profile.clone()
+            });
+            let _ = response.send(result);
+        }
+        Request::UpdateControllerSetting { request, response } => {
+            safety.invalidate_test_jog();
+            let result = execute_controller_setting_update(controller, request).await;
+            publish(snapshots, controller);
             let _ = response.send(result);
         }
         Request::Disconnect { response } => {
@@ -888,12 +940,59 @@ async fn configure_unhomed_operation(
     })
 }
 
+async fn execute_controller_setting_update(
+    controller: &mut Controller<BoxedTransport>,
+    request: ControllerSettingEditRequest,
+) -> Result<VerifiedSettingUpdate, ArbiterError> {
+    controller.refresh_status().await?;
+    ensure_stable_idle(&controller.snapshot())?;
+    let before = controller.inspect_device().await?;
+    let setting = validate_setting_edit(request, &before)?;
+    let before_value = before
+        .settings
+        .get(setting.key())
+        .expect("validated setting must exist")
+        .clone();
+    ensure_stable_idle(&controller.snapshot())?;
+    let write = controller.write_setting(&setting).await?;
+    controller.refresh_status().await?;
+    ensure_stable_idle(&controller.snapshot())?;
+    let inspection = controller.inspect_device().await?;
+    let stored_value = inspection
+        .settings
+        .get(setting.key())
+        .cloned()
+        .unwrap_or_else(|| "missing".to_owned());
+    if !setting_values_equal(setting.value(), &stored_value) {
+        return Err(ArbiterError::SettingVerification {
+            key: setting.key().to_owned(),
+            requested: setting.value().to_owned(),
+            stored: stored_value,
+        });
+    }
+    Ok(VerifiedSettingUpdate {
+        key: setting.key().to_owned(),
+        before_value,
+        stored_value,
+        write,
+        inspection,
+    })
+}
+
 fn ensure_stable_idle(snapshot: &ControllerSnapshot) -> Result<(), ArbiterError> {
     if snapshot.connection == ConnectionState::Connected
         && snapshot.machine.mode == MachineMode::Idle
         && snapshot.alarm.is_none()
         && snapshot.reset_notice.is_none()
     {
+        Ok(())
+    } else {
+        Err(SafetyError::UnsafeControllerState.into())
+    }
+}
+
+fn ensure_profile_binding_available(snapshot: &ControllerSnapshot) -> Result<(), ArbiterError> {
+    if snapshot.connection != ConnectionState::Disconnected {
         Ok(())
     } else {
         Err(SafetyError::UnsafeControllerState.into())
@@ -1145,6 +1244,80 @@ mod tests {
         let inspection = arbiter.inspect_device().await.unwrap();
         assert_eq!(inspection.readiness.profile.name, "Selected bench router");
         assert_eq!(inspection.readiness.profile.travel_mm, profile.travel_mm);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn binds_an_identified_profile_while_an_idle_reset_banner_is_visible() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        control.queue_reset("1.1h");
+        arbiter.refresh_status().await.unwrap();
+        let mut profile = HardwareProfile::first_machine();
+        profile.name = "Identified router".to_owned();
+
+        arbiter.bind_hardware_profile(profile).await.unwrap();
+        let inspection = arbiter.inspect_device().await.unwrap();
+
+        assert_eq!(inspection.readiness.profile.name, "Identified router");
+        assert!(arbiter.snapshot().reset_notice.is_some());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn profile_binding_is_local_context_and_does_not_write_during_run() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        control.set_status("<Run|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:10,0>");
+        arbiter.refresh_status().await.unwrap();
+        let writes_before_binding = control.writes();
+        let mut profile = HardwareProfile::first_machine();
+        profile.name = "Bound while externally running".to_owned();
+
+        arbiter.bind_hardware_profile(profile).await.unwrap();
+
+        assert_eq!(control.writes(), writes_before_binding);
+        assert_eq!(arbiter.snapshot().machine.mode, MachineMode::Run);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn writes_and_rereads_one_confirmed_controller_setting() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let update = arbiter
+            .update_controller_setting(ControllerSettingEditRequest {
+                key: "$120".to_owned(),
+                value: "600".to_owned(),
+                confirmed: true,
+                expected_value: Some("50".to_owned()),
+                expected_revision: Some(7),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(update.before_value, "50.000");
+        assert_eq!(update.stored_value, "600");
+        assert_eq!(
+            control.writes(),
+            vec![
+                b"?".to_vec(),
+                b"$I\n".to_vec(),
+                b"$$\n".to_vec(),
+                b"$G\n".to_vec(),
+                b"$#\n".to_vec(),
+                b"$120=600\n".to_vec(),
+                b"?".to_vec(),
+                b"$I\n".to_vec(),
+                b"$$\n".to_vec(),
+                b"$G\n".to_vec(),
+                b"$#\n".to_vec(),
+            ]
+        );
         task.abort();
     }
 

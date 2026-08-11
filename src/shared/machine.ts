@@ -71,6 +71,11 @@ export interface TransportDescriptor {
   portName?: string;
   likelyGrbl: boolean;
   matchReason?: string;
+  vendorId?: number;
+  productId?: number;
+  manufacturer?: string;
+  product?: string;
+  serialNumber?: string;
 }
 
 export type CommandCompletion = "ok" | "error" | "alarm" | "reset";

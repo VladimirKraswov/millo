@@ -1828,6 +1828,7 @@ dependencies = [
  "millo-run",
  "millo-safety",
  "millo-sender",
+ "millo-settings",
  "millo-transport",
  "thiserror 2.0.20",
  "tokio",
@@ -1841,6 +1842,7 @@ dependencies = [
  "millo-dry-run",
  "millo-grbl",
  "millo-mock",
+ "millo-settings",
  "millo-transport",
  "thiserror 2.0.20",
  "tokio",
@@ -1860,8 +1862,10 @@ dependencies = [
  "millo-run",
  "millo-sender",
  "millo-serial",
+ "millo-settings",
  "millo-transport",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tokio",
@@ -1968,6 +1972,16 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "tokio-serial",
+]
+
+[[package]]
+name = "millo-settings"
+version = "0.1.0"
+dependencies = [
+ "millo-domain",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

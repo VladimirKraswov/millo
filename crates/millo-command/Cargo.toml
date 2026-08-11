@@ -13,6 +13,7 @@ millo-grbl = { path = "../millo-grbl" }
 millo-readiness = { path = "../millo-readiness" }
 millo-run = { path = "../millo-run" }
 millo-safety = { path = "../millo-safety" }
+millo-settings = { path = "../millo-settings" }
 millo-sender = { path = "../millo-sender" }
 millo-transport = { path = "../millo-transport" }
 thiserror.workspace = true
