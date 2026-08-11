@@ -1,11 +1,12 @@
 use std::{
     collections::BTreeMap,
     fs, io,
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use millo_domain::{CommandResponse, DeviceInspection, MachineTravel};
+use millo_storage::{backup_path, write_atomically};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -387,13 +388,30 @@ impl MachineSettingsArchive {
         let machine_profile_id = machine_profile_id.into();
         let identity_fingerprint = identity_fingerprint.into();
         let observed = inspection.settings.clone();
-        let mut state = if path.exists() {
-            let stored: StoredSettingsArchive =
-                serde_json::from_slice(&fs::read(&path).map_err(|source| ArchiveError::Io {
-                    path: path.clone(),
-                    source,
-                })?)
-                .map_err(ArchiveError::InvalidFile)?;
+        let backup = backup_path(&path);
+        let mut recovered_from_backup = false;
+        let mut state = if path.exists() || backup.exists() {
+            let stored = if path.exists() {
+                match load_archive(&path) {
+                    Ok(stored) => stored,
+                    Err(ArchiveError::InvalidFile(primary)) if backup.exists() => {
+                        match load_archive(&backup) {
+                            Ok(stored) => {
+                                recovered_from_backup = true;
+                                stored
+                            }
+                            Err(ArchiveError::InvalidFile(backup)) => {
+                                return Err(ArchiveError::CorruptCopies { primary, backup });
+                            }
+                            Err(error) => return Err(error),
+                        }
+                    }
+                    Err(error) => return Err(error),
+                }
+            } else {
+                recovered_from_backup = true;
+                load_archive(&backup)?
+            };
             if stored.schema_version != ARCHIVE_SCHEMA_VERSION {
                 return Err(ArchiveError::UnsupportedSchema(stored.schema_version));
             }
@@ -440,6 +458,9 @@ impl MachineSettingsArchive {
         };
 
         let archive = Self { path, state };
+        if recovered_from_backup {
+            archive.remove_corrupt_primary()?;
+        }
         archive.persist()?;
         Ok(archive)
     }
@@ -483,23 +504,26 @@ impl MachineSettingsArchive {
     }
 
     fn persist(&self) -> Result<(), ArchiveError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|source| ArchiveError::Io {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
         let bytes = serde_json::to_vec_pretty(&StoredSettingsArchive {
             schema_version: ARCHIVE_SCHEMA_VERSION,
             state: self.state.clone(),
         })
         .map_err(ArchiveError::InvalidFile)?;
-        let temporary = self.path.with_extension("json.tmp");
-        fs::write(&temporary, bytes).map_err(|source| ArchiveError::Io {
-            path: temporary.clone(),
+        write_atomically(&self.path, &bytes).map_err(|source| ArchiveError::Io {
+            path: self.path.clone(),
             source,
-        })?;
-        replace_file(&temporary, &self.path)
+        })
+    }
+
+    fn remove_corrupt_primary(&self) -> Result<(), ArchiveError> {
+        match fs::remove_file(&self.path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(source) => Err(ArchiveError::Io {
+                path: self.path.clone(),
+                source,
+            }),
+        }
     }
 }
 
@@ -526,28 +550,21 @@ pub enum ArchiveError {
     },
     #[error("invalid settings archive: {0}")]
     InvalidFile(serde_json::Error),
+    #[error("settings primary and backup are corrupt: primary: {primary}; backup: {backup}")]
+    CorruptCopies {
+        primary: serde_json::Error,
+        backup: serde_json::Error,
+    },
     #[error("settings archive I/O failed for {path}: {source}")]
     Io { path: PathBuf, source: io::Error },
 }
 
-fn replace_file(temporary: &Path, destination: &Path) -> Result<(), ArchiveError> {
-    match fs::rename(temporary, destination) {
-        Ok(()) => Ok(()),
-        Err(_) if destination.exists() => {
-            fs::remove_file(destination).map_err(|source| ArchiveError::Io {
-                path: destination.to_path_buf(),
-                source,
-            })?;
-            fs::rename(temporary, destination).map_err(|source| ArchiveError::Io {
-                path: destination.to_path_buf(),
-                source,
-            })
-        }
-        Err(source) => Err(ArchiveError::Io {
-            path: destination.to_path_buf(),
-            source,
-        }),
-    }
+fn load_archive(path: &std::path::Path) -> Result<StoredSettingsArchive, ArchiveError> {
+    let bytes = fs::read(path).map_err(|source| ArchiveError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    serde_json::from_slice(&bytes).map_err(ArchiveError::InvalidFile)
 }
 
 fn next_revision_id(revisions: &[SettingsRevision]) -> u64 {
@@ -767,6 +784,41 @@ mod tests {
             Some("1700.000")
         );
         let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn recovers_and_repairs_settings_from_the_last_valid_backup() {
+        let path = test_path();
+        let first = inspection();
+        let mut archive =
+            MachineSettingsArchive::begin(&path, "machine-0001", "port:test", &first).unwrap();
+        archive.record_observation(&first).unwrap();
+        fs::write(&path, b"corrupt").unwrap();
+
+        let recovered =
+            MachineSettingsArchive::begin(&path, "machine-0001", "port:test", &first).unwrap();
+
+        assert_eq!(recovered.state().baseline_value("$100"), Some("1600.000"));
+        assert!(serde_json::from_slice::<StoredSettingsArchive>(&fs::read(&path).unwrap()).is_ok());
+        assert!(backup_path(&path).exists());
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
+    }
+
+    #[test]
+    fn reports_when_both_settings_copies_are_corrupt() {
+        let path = test_path();
+        fs::write(&path, b"corrupt primary").unwrap();
+        fs::write(backup_path(&path), b"corrupt backup").unwrap();
+
+        assert!(matches!(
+            MachineSettingsArchive::begin(&path, "machine-0001", "port:test", &inspection()),
+            Err(ArchiveError::CorruptCopies { .. })
+        ));
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
     }
 
     fn test_path() -> PathBuf {

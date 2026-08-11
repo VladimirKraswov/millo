@@ -395,6 +395,10 @@ additional two steps are the typed M5/M9 shutdown epilogue before M30.
   line and command, but expose `RestartBlocked`, not an executable resume token.
 - The JSON store keeps at most 100 runs. Tests use a two-entry bound, corrupt
   the active file, and prove load recovery from the preceding `.bak` checkpoint.
+- `millo-storage` fixtures verify synced replacement preserves the previous
+  generation and removes stale temporary files. Profile and settings tests each
+  corrupt the primary, require backup recovery plus primary self-repair, and
+  require a typed error when both copies are invalid.
 - Tauri owns only the platform config path and observes the existing sender
   event stream; it cannot alter journal recovery disposition.
 

@@ -16,6 +16,7 @@ members = [
   "crates/millo-settings",
   "crates/millo-sender",
   "crates/millo-serial",
+  "crates/millo-storage",
   "crates/millo-transport",
   "src-tauri",
 ]

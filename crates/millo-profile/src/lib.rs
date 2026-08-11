@@ -4,6 +4,7 @@ use std::{
 };
 
 use millo_domain::{DeviceInspection, HardwareProfile, MachineTravel, SpindleControl};
+use millo_storage::{backup_path, write_atomically};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -188,20 +189,35 @@ impl MachineProfileStore {
 
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, ProfileError> {
         let path = path.into();
-        if !path.exists() {
+        let backup = backup_path(&path);
+        if !path.exists() && !backup.exists() {
             return Ok(Self {
                 path: Some(path),
                 document: StoredProfiles::default(),
             });
         }
 
-        let bytes = fs::read(&path).map_err(|source| ProfileError::Io {
-            path: path.clone(),
-            source,
-        })?;
-        let document: StoredProfiles =
-            serde_json::from_slice(&bytes).map_err(ProfileError::InvalidFile)?;
-        validate_document(&document)?;
+        let (document, recovered_from_backup) = if path.exists() {
+            match load_document(&path) {
+                Ok(document) => (document, false),
+                Err(ProfileError::InvalidFile(primary)) if backup.exists() => {
+                    match load_document(&backup) {
+                        Ok(document) => (document, true),
+                        Err(ProfileError::InvalidFile(backup)) => {
+                            return Err(ProfileError::CorruptCopies { primary, backup });
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+        } else {
+            (load_document(&backup)?, true)
+        };
+        if recovered_from_backup {
+            remove_corrupt_primary(&path)?;
+            save_document(&path, &document)?;
+        }
         Ok(Self {
             path: Some(path),
             document,
@@ -354,6 +370,11 @@ pub enum ProfileError {
     InvalidControllerSetting(String),
     #[error("invalid machine-profile file: {0}")]
     InvalidFile(serde_json::Error),
+    #[error("machine-profile primary and backup are corrupt: primary: {primary}; backup: {backup}")]
+    CorruptCopies {
+        primary: serde_json::Error,
+        backup: serde_json::Error,
+    },
     #[error("machine-profile I/O failed for {path}: {source}")]
     Io { path: PathBuf, source: io::Error },
 }
@@ -424,36 +445,33 @@ fn positive_setting(inspection: &DeviceInspection, key: &str) -> Result<f64, Pro
         .ok_or_else(|| ProfileError::InvalidControllerSetting(key.to_owned()))
 }
 
-fn save_document(path: &Path, document: &StoredProfiles) -> Result<(), ProfileError> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| ProfileError::Io {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
-    let bytes = serde_json::to_vec_pretty(document).map_err(ProfileError::InvalidFile)?;
-    let temporary = path.with_extension("json.tmp");
-    fs::write(&temporary, bytes).map_err(|source| ProfileError::Io {
-        path: temporary.clone(),
+fn load_document(path: &Path) -> Result<StoredProfiles, ProfileError> {
+    let bytes = fs::read(path).map_err(|source| ProfileError::Io {
+        path: path.to_path_buf(),
         source,
     })?;
-    match fs::rename(&temporary, path) {
+    let document = serde_json::from_slice(&bytes).map_err(ProfileError::InvalidFile)?;
+    validate_document(&document)?;
+    Ok(document)
+}
+
+fn remove_corrupt_primary(path: &Path) -> Result<(), ProfileError> {
+    match fs::remove_file(path) {
         Ok(()) => Ok(()),
-        Err(_) if path.exists() => {
-            fs::remove_file(path).map_err(|source| ProfileError::Io {
-                path: path.to_path_buf(),
-                source,
-            })?;
-            fs::rename(&temporary, path).map_err(|source| ProfileError::Io {
-                path: path.to_path_buf(),
-                source,
-            })
-        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(source) => Err(ProfileError::Io {
             path: path.to_path_buf(),
             source,
         }),
     }
+}
+
+fn save_document(path: &Path, document: &StoredProfiles) -> Result<(), ProfileError> {
+    let bytes = serde_json::to_vec_pretty(document).map_err(ProfileError::InvalidFile)?;
+    write_atomically(path, &bytes).map_err(|source| ProfileError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
 }
 
 #[cfg(test)]
@@ -505,7 +523,42 @@ mod tests {
 
         let reloaded = MachineProfileStore::load(&path).unwrap().state();
         assert_eq!(reloaded, created);
-        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
+    }
+
+    #[test]
+    fn recovers_and_repairs_a_corrupt_primary_from_the_last_valid_profile_backup() {
+        let path = test_path();
+        let mut store = MachineProfileStore::load(&path).unwrap();
+        let created = store.create_and_select(draft("Router")).unwrap();
+        let id = created.selected_profile_id.unwrap();
+        store.select(&id).unwrap();
+        fs::write(&path, b"corrupt").unwrap();
+
+        let recovered = MachineProfileStore::load(&path).unwrap().state();
+
+        assert_eq!(recovered.selected_profile_id.as_deref(), Some(id.as_str()));
+        assert!(serde_json::from_slice::<StoredProfiles>(&fs::read(&path).unwrap()).is_ok());
+        assert!(backup_path(&path).exists());
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
+    }
+
+    #[test]
+    fn reports_when_both_profile_copies_are_corrupt() {
+        let path = test_path();
+        fs::write(&path, b"corrupt primary").unwrap();
+        fs::write(backup_path(&path), b"corrupt backup").unwrap();
+
+        assert!(matches!(
+            MachineProfileStore::load(&path),
+            Err(ProfileError::CorruptCopies { .. })
+        ));
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
     }
 
     #[test]
@@ -605,6 +658,7 @@ mod tests {
             MachineProfileStore::load(&path),
             Err(ProfileError::InvalidSelection(value)) if value == "missing"
         ));
-        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
     }
 }

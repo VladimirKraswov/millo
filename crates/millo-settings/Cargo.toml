@@ -7,6 +7,7 @@ description = "GRBL settings catalog and validated write boundary for Millo"
 
 [dependencies]
 millo-domain = { path = "../millo-domain" }
+millo-storage = { path = "../millo-storage" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

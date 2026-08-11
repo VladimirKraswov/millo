@@ -289,6 +289,7 @@ successful GRBL status exchange.
 | `millo-profile` | Validated machine profiles, GRBL-derived drafts, and JSON persistence |
 | `millo-settings` | GRBL settings catalog, validated writes, session baselines, and per-machine revisions |
 | `millo-serial` | Native asynchronous serial discovery and byte/line I/O |
+| `millo-storage` | Synced temp/backup replacement and crash recovery shared by local JSON stores |
 | `millo-controller` | Connection lifecycle and state orchestration |
 | `millo-dry-run` | Fail-closed program policy and opaque approved plans |
 | `millo-command` | Single-owner command actor, polling, and response arbitration |

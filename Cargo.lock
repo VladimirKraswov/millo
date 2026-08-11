@@ -1922,6 +1922,7 @@ name = "millo-journal"
 version = "0.1.0"
 dependencies = [
  "millo-sender",
+ "millo-storage",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -1941,6 +1942,7 @@ name = "millo-profile"
 version = "0.1.0"
 dependencies = [
  "millo-domain",
+ "millo-storage",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -2002,10 +2004,15 @@ name = "millo-settings"
 version = "0.1.0"
 dependencies = [
  "millo-domain",
+ "millo-storage",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
 ]
+
+[[package]]
+name = "millo-storage"
+version = "0.1.0"
 
 [[package]]
 name = "millo-transport"

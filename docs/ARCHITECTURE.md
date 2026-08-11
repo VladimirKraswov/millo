@@ -103,6 +103,19 @@ the physical-run operator pause state while GRBL is in Check.
    strings.
 8. Parsed source and preview geometry never imply permission to send a program.
 
+### Local persistence boundary
+
+- `millo-storage` is the only implementation of local temp/backup replacement.
+  It writes a new file with `create_new`, flushes it with `fsync`, moves the
+  current primary to `.bak`, renames the complete temporary file, and syncs the
+  parent directory on Unix.
+- Profiles, controller-setting archives, and sender journals use that contract.
+  A malformed primary is read from the preceding valid backup and immediately
+  repaired while the backup remains available. If both JSON copies are corrupt,
+  startup returns an explicit error instead of silently resetting operator data.
+- Domain-specific stores still own schema validation and bounded history;
+  `millo-storage` knows nothing about profiles, GRBL, sender state, or JSON.
+
 ## Implemented vertical slices
 
 The desktop command `connect_transport` selects either a deterministic mock or a

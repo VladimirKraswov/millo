@@ -1,11 +1,11 @@
 use std::{
-    fs::{self, File},
-    io::Write,
+    fs,
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use millo_sender::{SenderFailure, SenderMode, SenderSnapshot, SenderState};
+use millo_storage::{backup_path, write_atomically};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -100,6 +100,11 @@ struct JournalFile {
     entries: Vec<RunJournalEntry>,
 }
 
+struct LoadedJournal {
+    entries: Vec<RunJournalEntry>,
+    recovered_from_backup: bool,
+}
+
 #[derive(Debug, Clone)]
 struct PersistedCheckpoint {
     run_sequence: u64,
@@ -134,10 +139,17 @@ impl RunJournal {
 
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, RunJournalError> {
         let path = path.into();
-        let entries = load_file_with_backup(&path)?.unwrap_or_default();
+        let loaded = load_file_with_backup(&path)?;
         let mut journal = Self::new(Some(path), DEFAULT_MAX_ENTRIES, SystemTime::now());
-        journal.entries = entries;
+        journal.entries = loaded
+            .as_ref()
+            .map(|loaded| loaded.entries.clone())
+            .unwrap_or_default();
         journal.trim();
+        if loaded.is_some_and(|loaded| loaded.recovered_from_backup) {
+            journal.remove_corrupt_primary()?;
+            journal.persist()?;
+        }
         Ok(journal)
     }
 
@@ -230,38 +242,32 @@ impl RunJournal {
         let Some(path) = self.path.as_ref() else {
             return Ok(());
         };
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let temporary = temporary_path(path);
-        let backup = backup_path(path);
         let bytes = serde_json::to_vec_pretty(&JournalFile {
             schema_version: JOURNAL_SCHEMA_VERSION,
             entries: self.entries.clone(),
         })?;
-
-        let _ = fs::remove_file(&temporary);
-        let mut file = File::create(&temporary)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-
-        let _ = fs::remove_file(&backup);
-        if path.exists() {
-            fs::rename(path, &backup)?;
-        }
-        if let Err(error) = fs::rename(&temporary, path) {
-            if backup.exists() {
-                let _ = fs::rename(&backup, path);
-            }
-            return Err(error.into());
-        }
+        write_atomically(path, &bytes)?;
         Ok(())
+    }
+
+    fn remove_corrupt_primary(&self) -> Result<(), RunJournalError> {
+        let Some(path) = self.path.as_ref() else {
+            return Ok(());
+        };
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 }
 
-fn load_file_with_backup(path: &Path) -> Result<Option<Vec<RunJournalEntry>>, RunJournalError> {
+fn load_file_with_backup(path: &Path) -> Result<Option<LoadedJournal>, RunJournalError> {
     let mut parse_error = None;
-    for candidate in [path.to_path_buf(), backup_path(path)] {
+    for (index, candidate) in [path.to_path_buf(), backup_path(path)]
+        .into_iter()
+        .enumerate()
+    {
         if !candidate.exists() {
             continue;
         }
@@ -276,20 +282,15 @@ fn load_file_with_backup(path: &Path) -> Result<Option<Vec<RunJournalEntry>>, Ru
         if file.schema_version != JOURNAL_SCHEMA_VERSION {
             return Err(RunJournalError::UnsupportedSchema(file.schema_version));
         }
-        return Ok(Some(file.entries));
+        return Ok(Some(LoadedJournal {
+            entries: file.entries,
+            recovered_from_backup: index == 1,
+        }));
     }
     if let Some(error) = parse_error {
         return Err(error.into());
     }
     Ok(None)
-}
-
-fn temporary_path(path: &Path) -> PathBuf {
-    path.with_extension("json.tmp")
-}
-
-fn backup_path(path: &Path) -> PathBuf {
-    path.with_extension("json.bak")
 }
 
 fn unix_millis(time: SystemTime) -> u64 {
@@ -460,7 +461,7 @@ mod tests {
 
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(backup_path(&path));
-        let _ = fs::remove_file(temporary_path(&path));
+        let _ = fs::remove_file(millo_storage::temporary_path(&path));
     }
 
     #[test]
