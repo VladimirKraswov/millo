@@ -144,7 +144,8 @@ port names remain untouched.
   incomplete estimate produced by rapid motion.
 - Parser failures cover conflicting G/M modal groups, wrong-plane arc offsets,
   mixed R/IJK definitions, context-only words, feedless cutting, unsupported
-  G95, and GRBL-incompatible absolute arc-center mode.
+  G95, GRBL-incompatible absolute arc-center mode, and center-only arcs without
+  the explicit XYZ target required by physical GRBL.
 - Safety fixtures cover `M3`, spindle speed, `M6`, `G38.2`, and `G53`; they load
   for review but fail `dryRunEligible`, and unsafe movements are not invented as
   preview segments.
@@ -242,6 +243,27 @@ port names remain untouched.
   emergency Reset path. It is recorded as an interrupted attempt, not a pass.
   A separately confirmed retry after the terminal-barrier fix completed all
   10/10 lines and returned to fresh `Idle` at WPos XYZ zero.
+
+## Current GRBL Check-run coverage
+
+- The typed controller transition permits only verified `Idle -> Check` and
+  `Check -> Idle`; an active Run state is rejected before `$C`.
+- Mock GRBL models `$C`, reports `Check`, rejects the transition from Run, and
+  returns to `Idle` after the second toggle.
+- Check sender mode keeps one line in flight, preserves exact source-line errors,
+  acknowledges `M30` without physical draining, and never emits Hold or Reset.
+- Actor tests reject non-serial targets before I/O, run the complete multi-plane
+  fixture, verify every approved line exactly once, cover correlated error, and
+  require automatic cleanup to `Idle`.
+- The physical command below first rejected a center-only full circle with
+  `error:26` at source line 10. The parser now rejects that form locally and the
+  fixture names the unchanged endpoint explicitly. A repeat on 2026-08-11
+  accepted all 25 sender lines and returned the controller to `Idle`:
+
+```bash
+cargo run -p millo-desktop --example hardware_check_run -- \
+  /dev/cu.usbmodem11101 fixtures/programs/grbl-complex-check.nc
+```
 
 ### Hardware Air-run fixture
 

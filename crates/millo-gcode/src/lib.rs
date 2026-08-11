@@ -573,7 +573,17 @@ impl Parser {
                 );
             }
         }
-        if !(has_axis || is_arc && arc_definition) {
+        if is_arc && arc_definition && !has_axis {
+            self.preview_complete = false;
+            self.warn(
+                source_line,
+                ProgramWarningSeverity::Error,
+                ProgramWarningCode::ArcDefinition,
+                "GRBL arcs require at least one explicit X, Y, or Z target word",
+            );
+            return;
+        }
+        if !has_axis {
             return;
         }
 

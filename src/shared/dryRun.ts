@@ -10,7 +10,7 @@ export type SenderState =
   | "failed"
   | "cancelled";
 
-export type SenderMode = "mockDryRun" | "airRun" | "cutRun";
+export type SenderMode = "mockDryRun" | "checkRun" | "airRun" | "cutRun";
 
 export interface SenderSnapshot {
   readonly state: SenderState;

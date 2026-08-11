@@ -59,6 +59,16 @@ pub enum ControllerError {
     UnlockUnavailable(MachineMode),
     #[error("alarm unlock verification expected Idle, got {0:?}")]
     UnlockVerification(MachineMode),
+    #[error("cannot {action} GRBL Check mode from {mode:?}")]
+    CheckModeUnavailable {
+        action: &'static str,
+        mode: MachineMode,
+    },
+    #[error("GRBL Check mode verification expected {expected:?}, got {actual:?}")]
+    CheckModeVerification {
+        expected: MachineMode,
+        actual: MachineMode,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -316,6 +326,42 @@ impl<T: Transport> Controller<T> {
         let after = self.refresh_status().await?;
         if after.machine.mode != MachineMode::Idle || after.alarm.is_some() {
             return Err(ControllerError::UnlockVerification(after.machine.mode));
+        }
+        Ok(after)
+    }
+
+    pub async fn set_check_mode(
+        &mut self,
+        enabled: bool,
+    ) -> Result<ControllerSnapshot, ControllerError> {
+        let before = self.refresh_status().await?;
+        let expected = if enabled {
+            MachineMode::Check
+        } else {
+            MachineMode::Idle
+        };
+        if before.machine.mode == expected {
+            return Ok(before);
+        }
+        let allowed = if enabled {
+            before.machine.mode == MachineMode::Idle
+        } else {
+            before.machine.mode == MachineMode::Check
+        };
+        if !allowed {
+            return Err(ControllerError::CheckModeUnavailable {
+                action: if enabled { "enable" } else { "disable" },
+                mode: before.machine.mode,
+            });
+        }
+
+        self.execute_acknowledged_line("$C").await?;
+        let after = self.refresh_status().await?;
+        if after.machine.mode != expected {
+            return Err(ControllerError::CheckModeVerification {
+                expected,
+                actual: after.machine.mode,
+            });
         }
         Ok(after)
     }
@@ -775,6 +821,39 @@ mod tests {
         assert!(matches!(
             controller.unlock_alarm().await.unwrap_err(),
             ControllerError::UnlockUnavailable(MachineMode::Idle)
+        ));
+    }
+
+    #[tokio::test]
+    async fn check_mode_is_a_verified_typed_idle_transition() {
+        let transport = MockTransport::default();
+        let control = transport.control();
+        let mut controller = Controller::new(transport);
+        controller.connect().await.unwrap();
+
+        let enabled = controller.set_check_mode(true).await.unwrap();
+        assert_eq!(enabled.machine.mode, MachineMode::Check);
+        let disabled = controller.set_check_mode(false).await.unwrap();
+        assert_eq!(disabled.machine.mode, MachineMode::Idle);
+        assert_eq!(
+            control.writes(),
+            vec![
+                b"?".to_vec(),
+                b"$C\n".to_vec(),
+                b"?".to_vec(),
+                b"?".to_vec(),
+                b"$C\n".to_vec(),
+                b"?".to_vec(),
+            ]
+        );
+
+        control.set_status("<Run|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:10,0>");
+        assert!(matches!(
+            controller.set_check_mode(true).await.unwrap_err(),
+            ControllerError::CheckModeUnavailable {
+                action: "enable",
+                mode: MachineMode::Run,
+            }
         ));
     }
 

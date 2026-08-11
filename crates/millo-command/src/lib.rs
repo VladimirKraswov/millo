@@ -70,6 +70,8 @@ pub enum ArbiterError {
     DryRunTransportUnavailable,
     #[error("real-run preflight requires the serial transport target")]
     RealRunTransportUnavailable,
+    #[error("GRBL Check run requires the serial transport target")]
+    CheckRunTransportUnavailable,
     #[error("program run can resume only from GRBL Hold or Idle, current mode is {0:?}")]
     ProgramRunResumeUnavailable(MachineMode),
     #[error("a physical program run can be stopped only with Feed Hold followed by Soft Reset")]
@@ -299,6 +301,14 @@ impl CommandArbiter {
         .await
     }
 
+    pub async fn start_check_run(
+        &self,
+        program: GcodeProgram,
+    ) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::StartCheckRun { program, response })
+            .await
+    }
+
     pub async fn resume_program_run(&self) -> Result<SenderSnapshot, ArbiterError> {
         self.call(|response| Request::ResumeProgramRun { response })
             .await
@@ -483,6 +493,10 @@ enum Request {
         dispatch_immediately: bool,
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
+    StartCheckRun {
+        program: GcodeProgram,
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
+    },
     ResumeProgramRun {
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
@@ -629,6 +643,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             execution_target: replacement_target,
             response,
         } => {
+            cancel_check_run(controller, sender, sender_snapshots).await;
             let _ = controller.disconnect().await;
             invalidate_authorizations(safety, first_cut);
             cancel_active_sender(sender, sender_snapshots);
@@ -673,6 +688,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         }
         Request::Disconnect { response } => {
             invalidate_authorizations(safety, first_cut);
+            cancel_check_run(controller, sender, sender_snapshots).await;
             cancel_active_sender(sender, sender_snapshots);
             *sender_dispatch_enabled = true;
             let result = controller.disconnect().await.map_err(ArbiterError::from);
@@ -787,6 +803,17 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 .await
             };
             *sender_dispatch_enabled = dispatch_immediately && result.is_ok();
+            publish(snapshots, controller);
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
+        Request::StartCheckRun { program, response } => {
+            *sender_dispatch_enabled = true;
+            let result = if *execution_target != ExecutionTarget::Serial {
+                Err(ArbiterError::CheckRunTransportUnavailable)
+            } else {
+                execute_check_run_start(controller, sender, program).await
+            };
             publish(snapshots, controller);
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
@@ -932,7 +959,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(result);
         }
         Request::ResumeDryRun { response } => {
-            let result = ensure_stable_idle(&controller.snapshot())
+            let result = ensure_sender_dispatch_ready(sender, &controller.snapshot())
                 .and_then(|()| sender.resume().map_err(ArbiterError::from));
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
@@ -946,6 +973,10 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             } else {
                 sender.cancel().map_err(ArbiterError::from)
             };
+            if result.is_ok() {
+                finish_check_mode_after_terminal(controller, sender).await;
+                publish(snapshots, controller);
+            }
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
         }
@@ -1032,6 +1063,46 @@ async fn execute_authorized_program_run_start(
     sender.start().map_err(ArbiterError::from)
 }
 
+async fn execute_check_run_start(
+    controller: &mut Controller<BoxedTransport>,
+    sender: &mut Sender,
+    program: GcodeProgram,
+) -> Result<SenderSnapshot, ArbiterError> {
+    let sender_state = sender.snapshot().state;
+    if matches!(
+        sender_state,
+        SenderState::Running | SenderState::Paused | SenderState::Draining
+    ) {
+        return Err(SenderError::Busy(sender_state).into());
+    }
+
+    let plan = millo_dry_run::build_dry_run_plan(&program)?;
+    let initial = controller.refresh_status().await?;
+    ensure_stable_idle(&initial)?;
+    let inspection = controller.inspect_device().await?;
+    let final_idle = controller.refresh_status().await?;
+    ensure_stable_idle(&final_idle)?;
+
+    sender.configure_rx_buffer_capacity(usable_rx_buffer_capacity(
+        inspection
+            .controller_capabilities
+            .as_ref()
+            .and_then(|capabilities| capabilities.rx_buffer_bytes),
+    ))?;
+    sender.load_check_run(plan)?;
+    if let Err(error) = controller.set_check_mode(true).await {
+        let _ = sender.cancel();
+        return Err(error.into());
+    }
+    match sender.start() {
+        Ok(snapshot) => Ok(snapshot),
+        Err(error) => {
+            let _ = controller.set_check_mode(false).await;
+            Err(error.into())
+        }
+    }
+}
+
 async fn execute_program_run_resume(
     controller: &mut Controller<BoxedTransport>,
     sender: &mut Sender,
@@ -1073,6 +1144,13 @@ async fn reconcile_physical_sender(
         || snapshot.machine.mode == MachineMode::Alarm
     {
         sender.fail("controller became unavailable while waiting for physical motion to finish");
+    } else if sender.snapshot().mode == Some(millo_sender::SenderMode::CheckRun)
+        && snapshot.machine.mode != MachineMode::Check
+    {
+        sender.fail(format!(
+            "controller left GRBL Check mode during validation: {:?}",
+            snapshot.machine.mode
+        ));
     } else {
         match (sender_state, snapshot.machine.mode) {
             (SenderState::Running, MachineMode::Hold | MachineMode::Door) => {
@@ -1127,6 +1205,8 @@ async fn execute_sender_step(
 ) {
     if let Err(error) = ensure_sender_dispatch_ready(sender, &controller.snapshot()) {
         sender.fail(error.to_string());
+        finish_check_mode_after_terminal(controller, sender).await;
+        publish(snapshots, controller);
         publish_sender(sender_snapshots, sender);
         return;
     }
@@ -1140,6 +1220,7 @@ async fn execute_sender_step(
             if physical_run {
                 let _ = controller.abort_program_stream().await;
             }
+            finish_check_mode_after_terminal(controller, sender).await;
             publish(snapshots, controller);
             publish_sender(sender_snapshots, sender);
             return;
@@ -1172,6 +1253,7 @@ async fn execute_sender_step(
             }
         }
     }
+    finish_check_mode_after_terminal(controller, sender).await;
     publish(snapshots, controller);
     publish_sender(sender_snapshots, sender);
 }
@@ -1191,6 +1273,7 @@ fn ensure_sender_dispatch_ready(
             snapshot.machine.mode,
             MachineMode::Idle | MachineMode::Run | MachineMode::Hold
         ),
+        Some(millo_sender::SenderMode::CheckRun) => snapshot.machine.mode == MachineMode::Check,
         _ => snapshot.machine.mode == MachineMode::Idle,
     };
     if mode_ready {
@@ -1198,6 +1281,39 @@ fn ensure_sender_dispatch_ready(
     } else {
         Err(SafetyError::UnsafeControllerState.into())
     }
+}
+
+async fn finish_check_mode_after_terminal(
+    controller: &mut Controller<BoxedTransport>,
+    sender: &mut Sender,
+) {
+    let sender_snapshot = sender.snapshot();
+    if sender_snapshot.mode != Some(millo_sender::SenderMode::CheckRun)
+        || !matches!(
+            sender_snapshot.state,
+            SenderState::Completed | SenderState::Failed | SenderState::Cancelled
+        )
+        || controller.snapshot().connection != ConnectionState::Connected
+        || controller.snapshot().machine.mode != MachineMode::Check
+    {
+        return;
+    }
+    if let Err(error) = controller.set_check_mode(false).await {
+        sender.fail(format!("failed to leave GRBL Check mode: {error}"));
+    }
+}
+
+async fn cancel_check_run(
+    controller: &mut Controller<BoxedTransport>,
+    sender: &mut Sender,
+    snapshots: &watch::Sender<SenderSnapshot>,
+) {
+    if sender.snapshot().mode != Some(millo_sender::SenderMode::CheckRun) {
+        return;
+    }
+    cancel_active_sender(sender, snapshots);
+    finish_check_mode_after_terminal(controller, sender).await;
+    publish_sender(snapshots, sender);
 }
 
 fn cancel_active_sender(sender: &mut Sender, snapshots: &watch::Sender<SenderSnapshot>) {
@@ -2665,6 +2781,101 @@ mod tests {
                 .split_whitespace()
                 .all(|word| word != "M3" && word != "M4" && !word.starts_with('S'))
         }));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn serial_check_run_validates_complex_geometry_and_returns_to_idle() {
+        let source = include_str!("../../../fixtures/programs/grbl-complex-check.nc");
+        let program = parsed_program(source);
+        let plan = build_dry_run_plan(&program).unwrap();
+        let expected_commands = plan
+            .lines()
+            .iter()
+            .map(|line| format!("{}\n", line.command()).into_bytes())
+            .collect::<Vec<_>>();
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        control.set_firmware_options("V,35,254");
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let started = arbiter.start_check_run(program).await.unwrap();
+        assert_eq!(started.mode, Some(millo_sender::SenderMode::CheckRun));
+        assert_eq!(started.rx_buffer_capacity, 253);
+        let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
+
+        assert_eq!(completed.acknowledged_lines, completed.total_lines);
+        assert_eq!(arbiter.snapshot().machine.mode, MachineMode::Idle);
+        let writes = control.writes();
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|write| write.as_slice() == b"$C\n")
+                .count(),
+            2
+        );
+        let actual_commands = writes
+            .iter()
+            .filter(|write| {
+                write.ends_with(b"\n") && !write.starts_with(b"$") && write.as_slice() != b"$C\n"
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(actual_commands, expected_commands);
+        assert!(!writes.contains(&b"!".to_vec()));
+        assert!(!writes.contains(&b"\x18".to_vec()));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn serial_check_run_exits_check_mode_after_a_correlated_error() {
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        control.queue_program_ok();
+        control.queue_program_ok();
+        control.queue_program_error(33);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        arbiter
+            .start_check_run(parsed_program("G21 G90 G94\nG1 X1 F10"))
+            .await
+            .unwrap();
+        let failed = wait_for_sender(&arbiter, SenderState::Failed).await;
+
+        assert_eq!(failed.current_source_line, Some(1));
+        assert!(
+            failed
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("Some(33)"))
+        );
+        assert_eq!(arbiter.snapshot().machine.mode, MachineMode::Idle);
+        let writes = control.writes();
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|write| write.as_slice() == b"$C\n")
+                .count(),
+            2
+        );
+        assert!(!writes.contains(&b"!".to_vec()));
+        assert!(!writes.contains(&b"\x18".to_vec()));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn check_run_rejects_mock_target_before_controller_io() {
+        let (arbiter, control, worker) = mock_dry_run_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let error = arbiter
+            .start_check_run(parsed_program("G21 G90 G94\nG1 X1 F10"))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ArbiterError::CheckRunTransportUnavailable));
+        assert!(control.writes().is_empty());
         task.abort();
     }
 

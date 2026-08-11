@@ -125,6 +125,16 @@ fn blocks_grbl_incompatible_arc_modes_and_modal_group_conflicts() {
             && warning.severity == ProgramWarningSeverity::Error
     }));
 
+    let center_only_arc = parse_fixture(
+        "center-only-arc.nc",
+        "G21 G90 G94 G17\nG1 X10 F100\nG2 I-5 J0",
+    );
+    assert!(!center_only_arc.summary.dry_run_eligible);
+    assert!(center_only_arc.warnings.iter().any(|warning| {
+        warning.code == ProgramWarningCode::ArcDefinition
+            && warning.message.contains("explicit X, Y, or Z")
+    }));
+
     for (name, source) in [
         ("linear-offset.nc", "G21 G90 G94\nG1 X1 I0 F10"),
         ("arc-turns.nc", "G21 G90 G94 G17\nG2 X1 I0.5 P2 F10"),

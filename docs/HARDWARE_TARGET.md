@@ -33,6 +33,9 @@ until they are read from the controller or measured before cutting.
   after that lease is atomically consumed.
 - The sender covers terminal responses, program pause/end, Hold/resume, reset,
   polling failure, and link loss. Physical completion requires a fresh `Idle`.
+- Serial Check run may send a parser-approved program through GRBL `$C` with no
+  motion. It uses one outstanding line and verifies the return to `Idle` on
+  every terminal path; it is not permission for a physical Air or Cutting run.
 - Step jog is deliberately limited to `0.01..1.00 mm` at `10..100 mm/min`, with
   one fresh preflight lease required for every attempt and the operator present
   at the machine power control.
@@ -180,6 +183,25 @@ physical sender acknowledged all 10 lines, remained responsive in `Draining`
 while the four sides completed, dispatched `M30` only after fresh `Idle`, and
 finished at WPos X `+0.000`, Y `+0.000`, Z `+0.000 mm`. This is the first
 successful physical file-based Air run for Millo.
+
+## Physical GRBL Check run
+
+The complex regression fixture is
+`fixtures/programs/grbl-complex-check.nc`. It contains 12 preview motions and
+`163.190 mm` of cutting geometry across G17, G18, and G19, including helices,
+an explicit-endpoint full circle, absolute/incremental distance, G93/G94, and
+G4. The sender adds `M5/M9`, producing 25 checked commands.
+
+The first board run on 2026-08-11 stopped at source line 10 when firmware
+returned `error:26` for `G2 I-5 J0`. This established that the installed GRBL
+requires an explicit XYZ target word even when a full circle ends at its start.
+Millo's parser now blocks center-only arcs and the fixture uses
+`G2 X30 Y0 I-5 J0`.
+
+The immediate repeat accepted all 25 commands, reported the physical
+`[OPT]` RX value of 254 bytes, and automatically toggled from `Check` back to
+fresh `Idle`. No Hold, Soft Reset, spindle activation, or coordinate-changing
+motion was executed.
 
 At each connection Millo treats the controller's complete `$$` response as the
 truth and keeps a duplicate in

@@ -269,6 +269,23 @@ impl Transport for MockTransport {
                     .active_reads
                     .push_back(MockRead::Line("error:9".to_owned()));
             }
+        } else if data == b"$C\n" {
+            let mode = status_mode(&state.status_line).unwrap_or("Unknown");
+            if mode == "Idle" {
+                state.status_line = status_with_mode(&state.status_line, "Check", 0.0);
+                state
+                    .active_reads
+                    .push_back(MockRead::Line("ok".to_owned()));
+            } else if mode == "Check" {
+                state.status_line = status_with_mode(&state.status_line, "Idle", 0.0);
+                state
+                    .active_reads
+                    .push_back(MockRead::Line("ok".to_owned()));
+            } else {
+                state
+                    .active_reads
+                    .push_back(MockRead::Line("error:8".to_owned()));
+            }
         } else if let Some(jog) = parse_step_jog(data) {
             let mut position = status_position(&state.status_line).unwrap_or([0.0; 3]);
             position[jog.axis] += jog.distance_mm;
@@ -682,6 +699,29 @@ mod tests {
             }
         }
         assert_eq!(homing.as_deref(), Some("0"));
+    }
+
+    #[tokio::test]
+    async fn check_mode_toggles_only_between_idle_and_check() {
+        let mut transport = MockTransport::default();
+        transport.connect().await.unwrap();
+
+        transport.write(b"$C\n").await.unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), "ok");
+        transport.write(b"?").await.unwrap();
+        assert!(transport.read_line().await.unwrap().starts_with("<Check|"));
+
+        transport.write(b"$C\n").await.unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), "ok");
+        transport.write(b"?").await.unwrap();
+        assert!(transport.read_line().await.unwrap().starts_with("<Idle|"));
+
+        let mut running = MockTransport::with_status(
+            "<Run|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:10,0>",
+        );
+        running.connect().await.unwrap();
+        running.write(b"$C\n").await.unwrap();
+        assert_eq!(running.read_line().await.unwrap(), "error:8");
     }
 
     #[tokio::test]

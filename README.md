@@ -86,7 +86,8 @@ to 2 MB through a separate `ProgramGateway`. Rust parses compact words,
 comments, metric/imperial and absolute/incremental modes, G93/G94 feed modes,
 linear motion, dwell, and circular/helical motion in G17/G18/G19 into an
 immutable millimetre-based program model. IJK and R arcs include full circles;
-modal conflicts and words used outside their GRBL context fail closed.
+GRBL-compatible full circles still require an explicit XYZ target word. Modal
+conflicts and words used outside their GRBL context fail closed.
 Standalone `%` program delimiters are retained as non-executable source lines.
 Warnings retain source line numbers; spindle activation, tool change, probing,
 machine-coordinate motion, malformed geometry, and unsupported commands fail
@@ -146,6 +147,14 @@ Hold, and an operator stop remains challenge-confirmed. A physical `error`,
 Reset so already-buffered commands cannot continue. Polling failure, reset
 banner, or disconnect also fails closed. The sender is available only for an
 active, profile-bound serial target and has no plugin or raw-command entry point.
+
+A separate serial-only Check run validates an approved file through GRBL's
+typed `$C` mode without executing motion. The actor enters only from fresh
+`Idle`, verifies `Check`, correlates one outstanding line at a time, and always
+toggles back to verified `Idle` after completion, parser error, or cancellation.
+The complex multi-plane fixture has passed 25/25 lines on the physical GRBL
+1.1f controller. Its first attempt exposed and then regression-locked GRBL's
+requirement for an explicit axis target on a full-circle arc.
 
 UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
 first core contribution in the named `control.machine` slot; Work Zero occupies
@@ -257,6 +266,8 @@ Its bounded receive-buffer streaming contract is recorded in
 [ADR 0025](docs/decisions/0025-grbl-rx-buffer-streaming.md).
 Full modal arc parsing and conservative time estimation are recorded in
 [ADR 0026](docs/decisions/0026-modal-parser-and-time-estimation.md).
+The verified GRBL Check-run lifecycle is recorded in
+[ADR 0027](docs/decisions/0027-grbl-check-run.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

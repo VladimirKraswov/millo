@@ -219,6 +219,27 @@ does not schedule or execute controller I/O.
   current source line, and terminal error. Plugins receive no sender or raw-line
   capability. `jobs.create` remains reserved.
 
+### GRBL Check-run boundary
+
+- Check run is a serial-only typed use case. It builds the same opaque,
+  parser-approved Air-run plan before touching the controller; React and plugins
+  still cannot supply lines.
+- The actor performs fresh status, Inspector, and status transactions, then
+  `Controller::set_check_mode(true)` permits only `Idle -> Check`, sends `$C`,
+  and verifies the result through another status read.
+- `SenderMode::CheckRun` uses the same source-line correlation and capacity
+  validation but allows only one unacknowledged command. A rejected block
+  therefore leaves no later response tail that could be mistaken for the `$C`
+  cleanup acknowledgement.
+- Program end is acknowledged immediately in Check mode; there is no motion
+  planner to drain. Completion, correlated error, cancellation, disconnect,
+  and transport replacement all attempt a verified `Check -> Idle` transition.
+- Check-run failures do not send Feed Hold or Soft Reset. Physical Air/Cut runs
+  retain their buffered-motion abort policy and full RX-window streaming.
+- The physical GRBL 1.1f fixture covers G17/G18/G19 arcs, helices, explicit
+  full-circle endpoints, G90/G91, G93/G94, and G4. All 25 sender lines were
+  accepted and the controller returned to `Idle`.
+
 ### Real-run execution boundary
 
 - `millo-run` owns the first-run report. React displays its typed checks but
@@ -260,7 +281,7 @@ does not schedule or execute controller I/O.
 - Production Start refreshes status, rebuilds the intent-specific plan, consumes
   the matching lease, and starts the shared bounded-RX state machine in one
   actor request. Authorization alone still emits no program command.
-- `SenderSnapshot.mode` distinguishes `mockDryRun`, `airRun`, and `cutRun`
+- `SenderSnapshot.mode` distinguishes `mockDryRun`, `checkRun`, `airRun`, and `cutRun`
   without creating separate implementations. `M0/M1` pause after `ok`;
   `M2/M30` terminate dispatch. For physical modes the terminal line is retained
   as an unsent barrier while the sender enters `Draining`; a fresh `Idle`

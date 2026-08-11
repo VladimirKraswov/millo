@@ -21,6 +21,7 @@ pub fn usable_rx_buffer_capacity(reported_bytes: Option<u16>) -> usize {
 #[serde(rename_all = "camelCase")]
 pub enum SenderMode {
     MockDryRun,
+    CheckRun,
     AirRun,
     CutRun,
 }
@@ -189,6 +190,10 @@ impl Sender {
         self.load_with_mode(plan, SenderMode::AirRun)
     }
 
+    pub fn load_check_run(&mut self, plan: DryRunPlan) -> Result<SenderSnapshot, SenderError> {
+        self.load_with_mode(plan, SenderMode::CheckRun)
+    }
+
     pub fn load_cut_run(&mut self, plan: DryRunPlan) -> Result<SenderSnapshot, SenderError> {
         self.load_with_mode(plan, SenderMode::CutRun)
     }
@@ -320,6 +325,9 @@ impl Sender {
         if !self.is_dispatchable() {
             return None;
         }
+        if self.mode == Some(SenderMode::CheckRun) && !self.in_flight.is_empty() {
+            return None;
+        }
         let plan = self.plan.as_ref()?;
         if self.dispatched_lines >= plan.lines().len() {
             if self.in_flight.is_empty() {
@@ -336,7 +344,7 @@ impl Sender {
             return None;
         }
         let line = plan.lines()[self.dispatched_lines].clone();
-        if self.is_physical() && line.kind() == DryRunLineKind::ProgramEnd {
+        if self.requires_motion_drain() && line.kind() == DryRunLineKind::ProgramEnd {
             if self.in_flight.is_empty() {
                 self.dispatched_lines = self.dispatched_lines.saturating_add(1);
                 self.deferred_program_end = Some(line);
@@ -491,14 +499,14 @@ impl Sender {
     }
 
     fn finished_state(&self) -> SenderState {
-        if self.is_physical() {
+        if self.requires_motion_drain() {
             SenderState::Draining
         } else {
             SenderState::Completed
         }
     }
 
-    fn is_physical(&self) -> bool {
+    fn requires_motion_drain(&self) -> bool {
         matches!(self.mode, Some(SenderMode::AirRun | SenderMode::CutRun))
     }
 }
@@ -650,6 +658,30 @@ mod tests {
         assert_eq!(snapshot.state, SenderState::Draining);
         assert_eq!(snapshot.current_command.as_deref(), Some("M30"));
         assert_eq!(snapshot.acknowledged_lines + 1, snapshot.total_lines);
+    }
+
+    #[test]
+    fn check_run_acknowledges_program_end_without_motion_draining() {
+        let mut sender = Sender::default();
+        sender
+            .load_check_run(plan("G21 G90 G94\nG1 X1 F10\nM30"))
+            .unwrap();
+        sender.start().unwrap();
+
+        while sender.snapshot().state == SenderState::Running {
+            let line = sender.next_line().unwrap();
+            assert!(sender.next_line().is_none());
+            sender.acknowledge_ok().unwrap();
+            if line.kind() == DryRunLineKind::ProgramEnd {
+                break;
+            }
+        }
+
+        let completed = sender.snapshot();
+        assert_eq!(completed.mode, Some(SenderMode::CheckRun));
+        assert_eq!(completed.state, SenderState::Completed);
+        assert_eq!(completed.acknowledged_lines, completed.total_lines);
+        assert!(sender.deferred_program_end().is_none());
     }
 
     #[test]
