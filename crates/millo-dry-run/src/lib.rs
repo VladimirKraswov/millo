@@ -427,7 +427,7 @@ mod tests {
     #[test]
     fn classifies_program_pause_and_stops_the_plan_at_program_end() {
         let plan = build_program_run_plan(
-            &parse("G21\nM0\nG1 X1\nM30\nG1 X99"),
+            &parse("G21\nM0\nG1 X1 F10\nM30\nG1 X99"),
             ProgramRunPolicy::Cutting,
         )
         .unwrap();

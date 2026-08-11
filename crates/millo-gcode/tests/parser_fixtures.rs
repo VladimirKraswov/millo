@@ -33,6 +33,116 @@ fn parses_metric_compact_words_comments_and_xy_arcs() {
 }
 
 #[test]
+fn parses_every_grbl_arc_plane_helices_full_circle_and_dwell() {
+    let program = parse_fixture(
+        "all-arc-planes.nc",
+        include_str!("fixtures/all-arc-planes.nc"),
+    );
+
+    assert!(program.warnings.is_empty());
+    assert!(program.summary.preview_complete);
+    assert!(program.summary.dry_run_eligible);
+    assert!(program.summary.time_estimate_complete);
+    assert_eq!(program.summary.motion_count, 5);
+    assert_eq!(program.toolpath[1].kind, ToolpathKind::ArcCounterclockwise);
+    assert_eq!(program.toolpath[2].kind, ToolpathKind::ArcCounterclockwise);
+    assert_eq!(program.toolpath[3].kind, ToolpathKind::ArcClockwise);
+    assert_eq!(program.toolpath[4].kind, ToolpathKind::ArcClockwise);
+
+    let xy_end = program.toolpath[1].points.last().unwrap();
+    assert_point(*xy_end, [20.0, 10.0, 2.0]);
+    let xz_end = program.toolpath[2].points.last().unwrap();
+    assert_point(*xz_end, [30.0, 12.0, 12.0]);
+    let yz_end = program.toolpath[3].points.last().unwrap();
+    assert_point(*yz_end, [25.0, 22.0, 22.0]);
+    let full_circle = &program.toolpath[4].points;
+    assert!(full_circle.len() > 50);
+    assert_point(full_circle[0], [25.0, 22.0, 22.0]);
+    assert_point(*full_circle.last().unwrap(), [25.0, 22.0, 22.0]);
+
+    let bounds = program.summary.bounds.unwrap();
+    assert_point(bounds.min, [0.0, 0.0, 0.0]);
+    assert_point(bounds.max, [30.0, 27.0, 22.0]);
+    assert!((program.summary.dwell_time_seconds - 0.25).abs() < 1e-9);
+    assert!(program.summary.estimated_motion_time_seconds > 44.0);
+    assert!(program.summary.estimated_motion_time_seconds < 46.0);
+    assert!(
+        (program.summary.estimated_total_time_seconds
+            - program.summary.estimated_motion_time_seconds
+            - 0.25)
+            .abs()
+            < 1e-9
+    );
+    assert!(
+        program
+            .toolpath
+            .iter()
+            .all(|segment| segment.estimated_duration_seconds.is_some())
+    );
+}
+
+#[test]
+fn supports_inverse_time_and_marks_rapid_or_missing_feed_as_incomplete() {
+    let inverse = parse_fixture(
+        "inverse-time.nc",
+        "G21 G90 G93\nG1 X10 F2\nG1 X20 F4\nG4 P0.5",
+    );
+    assert!(inverse.warnings.is_empty());
+    assert!(inverse.summary.time_estimate_complete);
+    assert!((inverse.summary.estimated_motion_time_seconds - 45.0).abs() < 0.001);
+    assert!((inverse.summary.estimated_total_time_seconds - 45.5).abs() < 0.001);
+
+    let rapid = parse_fixture("rapid-time.nc", "G21 G90 G94\nG0 X10\nG1 X20 F60");
+    assert!(!rapid.summary.time_estimate_complete);
+    assert!((rapid.summary.estimated_motion_time_seconds - 10.0).abs() < 0.001);
+
+    let missing_feed = parse_fixture("missing-feed.nc", "G21 G90 G94\nG1 X10");
+    assert!(!missing_feed.summary.time_estimate_complete);
+    assert!(!missing_feed.summary.dry_run_eligible);
+    assert!(missing_feed.warnings.iter().any(|warning| {
+        warning.code == ProgramWarningCode::FeedRate
+            && warning.severity == ProgramWarningSeverity::Error
+    }));
+}
+
+#[test]
+fn blocks_grbl_incompatible_arc_modes_and_modal_group_conflicts() {
+    let absolute_centers = parse_fixture(
+        "absolute-centers.nc",
+        "G21 G90 G94 G90.1\nG1 X10 F100\nG17 G3 X20 Y10 I10 J10",
+    );
+    assert!(!absolute_centers.summary.dry_run_eligible);
+    assert_eq!(absolute_centers.summary.motion_count, 2);
+    assert!(absolute_centers.warnings.iter().any(|warning| {
+        warning.code == ProgramWarningCode::UnsupportedGCode && warning.message.contains("G90.1")
+    }));
+
+    let conflict = parse_fixture("modal-conflict.nc", "G21 G90 G94\nG0 G1 X1 F10");
+    assert!(!conflict.summary.preview_complete);
+    assert!(!conflict.summary.dry_run_eligible);
+    assert!(conflict.warnings.iter().any(|warning| {
+        warning.code == ProgramWarningCode::ModalGroupConflict
+            && warning.severity == ProgramWarningSeverity::Error
+    }));
+
+    for (name, source) in [
+        ("linear-offset.nc", "G21 G90 G94\nG1 X1 I0 F10"),
+        ("arc-turns.nc", "G21 G90 G94 G17\nG2 X1 I0.5 P2 F10"),
+        ("m-conflict.nc", "G21 G90 G94\nM3 M4 S1000\nG1 X1 F10"),
+    ] {
+        let invalid = parse_fixture(name, source);
+        assert!(!invalid.summary.dry_run_eligible, "{name}");
+        assert!(
+            invalid.warnings.iter().any(|warning| matches!(
+                warning.code,
+                ProgramWarningCode::UnsupportedWord | ProgramWarningCode::ModalGroupConflict
+            )),
+            "{name}"
+        );
+    }
+}
+
+#[test]
 fn accepts_common_program_headers_and_modal_cancels() {
     let program = parse_fixture(
         "common-header.ngc",
@@ -178,4 +288,10 @@ fn unknown_m_codes_fail_the_future_dry_run_gate() {
         warning.code == ProgramWarningCode::UnsupportedMCode
             && warning.severity == ProgramWarningSeverity::Safety
     }));
+}
+
+fn assert_point(point: millo_gcode::ProgramPoint, expected: [f64; 3]) {
+    assert!((point.x - expected[0]).abs() < 0.001, "x={}", point.x);
+    assert!((point.y - expected[1]).abs() < 0.001, "y={}", point.y);
+    assert!((point.z - expected[2]).abs() < 0.001, "z={}", point.z);
 }

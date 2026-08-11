@@ -648,14 +648,14 @@ fn assess_modal_contract(program: &GcodeProgram) -> ModalContract {
         }
     }
     if let Some(source_line) = first_feed_motion
-        && last_modal_code(program, source_line, &[93, 94]) != Some(94)
+        && last_modal_code(program, source_line, &[93, 94]).is_none()
     {
-        missing.push("G94");
+        missing.push("G93/G94");
     }
     if let Some(source_line) = first_arc
-        && last_modal_code(program, source_line, &[17, 18, 19]) != Some(17)
+        && last_modal_code(program, source_line, &[17, 18, 19]).is_none()
     {
-        missing.push("G17");
+        missing.push("G17/G18/G19");
     }
 
     ModalContract {
@@ -924,8 +924,26 @@ mod tests {
             .find(|item| item.id == "program-modal-contract")
             .unwrap();
         assert_eq!(modal.level, RunPreflightLevel::Blocker);
-        assert!(modal.detail.contains("G21, G90, G94"));
+        assert!(modal.detail.contains("G21, G90, G93/G94"));
         assert_eq!(modal.source_line, Some(1));
+    }
+
+    #[test]
+    fn accepts_an_explicit_non_xy_arc_plane_and_inverse_time_feed_mode() {
+        let report = assess_real_run_preflight(
+            &program("G21 G90 G93 G18\nG1 X10 F2\nG3 X20 Z10 I10 K0 F2"),
+            hardware(Vec::new()),
+            &snapshot(MachineMode::Idle),
+            ProgramRunIntent::AirRun,
+        );
+
+        let modal = report
+            .checks
+            .iter()
+            .find(|item| item.id == "program-modal-contract")
+            .unwrap();
+        assert_eq!(modal.level, RunPreflightLevel::Pass);
+        assert!(report.ready);
     }
 
     #[test]

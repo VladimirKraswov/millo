@@ -83,11 +83,16 @@ heightmap motion remain unavailable.
 
 The Program workbench loads `.nc`, `.ngc`, `.gcode`, `.tap`, and `.cnc` files up
 to 2 MB through a separate `ProgramGateway`. Rust parses compact words,
-comments, metric/imperial and absolute/incremental modes, linear motion, and XY
-arcs into an immutable millimetre-based program model. Standalone `%` program
-delimiters are retained as non-executable source lines. Warnings retain source
-line numbers; spindle activation, tool change, probing, machine-coordinate
-motion, malformed geometry, and unsupported commands fail the dry-run gate. For
+comments, metric/imperial and absolute/incremental modes, G93/G94 feed modes,
+linear motion, dwell, and circular/helical motion in G17/G18/G19 into an
+immutable millimetre-based program model. IJK and R arcs include full circles;
+modal conflicts and words used outside their GRBL context fail closed.
+Standalone `%` program delimiters are retained as non-executable source lines.
+Warnings retain source line numbers; spindle activation, tool change, probing,
+machine-coordinate motion, malformed geometry, and unsupported commands fail
+the dry-run gate. Feed and dwell time is estimated per segment. A program with
+rapid moves is explicitly marked as a lower-bound estimate because controller
+acceleration and rapid limits are machine-specific. For
 parser-clean programs, Tauri reparses the original source and `millo-dry-run`
 builds an opaque plan with an `M5/M9` safety preamble. `millo-sender` permits
 only a bounded GRBL RX window and advances only after correlated FIFO `ok`
@@ -125,8 +130,9 @@ actor repeats the complete serial preflight and then issues a 30-second,
 program-bound, position-bound, single-use lease. A separate Start action reparses
 the original file, refreshes status, and atomically consumes that lease before
 the first line can be dispatched. The run contract also
-requires explicit `G21`, `G90`, `G94`, and `G17` before the motions that depend
-on them, so preview cannot silently rely on ambient controller modes.
+requires explicit `G21`, `G90`, either `G93` or `G94`, and an explicit
+`G17/G18/G19` before arcs, so preview cannot silently rely on ambient controller
+modes.
 
 The production serial sender derives its usable window as `reported RX - 1`
 from the authorization's fresh `[OPT]` inspection, falls back to 127 bytes,
@@ -249,6 +255,8 @@ The production file sender is recorded in
 [ADR 0023](docs/decisions/0023-authorized-file-program-run.md).
 Its bounded receive-buffer streaming contract is recorded in
 [ADR 0025](docs/decisions/0025-grbl-rx-buffer-streaming.md).
+Full modal arc parsing and conservative time estimation are recorded in
+[ADR 0026](docs/decisions/0026-modal-parser-and-time-estimation.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

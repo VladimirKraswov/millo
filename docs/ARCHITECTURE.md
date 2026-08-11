@@ -157,10 +157,18 @@ does not schedule or execute controller I/O.
 - `millo-gcode` owns source limits, lexical normalization, modal parsing,
   warnings, safety features, bounds, distances, and sampled preview geometry.
   It imports neither GRBL controller code nor Tauri.
-- The first parser supports comments, compact words, `G0/G1/G2/G3`, G17 XY
-  arcs with I/J or R, `G20/G21`, `G90/G91`, common modal cancels, and millimetre
-  normalization. Unsupported behavior is retained as a source-line warning; it
-  is never guessed into geometry.
+- The parser supports comments, compact words, `G0/G1/G2/G3`, circular and
+  helical IJK/R arcs in `G17/G18/G19`, full circles, `G20/G21`, `G90/G91`,
+  GRBL's incremental `G91.1` arc centers, `G93/G94`, `G4`, common modal
+  cancels, and millimetre normalization. Unsupported behavior is retained as a
+  source-line warning; it is never guessed into geometry.
+- Modal-group conflicts, wrong-plane arc offsets, misplaced context words, and
+  cutting moves without a usable feed are errors before policy or hardware.
+  Absolute arc centers (`G90.1`) can be previewed but block GRBL 1.1 execution.
+- Every cutting segment carries a feed and estimated duration. Dwell contributes
+  exact commanded time. A rapid segment makes the program estimate incomplete,
+  because controller acceleration and axis-specific maximum rates are not part
+  of a portable G-code file.
 - Input is bounded to a 255-byte source name, 2 MB, and 200,000 lines. Preview
   output is bounded to 500,000 points.
 - Safety/error warnings make `dryRunEligible` false. `M3/M4`, non-zero spindle
@@ -228,8 +236,9 @@ does not schedule or execute controller I/O.
   coordinate mutation, malformed geometry, and unsupported safety behavior
   remain blockers in both modes.
 - Before relevant motion, the file must explicitly establish `G21` units,
-  `G90` distance mode, `G94` feed mode, and `G17` for XY arcs. Ambient GRBL
-  modal state cannot fill parser defaults for a physical run.
+  `G90` distance mode, either `G93` or `G94` feed mode, and `G17`, `G18`, or
+  `G19` before its first arc. Ambient GRBL modal state cannot fill parser
+  defaults for a physical run.
 - Probe readiness is not motion-critical for a program that is forbidden from
   probing. Firmware, XYZ tuning, unhomed settings, units, milling mode, active
   G54-G59, alarm/reset, and controller state remain enforced.

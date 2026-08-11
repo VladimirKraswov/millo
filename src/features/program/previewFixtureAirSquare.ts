@@ -32,6 +32,10 @@ export const previewFixtureAirSquareProgram: GcodeProgram = {
     motionCount: 4,
     rapidDistanceMm: 0,
     cuttingDistanceMm: 80,
+    estimatedMotionTimeSeconds: 48,
+    dwellTimeSeconds: 0,
+    estimatedTotalTimeSeconds: 48,
+    timeEstimateComplete: true,
     bounds: {
       min: { x: 0, y: 0, z: 0 },
       max: { x: 20, y: 20, z: 0 },

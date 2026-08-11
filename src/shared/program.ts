@@ -26,6 +26,8 @@ export interface ToolpathSegment {
   readonly kind: ToolpathKind;
   readonly points: readonly ProgramPoint[];
   readonly distanceMm: number;
+  readonly feedRateMmPerMin?: number;
+  readonly estimatedDurationSeconds?: number;
 }
 
 export type ProgramWarningSeverity = "warning" | "safety" | "error";
@@ -47,6 +49,9 @@ export type ProgramWarningCode =
   | "spindle-speed"
   | "tool-change"
   | "arc-definition"
+  | "dwell-definition"
+  | "feed-rate"
+  | "modal-group-conflict"
   | "preview-limit";
 
 export interface ProgramWarning {
@@ -80,6 +85,10 @@ export interface ProgramSummary {
   readonly motionCount: number;
   readonly rapidDistanceMm: number;
   readonly cuttingDistanceMm: number;
+  readonly estimatedMotionTimeSeconds: number;
+  readonly dwellTimeSeconds: number;
+  readonly estimatedTotalTimeSeconds: number;
+  readonly timeEstimateComplete: boolean;
   readonly bounds?: ProgramBounds;
   readonly previewComplete: boolean;
   readonly dryRunEligible: boolean;

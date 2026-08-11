@@ -90,6 +90,10 @@ export const previewFixtureProgram: GcodeProgram = {
     motionCount: 5,
     rapidDistanceMm: 4,
     cuttingDistanceMm: 60,
+    estimatedMotionTimeSeconds: 30,
+    dwellTimeSeconds: 0,
+    estimatedTotalTimeSeconds: 30,
+    timeEstimateComplete: false,
     bounds: {
       min: { x: 0, y: 0, z: 0 },
       max: { x: 20, y: 15, z: 0 },

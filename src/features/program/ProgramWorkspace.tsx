@@ -68,6 +68,19 @@ interface ProgramWorkspaceProps {
 const formatDistance = (value: number): string =>
   value >= 1_000 ? `${(value / 1_000).toFixed(2)} m` : `${value.toFixed(1)} mm`;
 
+const formatDuration = (seconds: number, complete: boolean): string => {
+  const rounded = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(rounded / 3_600);
+  const minutes = Math.floor((rounded % 3_600) / 60);
+  const remainder = rounded % 60;
+  const value = hours > 0
+    ? `${hours}h ${minutes}m`
+    : minutes > 0
+      ? `${minutes}m ${remainder}s`
+      : `${remainder}s`;
+  return `${complete ? "~" : ">="}${value}`;
+};
+
 const warningTitle = (warning: ProgramWarning): string =>
   warning.code.replaceAll("-", " ");
 
@@ -409,8 +422,13 @@ export function ProgramWorkspace({
                 <dd>{program.summary.lineCount}</dd>
               </div>
               <div>
-                <dt>Motions</dt>
-                <dd>{program.summary.motionCount}</dd>
+                <dt>Time</dt>
+                <dd>
+                  {formatDuration(
+                    program.summary.estimatedTotalTimeSeconds,
+                    program.summary.timeEstimateComplete,
+                  )}
+                </dd>
               </div>
               <div>
                 <dt>Path</dt>

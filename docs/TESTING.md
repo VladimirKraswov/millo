@@ -137,7 +137,14 @@ port names remain untouched.
 
 - Real `.nc`, `.ngc`, and `.tap` fixtures cover compact words, comments, common
   headers/modal cancels, metric and imperial units, absolute and incremental
-  distance, linear moves, I/J arcs, and R arcs.
+  distance, linear moves, all three GRBL arc planes, IJK/R arcs, helices, and
+  full circles.
+- Timing fixtures cover modal units-per-minute feed, inverse-time feed on every
+  cutting block, dwell accumulation, per-segment duration, and the explicit
+  incomplete estimate produced by rapid motion.
+- Parser failures cover conflicting G/M modal groups, wrong-plane arc offsets,
+  mixed R/IJK definitions, context-only words, feedless cutting, unsupported
+  G95, and GRBL-incompatible absolute arc-center mode.
 - Safety fixtures cover `M3`, spindle speed, `M6`, `G38.2`, and `G53`; they load
   for review but fail `dryRunEligible`, and unsafe movements are not invented as
   preview segments.

@@ -51,6 +51,10 @@ pub struct ToolpathSegment {
     pub kind: ToolpathKind,
     pub points: Vec<ProgramPoint>,
     pub distance_mm: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feed_rate_mm_per_min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub estimated_duration_seconds: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +84,9 @@ pub enum ProgramWarningCode {
     SpindleSpeed,
     ToolChange,
     ArcDefinition,
+    DwellDefinition,
+    FeedRate,
+    ModalGroupConflict,
     PreviewLimit,
 }
 
@@ -122,6 +129,10 @@ pub struct ProgramSummary {
     pub motion_count: usize,
     pub rapid_distance_mm: f64,
     pub cutting_distance_mm: f64,
+    pub estimated_motion_time_seconds: f64,
+    pub dwell_time_seconds: f64,
+    pub estimated_total_time_seconds: f64,
+    pub time_estimate_complete: bool,
     pub bounds: Option<ProgramBounds>,
     pub preview_complete: bool,
     pub dry_run_eligible: bool,
@@ -161,6 +172,7 @@ struct Word {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MotionMode {
+    None,
     Rapid,
     Linear,
     ArcClockwise,
@@ -180,6 +192,18 @@ enum DistanceMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArcDistanceMode {
+    Absolute,
+    Incremental,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FeedMode {
+    InverseTime,
+    UnitsPerMinute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Plane {
     Xy,
     Xz,
@@ -191,6 +215,9 @@ struct Parser {
     motion: MotionMode,
     units: UnitMode,
     distance: DistanceMode,
+    arc_distance: ArcDistanceMode,
+    feed_mode: FeedMode,
+    feed_rate: Option<f64>,
     plane: Plane,
     lines: Vec<ProgramLine>,
     warnings: Vec<ProgramWarning>,
@@ -201,6 +228,9 @@ struct Parser {
     preview_complete: bool,
     rapid_distance_mm: f64,
     cutting_distance_mm: f64,
+    estimated_motion_time_seconds: f64,
+    dwell_time_seconds: f64,
+    time_estimate_complete: bool,
 }
 
 impl Default for Parser {
@@ -210,6 +240,9 @@ impl Default for Parser {
             motion: MotionMode::Rapid,
             units: UnitMode::Millimeters,
             distance: DistanceMode::Absolute,
+            arc_distance: ArcDistanceMode::Incremental,
+            feed_mode: FeedMode::UnitsPerMinute,
+            feed_rate: None,
             plane: Plane::Xy,
             lines: Vec::new(),
             warnings: Vec::new(),
@@ -220,6 +253,9 @@ impl Default for Parser {
             preview_complete: true,
             rapid_distance_mm: 0.0,
             cutting_distance_mm: 0.0,
+            estimated_motion_time_seconds: 0.0,
+            dwell_time_seconds: 0.0,
+            time_estimate_complete: true,
         }
     }
 }
@@ -303,6 +339,11 @@ pub fn parse_program(request: ProgramParseRequest) -> Result<GcodeProgram, Progr
         motion_count: parser.toolpath.len(),
         rapid_distance_mm: parser.rapid_distance_mm,
         cutting_distance_mm: parser.cutting_distance_mm,
+        estimated_motion_time_seconds: parser.estimated_motion_time_seconds,
+        dwell_time_seconds: parser.dwell_time_seconds,
+        estimated_total_time_seconds: parser.estimated_motion_time_seconds
+            + parser.dwell_time_seconds,
+        time_estimate_complete: parser.time_estimate_complete,
         bounds: parser.bounds.finish(),
         preview_complete: parser.preview_complete,
         dry_run_eligible: parser.preview_complete && !has_blocker,
@@ -350,7 +391,10 @@ impl Parser {
     fn apply_block(&mut self, source_line: usize, words: &[Word]) {
         let mut block_motion = self.motion;
         let mut skip_motion = false;
+        let mut dwell = false;
         let mut seen = BTreeSet::new();
+        let mut modal_groups = BTreeSet::new();
+        let mut m_modal_groups = BTreeSet::new();
 
         for word in words {
             if !seen.insert(word.letter)
@@ -372,9 +416,41 @@ impl Parser {
 
             match word.letter {
                 'G' => {
-                    self.apply_g_code(source_line, word.value, &mut block_motion, &mut skip_motion)
+                    if let Some(group) = g_modal_group(word.value)
+                        && !modal_groups.insert(group)
+                    {
+                        skip_motion = true;
+                        self.preview_complete = false;
+                        self.warn(
+                            source_line,
+                            ProgramWarningSeverity::Error,
+                            ProgramWarningCode::ModalGroupConflict,
+                            format!("more than one G-code from modal group {group} in one block"),
+                        );
+                    }
+                    self.apply_g_code(
+                        source_line,
+                        word.value,
+                        &mut block_motion,
+                        &mut skip_motion,
+                        &mut dwell,
+                    )
                 }
-                'M' => self.apply_m_code(source_line, word.value),
+                'M' => {
+                    if let Some(group) = m_modal_group(word.value)
+                        && !m_modal_groups.insert(group)
+                    {
+                        skip_motion = true;
+                        self.preview_complete = false;
+                        self.warn(
+                            source_line,
+                            ProgramWarningSeverity::Error,
+                            ProgramWarningCode::ModalGroupConflict,
+                            format!("more than one M-code from modal group {group} in one block"),
+                        );
+                    }
+                    self.apply_m_code(source_line, word.value)
+                }
                 'S' if word.value.abs() > f64::EPSILON => {
                     self.features.has_spindle_speed = true;
                     self.warn(
@@ -404,26 +480,111 @@ impl Parser {
             UnitMode::Millimeters => 1.0,
             UnitMode::Inches => 25.4,
         };
-        let last = |letter| {
+        let last_raw = |letter| {
             words
                 .iter()
                 .rev()
                 .find(|word| word.letter == letter)
-                .map(|word| word.value * unit_scale)
+                .map(|word| word.value)
         };
+        let last = |letter| last_raw(letter).map(|value| value * unit_scale);
+        let block_feed = last_raw('F');
+        if let Some(feed) = block_feed {
+            if feed <= 0.0 {
+                self.feed_rate = None;
+                self.time_estimate_complete = false;
+                self.warn(
+                    source_line,
+                    ProgramWarningSeverity::Error,
+                    ProgramWarningCode::FeedRate,
+                    "feed rate must be greater than zero",
+                );
+            } else {
+                self.feed_rate = Some(match self.feed_mode {
+                    FeedMode::UnitsPerMinute => feed * unit_scale,
+                    FeedMode::InverseTime => feed,
+                });
+            }
+        }
+
+        if dwell {
+            match last_raw('P') {
+                Some(seconds) if seconds >= 0.0 => self.dwell_time_seconds += seconds,
+                _ => {
+                    self.time_estimate_complete = false;
+                    self.warn(
+                        source_line,
+                        ProgramWarningSeverity::Error,
+                        ProgramWarningCode::DwellDefinition,
+                        "G4 dwell requires a non-negative P value in seconds",
+                    );
+                }
+            }
+            if words
+                .iter()
+                .any(|word| matches!(word.letter, 'X' | 'Y' | 'Z' | 'I' | 'J' | 'K' | 'R'))
+            {
+                self.preview_complete = false;
+                self.warn(
+                    source_line,
+                    ProgramWarningSeverity::Error,
+                    ProgramWarningCode::DwellDefinition,
+                    "G4 dwell cannot contain motion or arc words",
+                );
+            }
+            return;
+        }
+
         let x = last('X');
         let y = last('Y');
         let z = last('Z');
         let i = last('I');
         let j = last('J');
+        let k = last('K');
         let radius = last('R');
         let has_axis = x.is_some() || y.is_some() || z.is_some();
-        let arc_definition = i.is_some() || j.is_some() || radius.is_some();
+        let arc_definition = i.is_some() || j.is_some() || k.is_some() || radius.is_some();
         let is_arc = matches!(
             block_motion,
             MotionMode::ArcClockwise | MotionMode::ArcCounterclockwise
         );
+        let has_g10 = words
+            .iter()
+            .any(|word| word.letter == 'G' && code_is(word.value, 10.0));
+        let mut invalid_context = BTreeSet::new();
+        for word in words {
+            let invalid = match word.letter {
+                'I' | 'J' | 'K' | 'R' => !is_arc,
+                'P' | 'L' => !has_g10,
+                'H' | 'D' | 'Q' => true,
+                _ => false,
+            };
+            if invalid && invalid_context.insert(word.letter) {
+                skip_motion = true;
+                self.preview_complete = false;
+                self.warn(
+                    source_line,
+                    ProgramWarningSeverity::Error,
+                    ProgramWarningCode::UnsupportedWord,
+                    format!(
+                        "{} is not valid for the active command in this block",
+                        word.letter
+                    ),
+                );
+            }
+        }
         if !(has_axis || is_arc && arc_definition) {
+            return;
+        }
+
+        if block_motion == MotionMode::None {
+            self.preview_complete = false;
+            self.warn(
+                source_line,
+                ProgramWarningSeverity::Error,
+                ProgramWarningCode::UnsupportedGCode,
+                "axis words require an active G0, G1, G2, or G3 motion mode",
+            );
             return;
         }
 
@@ -439,26 +600,33 @@ impl Parser {
         }
 
         let points = match block_motion {
+            MotionMode::None => unreachable!("motion cancellation is handled above"),
             MotionMode::Rapid | MotionMode::Linear => vec![self.position, end],
             MotionMode::ArcClockwise | MotionMode::ArcCounterclockwise => {
-                if self.plane != Plane::Xy {
+                let (offset_u, offset_v, invalid_offset) = plane_offsets(self.plane, i, j, k);
+                if invalid_offset || radius.is_some() && (i.is_some() || j.is_some() || k.is_some())
+                {
                     self.preview_complete = false;
                     self.warn(
                         source_line,
                         ProgramWarningSeverity::Error,
-                        ProgramWarningCode::UnsupportedPlane,
-                        "arc preview currently supports only the G17 XY plane",
+                        ProgramWarningCode::ArcDefinition,
+                        "arc must use only its plane offsets and cannot mix I/J/K with R",
                     );
                     self.position = end;
                     return;
                 }
-                match sample_xy_arc(
+                match sample_arc(
                     self.position,
                     end,
-                    i,
-                    j,
-                    radius,
-                    block_motion == MotionMode::ArcClockwise,
+                    ArcDefinition {
+                        plane: self.plane,
+                        offset_u,
+                        offset_v,
+                        radius,
+                        clockwise: block_motion == MotionMode::ArcClockwise,
+                        distance_mode: self.arc_distance,
+                    },
                 ) {
                     Some(points) => points,
                     None => {
@@ -467,7 +635,7 @@ impl Parser {
                             source_line,
                             ProgramWarningSeverity::Error,
                             ProgramWarningCode::ArcDefinition,
-                            "arc requires a valid I/J center or R radius",
+                            "arc requires a valid plane-specific I/J/K center or R radius",
                         );
                         self.position = end;
                         return;
@@ -498,6 +666,7 @@ impl Parser {
         }
         self.preview_points += points.len();
         let kind = match block_motion {
+            MotionMode::None => unreachable!("motion cancellation is handled above"),
             MotionMode::Rapid => ToolpathKind::Rapid,
             MotionMode::Linear => ToolpathKind::Linear,
             MotionMode::ArcClockwise => ToolpathKind::ArcClockwise,
@@ -505,14 +674,50 @@ impl Parser {
         };
         if kind == ToolpathKind::Rapid {
             self.rapid_distance_mm += distance_mm;
+            self.time_estimate_complete = false;
         } else {
             self.cutting_distance_mm += distance_mm;
+        }
+        let (feed_rate_mm_per_min, estimated_duration_seconds) = match block_motion {
+            MotionMode::None | MotionMode::Rapid => (None, None),
+            MotionMode::Linear | MotionMode::ArcClockwise | MotionMode::ArcCounterclockwise => {
+                match (self.feed_mode, self.feed_rate) {
+                    (FeedMode::UnitsPerMinute, Some(feed)) if feed > 0.0 => {
+                        (Some(feed), Some(distance_mm / feed * 60.0))
+                    }
+                    (FeedMode::InverseTime, Some(feed)) if feed > 0.0 && block_feed.is_some() => {
+                        (None, Some(60.0 / feed))
+                    }
+                    _ => {
+                        self.time_estimate_complete = false;
+                        self.warn(
+                            source_line,
+                            ProgramWarningSeverity::Error,
+                            ProgramWarningCode::FeedRate,
+                            match self.feed_mode {
+                                FeedMode::UnitsPerMinute => {
+                                    "cutting motion requires a positive modal F feed rate"
+                                }
+                                FeedMode::InverseTime => {
+                                    "every G93 motion block requires its own positive F value"
+                                }
+                            },
+                        );
+                        (None, None)
+                    }
+                }
+            }
+        };
+        if let Some(seconds) = estimated_duration_seconds {
+            self.estimated_motion_time_seconds += seconds;
         }
         self.toolpath.push(ToolpathSegment {
             source_line,
             kind,
             points,
             distance_mm,
+            feed_rate_mm_per_min,
+            estimated_duration_seconds,
         });
     }
 
@@ -522,6 +727,7 @@ impl Parser {
         value: f64,
         motion: &mut MotionMode,
         skip_motion: &mut bool,
+        dwell: &mut bool,
     ) {
         if code_is(value, 0.0) {
             *motion = MotionMode::Rapid;
@@ -538,28 +744,56 @@ impl Parser {
         } else if code_is(value, 19.0) {
             self.plane = Plane::Yz;
         } else if code_is(value, 20.0) {
+            if self.units != UnitMode::Inches {
+                self.feed_rate = None;
+            }
             self.units = UnitMode::Inches;
             self.features.uses_imperial_units = true;
         } else if code_is(value, 21.0) {
+            if self.units != UnitMode::Millimeters {
+                self.feed_rate = None;
+            }
             self.units = UnitMode::Millimeters;
         } else if code_is(value, 90.0) {
             self.distance = DistanceMode::Absolute;
         } else if code_is(value, 91.0) {
             self.distance = DistanceMode::Incremental;
             self.features.uses_incremental_distance = true;
-        } else if code_is(value, 94.0) {
-            // Units per minute changes feed interpretation, not preview geometry.
-        } else if code_is(value, 40.0) || code_is(value, 49.0) || code_is(value, 80.0) {
-            // Common modal cancel commands leave nominal preview geometry unchanged.
-        } else if code_is(value, 61.0) || code_is(value, 64.0) {
-            // Path control affects execution, not nominal preview geometry.
-        } else if code_is(value, 93.0) || code_is(value, 95.0) {
+        } else if code_is(value, 90.1) {
+            self.arc_distance = ArcDistanceMode::Absolute;
+            *skip_motion = true;
             self.warn(
                 source_line,
-                ProgramWarningSeverity::Warning,
+                ProgramWarningSeverity::Error,
                 ProgramWarningCode::UnsupportedGCode,
-                format!("G{value} feed mode is recorded without time estimation"),
+                "G90.1 absolute arc centers can be previewed but are not supported by GRBL 1.1",
             );
+        } else if code_is(value, 91.1) {
+            self.arc_distance = ArcDistanceMode::Incremental;
+        } else if code_is(value, 93.0) {
+            if self.feed_mode != FeedMode::InverseTime {
+                self.feed_rate = None;
+            }
+            self.feed_mode = FeedMode::InverseTime;
+        } else if code_is(value, 94.0) {
+            if self.feed_mode != FeedMode::UnitsPerMinute {
+                self.feed_rate = None;
+            }
+            self.feed_mode = FeedMode::UnitsPerMinute;
+        } else if code_is(value, 95.0) {
+            *skip_motion = true;
+            self.warn(
+                source_line,
+                ProgramWarningSeverity::Error,
+                ProgramWarningCode::UnsupportedGCode,
+                "G95 units-per-revolution feed is not supported by GRBL 1.1",
+            );
+        } else if code_is(value, 40.0) || code_is(value, 49.0) {
+            // Common modal cancel commands leave nominal preview geometry unchanged.
+        } else if code_is(value, 80.0) {
+            *motion = MotionMode::None;
+        } else if code_is(value, 61.0) || code_is(value, 64.0) {
+            // Path control affects execution, not nominal preview geometry.
         } else if (54.0..=59.0).contains(&value) && value.fract().abs() < f64::EPSILON {
             self.warn(
                 source_line,
@@ -570,12 +804,7 @@ impl Parser {
                 ),
             );
         } else if code_is(value, 4.0) {
-            self.warn(
-                source_line,
-                ProgramWarningSeverity::Warning,
-                ProgramWarningCode::UnsupportedGCode,
-                "G4 dwell has no preview geometry",
-            );
+            *dwell = true;
         } else if code_is(value, 10.0)
             || code_is(value, 28.0)
             || code_is(value, 30.0)
@@ -795,39 +1024,157 @@ fn code_is(value: f64, expected: f64) -> bool {
     (value - expected).abs() < 1e-6
 }
 
+fn g_modal_group(value: f64) -> Option<u8> {
+    if [0.0, 1.0, 2.0, 3.0, 80.0]
+        .into_iter()
+        .any(|code| code_is(value, code))
+        || (38.0..39.0).contains(&value)
+    {
+        Some(1)
+    } else if [17.0, 18.0, 19.0]
+        .into_iter()
+        .any(|code| code_is(value, code))
+    {
+        Some(2)
+    } else if code_is(value, 90.0) || code_is(value, 91.0) {
+        Some(3)
+    } else if code_is(value, 90.1) || code_is(value, 91.1) {
+        Some(4)
+    } else if [93.0, 94.0, 95.0]
+        .into_iter()
+        .any(|code| code_is(value, code))
+    {
+        Some(5)
+    } else if code_is(value, 20.0) || code_is(value, 21.0) {
+        Some(6)
+    } else if [4.0, 10.0, 28.0, 30.0, 53.0, 92.0]
+        .into_iter()
+        .any(|code| code_is(value, code))
+    {
+        Some(0)
+    } else if code_is(value, 40.0) {
+        Some(7)
+    } else if code_is(value, 49.0) {
+        Some(8)
+    } else if (54.0..=59.0).contains(&value) && value.fract().abs() < f64::EPSILON {
+        Some(12)
+    } else if code_is(value, 61.0) || code_is(value, 64.0) {
+        Some(13)
+    } else {
+        None
+    }
+}
+
+fn m_modal_group(value: f64) -> Option<u8> {
+    if [0.0, 1.0, 2.0, 30.0]
+        .into_iter()
+        .any(|code| code_is(value, code))
+    {
+        Some(4)
+    } else if [3.0, 4.0, 5.0].into_iter().any(|code| code_is(value, code)) {
+        Some(7)
+    } else if [7.0, 8.0, 9.0].into_iter().any(|code| code_is(value, code)) {
+        Some(8)
+    } else {
+        None
+    }
+}
+
 fn same_point(left: ProgramPoint, right: ProgramPoint) -> bool {
     (left.x - right.x).abs() <= POSITION_EPSILON_MM
         && (left.y - right.y).abs() <= POSITION_EPSILON_MM
         && (left.z - right.z).abs() <= POSITION_EPSILON_MM
 }
 
-fn sample_xy_arc(
-    start: ProgramPoint,
-    end: ProgramPoint,
+fn plane_offsets(
+    plane: Plane,
     i: Option<f64>,
     j: Option<f64>,
+    k: Option<f64>,
+) -> (Option<f64>, Option<f64>, bool) {
+    match plane {
+        Plane::Xy => (i, j, k.is_some()),
+        Plane::Xz => (k, i, j.is_some()),
+        Plane::Yz => (j, k, i.is_some()),
+    }
+}
+
+fn plane_components(point: ProgramPoint, plane: Plane) -> (f64, f64, f64) {
+    match plane {
+        Plane::Xy => (point.x, point.y, point.z),
+        Plane::Xz => (point.z, point.x, point.y),
+        Plane::Yz => (point.y, point.z, point.x),
+    }
+}
+
+fn point_from_plane(u: f64, v: f64, linear: f64, plane: Plane) -> ProgramPoint {
+    match plane {
+        Plane::Xy => ProgramPoint {
+            x: u,
+            y: v,
+            z: linear,
+        },
+        Plane::Xz => ProgramPoint {
+            x: v,
+            y: linear,
+            z: u,
+        },
+        Plane::Yz => ProgramPoint {
+            x: linear,
+            y: u,
+            z: v,
+        },
+    }
+}
+
+struct ArcDefinition {
+    plane: Plane,
+    offset_u: Option<f64>,
+    offset_v: Option<f64>,
     radius: Option<f64>,
     clockwise: bool,
+    distance_mode: ArcDistanceMode,
+}
+
+fn sample_arc(
+    start: ProgramPoint,
+    end: ProgramPoint,
+    definition: ArcDefinition,
 ) -> Option<Vec<ProgramPoint>> {
-    let (center_x, center_y) = if i.is_some() || j.is_some() {
-        (start.x + i.unwrap_or(0.0), start.y + j.unwrap_or(0.0))
+    let (start_u, start_v, start_linear) = plane_components(start, definition.plane);
+    let (end_u, end_v, end_linear) = plane_components(end, definition.plane);
+    let (center_u, center_v) = if definition.offset_u.is_some() || definition.offset_v.is_some() {
+        match definition.distance_mode {
+            ArcDistanceMode::Incremental => (
+                start_u + definition.offset_u.unwrap_or(0.0),
+                start_v + definition.offset_v.unwrap_or(0.0),
+            ),
+            ArcDistanceMode::Absolute => (definition.offset_u?, definition.offset_v?),
+        }
     } else {
-        center_from_radius(start, end, radius?, clockwise)?
+        center_from_radius(
+            start_u,
+            start_v,
+            end_u,
+            end_v,
+            definition.radius?,
+            definition.clockwise,
+        )?
     };
-    let arc_radius = (start.x - center_x).hypot(start.y - center_y);
+    let arc_radius = (start_u - center_u).hypot(start_v - center_v);
     if arc_radius <= POSITION_EPSILON_MM {
         return None;
     }
-    let end_radius = (end.x - center_x).hypot(end.y - center_y);
+    let end_radius = (end_u - center_u).hypot(end_v - center_v);
     if (arc_radius - end_radius).abs() > arc_radius.max(1.0) * 0.002 {
         return None;
     }
 
-    let start_angle = (start.y - center_y).atan2(start.x - center_x);
-    let end_angle = (end.y - center_y).atan2(end.x - center_x);
-    let full_circle = (start.x - end.x).abs() <= POSITION_EPSILON_MM
-        && (start.y - end.y).abs() <= POSITION_EPSILON_MM;
-    let sweep = directed_sweep(start_angle, end_angle, clockwise, full_circle);
+    let start_angle = (start_v - center_v).atan2(start_u - center_u);
+    let end_angle = (end_v - center_v).atan2(end_u - center_u);
+    let full_circle = (start_u - end_u).abs() <= POSITION_EPSILON_MM
+        && (start_v - end_v).abs() <= POSITION_EPSILON_MM;
+    let sweep = directed_sweep(start_angle, end_angle, definition.clockwise, full_circle);
     if sweep <= POSITION_EPSILON_MM {
         return None;
     }
@@ -837,16 +1184,17 @@ fn sample_xy_arc(
     let mut points = Vec::with_capacity(steps + 1);
     for step in 0..=steps {
         let progress = step as f64 / steps as f64;
-        let angle = if clockwise {
+        let angle = if definition.clockwise {
             start_angle - sweep * progress
         } else {
             start_angle + sweep * progress
         };
-        points.push(ProgramPoint {
-            x: center_x + arc_radius * angle.cos(),
-            y: center_y + arc_radius * angle.sin(),
-            z: start.z + (end.z - start.z) * progress,
-        });
+        points.push(point_from_plane(
+            center_u + arc_radius * angle.cos(),
+            center_v + arc_radius * angle.sin(),
+            start_linear + (end_linear - start_linear) * progress,
+            definition.plane,
+        ));
     }
     if let Some(first) = points.first_mut() {
         *first = start;
@@ -858,19 +1206,21 @@ fn sample_xy_arc(
 }
 
 fn center_from_radius(
-    start: ProgramPoint,
-    end: ProgramPoint,
+    start_u: f64,
+    start_v: f64,
+    end_u: f64,
+    end_v: f64,
     signed_radius: f64,
     clockwise: bool,
 ) -> Option<(f64, f64)> {
-    let dx = end.x - start.x;
-    let dy = end.y - start.y;
+    let dx = end_u - start_u;
+    let dy = end_v - start_v;
     let chord = dx.hypot(dy);
     let radius = signed_radius.abs();
     if chord <= POSITION_EPSILON_MM || radius + POSITION_EPSILON_MM < chord / 2.0 {
         return None;
     }
-    let midpoint = ((start.x + end.x) / 2.0, (start.y + end.y) / 2.0);
+    let midpoint = ((start_u + end_u) / 2.0, (start_v + end_v) / 2.0);
     let height = (radius * radius - chord * chord / 4.0).max(0.0).sqrt();
     let perpendicular = (-dy / chord, dx / chord);
     let candidates = [
@@ -886,8 +1236,8 @@ fn center_from_radius(
     let wants_major = signed_radius < 0.0;
     candidates.into_iter().min_by(|left, right| {
         let score = |center: &(f64, f64)| {
-            let start_angle = (start.y - center.1).atan2(start.x - center.0);
-            let end_angle = (end.y - center.1).atan2(end.x - center.0);
+            let start_angle = (start_v - center.1).atan2(start_u - center.0);
+            let end_angle = (end_v - center.1).atan2(end_u - center.0);
             let sweep = directed_sweep(start_angle, end_angle, clockwise, false);
             let is_major = sweep > PI + 1e-6;
             if is_major == wants_major { 0 } else { 1 }
