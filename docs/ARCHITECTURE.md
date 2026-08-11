@@ -47,6 +47,18 @@ File API -> ProgramGateway -> typed Tauri parse command -> millo-gcode
 It does not pass through the command actor because parsing owns no controller
 state and cannot produce transport writes.
 
+Mock dry-run execution is a separate, explicitly gated path:
+
+```text
+Original source -> Rust reparse -> millo-dry-run -> opaque DryRunPlan
+                                                    |
+                                            command actor/sender
+                                                    |
+                                            Controller -> Mock GRBL
+```
+
+Neither an immutable preview DTO nor a React flag can become a sender plan.
+
 ## Rules
 
 1. CNC behavior belongs in Rust and must be testable without Tauri.
@@ -96,8 +108,26 @@ does not schedule or execute controller I/O.
 - `Program` and `Controller` are separate retained workbench views. Program
   state survives tab changes; Device Inspector remains available without being
   mixed into preview diagnostics.
-- Neither the core UI nor plugins receive a sender or raw-line capability in
-  this slice. `jobs.create` remains reserved.
+- The original source is retained beside the immutable preview. Starting a dry
+  run sends that source back to Rust for a fresh parse and independent policy
+  check; the UI's `dryRunEligible` display flag is never authority.
+- `millo-dry-run` rejects every parser safety/error plus explicit M3/M4,
+  non-zero S, M7/M8, M6, G38.x, G28/G30/G53, and G10/G92 families. It limits a
+  normalized command to 255 bytes and prepends only the safe M5/M9 off commands.
+- `DryRunPlan` and `DryRunLine` have private fields and are not deserializable.
+  Only the Rust policy can mint commands accepted by the controller sender API.
+- `millo-sender` limits plan lines and bytes, permits one in-flight command,
+  advances only on correlated `ok`, and models Ready/Running/Paused/Completed/
+  Failed/Cancelled explicitly.
+- Sender dispatch runs inside the existing command actor. Requests remain
+  prioritized between lines, lifecycle polling uses the same controller, and
+  no second task can write to the transport.
+- Tauri checks the active descriptor and the actor checks `DryRunTarget`; both
+  must identify Mock GRBL. Serial replacement automatically disables and
+  cancels dry-run execution.
+- React receives a separate `dry-run-state` event with bounded progress,
+  current source line, and terminal error. Plugins receive no sender or raw-line
+  capability. `jobs.create` remains reserved.
 
 ### Lifecycle invariants
 
@@ -227,9 +257,9 @@ does not schedule or execute controller I/O.
   stable `Idle`; it reads settings before and after, skips values already zero,
   and fails verification unless both final values are exactly `0`.
 - The single actor remains the only writer to the port. A realtime byte is
-  serialized behind an already active controller transaction; future sender
-  work must preserve bounded command transactions and provide priority handling
-  between streamed lines.
+  serialized behind an already active controller transaction; the sender
+  returns to the actor queue after every correlated line result so queued
+  realtime requests are considered before the next line.
 
 ### Extension host boundary
 
@@ -291,13 +321,11 @@ does not schedule or execute controller I/O.
 
 ## Near-term sequence
 
-1. Bounded sender state machine with pause, cancel, and correlated line results.
-2. Safe dry run policy that rejects spindle/coolant activation, probing, tool
-   changes, machine-coordinate moves, and parser blockers while requiring the
-   spindle to remain manually off.
-3. Program-line table and selection linked to preview geometry without editing
+1. Program-line table and selection linked to preview geometry without editing
    the immutable loaded source in place.
-4. Probe input validation and guarded Z probing only after a physical sensor is
+2. Mock sender timing and richer simulated position updates without widening
+   the hardware execution gate.
+3. Probe input validation and guarded Z probing only after a physical sensor is
    installed and connected.
 
 Three.js is now isolated behind the program preview adapter and a lazy bundle.

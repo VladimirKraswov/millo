@@ -1820,10 +1820,13 @@ version = "0.1.0"
 dependencies = [
  "millo-controller",
  "millo-domain",
+ "millo-dry-run",
+ "millo-gcode",
  "millo-grbl",
  "millo-mock",
  "millo-readiness",
  "millo-safety",
+ "millo-sender",
  "millo-transport",
  "thiserror 2.0.20",
  "tokio",
@@ -1834,6 +1837,7 @@ name = "millo-controller"
 version = "0.1.0"
 dependencies = [
  "millo-domain",
+ "millo-dry-run",
  "millo-grbl",
  "millo-mock",
  "millo-transport",
@@ -1848,8 +1852,10 @@ dependencies = [
  "millo-command",
  "millo-controller",
  "millo-domain",
+ "millo-dry-run",
  "millo-gcode",
  "millo-mock",
+ "millo-sender",
  "millo-serial",
  "millo-transport",
  "serde",
@@ -1863,6 +1869,15 @@ name = "millo-domain"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "millo-dry-run"
+version = "0.1.0"
+dependencies = [
+ "millo-gcode",
+ "serde",
+ "thiserror 2.0.20",
 ]
 
 [[package]]
@@ -1908,6 +1923,16 @@ name = "millo-safety"
 version = "0.1.0"
 dependencies = [
  "millo-domain",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "millo-sender"
+version = "0.1.0"
+dependencies = [
+ "millo-dry-run",
+ "millo-gcode",
+ "serde",
  "thiserror 2.0.20",
 ]
 

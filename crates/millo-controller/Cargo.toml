@@ -5,6 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+ millo-dry-run = { path = "../millo-dry-run" }
 millo-domain = { path = "../millo-domain" }
 millo-grbl = { path = "../millo-grbl" }
 millo-transport = { path = "../millo-transport" }

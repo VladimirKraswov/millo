@@ -26,6 +26,7 @@ import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineComma
 import { tauriMachineStateEventStream } from "./platform/machine/tauriMachineStateEventStream";
 import { tauriWorkCoordinateGateway } from "./platform/machine/tauriWorkCoordinateGateway";
 import { tauriProgramGateway } from "./platform/program/tauriProgramGateway";
+import { tauriDryRunGateway } from "./platform/program/tauriDryRunGateway";
 import {
   emptySnapshot,
   type ControllerSnapshot,
@@ -356,6 +357,15 @@ export default function App() {
           >
             <ProgramWorkspace
               desktopRuntime={desktopRuntime}
+              dryRunAvailable={
+                desktopRuntime &&
+                activeTransport.kind === "mock" &&
+                snapshot.connection === "connected" &&
+                snapshot.machine.mode === "idle" &&
+                snapshot.alarm === undefined &&
+                snapshot.resetNotice === undefined
+              }
+              dryRunGateway={desktopRuntime ? tauriDryRunGateway : undefined}
               gateway={tauriProgramGateway}
               initialProgram={developmentPreviewFixture}
             />

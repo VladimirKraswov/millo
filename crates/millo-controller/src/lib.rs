@@ -5,6 +5,7 @@ use millo_domain::{
     DeviceInspection, MachineMode, MachineState, ResetNotice, StepJogReceipt, StepJogRequest,
     WorkAxis, WorkCoordinateSystem,
 };
+use millo_dry_run::DryRunLine;
 use millo_grbl::{
     IncomingLine, JogValidationError, StatusParseError, build_device_inspection,
     encode_set_work_zero, encode_step_jog, parse_incoming_line,
@@ -292,6 +293,13 @@ impl<T: Transport> Controller<T> {
     ) -> Result<CommandResponse, ControllerError> {
         let command = encode_set_work_zero(axis, coordinate_system);
         self.execute_acknowledged_line(&command).await
+    }
+
+    pub async fn execute_dry_run_line(
+        &mut self,
+        line: &DryRunLine,
+    ) -> Result<CommandResponse, ControllerError> {
+        self.execute_acknowledged_line(line.command()).await
     }
 
     pub async fn send_realtime(

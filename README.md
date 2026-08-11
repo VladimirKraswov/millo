@@ -13,6 +13,7 @@ The current slices form this path:
 ```text
 Serial / Mock -> command arbiter -> GRBL lifecycle/parser -> typed Tauri IPC -> React
 File source -> millo-gcode parser -> immutable program DTO -> Three.js preview
+Safe source -> dry-run policy -> bounded sender -> Mock GRBL only
 ```
 
 The command arbiter now owns the active transport, periodic status polling, and
@@ -67,11 +68,16 @@ to 2 MB through a separate `ProgramGateway`. Rust parses compact words,
 comments, metric/imperial and absolute/incremental modes, linear motion, and XY
 arcs into an immutable millimetre-based program model. Warnings retain source
 line numbers; spindle activation, tool change, probing, machine-coordinate
-motion, malformed geometry, and unsupported commands fail the future dry-run
-gate. A lazily loaded Three.js adapter renders rapid and cutting geometry from a
-pure read model with top/isometric views. Loading and preview have no access to
-the command actor, serial transport, or machine capabilities, so a parsed line
-cannot move the machine in this slice.
+motion, malformed geometry, and unsupported commands fail the dry-run gate. For
+parser-clean programs, Tauri reparses the original source and `millo-dry-run`
+builds an opaque plan with an `M5/M9` safety preamble. `millo-sender` permits
+only one in-flight line and advances only after its correlated `ok`; `error`,
+`ALARM`, disconnect, or invalid controller state stops the run. This execution
+path is locked to Mock GRBL in both the Tauri adapter and command actor. Serial
+hardware cannot start it. A lazily loaded Three.js adapter renders rapid and
+cutting geometry from a pure read model with top/isometric views. Loading and
+preview have no access to the command actor, serial transport, or machine
+capabilities; only the separate policy can mint sender lines.
 
 UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
 first core contribution in the named `control.machine` slot; Work Zero occupies
@@ -137,9 +143,11 @@ successful GRBL status exchange.
 | `millo-mock` | Deterministic virtual machine for tests |
 | `millo-serial` | Native asynchronous serial discovery and byte/line I/O |
 | `millo-controller` | Connection lifecycle and state orchestration |
+| `millo-dry-run` | Fail-closed program policy and opaque approved plans |
 | `millo-command` | Single-owner command actor, polling, and response arbitration |
 | `millo-readiness` | Hardware-profile policy and guarded test-jog readiness |
 | `millo-safety` | Reset challenges and short-lived test-jog authorization |
+| `millo-sender` | Bounded one-line-in-flight sender state machine |
 | `millo-desktop` | Thin Tauri command/event adapter |
 
 See [Architecture](docs/ARCHITECTURE.md), the decisions for the
@@ -158,7 +166,8 @@ followed by the
 [read-only machine capability](docs/decisions/0012-machine-read-capability.md)
 and [PluginHost bootstrap](docs/decisions/0013-plugin-host-bootstrap.md), then the
 [guarded work-zero transaction](docs/decisions/0014-guarded-work-zero.md) and
-[G-code program boundary](docs/decisions/0015-gcode-program-boundary.md).
+[G-code program boundary](docs/decisions/0015-gcode-program-boundary.md), then
+the [Mock-only bounded sender](docs/decisions/0016-mock-dry-run-sender.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

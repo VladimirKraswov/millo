@@ -9,11 +9,13 @@ use millo_domain::{
     Position, ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation, WorkAxis,
     WorkCoordinateSystem, WorkZeroOutcome, WorkZeroRequest,
 };
+use millo_dry_run::DryRunPlan;
 use millo_grbl::{
     active_work_coordinate_system, build_device_inspection, work_coordinate_parameter,
 };
 use millo_readiness::assess;
 use millo_safety::{SafetyError, SafetyManager};
+use millo_sender::{Sender, SenderError, SenderSnapshot, SenderState};
 use millo_transport::BoxedTransport;
 use thiserror::Error;
 use tokio::{
@@ -48,6 +50,17 @@ pub enum ArbiterError {
     ActiveWorkCoordinateSystemUnavailable,
     #[error("work zero verification failed: {0}")]
     WorkZeroVerification(String),
+    #[error(transparent)]
+    Sender(#[from] SenderError),
+    #[error("dry run is disabled for the active transport")]
+    DryRunTransportUnavailable,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DryRunTarget {
+    #[default]
+    Disabled,
+    Mock,
 }
 
 #[derive(Debug, Clone)]
@@ -61,6 +74,7 @@ pub struct UnhomedConfiguration {
 pub struct CommandArbiter {
     requests: mpsc::Sender<Request>,
     snapshots: watch::Receiver<ControllerSnapshot>,
+    sender_snapshots: watch::Receiver<SenderSnapshot>,
 }
 
 impl CommandArbiter {
@@ -69,22 +83,38 @@ impl CommandArbiter {
         config: ControllerConfig,
         hardware_profile: HardwareProfile,
     ) -> (Self, impl Future<Output = ()> + Send + 'static) {
+        Self::new_with_dry_run_target(transport, config, hardware_profile, DryRunTarget::Disabled)
+    }
+
+    pub fn new_with_dry_run_target(
+        transport: BoxedTransport,
+        config: ControllerConfig,
+        hardware_profile: HardwareProfile,
+        dry_run_target: DryRunTarget,
+    ) -> (Self, impl Future<Output = ()> + Send + 'static) {
         let controller = Controller::with_config(transport, config);
         let initial_snapshot = controller.snapshot();
+        let sender = Sender::default();
         let (requests, request_rx) = mpsc::channel(REQUEST_CAPACITY);
         let (snapshot_tx, snapshots) = watch::channel(initial_snapshot);
-        let worker = run_actor(
+        let (sender_snapshot_tx, sender_snapshots) = watch::channel(sender.snapshot());
+        let actor = ActorState {
             controller,
             config,
             hardware_profile,
-            request_rx,
-            snapshot_tx,
-        );
+            dry_run_target,
+            sender,
+            safety: SafetyManager::default(),
+            snapshots: snapshot_tx,
+            sender_snapshots: sender_snapshot_tx,
+        };
+        let worker = run_actor(actor, request_rx);
 
         (
             Self {
                 requests,
                 snapshots,
+                sender_snapshots,
             },
             worker,
         )
@@ -98,12 +128,30 @@ impl CommandArbiter {
         self.snapshots.clone()
     }
 
+    pub fn sender_snapshot(&self) -> SenderSnapshot {
+        self.sender_snapshots.borrow().clone()
+    }
+
+    pub fn subscribe_sender(&self) -> watch::Receiver<SenderSnapshot> {
+        self.sender_snapshots.clone()
+    }
+
     pub async fn replace_transport(
         &self,
         transport: BoxedTransport,
     ) -> Result<ControllerSnapshot, ArbiterError> {
+        self.replace_transport_with_dry_run_target(transport, DryRunTarget::Disabled)
+            .await
+    }
+
+    pub async fn replace_transport_with_dry_run_target(
+        &self,
+        transport: BoxedTransport,
+        dry_run_target: DryRunTarget,
+    ) -> Result<ControllerSnapshot, ArbiterError> {
         self.call(|response| Request::ReplaceTransport {
             transport,
+            dry_run_target,
             response,
         })
         .await
@@ -193,6 +241,26 @@ impl CommandArbiter {
             .await
     }
 
+    pub async fn start_dry_run(&self, plan: DryRunPlan) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::StartDryRun { plan, response })
+            .await
+    }
+
+    pub async fn pause_dry_run(&self) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::PauseDryRun { response })
+            .await
+    }
+
+    pub async fn resume_dry_run(&self) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::ResumeDryRun { response })
+            .await
+    }
+
+    pub async fn cancel_dry_run(&self) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::CancelDryRun { response })
+            .await
+    }
+
     pub async fn send_realtime(
         &self,
         command: RealtimeCommand,
@@ -219,6 +287,7 @@ impl CommandArbiter {
 enum Request {
     ReplaceTransport {
         transport: BoxedTransport,
+        dry_run_target: DryRunTarget,
         response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
     },
     Connect {
@@ -269,17 +338,34 @@ enum Request {
         request: WorkZeroRequest,
         response: oneshot::Sender<Result<WorkZeroOutcome, ArbiterError>>,
     },
+    StartDryRun {
+        plan: DryRunPlan,
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
+    },
+    PauseDryRun {
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
+    },
+    ResumeDryRun {
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
+    },
+    CancelDryRun {
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
+    },
 }
 
-async fn run_actor(
-    mut controller: Controller<BoxedTransport>,
+struct ActorState {
+    controller: Controller<BoxedTransport>,
     config: ControllerConfig,
     hardware_profile: HardwareProfile,
-    mut requests: mpsc::Receiver<Request>,
+    dry_run_target: DryRunTarget,
+    sender: Sender,
+    safety: SafetyManager,
     snapshots: watch::Sender<ControllerSnapshot>,
-) {
-    let mut safety = SafetyManager::default();
-    let mut ticker = interval(config.poll_interval);
+    sender_snapshots: watch::Sender<SenderSnapshot>,
+}
+
+async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>) {
+    let mut ticker = interval(actor.config.poll_interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     ticker.tick().await;
 
@@ -290,57 +376,66 @@ async fn run_actor(
                 let Some(request) = request else {
                     break;
                 };
-                handle_request(
-                    request,
-                    &mut controller,
-                    config,
-                    &hardware_profile,
-                    &mut safety,
-                    &snapshots,
-                )
-                .await;
+                handle_request(request, &mut actor).await;
             }
             _ = ticker.tick() => {
                 if matches!(
-                    controller.snapshot().connection,
+                    actor.controller.snapshot().connection,
                     ConnectionState::Connected | ConnectionState::Recovering
                 ) {
-                    let _ = controller.lifecycle_tick().await;
-                    safety.observe(&controller.snapshot(), Instant::now());
-                    publish(&snapshots, &controller);
+                    let _ = actor.controller.lifecycle_tick().await;
+                    actor.safety.observe(&actor.controller.snapshot(), Instant::now());
+                    publish(&actor.snapshots, &actor.controller);
                 }
+            }
+            _ = tokio::task::yield_now(), if actor.sender.is_dispatchable() => {
+                execute_sender_step(
+                    &mut actor.controller,
+                    &mut actor.sender,
+                    &actor.snapshots,
+                    &actor.sender_snapshots,
+                )
+                .await;
             }
         }
     }
 }
 
-async fn handle_request(
-    request: Request,
-    controller: &mut Controller<BoxedTransport>,
-    config: ControllerConfig,
-    hardware_profile: &HardwareProfile,
-    safety: &mut SafetyManager,
-    snapshots: &watch::Sender<ControllerSnapshot>,
-) {
+async fn handle_request(request: Request, actor: &mut ActorState) {
+    let ActorState {
+        controller,
+        config,
+        hardware_profile,
+        dry_run_target,
+        sender,
+        safety,
+        snapshots,
+        sender_snapshots,
+    } = actor;
     match request {
         Request::ReplaceTransport {
             transport,
+            dry_run_target: replacement_target,
             response,
         } => {
             let _ = controller.disconnect().await;
             safety.invalidate_test_jog();
-            *controller = Controller::with_config(transport, config);
+            cancel_active_sender(sender, sender_snapshots);
+            *controller = Controller::with_config(transport, *config);
+            *dry_run_target = replacement_target;
             publish(snapshots, controller);
             let _ = response.send(Ok(controller.snapshot()));
         }
         Request::Connect { response } => {
             safety.invalidate_test_jog();
+            cancel_active_sender(sender, sender_snapshots);
             let result = controller.connect().await.map_err(ArbiterError::from);
             publish(snapshots, controller);
             let _ = response.send(result);
         }
         Request::Disconnect { response } => {
             safety.invalidate_test_jog();
+            cancel_active_sender(sender, sender_snapshots);
             let result = controller.disconnect().await.map_err(ArbiterError::from);
             publish(snapshots, controller);
             let _ = response.send(result);
@@ -375,6 +470,15 @@ async fn handle_request(
             if command != RealtimeCommand::Status {
                 safety.invalidate_test_jog();
             }
+            if command == RealtimeCommand::FeedHold
+                && sender.snapshot().state == SenderState::Running
+            {
+                let _ = sender.pause();
+                publish_sender(sender_snapshots, sender);
+            }
+            if command == RealtimeCommand::SoftReset {
+                cancel_active_sender(sender, sender_snapshots);
+            }
             let result = controller
                 .send_realtime(command)
                 .await
@@ -394,6 +498,7 @@ async fn handle_request(
             challenge_id,
             response,
         } => {
+            cancel_active_sender(sender, sender_snapshots);
             let result = safety
                 .confirm_soft_reset(challenge_id, Instant::now())
                 .map_err(ArbiterError::from);
@@ -464,6 +569,73 @@ async fn handle_request(
             publish(snapshots, controller);
             let _ = response.send(result);
         }
+        Request::StartDryRun { plan, response } => {
+            let result = if *dry_run_target != DryRunTarget::Mock {
+                Err(ArbiterError::DryRunTransportUnavailable)
+            } else {
+                ensure_stable_idle(&controller.snapshot()).and_then(|()| {
+                    sender.load(plan)?;
+                    sender.start().map_err(ArbiterError::from)
+                })
+            };
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
+        Request::PauseDryRun { response } => {
+            let result = sender.pause().map_err(ArbiterError::from);
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
+        Request::ResumeDryRun { response } => {
+            let result = ensure_stable_idle(&controller.snapshot())
+                .and_then(|()| sender.resume().map_err(ArbiterError::from));
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
+        Request::CancelDryRun { response } => {
+            let result = sender.cancel().map_err(ArbiterError::from);
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
+    }
+}
+
+async fn execute_sender_step(
+    controller: &mut Controller<BoxedTransport>,
+    sender: &mut Sender,
+    snapshots: &watch::Sender<ControllerSnapshot>,
+    sender_snapshots: &watch::Sender<SenderSnapshot>,
+) {
+    if let Err(error) = ensure_stable_idle(&controller.snapshot()) {
+        sender.fail(error.to_string());
+        publish_sender(sender_snapshots, sender);
+        return;
+    }
+    let Some(line) = sender.next_line() else {
+        publish_sender(sender_snapshots, sender);
+        return;
+    };
+    publish_sender(sender_snapshots, sender);
+
+    match controller.execute_dry_run_line(&line).await {
+        Ok(_) => {
+            let _ = sender.acknowledge_ok();
+        }
+        Err(error) => {
+            let _ = sender.acknowledge_error(error.to_string());
+        }
+    }
+    publish(snapshots, controller);
+    publish_sender(sender_snapshots, sender);
+}
+
+fn cancel_active_sender(sender: &mut Sender, snapshots: &watch::Sender<SenderSnapshot>) {
+    if matches!(
+        sender.snapshot().state,
+        SenderState::Ready | SenderState::Running | SenderState::Paused
+    ) {
+        let _ = sender.cancel();
+        publish_sender(snapshots, sender);
     }
 }
 
@@ -731,10 +903,16 @@ fn publish(snapshots: &watch::Sender<ControllerSnapshot>, controller: &Controlle
     snapshots.send_replace(controller.snapshot());
 }
 
+fn publish_sender(snapshots: &watch::Sender<SenderSnapshot>, sender: &Sender) {
+    snapshots.send_replace(sender.snapshot());
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
+    use millo_dry_run::build_dry_run_plan;
+    use millo_gcode::{ProgramParseRequest, parse_program};
     use millo_mock::MockTransport;
 
     use super::*;
@@ -774,6 +952,51 @@ mod tests {
             axis,
             position_confirmed,
         }
+    }
+
+    fn dry_run_plan(source: &str) -> DryRunPlan {
+        let program = parse_program(ProgramParseRequest {
+            source_name: "sender-fixture.nc".to_owned(),
+            source: source.to_owned(),
+        })
+        .unwrap();
+        build_dry_run_plan(&program).unwrap()
+    }
+
+    fn mock_dry_run_arbiter() -> (
+        CommandArbiter,
+        millo_mock::MockControl,
+        impl Future<Output = ()> + Send + 'static,
+    ) {
+        let transport = MockTransport::default();
+        let control = transport.control();
+        let (arbiter, worker) = CommandArbiter::new_with_dry_run_target(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(50),
+                failures_before_recovery: 2,
+            },
+            HardwareProfile::first_machine(),
+            DryRunTarget::Mock,
+        );
+        (arbiter, control, worker)
+    }
+
+    async fn wait_for_sender(arbiter: &CommandArbiter, expected: SenderState) -> SenderSnapshot {
+        let mut snapshots = arbiter.subscribe_sender();
+        tokio::time::timeout(Duration::from_millis(200), async {
+            loop {
+                let snapshot = snapshots.borrow_and_update().clone();
+                if snapshot.state == expected {
+                    return snapshot;
+                }
+                snapshots.changed().await.unwrap();
+            }
+        })
+        .await
+        .unwrap()
     }
 
     #[tokio::test]
@@ -1393,6 +1616,89 @@ mod tests {
                 b"?".to_vec(),
             ]
         );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn mock_actor_sends_one_policy_approved_line_per_acknowledgement() {
+        let (arbiter, control, worker) = mock_dry_run_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+
+        let started = arbiter
+            .start_dry_run(dry_run_plan("G21 G90\nG0 X1\nG1 X2 F10"))
+            .await
+            .unwrap();
+        let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
+
+        assert_eq!(started.state, SenderState::Running);
+        assert_eq!(completed.acknowledged_lines, 5);
+        assert_eq!(completed.total_lines, 5);
+        assert_eq!(
+            control.writes(),
+            vec![
+                b"?".to_vec(),
+                b"M5\n".to_vec(),
+                b"M9\n".to_vec(),
+                b"G21 G90\n".to_vec(),
+                b"G0 X1\n".to_vec(),
+                b"G1 X2 F10\n".to_vec(),
+            ]
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn mock_actor_stops_at_the_exact_rejected_program_line() {
+        let (arbiter, control, worker) = mock_dry_run_arbiter();
+        control.queue_program_ok();
+        control.queue_program_ok();
+        control.queue_program_error(20);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+
+        arbiter
+            .start_dry_run(dry_run_plan("G21\nG0 X1"))
+            .await
+            .unwrap();
+        let failed = wait_for_sender(&arbiter, SenderState::Failed).await;
+
+        assert_eq!(failed.current_source_line, Some(1));
+        assert_eq!(failed.acknowledged_lines, 2);
+        assert!(
+            failed
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("code Some(20)"))
+        );
+        assert_eq!(
+            control.writes(),
+            vec![
+                b"?".to_vec(),
+                b"M5\n".to_vec(),
+                b"M9\n".to_vec(),
+                b"G21\n".to_vec(),
+            ]
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn dry_run_is_rejected_when_the_actor_target_is_not_mock() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+
+        let error = arbiter
+            .start_dry_run(dry_run_plan("G0 X1"))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ArbiterError::DryRunTransportUnavailable));
+        assert_eq!(control.writes(), vec![b"?".to_vec()]);
         task.abort();
     }
 }

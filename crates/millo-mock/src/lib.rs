@@ -23,6 +23,7 @@ struct MockState {
     planned_cycles: VecDeque<VecDeque<MockRead>>,
     planned_queries: VecDeque<VecDeque<MockRead>>,
     planned_settings: VecDeque<VecDeque<MockRead>>,
+    planned_program: VecDeque<VecDeque<MockRead>>,
     active_reads: VecDeque<MockRead>,
     writes: Vec<Vec<u8>>,
     jog_polls_remaining: u32,
@@ -94,6 +95,24 @@ impl MockControl {
             .push_back(VecDeque::from([MockRead::Line(format!("error:{code}"))]));
     }
 
+    pub fn queue_program_error(&self, code: u16) {
+        self.lock()
+            .planned_program
+            .push_back(VecDeque::from([MockRead::Line(format!("error:{code}"))]));
+    }
+
+    pub fn queue_program_ok(&self) {
+        self.lock()
+            .planned_program
+            .push_back(VecDeque::from([MockRead::Line("ok".to_owned())]));
+    }
+
+    pub fn queue_program_alarm(&self, code: u16) {
+        self.lock()
+            .planned_program
+            .push_back(VecDeque::from([MockRead::Line(format!("ALARM:{code}"))]));
+    }
+
     pub fn writes(&self) -> Vec<Vec<u8>> {
         self.lock().writes.clone()
     }
@@ -133,6 +152,7 @@ impl MockTransport {
                     planned_cycles: VecDeque::new(),
                     planned_queries: VecDeque::new(),
                     planned_settings: VecDeque::new(),
+                    planned_program: VecDeque::new(),
                     active_reads: VecDeque::new(),
                     writes: Vec::new(),
                     jog_polls_remaining: 0,
@@ -248,6 +268,12 @@ impl Transport for MockTransport {
                 .pop_front()
                 .unwrap_or(default_response);
             state.active_reads.extend(response);
+        } else if is_program_line(data) {
+            let response = state
+                .planned_program
+                .pop_front()
+                .unwrap_or_else(|| lines(&["ok"]));
+            state.active_reads.extend(response);
         }
         Ok(())
     }
@@ -358,6 +384,14 @@ fn parse_setting_write(data: &[u8]) -> Option<(u16, String)> {
     let (number, value) = command.strip_prefix('$')?.split_once('=')?;
     let number = number.parse().ok()?;
     (!value.is_empty()).then(|| (number, value.to_owned()))
+}
+
+fn is_program_line(data: &[u8]) -> bool {
+    let Ok(command) = std::str::from_utf8(data) else {
+        return false;
+    };
+    let command = command.trim_end_matches(['\r', '\n']);
+    !command.is_empty() && !command.starts_with('$') && data.ends_with(b"\n")
 }
 
 fn status_position(status: &str) -> Option<[f64; 3]> {
@@ -691,6 +725,36 @@ mod tests {
             status_position(&control.lock().status_line),
             Some([10.0, 20.0, 30.0])
         );
+    }
+
+    #[tokio::test]
+    async fn acknowledges_program_lines_and_can_inject_a_correlated_error() {
+        let mut transport = MockTransport::default();
+        let control = transport.control();
+        transport.connect().await.unwrap();
+
+        transport.write(b"G21 G90\n").await.unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), "ok");
+        control.queue_program_error(20);
+        transport.write(b"G1 X1 F10\n").await.unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), "error:20");
+
+        assert_eq!(
+            control.writes(),
+            vec![b"G21 G90\n".to_vec(), b"G1 X1 F10\n".to_vec()]
+        );
+    }
+
+    #[tokio::test]
+    async fn can_inject_an_alarm_as_the_terminal_program_response() {
+        let mut transport = MockTransport::default();
+        let control = transport.control();
+        control.queue_program_alarm(2);
+        transport.connect().await.unwrap();
+
+        transport.write(b"G1 X1\n").await.unwrap();
+
+        assert_eq!(transport.read_line().await.unwrap(), "ALARM:2");
     }
 
     #[tokio::test]

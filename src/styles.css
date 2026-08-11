@@ -442,6 +442,11 @@ select:focus-visible {
   align-items: center;
 }
 
+.program-icon-action:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .program-actions {
   flex: 0 0 auto;
   gap: 7px;
@@ -660,6 +665,123 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.dry-run-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 11px;
+  border-bottom: 1px solid #27323a;
+  background: #10171b;
+}
+
+.dry-run-heading,
+.dry-run-line,
+.dry-run-actions {
+  display: flex;
+  align-items: center;
+}
+
+.dry-run-heading {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dry-run-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dry-run-heading span,
+.dry-run-card > small {
+  color: #75838c;
+  font-size: 8px;
+}
+
+.dry-run-heading strong {
+  color: #c9d3d8;
+  font-size: 10px;
+}
+
+.dry-run-heading code,
+.dry-run-line code {
+  color: #8fe0c0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
+.dry-run-progress {
+  height: 3px;
+  overflow: hidden;
+  background: #27323a;
+}
+
+.dry-run-progress i {
+  display: block;
+  height: 100%;
+  background: #69cfaa;
+  transition: width 120ms linear;
+}
+
+.dry-run-line {
+  min-width: 0;
+  gap: 7px;
+}
+
+.dry-run-line span {
+  flex: 0 0 auto;
+  color: #75838c;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
+.dry-run-line code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dry-run-actions {
+  gap: 6px;
+}
+
+.dry-run-actions button {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid #3f8069;
+  border-radius: 4px;
+  color: #b9e7d6;
+  background: #172821;
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.dry-run-actions button.is-cancel {
+  border-color: #73484b;
+  color: #e8b4b4;
+  background: #28191b;
+}
+
+.dry-run-actions button:disabled {
+  opacity: 0.36;
+  cursor: default;
+}
+
+.dry-run-card.is-completed .dry-run-heading strong {
+  color: #77d6b3;
+}
+
+.dry-run-card.is-failed .dry-run-heading strong,
+.dry-run-card > small.is-error {
+  color: #ef8585;
+}
+
 .warning-heading {
   display: flex;
   flex: 0 0 34px;
@@ -748,6 +870,21 @@ select:focus-visible {
   background: #0c1215;
   outline: 1px dashed #314048;
   outline-offset: -12px;
+}
+
+.sender-recovery button {
+  display: flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid #73484b;
+  border-radius: 4px;
+  color: #e8b4b4;
+  background: #28191b;
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .program-dropzone.is-dragging {

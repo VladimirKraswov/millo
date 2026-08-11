@@ -15,10 +15,12 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 millo-command = { path = "../crates/millo-command" }
 millo-controller = { path = "../crates/millo-controller" }
+millo-dry-run = { path = "../crates/millo-dry-run" }
 millo-domain = { path = "../crates/millo-domain" }
 millo-gcode = { path = "../crates/millo-gcode" }
 millo-mock = { path = "../crates/millo-mock" }
 millo-serial = { path = "../crates/millo-serial" }
+millo-sender = { path = "../crates/millo-sender" }
 millo-transport = { path = "../crates/millo-transport" }
 serde.workspace = true
 tauri = { version = "2", features = [] }

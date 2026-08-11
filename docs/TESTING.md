@@ -20,9 +20,11 @@ and delegates only a typed X/Y/Z request. Registry tests also verify that the
 core panel occupies the separate `control.coordinates` slot.
 
 Program-loader tests reject unsupported, empty, and oversized files before IPC
-and assert the exact typed parse request. Toolpath read-model tests verify rapid
-and cutting buffers, centering, framing, and grid placement independently from
-WebGL.
+and assert both the exact typed parse request and retained original source.
+Dry-run read-model tests prove that Mock availability and policy eligibility are
+both required, expose only state-valid controls, and clamp untrusted display
+progress. Toolpath read-model tests verify rapid and cutting buffers, centering,
+framing, and grid placement independently from WebGL.
 
 Extension-registry tests cover deterministic slot ordering, duplicate and
 self-replacement rejection, add/replace/dispose behavior, one-revision owner
@@ -130,13 +132,34 @@ port names remain untouched.
   file-size and extension gate before reading a file.
 - The Tauri adapter test proves parsing returns a typed program without an
   `AppState`, controller, transport, or command actor dependency.
-- Vitest checks the platform-neutral loader and pure toolpath read model. No
-  test invokes a sender because none exists in this slice.
+- Vitest checks the platform-neutral loader, dry-run controls, and pure toolpath
+  read model. No browser test can bypass the Rust execution policy.
 - Manual browser fixtures use `/?fixture=program` for desktop and
   `/tests/visual/program-mobile.html` for a 390 x 844 responsive viewport.
   Playwright screenshots verify layout and top/isometric switching. Canvas crops
   are checked for non-uniform luminance and color: the accepted desktop fixture
   measured Y `0..197`, and mobile measured Y `0..206`.
+
+## Current dry-run sender coverage
+
+- Policy tests independently reject spindle activation, non-zero spindle
+  speed, coolant activation, probing, M6, machine/reference-coordinate motion,
+  coordinate mutation, parser safety/errors, incomplete previews, and commands
+  over 255 bytes.
+- Approved plans contain normalized executable lines plus only an M5/M9 safety
+  preamble. Plan and line fields are private and have no deserialize path.
+- Sender tests prove one-line-in-flight correlation, pause/resume/cancel
+  transitions, exact failed source-line retention, terminal completion only
+  after every `ok`, and line/byte bounds.
+- Mock transport can acknowledge ordinary program lines or inject a correlated
+  `error:n`/`ALARM:n` without changing serial hardware.
+- Actor integration tests assert exact writes, stop before the line following an
+  error, publish terminal state, and reject execution when its target is not
+  Mock.
+- Tauri adapter tests reparse original source and prove an unsafe request cannot
+  mint a plan. Runtime start also checks the active backend transport descriptor.
+- No automated or manual test in this slice sends a program line to the physical
+  controller.
 
 ## Current hardware readiness coverage
 

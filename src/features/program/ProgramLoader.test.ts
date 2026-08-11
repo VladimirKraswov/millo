@@ -20,7 +20,10 @@ describe("ProgramLoader", () => {
     const parse = vi.fn(async () => previewFixtureProgram);
     const loader = new ProgramLoader({ parse });
 
-    await expect(loader.load(file())).resolves.toBe(previewFixtureProgram);
+    await expect(loader.load(file())).resolves.toEqual({
+      program: previewFixtureProgram,
+      source: "G21\nG0 X1",
+    });
     expect(parse).toHaveBeenCalledOnce();
     expect(parse).toHaveBeenCalledWith({
       sourceName: "profile.nc",

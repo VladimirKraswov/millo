@@ -1,12 +1,14 @@
-use millo_command::CommandArbiter;
+use millo_command::{CommandArbiter, DryRunTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
     ControllerSnapshot, HardwareInspection, HardwareProfile, JogPadStepOutcome, JogPadStepRequest,
     OperatorConfirmation, ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation,
     WorkZeroOutcome, WorkZeroRequest,
 };
+use millo_dry_run::{DryRunPlan, DryRunPolicyError, build_dry_run_plan};
 use millo_gcode::{GcodeProgram, ProgramParseRequest, parse_program};
 use millo_mock::{MockControl, MockTransport};
+use millo_sender::SenderSnapshot;
 use millo_serial::{
     SerialConfig, SerialPortDescriptor, SerialPortKind, SerialTransport,
     available_ports as available_serial_ports,
@@ -42,6 +44,7 @@ struct ResolvedTransport {
     transport: BoxedTransport,
     descriptor: TransportDescriptor,
     mock: Option<MockControl>,
+    dry_run_target: DryRunTarget,
 }
 
 impl ResolvedTransport {
@@ -52,6 +55,7 @@ impl ResolvedTransport {
             transport: Box::new(transport),
             descriptor: mock_descriptor(),
             mock: Some(mock),
+            dry_run_target: DryRunTarget::Mock,
         }
     }
 }
@@ -69,10 +73,11 @@ impl Default for AppState {
         let initial = ResolvedTransport::mock();
         let descriptor = initial.descriptor;
         let mock = initial.mock;
-        let (arbiter, worker) = CommandArbiter::new(
+        let (arbiter, worker) = CommandArbiter::new_with_dry_run_target(
             initial.transport,
             ControllerConfig::default(),
             HardwareProfile::first_machine(),
+            initial.dry_run_target,
         );
         tauri::async_runtime::spawn(worker);
 
@@ -94,10 +99,25 @@ impl AppState {
         }
 
         let mut snapshots = self.arbiter.subscribe();
+        let mut sender_snapshots = self.arbiter.subscribe_sender();
         *event_task = Some(tokio::spawn(async move {
-            while snapshots.changed().await.is_ok() {
-                let snapshot = snapshots.borrow_and_update().clone();
-                let _ = app.emit("machine-state", snapshot);
+            loop {
+                tokio::select! {
+                    changed = snapshots.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let snapshot = snapshots.borrow_and_update().clone();
+                        let _ = app.emit("machine-state", snapshot);
+                    }
+                    changed = sender_snapshots.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let snapshot = sender_snapshots.borrow_and_update().clone();
+                        let _ = app.emit("dry-run-state", snapshot);
+                    }
+                }
             }
         }));
     }
@@ -138,7 +158,7 @@ pub async fn connect_transport(
 
     state
         .arbiter
-        .replace_transport(replacement.transport)
+        .replace_transport_with_dry_run_target(replacement.transport, replacement.dry_run_target)
         .await
         .map_err(|error| error.to_string())?;
     *state.active_transport.lock().await = replacement.descriptor;
@@ -280,6 +300,56 @@ pub async fn parse_gcode_program(request: ProgramParseRequest) -> Result<GcodePr
 }
 
 #[tauri::command]
+pub async fn sender_snapshot(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
+    Ok(state.arbiter.sender_snapshot())
+}
+
+#[tauri::command]
+pub async fn start_mock_dry_run(
+    request: ProgramParseRequest,
+    state: State<'_, AppState>,
+) -> Result<SenderSnapshot, String> {
+    if state.active_transport.lock().await.kind != TransportKind::Mock {
+        return Err("dry run is currently available only on Mock GRBL".to_owned());
+    }
+    let plan = tokio::task::spawn_blocking(move || prepare_dry_run(request))
+        .await
+        .map_err(|error| format!("dry-run policy task failed: {error}"))??;
+    state
+        .arbiter
+        .start_dry_run(plan)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn pause_dry_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
+    state
+        .arbiter
+        .pause_dry_run()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn resume_dry_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
+    state
+        .arbiter
+        .resume_dry_run()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn cancel_dry_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
+    state
+        .arbiter
+        .cancel_dry_run()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn cancel_jog(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
     state
         .arbiter
@@ -361,7 +431,29 @@ async fn resolve_transport(
         transport: Box::new(SerialTransport::new(config)),
         descriptor: serial_descriptor(port),
         mock: None,
+        dry_run_target: DryRunTarget::Disabled,
     })
+}
+
+fn prepare_dry_run(request: ProgramParseRequest) -> Result<DryRunPlan, String> {
+    let program = parse_program(request).map_err(|error| error.to_string())?;
+    build_dry_run_plan(&program).map_err(format_dry_run_policy_error)
+}
+
+fn format_dry_run_policy_error(error: DryRunPolicyError) -> String {
+    match error {
+        DryRunPolicyError::Rejected(_, blockers) => blockers
+            .into_iter()
+            .map(|blocker| {
+                let location = blocker
+                    .source_line
+                    .map_or_else(|| "program".to_owned(), |line| format!("line {line}"));
+                format!("{location}: {}", blocker.message)
+            })
+            .collect::<Vec<_>>()
+            .join("; "),
+        DryRunPolicyError::EmptyProgram => error.to_string(),
+    }
 }
 
 fn mock_descriptor() -> TransportDescriptor {
@@ -477,6 +569,30 @@ mod tests {
         assert_eq!(program.source_name, "adapter.nc");
         assert_eq!(program.summary.motion_count, 2);
         assert!(program.summary.preview_complete);
+    }
+
+    #[test]
+    fn dry_run_adapter_reparses_source_and_rejects_spindle_commands() {
+        let error = prepare_dry_run(ProgramParseRequest {
+            source_name: "unsafe.nc".to_owned(),
+            source: "G21\nM3 S1000\nG1 X1".to_owned(),
+        })
+        .unwrap_err();
+
+        assert!(error.contains("line 2"));
+        assert!(error.contains("spindle"));
+    }
+
+    #[test]
+    fn dry_run_adapter_returns_an_opaque_policy_plan_for_safe_source() {
+        let plan = prepare_dry_run(ProgramParseRequest {
+            source_name: "safe.nc".to_owned(),
+            source: "G21 G90\nG0 X1\nG1 X2 F10".to_owned(),
+        })
+        .unwrap();
+
+        assert_eq!(plan.source_name(), "safe.nc");
+        assert_eq!(plan.lines().len(), 5);
     }
 
     #[test]

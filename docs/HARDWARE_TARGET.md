@@ -22,13 +22,16 @@ until they are read from the controller or measured before cutting.
 - Approved hardware interactions are the read-only Inspector, realtime Feed
   Hold, challenge-confirmed Soft Reset, guarded single-axis step jog, and typed
   per-axis work zero while Idle. There is no arbitrary motion or spindle command
-  endpoint.
+  endpoint. The program sender is hard-disabled for serial targets and runs only
+  against the deterministic Mock GRBL transport.
 - Step jog is deliberately limited to `0.01..1.00 mm` at `10..100 mm/min`, with
   one fresh preflight lease required for every attempt and the operator present
   at the machine power control.
 - Software Hold/Reset is not a replacement for a physical emergency stop.
-- Automatic `M3`, `M4`, or spindle-speed control must stay disabled for this
-  profile. The sender will require an explicit manual-spindle workflow.
+- Automatic `M3`, `M4`, or spindle-speed control stays disabled for this
+  profile. The current dry-run policy also blocks coolant, probing, M6,
+  machine/reference-coordinate moves, and coordinate mutation before an opaque
+  plan can be created.
 - Probe, `$H`, and heightmap motion must remain unavailable while their physical
   hardware is absent. A future probe slice must first validate wiring, polarity,
   input transitions, and a stationary spindle before enabling a probing cycle.

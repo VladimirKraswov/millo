@@ -10,10 +10,15 @@ export interface ProgramSourceFile {
   text(): Promise<string>;
 }
 
+export interface LoadedProgram {
+  readonly program: GcodeProgram;
+  readonly source: string;
+}
+
 export class ProgramLoader {
   constructor(private readonly gateway: ProgramGateway) {}
 
-  async load(file: ProgramSourceFile): Promise<GcodeProgram> {
+  async load(file: ProgramSourceFile): Promise<LoadedProgram> {
     const name = file.name.trim();
     const extension = name.split(".").pop()?.toLowerCase();
     if (!name || !extension || !supportedExtensions.has(extension)) {
@@ -29,6 +34,9 @@ export class ProgramLoader {
     if (!source.trim()) {
       throw new Error("G-code файл не содержит команд");
     }
-    return this.gateway.parse({ sourceName: name, source });
+    return {
+      program: await this.gateway.parse({ sourceName: name, source }),
+      source,
+    };
   }
 }
