@@ -1,6 +1,7 @@
 use millo_domain::{
-    CommandResponse, DeviceInspection, JogAxis, MachineMode, MachineState, Position,
-    StepJogRequest, WorkAxis, WorkCoordinateSystem,
+    CommandResponse, ControllerAccessories, ControllerBufferState, ControllerCapabilities,
+    ControllerOverrides, ControllerPins, DeviceInspection, JogAxis, MachineMode, MachineState,
+    Position, StepJogRequest, WorkAxis, WorkCoordinateSystem,
 };
 use thiserror::Error;
 
@@ -11,7 +12,7 @@ pub const MAX_STEP_JOG_FEED_MM_PER_MIN: f64 = 100.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IncomingLine {
-    Status(MachineState),
+    Status(Box<MachineState>),
     ResetBanner {
         raw: String,
         version: Option<String>,
@@ -38,6 +39,8 @@ pub enum StatusParseError {
     InvalidNumber { field: String, value: String },
     #[error("field '{field}' must contain three or four coordinates")]
     InvalidPosition { field: String },
+    #[error("field '{field}' must contain exactly {expected} values")]
+    InvalidValueCount { field: String, expected: usize },
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -132,7 +135,7 @@ pub fn parse_incoming_line(line: &str) -> Result<IncomingLine, StatusParseError>
     let line = line.trim();
 
     if line.starts_with('<') {
-        return parse_status_line(line).map(IncomingLine::Status);
+        return parse_status_line(line).map(|state| IncomingLine::Status(Box::new(state)));
     }
 
     if let Some(remainder) = line.strip_prefix("Grbl ") {
@@ -209,6 +212,36 @@ pub fn parse_status_line(line: &str) -> Result<MachineState, StatusParseError> {
                     .copied()
                     .unwrap_or_default();
             }
+            "Bf" => {
+                let values = parse_unsigned_numbers::<u16>(name, value)?;
+                require_value_count(name, &values, 2)?;
+                state.buffer_state = Some(ControllerBufferState {
+                    planner_available: values[0],
+                    rx_available: values[1],
+                });
+            }
+            "Ov" => {
+                let values = parse_unsigned_numbers::<u16>(name, value)?;
+                require_value_count(name, &values, 3)?;
+                state.overrides = Some(ControllerOverrides {
+                    feed_percent: values[0],
+                    rapid_percent: values[1],
+                    spindle_percent: values[2],
+                });
+            }
+            "Pn" => state.pins = Some(parse_pins(value)),
+            "A" => state.accessories = Some(parse_accessories(value)),
+            "Ln" => {
+                state.line_number =
+                    Some(
+                        value
+                            .parse::<u64>()
+                            .map_err(|_| StatusParseError::InvalidNumber {
+                                field: name.to_owned(),
+                                value: value.to_owned(),
+                            })?,
+                    );
+            }
             _ => {}
         }
     }
@@ -242,7 +275,18 @@ fn parse_identity_line(line: &str, inspection: &mut DeviceInspection) {
         inspection.firmware_build_info = non_empty(build_info);
     } else if let Some(value) = bracket_value(line, "OPT") {
         inspection.firmware_options = non_empty(value);
+        inspection.controller_capabilities = parse_capabilities(value);
     }
+}
+
+fn parse_capabilities(value: &str) -> Option<ControllerCapabilities> {
+    let mut parts = value.split(',');
+    let option_flags = parts.next()?.to_owned();
+    Some(ControllerCapabilities {
+        option_flags,
+        planner_buffer_blocks: parts.next().and_then(|value| value.parse().ok()),
+        rx_buffer_bytes: parts.next().and_then(|value| value.parse().ok()),
+    })
 }
 
 fn parse_setting_line(line: &str, inspection: &mut DeviceInspection) {
@@ -347,6 +391,64 @@ fn parse_numbers(field: &str, value: &str) -> Result<Vec<f64>, StatusParseError>
         .collect()
 }
 
+fn parse_unsigned_numbers<T>(field: &str, value: &str) -> Result<Vec<T>, StatusParseError>
+where
+    T: std::str::FromStr,
+{
+    value
+        .split(',')
+        .map(|part| {
+            part.parse::<T>()
+                .map_err(|_| StatusParseError::InvalidNumber {
+                    field: field.to_owned(),
+                    value: part.to_owned(),
+                })
+        })
+        .collect()
+}
+
+fn require_value_count<T>(
+    field: &str,
+    values: &[T],
+    expected: usize,
+) -> Result<(), StatusParseError> {
+    if values.len() == expected {
+        Ok(())
+    } else {
+        Err(StatusParseError::InvalidValueCount {
+            field: field.to_owned(),
+            expected,
+        })
+    }
+}
+
+fn parse_pins(value: &str) -> ControllerPins {
+    ControllerPins {
+        raw: value.to_owned(),
+        x_limit: value.contains('X'),
+        y_limit: value.contains('Y'),
+        z_limit: value.contains('Z'),
+        a_limit: value.contains('A'),
+        b_limit: value.contains('B'),
+        c_limit: value.contains('C'),
+        probe: value.contains('P'),
+        door: value.contains('D'),
+        hold: value.contains('H'),
+        soft_reset: value.contains('R'),
+        cycle_start: value.contains('S'),
+    }
+}
+
+fn parse_accessories(value: &str) -> ControllerAccessories {
+    ControllerAccessories {
+        raw: value.to_owned(),
+        spindle_clockwise: value.contains('S'),
+        spindle_counterclockwise: value.contains('C'),
+        flood_coolant: value.contains('F'),
+        mist_coolant: value.contains('M'),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use millo_domain::{CommandCompletion, CommandResponse, JogAxis, StepJogRequest};
@@ -370,6 +472,41 @@ mod tests {
         assert_eq!(state.machine_position.unwrap().a, Some(4.0));
         assert_eq!(state.feed_rate, 120.0);
         assert_eq!(state.spindle_speed, 9000.0);
+    }
+
+    #[test]
+    fn parses_buffers_overrides_pins_accessories_and_line_number() {
+        let state =
+            parse_status_line("<Run|MPos:1,2,3|Bf:15,127|Ov:95,50,110|Pn:XYZPDHRS|A:SCFM|Ln:73>")
+                .unwrap();
+
+        assert_eq!(state.buffer_state.unwrap().planner_available, 15);
+        assert_eq!(state.buffer_state.unwrap().rx_available, 127);
+        assert_eq!(state.overrides.unwrap().feed_percent, 95);
+        assert_eq!(state.overrides.unwrap().rapid_percent, 50);
+        assert_eq!(state.overrides.unwrap().spindle_percent, 110);
+        let pins = state.pins.unwrap();
+        assert!(pins.x_limit && pins.y_limit && pins.z_limit && pins.probe);
+        assert!(pins.door && pins.hold && pins.soft_reset && pins.cycle_start);
+        let accessories = state.accessories.unwrap();
+        assert!(accessories.spindle_clockwise && accessories.spindle_counterclockwise);
+        assert!(accessories.flood_coolant && accessories.mist_coolant);
+        assert_eq!(state.line_number, Some(73));
+    }
+
+    #[test]
+    fn rejects_malformed_typed_telemetry() {
+        assert_eq!(
+            parse_status_line("<Idle|MPos:0,0,0|Bf:15>").unwrap_err(),
+            StatusParseError::InvalidValueCount {
+                field: "Bf".to_owned(),
+                expected: 2,
+            }
+        );
+        assert!(matches!(
+            parse_status_line("<Idle|MPos:0,0,0|Ln:-1>"),
+            Err(StatusParseError::InvalidNumber { field, .. }) if field == "Ln"
+        ));
     }
 
     #[test]
@@ -418,6 +555,13 @@ mod tests {
             Some("Millo Mock")
         );
         assert_eq!(inspection.firmware_options.as_deref(), Some("V,15,128"));
+        assert_eq!(
+            inspection
+                .controller_capabilities
+                .as_ref()
+                .and_then(|capabilities| capabilities.rx_buffer_bytes),
+            Some(128)
+        );
         assert_eq!(
             inspection.settings.get("$30").map(String::as_str),
             Some("12000")

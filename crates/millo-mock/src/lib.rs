@@ -30,6 +30,7 @@ struct MockState {
     settings: BTreeMap<u16, String>,
     active_wcs: usize,
     work_offsets: [[f64; 3]; 6],
+    firmware_options: String,
 }
 
 #[derive(Debug, Clone)]
@@ -146,6 +147,10 @@ impl MockControl {
         self.lock().active_wcs = usize::from(coordinate_system - 54);
     }
 
+    pub fn set_firmware_options(&self, value: impl Into<String>) {
+        self.lock().firmware_options = value.into();
+    }
+
     fn lock(&self) -> MutexGuard<'_, MockState> {
         self.state.lock().expect("mock transport lock poisoned")
     }
@@ -179,6 +184,7 @@ impl MockTransport {
                     settings: default_settings(),
                     active_wcs: 0,
                     work_offsets: [[0.0; 3]; 6],
+                    firmware_options: "V,15,128".to_owned(),
                 })),
             },
         }
@@ -525,7 +531,7 @@ fn device_query_response(command: &[u8], state: &MockState) -> Option<VecDeque<M
     match command {
         b"$I\n" => Some(lines(&[
             "[VER:1.1h.20240101:Millo Mock]",
-            "[OPT:V,15,128]",
+            &format!("[OPT:{}]", state.firmware_options),
             "ok",
         ])),
         b"$$\n" => {

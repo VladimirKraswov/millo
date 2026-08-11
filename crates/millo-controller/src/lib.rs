@@ -441,7 +441,7 @@ impl<T: Transport> Controller<T> {
             let line = self.transport.read_line().await?;
             match parse_incoming_line(&line)? {
                 IncomingLine::Status(state) => {
-                    self.apply_status(state);
+                    self.apply_status(*state);
                     return Ok(());
                 }
                 IncomingLine::ResetBanner { raw, version } => {
@@ -477,7 +477,7 @@ impl<T: Transport> Controller<T> {
         loop {
             let line = self.transport.read_line().await?;
             match parse_incoming_line(&line)? {
-                IncomingLine::Status(state) => self.apply_status(state),
+                IncomingLine::Status(state) => self.apply_status(*state),
                 IncomingLine::ResetBanner { raw, version } => {
                     self.apply_reset_banner(raw.clone(), version);
                     lines.push(raw);

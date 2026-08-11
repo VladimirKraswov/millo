@@ -80,7 +80,8 @@ mobile sizes.
 
 ## Current lifecycle coverage
 
-- GRBL status, reset, alarm, error, and acknowledgement fixtures.
+- GRBL status, reset, alarm, error, and acknowledgement fixtures, including
+  `Bf`, `Ov`, `Pn`, `A`, and `Ln` telemetry.
 - Reset banner ordering in the mock transport.
 - Persistent mock alarm and explicit alarm clearing.
 - Unresponsive transport simulation.
@@ -111,7 +112,8 @@ port names remain untouched.
   correlated terminal response.
 - `error:n` and `ALARM:n` retain both active command and numeric code.
 - Recorded Inspector fixtures parse firmware/build/options, numbered settings,
-  modal state, WCS/TLO, and probe parameters.
+  structured `[OPT]` planner/RX capacities, modal state, WCS/TLO, and probe
+  parameters.
 - Mock Inspector responses cover the full Rust-to-UI readiness path.
 - The Tauri command surface contains no raw-line or general movement endpoint;
   only typed guarded step-jog use cases are exposed.
@@ -175,9 +177,9 @@ port names remain untouched.
   `ok`, and line/plan bounds.
 - Mock transport can acknowledge ordinary program lines or inject a correlated
   `error:n`/`ALARM:n` without changing serial hardware.
-- Actor integration tests assert multi-line prefill without exceeding 127 RX
-  bytes, exact rejected FIFO-line reporting, terminal state publication, and
-  rejection when the execution target is not Mock.
+- Actor integration tests assert multi-line prefill without exceeding the active
+  RX window, exact rejected FIFO-line reporting, terminal state publication,
+  and rejection when the execution target is not Mock.
 - Tauri adapter tests reparse original source and prove an unsafe request cannot
   mint a plan. Runtime start also checks the active backend transport descriptor.
 - No automated or manual test in this slice sends a program line to the physical
@@ -221,6 +223,8 @@ port names remain untouched.
   Hold/Resume, Reset cancellation, and terminal-command timeout while deferred.
   Physical command failures also verify automatic Hold plus Soft Reset and that
   reset flushes every queued Mock GRBL response.
+- A non-default Mock `[OPT:V,15,256]` fixture proves the inspected capacity is
+  carried by the one-use lease and becomes a 255-byte sender window at Start.
 - Reusing a consumed authorization fails after only the fresh status read. No
   second program line can be started from the same lease.
 - Tauri and React expose production Start only for a profile-bound serial target

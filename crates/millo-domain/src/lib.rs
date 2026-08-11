@@ -39,6 +39,48 @@ pub struct Position {
     pub a: Option<f64>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerBufferState {
+    pub planner_available: u16,
+    pub rx_available: u16,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerOverrides {
+    pub feed_percent: u16,
+    pub rapid_percent: u16,
+    pub spindle_percent: u16,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerPins {
+    pub raw: String,
+    pub x_limit: bool,
+    pub y_limit: bool,
+    pub z_limit: bool,
+    pub a_limit: bool,
+    pub b_limit: bool,
+    pub c_limit: bool,
+    pub probe: bool,
+    pub door: bool,
+    pub hold: bool,
+    pub soft_reset: bool,
+    pub cycle_start: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerAccessories {
+    pub raw: String,
+    pub spindle_clockwise: bool,
+    pub spindle_counterclockwise: bool,
+    pub flood_coolant: bool,
+    pub mist_coolant: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MachineState {
@@ -54,6 +96,16 @@ pub struct MachineState {
     pub work_coordinate_offset: Option<Position>,
     pub feed_rate: f64,
     pub spindle_speed: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub buffer_state: Option<ControllerBufferState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<ControllerOverrides>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pins: Option<ControllerPins>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accessories: Option<ControllerAccessories>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_number: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,10 +173,22 @@ pub struct DeviceInspection {
     pub firmware_build_info: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub firmware_options: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub controller_capabilities: Option<ControllerCapabilities>,
     pub settings: BTreeMap<String, String>,
     pub modal_state: Vec<String>,
     pub parameters: BTreeMap<String, String>,
     pub responses: Vec<CommandResponse>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ControllerCapabilities {
+    pub option_flags: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub planner_buffer_blocks: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rx_buffer_bytes: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -97,6 +97,12 @@ pub struct FirstCutPreparation {
     pub authorization: FirstCutAuthorization,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ConsumedFirstCutAuthorization {
+    pub intent: ProgramRunIntent,
+    pub reported_rx_buffer_bytes: Option<u16>,
+}
+
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum FirstCutAuthorizationError {
     #[error("first-cut confirmation is incomplete: {missing:?}")]
@@ -132,6 +138,7 @@ struct FirstCutLease {
     machine_position: Option<Position>,
     work_position: Option<Position>,
     work_coordinate_offset: Option<Position>,
+    reported_rx_buffer_bytes: Option<u16>,
 }
 
 #[derive(Debug, Default)]
@@ -186,6 +193,12 @@ impl FirstCutGate {
             machine_position: snapshot.machine.machine_position,
             work_position: snapshot.machine.work_position,
             work_coordinate_offset: snapshot.machine.work_coordinate_offset,
+            reported_rx_buffer_bytes: report
+                .hardware
+                .device
+                .controller_capabilities
+                .as_ref()
+                .and_then(|capabilities| capabilities.rx_buffer_bytes),
         });
         Ok(authorization)
     }
@@ -196,7 +209,7 @@ impl FirstCutGate {
         program_fingerprint: &str,
         snapshot: &ControllerSnapshot,
         now: Instant,
-    ) -> Result<ProgramRunIntent, FirstCutAuthorizationError> {
+    ) -> Result<ConsumedFirstCutAuthorization, FirstCutAuthorizationError> {
         let Some(lease) = self.lease.take() else {
             return Err(FirstCutAuthorizationError::AuthorizationMissing);
         };
@@ -224,7 +237,10 @@ impl FirstCutGate {
         if lease.authorization.program_fingerprint != program_fingerprint {
             return Err(FirstCutAuthorizationError::ProgramChanged);
         }
-        Ok(lease.authorization.intent)
+        Ok(ConsumedFirstCutAuthorization {
+            intent: lease.authorization.intent,
+            reported_rx_buffer_bytes: lease.reported_rx_buffer_bytes,
+        })
     }
 
     pub fn observe(&mut self, snapshot: &ControllerSnapshot, now: Instant) {
@@ -693,8 +709,8 @@ fn check(
 #[cfg(test)]
 mod tests {
     use millo_domain::{
-        ControllerSnapshot, DeviceInspection, HardwareProfile, MachineState, ReadinessCheck,
-        ReadinessReport,
+        ControllerCapabilities, ControllerSnapshot, DeviceInspection, HardwareProfile,
+        MachineState, ReadinessCheck, ReadinessReport,
     };
     use millo_gcode::{ProgramParseRequest, parse_program};
 
@@ -1010,6 +1026,34 @@ mod tests {
             ),
             Err(FirstCutAuthorizationError::AuthorizationExpired)
         );
+    }
+
+    #[test]
+    fn first_cut_lease_carries_the_inspected_rx_capacity() {
+        let now = Instant::now();
+        let snapshot = snapshot(MachineMode::Idle);
+        let (_, mut report) = ready_first_cut(&snapshot);
+        report.hardware.device.controller_capabilities = Some(ControllerCapabilities {
+            option_flags: "V".to_owned(),
+            planner_buffer_blocks: Some(31),
+            rx_buffer_bytes: Some(256),
+        });
+        let mut gate = FirstCutGate::default();
+        let authorization = gate
+            .authorize(first_cut_confirmation(), &report, &snapshot, now)
+            .unwrap();
+
+        let consumed = gate
+            .consume(
+                authorization.id,
+                &report.program_fingerprint,
+                &snapshot,
+                now,
+            )
+            .unwrap();
+
+        assert_eq!(consumed.intent, ProgramRunIntent::Cutting);
+        assert_eq!(consumed.reported_rx_buffer_bytes, Some(256));
     }
 
     #[test]

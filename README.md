@@ -40,11 +40,14 @@ repeat status and the complete Inspector before the UI shows the value as
 saved. Rollback always targets the connection baseline; reconnect archives the
 old baseline and makes the controller's newly observed state the next baseline.
 
-Device Inspector displays parsed firmware, settings, modal state, and coordinate
-parameters. A separate Rust readiness policy evaluates those values against the
-selected profile. The desktop API exposes typed operations and a policy-approved
-file sender, never an arbitrary raw-line endpoint. Mock GRBL remains available
-for development and lifecycle tests without hardware.
+Device Inspector displays parsed firmware, `[OPT]` controller capabilities,
+settings, modal state, and coordinate parameters. Status parsing also publishes
+typed planner/RX availability, feed/rapid/spindle overrides, input pins,
+accessories, and line number when GRBL reports them. A separate Rust readiness
+policy evaluates the inspected values against the selected profile. The desktop
+API exposes typed operations and a policy-approved file sender, never an
+arbitrary raw-line endpoint. Mock GRBL remains available for development and
+lifecycle tests without hardware.
 
 The first safety controls are now available without opening a G-code endpoint.
 Feed Hold sends the GRBL realtime `!` byte when the controller reports active
@@ -125,8 +128,10 @@ the first line can be dispatched. The run contract also
 requires explicit `G21`, `G90`, `G94`, and `G17` before the motions that depend
 on them, so preview cannot silently rely on ambient controller modes.
 
-The production serial sender fills a 127-byte GRBL RX window, accounts for each
-newline, and correlates every FIFO terminal response with its source line.
+The production serial sender derives its usable window as `reported RX - 1`
+from the authorization's fresh `[OPT]` inspection, falls back to 127 bytes,
+accounts for each newline, and correlates every FIFO terminal response with its
+source line.
 `M0/M1` are acknowledged program barriers; `M2/M30` end dispatch. After the
 final `ok`, physical runs enter `Draining` and complete only after a fresh GRBL
 `Idle` status. Feed Hold uses realtime `!`, Resume uses `~` when GRBL reports

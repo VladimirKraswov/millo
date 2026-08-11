@@ -7,6 +7,15 @@ use thiserror::Error;
 pub const MAX_SENDER_LINES: usize = 200_002;
 pub const MAX_SENDER_BYTES: usize = 2 * 1024 * 1024;
 pub const DEFAULT_GRBL_RX_BUFFER_BYTES: usize = 127;
+pub const MAX_GRBL_RX_BUFFER_BYTES: usize = 4095;
+
+pub fn usable_rx_buffer_capacity(reported_bytes: Option<u16>) -> usize {
+    reported_bytes
+        .map(|bytes| usize::from(bytes.saturating_sub(1)))
+        .filter(|bytes| *bytes > 0)
+        .map(|bytes| bytes.min(MAX_GRBL_RX_BUFFER_BYTES))
+        .unwrap_or(DEFAULT_GRBL_RX_BUFFER_BYTES)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -105,6 +114,8 @@ pub enum SenderError {
     CommandTooLong { actual: usize, limit: usize },
     #[error("sender command requires {actual} RX bytes; GRBL buffer capacity is {limit}")]
     CommandExceedsRxBuffer { actual: usize, limit: usize },
+    #[error("GRBL RX buffer capacity must be between 1 and {max}, got {actual}")]
+    InvalidRxBufferCapacity { actual: usize, max: usize },
     #[error("sender has no command awaiting acknowledgement")]
     NoCommandInFlight,
     #[error("sender cannot complete while a command is awaiting acknowledgement")]
@@ -152,6 +163,26 @@ impl Sender {
 
     pub fn load(&mut self, plan: DryRunPlan) -> Result<SenderSnapshot, SenderError> {
         self.load_with_mode(plan, SenderMode::MockDryRun)
+    }
+
+    pub fn configure_rx_buffer_capacity(
+        &mut self,
+        capacity: usize,
+    ) -> Result<SenderSnapshot, SenderError> {
+        if matches!(
+            self.state,
+            SenderState::Ready | SenderState::Running | SenderState::Paused | SenderState::Draining
+        ) {
+            return Err(SenderError::Busy(self.state));
+        }
+        if !(1..=MAX_GRBL_RX_BUFFER_BYTES).contains(&capacity) {
+            return Err(SenderError::InvalidRxBufferCapacity {
+                actual: capacity,
+                max: MAX_GRBL_RX_BUFFER_BYTES,
+            });
+        }
+        self.limits.rx_buffer_bytes = capacity;
+        Ok(self.snapshot())
     }
 
     pub fn load_air_run(&mut self, plan: DryRunPlan) -> Result<SenderSnapshot, SenderError> {
@@ -522,6 +553,29 @@ mod tests {
         assert_eq!(snapshot.in_flight_lines, dispatched.len());
         assert!(snapshot.rx_buffer_bytes <= snapshot.rx_buffer_capacity);
         assert_eq!(snapshot.acknowledged_lines, 0);
+    }
+
+    #[test]
+    fn derives_and_applies_a_bounded_window_from_reported_grbl_capacity() {
+        assert_eq!(usable_rx_buffer_capacity(Some(128)), 127);
+        assert_eq!(usable_rx_buffer_capacity(Some(256)), 255);
+        assert_eq!(
+            usable_rx_buffer_capacity(Some(1)),
+            DEFAULT_GRBL_RX_BUFFER_BYTES
+        );
+        assert_eq!(
+            usable_rx_buffer_capacity(Some(u16::MAX)),
+            MAX_GRBL_RX_BUFFER_BYTES
+        );
+
+        let mut sender = Sender::default();
+        let configured = sender.configure_rx_buffer_capacity(255).unwrap();
+        assert_eq!(configured.rx_buffer_capacity, 255);
+        sender.load(plan("G21")).unwrap();
+        assert_eq!(
+            sender.configure_rx_buffer_capacity(127),
+            Err(SenderError::Busy(SenderState::Ready))
+        );
     }
 
     #[test]

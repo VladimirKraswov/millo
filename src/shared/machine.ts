@@ -24,6 +24,40 @@ export interface Position {
   a?: number;
 }
 
+export interface ControllerBufferState {
+  plannerAvailable: number;
+  rxAvailable: number;
+}
+
+export interface ControllerOverrides {
+  feedPercent: number;
+  rapidPercent: number;
+  spindlePercent: number;
+}
+
+export interface ControllerPins {
+  raw: string;
+  xLimit: boolean;
+  yLimit: boolean;
+  zLimit: boolean;
+  aLimit: boolean;
+  bLimit: boolean;
+  cLimit: boolean;
+  probe: boolean;
+  door: boolean;
+  hold: boolean;
+  softReset: boolean;
+  cycleStart: boolean;
+}
+
+export interface ControllerAccessories {
+  raw: string;
+  spindleClockwise: boolean;
+  spindleCounterclockwise: boolean;
+  floodCoolant: boolean;
+  mistCoolant: boolean;
+}
+
 export interface MachineState {
   mode: MachineMode;
   reportedMode: string;
@@ -33,6 +67,11 @@ export interface MachineState {
   workCoordinateOffset?: Position;
   feedRate: number;
   spindleSpeed: number;
+  bufferState?: ControllerBufferState;
+  overrides?: ControllerOverrides;
+  pins?: ControllerPins;
+  accessories?: ControllerAccessories;
+  lineNumber?: number;
 }
 
 export interface ResetNotice {
@@ -91,10 +130,17 @@ export interface DeviceInspection {
   firmwareVersion?: string;
   firmwareBuildInfo?: string;
   firmwareOptions?: string;
+  controllerCapabilities?: ControllerCapabilities;
   settings: Record<string, string>;
   modalState: string[];
   parameters: Record<string, string>;
   responses: CommandResponse[];
+}
+
+export interface ControllerCapabilities {
+  optionFlags: string;
+  plannerBufferBlocks?: number;
+  rxBufferBytes?: number;
 }
 
 export type SpindleControl = "manual" | "controller";

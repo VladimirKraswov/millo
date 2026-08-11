@@ -95,6 +95,14 @@ async fn run(
         .preflight_real_run(program.clone(), ProgramRunIntent::AirRun)
         .await?;
     print_preflight(&report);
+    if let Some(capabilities) = &report.hardware.device.controller_capabilities {
+        println!(
+            "GRBL capabilities: flags={}, planner={:?}, RX={:?} byte(s)",
+            capabilities.option_flags,
+            capabilities.planner_buffer_blocks,
+            capabilities.rx_buffer_bytes
+        );
+    }
     if !report.ready {
         return Err(input_error("Air-run preflight is blocked").into());
     }
@@ -154,8 +162,8 @@ async fn run(
         .start_program_run(program, preparation.authorization.id)
         .await?;
     println!(
-        "START: {:?}, {} sender line(s), authorization #{}",
-        started.mode, started.total_lines, preparation.authorization.id
+        "START: {:?}, {} sender line(s), RX window {} byte(s), authorization #{}",
+        started.mode, started.total_lines, started.rx_buffer_capacity, preparation.authorization.id
     );
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(120);

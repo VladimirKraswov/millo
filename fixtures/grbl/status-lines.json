@@ -23,5 +23,21 @@
     "machinePosition": [4.0, 5.0, 6.0],
     "feedRate": 100.0,
     "spindleSpeed": 0.0
+  },
+  {
+    "name": "full grbl 1.1 telemetry",
+    "input": "<Run|MPos:1.000,2.000,3.000|Bf:14,96|FS:350,8000|Pn:XPDS|Ov:90,50,110|A:SF|Ln:42>",
+    "mode": "Run",
+    "machinePosition": [1.0, 2.0, 3.0],
+    "feedRate": 350.0,
+    "spindleSpeed": 8000.0,
+    "plannerAvailable": 14,
+    "rxAvailable": 96,
+    "feedOverride": 90,
+    "rapidOverride": 50,
+    "spindleOverride": 110,
+    "pins": "XPDS",
+    "accessories": "SF",
+    "lineNumber": 42
   }
 ]

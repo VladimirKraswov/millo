@@ -17,6 +17,10 @@ queue-flush policy.
 
 - `millo-sender` owns a FIFO of dispatched, unacknowledged lines and their
   source locations. The default usable window is 127 bytes.
+- Device Inspector parses `[OPT:flags,planner,rx]`. The one-use physical-run
+  lease carries that observation to Start, where sender capacity becomes
+  `rx - 1`. Missing or invalid values use the default; reported values are
+  bounded to 4095 usable bytes.
 - Capacity accounting includes every UTF-8 command byte and its trailing
   newline. A command larger than the configured window is rejected before run.
 - The single-owner command actor fills the available window and consumes
@@ -39,5 +43,5 @@ queue-flush policy.
 - Response order is deterministic and bounded by the configured byte window.
 - A failed physical stream intentionally resets modal/controller execution
   state; resuming it requires a new preflight and one-use authorization.
-- Dynamic capacity from GRBL `[OPT]` metadata can replace the conservative
-  default without changing the sender state machine.
+- Controllers with larger reported RX buffers are fed accordingly without
+  changing the sender state machine or trusting stale UI state.

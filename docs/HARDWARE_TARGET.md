@@ -15,6 +15,8 @@ until they are read from the controller or measured before cutting.
 - Physical emergency stop: not installed.
 - Selected profile: `LUNYEE CNC` (`machine-0001`).
 - Firmware-configured travel: X `500.000 mm`, Y `500.000 mm`, Z `200.000 mm`.
+- GRBL `[OPT]` on 2026-08-11: flags `VMZHL`, planner `35`, RX `254` bytes;
+  physical sender window `253` bytes.
 
 ## Safety consequences
 
@@ -147,6 +149,11 @@ setup. It sent no program line. GRBL reported work position X `-9.400 mm`, Y
 operator must position the empty spindle at a safe origin and confirm that the
 harness may set it as XYZ work zero, with at least 20 mm of positive X/Y
 clearance, before the physical Air run can consume an authorization.
+
+A later read-only capability check on the same date parsed `[OPT:VMZHL,35,254]`
+into typed firmware capabilities and selected a 253-byte usable RX window. It
+again passed with zero blockers, sent no program line, and observed WPos XYZ
+`0.000 mm`.
 
 The first confirmed attempt on 2026-08-11 set the current position as G54 XYZ0
 and verified every axis at `0.000 mm`. GRBL acknowledged the safety preamble,

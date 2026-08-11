@@ -269,6 +269,9 @@ does not schedule or execute controller I/O.
 - Only one actor task owns controller I/O and periodic polling.
 - Poll ticks use skip semantics and never build a backlog.
 - Every status transaction has a bounded timeout.
+- GRBL 1.1 `Bf`, `Ov`, `Pn`, `A`, and `Ln` status fields are parsed into typed
+  buffer, override, input, accessory, and source-line state. Missing optional
+  telemetry remains absent instead of being synthesized.
 - A successful transport connection starts polling even if the initial status
   synchronization fails.
 - A single failed poll is transient; the configured failure threshold moves the
@@ -313,6 +316,10 @@ does not schedule or execute controller I/O.
 - Realtime bytes and newline-terminated commands are distinct request types.
 - Status `?` consumes its matching status frame before another request runs.
 - Device Inspector permits only `$I`, `$$`, `$G`, and `$#`.
+- Inspector retains raw `[OPT]` text and separately parses option flags, planner
+  block count, and RX byte capacity. A first-cut lease carries the observed RX
+  capacity to Start, which configures the sender to `RX - 1`; invalid, missing,
+  or implausibly large reports fall back to or are capped by sender policy.
 - `ok`, `error:n`, `ALARM:n`, and reset terminate and classify the active line
   request; asynchronous status/reset information still updates the snapshot.
 - Rust parses firmware, settings, modal state, and coordinate parameters. The UI

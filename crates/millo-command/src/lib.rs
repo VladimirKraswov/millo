@@ -23,7 +23,7 @@ use millo_run::{
     ProgramRunIntent, RunPreflightReport, assess_real_run_preflight,
 };
 use millo_safety::{SafetyError, SafetyManager};
-use millo_sender::{Sender, SenderError, SenderSnapshot, SenderState};
+use millo_sender::{Sender, SenderError, SenderSnapshot, SenderState, usable_rx_buffer_capacity};
 use millo_settings::{
     ControllerSettingEditRequest, SettingsError, VerifiedSettingUpdate, setting_values_equal,
     validate_setting_edit,
@@ -1015,13 +1015,17 @@ async fn execute_authorized_program_run_start(
     let fingerprint = program_fingerprint(&program);
     let snapshot = controller.refresh_status().await?;
     ensure_stable_idle(&snapshot)?;
-    let intent = first_cut.consume(authorization_id, &fingerprint, &snapshot, Instant::now())?;
-    let policy = match intent {
+    let authorization =
+        first_cut.consume(authorization_id, &fingerprint, &snapshot, Instant::now())?;
+    let policy = match authorization.intent {
         ProgramRunIntent::AirRun => ProgramRunPolicy::AirRun,
         ProgramRunIntent::Cutting => ProgramRunPolicy::Cutting,
     };
     let plan = build_program_run_plan(&program, policy)?;
-    match intent {
+    sender.configure_rx_buffer_capacity(usable_rx_buffer_capacity(
+        authorization.reported_rx_buffer_bytes,
+    ))?;
+    match authorization.intent {
         ProgramRunIntent::AirRun => sender.load_air_run(plan)?,
         ProgramRunIntent::Cutting => sender.load_cut_run(plan)?,
     };
@@ -2602,6 +2606,7 @@ mod tests {
     async fn serial_fixture_consumes_one_lease_and_completes_only_after_every_ok() {
         let source = "G21 G90 G94\nG0 Z2\nG1 X2 F20\nM5";
         let (arbiter, control, worker) = serial_preflight_arbiter();
+        control.set_firmware_options("V,15,256");
         let task = tokio::spawn(worker);
         arbiter.connect().await.unwrap();
 
@@ -2613,6 +2618,7 @@ mod tests {
         let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
 
         assert_eq!(started.mode, Some(millo_sender::SenderMode::CutRun));
+        assert_eq!(started.rx_buffer_capacity, 255);
         assert_eq!(completed.acknowledged_lines, completed.total_lines);
         assert_eq!(completed.progress, 1.0);
         let writes_before_reuse = control.writes();

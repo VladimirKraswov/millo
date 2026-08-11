@@ -16,6 +16,10 @@ fn parses_recorded_device_inspector_responses() {
         inspection.firmware_build_info.as_deref(),
         Some("XYZ Router")
     );
+    let capabilities = inspection.controller_capabilities.as_ref().unwrap();
+    assert_eq!(capabilities.option_flags, "V");
+    assert_eq!(capabilities.planner_buffer_blocks, Some(15));
+    assert_eq!(capabilities.rx_buffer_bytes, Some(128));
     assert_eq!(
         inspection.settings.get("$21").map(String::as_str),
         Some("0")

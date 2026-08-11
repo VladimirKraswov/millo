@@ -703,7 +703,11 @@ export default function App() {
                       <dl className="inspection-meta">
                         <div>
                           <dt>Options</dt>
-                          <dd>{inspection.device.firmwareOptions ?? "--"}</dd>
+                          <dd title={inspection.device.firmwareOptions}>
+                            {inspection.device.controllerCapabilities
+                              ? `${inspection.device.controllerCapabilities.optionFlags} · P${inspection.device.controllerCapabilities.plannerBufferBlocks ?? "?"} · RX${inspection.device.controllerCapabilities.rxBufferBytes ?? "?"}`
+                              : (inspection.device.firmwareOptions ?? "--")}
+                          </dd>
                         </div>
                         <div>
                           <dt>Settings</dt>
