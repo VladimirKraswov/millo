@@ -2,8 +2,8 @@ use std::{future::Future, time::Instant};
 
 use millo_controller::{Controller, ControllerConfig, ControllerError, RealtimeCommand};
 use millo_domain::{
-    ConnectionState, ControllerSnapshot, HardwareInspection, HardwareProfile, OperatorConfirmation,
-    ResetChallenge, TestJogPreparation,
+    ConnectionState, ControllerSnapshot, HardwareInspection, HardwareProfile, MachineMode,
+    OperatorConfirmation, ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation,
 };
 use millo_readiness::assess;
 use millo_safety::{SafetyError, SafetyManager};
@@ -26,6 +26,8 @@ pub enum ArbiterError {
     Closed,
     #[error("command arbiter dropped a response")]
     ResponseDropped,
+    #[error("jog cancel requires Jog state, current mode is {0:?}")]
+    JogCancelUnavailable(MachineMode),
 }
 
 #[derive(Clone)]
@@ -134,6 +136,15 @@ impl CommandArbiter {
         .await
     }
 
+    pub async fn step_jog(&self, request: StepJogRequest) -> Result<StepJogReceipt, ArbiterError> {
+        self.call(|response| Request::StepJog { request, response })
+            .await
+    }
+
+    pub async fn cancel_jog(&self) -> Result<ControllerSnapshot, ArbiterError> {
+        self.call(|response| Request::CancelJog { response }).await
+    }
+
     pub async fn send_realtime(
         &self,
         command: RealtimeCommand,
@@ -191,6 +202,13 @@ enum Request {
     PrepareTestJog {
         confirmation: OperatorConfirmation,
         response: oneshot::Sender<Result<TestJogPreparation, ArbiterError>>,
+    },
+    StepJog {
+        request: StepJogRequest,
+        response: oneshot::Sender<Result<StepJogReceipt, ArbiterError>>,
+    },
+    CancelJog {
+        response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
     },
 }
 
@@ -335,6 +353,38 @@ async fn handle_request(
             response,
         } => {
             let result = prepare_test_jog(controller, hardware_profile, safety, confirmation).await;
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::StepJog { request, response } => {
+            let result = safety
+                .consume_test_jog(
+                    request.authorization_id,
+                    &controller.snapshot(),
+                    Instant::now(),
+                )
+                .map_err(ArbiterError::from);
+            let result = match result {
+                Ok(()) => controller
+                    .step_jog(request)
+                    .await
+                    .map_err(ArbiterError::from),
+                Err(error) => Err(error),
+            };
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::CancelJog { response } => {
+            safety.invalidate_test_jog();
+            let mode = controller.snapshot().machine.mode;
+            let result = if mode == MachineMode::Jog {
+                controller
+                    .send_realtime(RealtimeCommand::JogCancel)
+                    .await
+                    .map_err(ArbiterError::from)
+            } else {
+                Err(ArbiterError::JogCancelUnavailable(mode))
+            };
             publish(snapshots, controller);
             let _ = response.send(result);
         }
@@ -577,6 +627,148 @@ mod tests {
         assert!(preparation.authorization.is_none());
         assert!(!preparation.inspection.readiness.test_jog_ready);
         assert!(preparation.inspection.readiness.blocker_count > 0);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn consumes_authorization_before_writing_one_typed_step_jog() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+        let authorization = arbiter
+            .prepare_test_jog(operator_confirmation())
+            .await
+            .unwrap()
+            .authorization
+            .unwrap();
+
+        let receipt = arbiter
+            .step_jog(StepJogRequest {
+                authorization_id: authorization.id,
+                axis: millo_domain::JogAxis::X,
+                distance_mm: 0.1,
+                feed_mm_per_min: 50.0,
+            })
+            .await
+            .unwrap();
+        let reused = arbiter
+            .step_jog(StepJogRequest {
+                authorization_id: authorization.id,
+                axis: millo_domain::JogAxis::X,
+                distance_mm: 0.1,
+                feed_mm_per_min: 50.0,
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(receipt.command, "$J=G91 G21 X0.100 F50.000");
+        assert!(matches!(
+            reused,
+            ArbiterError::Safety(SafetyError::TestJogAuthorizationMissing)
+        ));
+        assert_eq!(
+            control.writes().last(),
+            Some(&b"$J=G91 G21 X0.100 F50.000\n".to_vec())
+        );
+        assert_eq!(
+            control
+                .writes()
+                .iter()
+                .filter(|write| write.starts_with(b"$J="))
+                .count(),
+            1
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn failed_jog_validation_still_consumes_the_authorization() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+        let authorization = arbiter
+            .prepare_test_jog(operator_confirmation())
+            .await
+            .unwrap()
+            .authorization
+            .unwrap();
+
+        let invalid = arbiter
+            .step_jog(StepJogRequest {
+                authorization_id: authorization.id,
+                axis: millo_domain::JogAxis::Z,
+                distance_mm: 1.01,
+                feed_mm_per_min: 50.0,
+            })
+            .await
+            .unwrap_err();
+        let retry = arbiter
+            .step_jog(StepJogRequest {
+                authorization_id: authorization.id,
+                axis: millo_domain::JogAxis::Z,
+                distance_mm: 0.1,
+                feed_mm_per_min: 50.0,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            invalid,
+            ArbiterError::Controller(ControllerError::JogValidation(_))
+        ));
+        assert!(matches!(
+            retry,
+            ArbiterError::Safety(SafetyError::TestJogAuthorizationMissing)
+        ));
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"$J="))
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn jog_cancel_is_available_only_for_reported_jog_state() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+
+        assert!(matches!(
+            arbiter.cancel_jog().await.unwrap_err(),
+            ArbiterError::JogCancelUnavailable(MachineMode::Idle)
+        ));
+
+        let authorization = arbiter
+            .prepare_test_jog(operator_confirmation())
+            .await
+            .unwrap()
+            .authorization
+            .unwrap();
+        arbiter
+            .step_jog(StepJogRequest {
+                authorization_id: authorization.id,
+                axis: millo_domain::JogAxis::Y,
+                distance_mm: -1.0,
+                feed_mm_per_min: 10.0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            arbiter.refresh_status().await.unwrap().machine.mode,
+            MachineMode::Jog
+        );
+
+        arbiter.cancel_jog().await.unwrap();
+        assert_eq!(control.writes().last(), Some(&vec![0x85]));
+        assert_eq!(
+            arbiter.refresh_status().await.unwrap().machine.mode,
+            MachineMode::Idle
+        );
         task.abort();
     }
 }

@@ -1,5 +1,12 @@
-use millo_domain::{CommandResponse, DeviceInspection, MachineMode, MachineState, Position};
+use millo_domain::{
+    CommandResponse, DeviceInspection, JogAxis, MachineMode, MachineState, Position, StepJogRequest,
+};
 use thiserror::Error;
+
+pub const MIN_STEP_JOG_DISTANCE_MM: f64 = 0.01;
+pub const MAX_STEP_JOG_DISTANCE_MM: f64 = 1.0;
+pub const MIN_STEP_JOG_FEED_MM_PER_MIN: f64 = 10.0;
+pub const MAX_STEP_JOG_FEED_MM_PER_MIN: f64 = 100.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IncomingLine {
@@ -30,6 +37,54 @@ pub enum StatusParseError {
     InvalidNumber { field: String, value: String },
     #[error("field '{field}' must contain three or four coordinates")]
     InvalidPosition { field: String },
+}
+
+#[derive(Debug, Error, PartialEq)]
+pub enum JogValidationError {
+    #[error("step jog distance must be finite and non-zero")]
+    InvalidDistance,
+    #[error("step jog distance must be between {min_mm:.2} and {max_mm:.2} mm")]
+    DistanceOutOfRange { min_mm: f64, max_mm: f64 },
+    #[error("step jog feed must be finite")]
+    InvalidFeed,
+    #[error("step jog feed must be between {min_mm_per_min:.0} and {max_mm_per_min:.0} mm/min")]
+    FeedOutOfRange {
+        min_mm_per_min: f64,
+        max_mm_per_min: f64,
+    },
+}
+
+pub fn encode_step_jog(request: StepJogRequest) -> Result<String, JogValidationError> {
+    if !request.distance_mm.is_finite() || request.distance_mm == 0.0 {
+        return Err(JogValidationError::InvalidDistance);
+    }
+    if !(MIN_STEP_JOG_DISTANCE_MM..=MAX_STEP_JOG_DISTANCE_MM).contains(&request.distance_mm.abs()) {
+        return Err(JogValidationError::DistanceOutOfRange {
+            min_mm: MIN_STEP_JOG_DISTANCE_MM,
+            max_mm: MAX_STEP_JOG_DISTANCE_MM,
+        });
+    }
+    if !request.feed_mm_per_min.is_finite() {
+        return Err(JogValidationError::InvalidFeed);
+    }
+    if !(MIN_STEP_JOG_FEED_MM_PER_MIN..=MAX_STEP_JOG_FEED_MM_PER_MIN)
+        .contains(&request.feed_mm_per_min)
+    {
+        return Err(JogValidationError::FeedOutOfRange {
+            min_mm_per_min: MIN_STEP_JOG_FEED_MM_PER_MIN,
+            max_mm_per_min: MAX_STEP_JOG_FEED_MM_PER_MIN,
+        });
+    }
+
+    let axis = match request.axis {
+        JogAxis::X => 'X',
+        JogAxis::Y => 'Y',
+        JogAxis::Z => 'Z',
+    };
+    Ok(format!(
+        "$J=G91 G21 {axis}{:.3} F{:.3}",
+        request.distance_mm, request.feed_mm_per_min
+    ))
 }
 
 pub fn parse_incoming_line(line: &str) -> Result<IncomingLine, StatusParseError> {
@@ -253,7 +308,7 @@ fn parse_numbers(field: &str, value: &str) -> Result<Vec<f64>, StatusParseError>
 
 #[cfg(test)]
 mod tests {
-    use millo_domain::{CommandCompletion, CommandResponse};
+    use millo_domain::{CommandCompletion, CommandResponse, JogAxis, StepJogRequest};
 
     use super::*;
 
@@ -332,6 +387,58 @@ mod tests {
             Some("1.000,2.000,3.000")
         );
         assert_eq!(inspection.responses.len(), 4);
+    }
+
+    #[test]
+    fn encodes_a_single_axis_incremental_metric_jog() {
+        let command = encode_step_jog(StepJogRequest {
+            authorization_id: 42,
+            axis: JogAxis::Y,
+            distance_mm: -0.1,
+            feed_mm_per_min: 50.0,
+        })
+        .unwrap();
+
+        assert_eq!(command, "$J=G91 G21 Y-0.100 F50.000");
+        assert!(!command.contains('X'));
+        assert!(!command.contains('Z'));
+    }
+
+    #[test]
+    fn accepts_only_the_hard_step_jog_envelope() {
+        let request = |distance_mm, feed_mm_per_min| StepJogRequest {
+            authorization_id: 1,
+            axis: JogAxis::X,
+            distance_mm,
+            feed_mm_per_min,
+        };
+
+        assert!(encode_step_jog(request(0.01, 10.0)).is_ok());
+        assert!(encode_step_jog(request(-1.0, 100.0)).is_ok());
+        assert_eq!(
+            encode_step_jog(request(0.0, 50.0)),
+            Err(JogValidationError::InvalidDistance)
+        );
+        assert!(matches!(
+            encode_step_jog(request(1.001, 50.0)),
+            Err(JogValidationError::DistanceOutOfRange { .. })
+        ));
+        assert_eq!(
+            encode_step_jog(request(f64::NAN, 50.0)),
+            Err(JogValidationError::InvalidDistance)
+        );
+        assert!(matches!(
+            encode_step_jog(request(0.1, 9.999)),
+            Err(JogValidationError::FeedOutOfRange { .. })
+        ));
+        assert!(matches!(
+            encode_step_jog(request(0.1, 100.001)),
+            Err(JogValidationError::FeedOutOfRange { .. })
+        ));
+        assert_eq!(
+            encode_step_jog(request(0.1, f64::INFINITY)),
+            Err(JogValidationError::InvalidFeed)
+        );
     }
 
     fn response(command: &str, lines: &[&str]) -> CommandResponse {

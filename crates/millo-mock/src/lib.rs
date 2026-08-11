@@ -24,6 +24,7 @@ struct MockState {
     planned_queries: VecDeque<VecDeque<MockRead>>,
     active_reads: VecDeque<MockRead>,
     writes: Vec<Vec<u8>>,
+    jog_polls_remaining: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +115,7 @@ impl MockTransport {
                     planned_queries: VecDeque::new(),
                     active_reads: VecDeque::new(),
                     writes: Vec::new(),
+                    jog_polls_remaining: 0,
                 })),
             },
         }
@@ -150,10 +152,18 @@ impl Transport for MockTransport {
 
         state.writes.push(data.to_vec());
         if data == b"?" {
-            let cycle = state
-                .planned_cycles
-                .pop_front()
-                .unwrap_or_else(|| VecDeque::from([MockRead::Line(state.status_line.clone())]));
+            let cycle = if let Some(cycle) = state.planned_cycles.pop_front() {
+                cycle
+            } else {
+                let status_line = state.status_line.clone();
+                if status_line.starts_with("<Jog") {
+                    state.jog_polls_remaining = state.jog_polls_remaining.saturating_sub(1);
+                    if state.jog_polls_remaining == 0 {
+                        state.status_line = status_with_mode(&status_line, "Idle", 0.0);
+                    }
+                }
+                VecDeque::from([MockRead::Line(status_line)])
+            };
             state.active_reads.extend(cycle);
         } else if data == b"!" {
             if state.status_line.starts_with("<Run") || state.status_line.starts_with("<Jog") {
@@ -161,12 +171,27 @@ impl Transport for MockTransport {
                     .status_line
                     .replacen("<Run", "<Hold:0", 1)
                     .replacen("<Jog", "<Hold:0", 1);
+                state.jog_polls_remaining = 0;
             }
         } else if data == b"\x18" {
             state.status_line = DEFAULT_STATUS.to_owned();
+            state.jog_polls_remaining = 0;
             state
                 .active_reads
                 .push_back(MockRead::Line("Grbl 1.1h ['$' for help]".to_owned()));
+        } else if data == [0x85] {
+            if state.status_line.starts_with("<Jog") {
+                state.status_line = status_with_mode(&state.status_line, "Idle", 0.0);
+                state.jog_polls_remaining = 0;
+            }
+        } else if let Some(jog) = parse_step_jog(data) {
+            let mut position = status_position(&state.status_line).unwrap_or([0.0; 3]);
+            position[jog.axis] += jog.distance_mm;
+            state.status_line = format_status("Jog", position, jog.feed_mm_per_min);
+            state.jog_polls_remaining = mock_jog_status_polls(jog);
+            state
+                .active_reads
+                .push_back(MockRead::Line("ok".to_owned()));
         } else if let Some(default_response) = device_query_response(data) {
             let response = state
                 .planned_queries
@@ -202,6 +227,74 @@ impl Transport for MockTransport {
     fn is_connected(&self) -> bool {
         self.lock().connected
     }
+}
+
+fn mock_jog_status_polls(jog: MockJog) -> u32 {
+    const MOCK_POLL_SECONDS: f64 = 0.25;
+    let duration_seconds = jog.distance_mm.abs() / jog.feed_mm_per_min * 60.0;
+    (duration_seconds / MOCK_POLL_SECONDS)
+        .ceil()
+        .clamp(1.0, 24.0) as u32
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MockJog {
+    axis: usize,
+    distance_mm: f64,
+    feed_mm_per_min: f64,
+}
+
+fn parse_step_jog(data: &[u8]) -> Option<MockJog> {
+    let command = std::str::from_utf8(data)
+        .ok()?
+        .trim_end_matches(['\r', '\n']);
+    let words: Vec<_> = command
+        .strip_prefix("$J=G91 G21 ")?
+        .split_whitespace()
+        .collect();
+    if words.len() != 2 {
+        return None;
+    }
+
+    let axis = match words[0].as_bytes().first()? {
+        b'X' => 0,
+        b'Y' => 1,
+        b'Z' => 2,
+        _ => return None,
+    };
+    let distance_mm = words[0].get(1..)?.parse().ok()?;
+    let feed_mm_per_min = words[1].strip_prefix('F')?.parse().ok()?;
+    Some(MockJog {
+        axis,
+        distance_mm,
+        feed_mm_per_min,
+    })
+}
+
+fn status_position(status: &str) -> Option<[f64; 3]> {
+    let values = status
+        .split('|')
+        .find_map(|field| field.strip_prefix("MPos:"))?
+        .split(',')
+        .map(str::parse::<f64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    (values.len() >= 3).then(|| [values[0], values[1], values[2]])
+}
+
+fn status_with_mode(status: &str, mode: &str, feed_mm_per_min: f64) -> String {
+    format_status(
+        mode,
+        status_position(status).unwrap_or([0.0; 3]),
+        feed_mm_per_min,
+    )
+}
+
+fn format_status(mode: &str, position: [f64; 3], feed_mm_per_min: f64) -> String {
+    let [x, y, z] = position;
+    format!(
+        "<{mode}|MPos:{x:.3},{y:.3},{z:.3}|WPos:{x:.3},{y:.3},{z:.3}|FS:{feed_mm_per_min:.3},0>"
+    )
 }
 
 fn lines(values: &[&str]) -> VecDeque<MockRead> {
@@ -357,5 +450,67 @@ mod tests {
         );
         transport.write(b"?").await.unwrap();
         assert_eq!(transport.read_line().await.unwrap(), DEFAULT_STATUS);
+    }
+
+    #[tokio::test]
+    async fn step_jog_changes_exactly_one_axis_and_completes() {
+        let mut transport = MockTransport::default();
+        transport.connect().await.unwrap();
+
+        transport
+            .write(b"$J=G91 G21 Y-0.100 F50.000\n")
+            .await
+            .unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), "ok");
+
+        transport.write(b"?").await.unwrap();
+        assert_eq!(
+            transport.read_line().await.unwrap(),
+            "<Jog|MPos:0.000,-0.100,0.000|WPos:0.000,-0.100,0.000|FS:50.000,0>"
+        );
+        transport.write(b"?").await.unwrap();
+        assert_eq!(
+            transport.read_line().await.unwrap(),
+            "<Idle|MPos:0.000,-0.100,0.000|WPos:0.000,-0.100,0.000|FS:0.000,0>"
+        );
+    }
+
+    #[tokio::test]
+    async fn realtime_jog_cancel_returns_the_mock_to_idle() {
+        let mut transport = MockTransport::default();
+        transport.connect().await.unwrap();
+        transport
+            .write(b"$J=G91 G21 X1.000 F100.000\n")
+            .await
+            .unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), "ok");
+
+        transport.write(&[0x85]).await.unwrap();
+        transport.write(b"?").await.unwrap();
+
+        assert_eq!(
+            transport.read_line().await.unwrap(),
+            "<Idle|MPos:1.000,0.000,0.000|WPos:1.000,0.000,0.000|FS:0.000,0>"
+        );
+    }
+
+    #[tokio::test]
+    async fn slow_mock_jog_remains_active_for_its_bounded_duration() {
+        let mut transport = MockTransport::default();
+        transport.connect().await.unwrap();
+        transport
+            .write(b"$J=G91 G21 Z1.000 F10.000\n")
+            .await
+            .unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), "ok");
+
+        for _ in 0..23 {
+            transport.write(b"?").await.unwrap();
+            assert!(transport.read_line().await.unwrap().starts_with("<Jog|"));
+        }
+        transport.write(b"?").await.unwrap();
+        assert!(transport.read_line().await.unwrap().starts_with("<Jog|"));
+        transport.write(b"?").await.unwrap();
+        assert!(transport.read_line().await.unwrap().starts_with("<Idle|"));
     }
 }

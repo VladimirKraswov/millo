@@ -25,16 +25,20 @@ controller at a selected baud rate. Device Inspector automatically reads `$I`,
 coordinate parameters. A separate Rust readiness policy evaluates those values
 against the first-machine profile: XYZ motion, manual spindle, no homing, no
 limit switches, and no physical emergency stop. It reports blockers and
-cautions for a future guarded test jog; probing remains locked. No arbitrary
-line, motion, or spindle command is exposed by the desktop API. Mock GRBL remains
-the default, so development and lifecycle tests do not require hardware.
+cautions for a guarded test jog; probing remains locked. No arbitrary line,
+general motion, or spindle command is exposed by the desktop API. Mock GRBL
+remains the default, so development and lifecycle tests do not require hardware.
 
 The first safety controls are now available without opening a G-code endpoint.
 Feed Hold sends the GRBL realtime `!` byte when the controller reports active
 motion. Soft Reset sends `Ctrl-X` only after a short-lived actor-issued challenge
 is confirmed. Test-jog preflight requires three physical operator confirmations,
 runs a fresh Inspector transaction, and can issue a 15-second single-use backend
-authorization. There is still no command that consumes it to move an axis.
+authorization. The only motion endpoint consumes that authorization inside the
+same Rust actor and emits one `$J=G91 G21` step on exactly one XYZ axis. Distance
+is limited to `0.01..1.00 mm` and feed to `10..100 mm/min` in the backend. Every
+attempt consumes its lease before writing; another step requires another full
+preflight. GRBL Jog Cancel (`0x85`) is exposed as a separate named safety action.
 
 ## Run
 
@@ -91,7 +95,8 @@ See [Architecture](docs/ARCHITECTURE.md), the decisions for the
 [native serial boundary](docs/decisions/0004-native-serial-transport.md), and
 [command arbiter](docs/decisions/0005-command-arbiter-device-inspector.md), plus
 [hardware readiness](docs/decisions/0006-hardware-readiness.md) and
-[realtime safety controls](docs/decisions/0007-realtime-safety-controls.md). The
+[realtime safety controls](docs/decisions/0007-realtime-safety-controls.md), then
+the [guarded step jog](docs/decisions/0008-guarded-step-jog.md). The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).
 

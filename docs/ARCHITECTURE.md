@@ -109,7 +109,9 @@ does not schedule or execute controller I/O.
   request; asynchronous status/reset information still updates the snapshot.
 - Rust parses firmware, settings, modal state, and coordinate parameters. The UI
   never receives a responsibility to interpret wire lines.
-- Tauri exposes no raw command, G-code motion, or spindle-control endpoint.
+- Tauri exposes no raw command, general G-code, or spindle-control endpoint. Its
+  sole motion call is the typed, actor-authorized step-jog operation described
+  below.
 
 ### Hardware readiness boundary
 
@@ -122,9 +124,9 @@ does not schedule or execute controller I/O.
   settings block the future guarded test jog.
 - Unhomed coordinates, manual spindle operation, missing emergency stop, active
   `G91`, and an electrically untested probe remain visible cautions.
-- `testJogReady` is an inspection result, not a general motion permission. A
-  future movement command must re-check live controller state inside the command
-  actor immediately before writing bytes.
+- `testJogReady` is an inspection result, not a general motion permission. The
+  step-jog command re-checks live controller state inside the command actor
+  immediately before writing bytes.
 - React discards the displayed report when the live snapshot leaves stable
   `Connected + Idle`, receives an alarm, or receives a reset notice. The
   Inspector must be read again after recovery.
@@ -146,8 +148,17 @@ does not schedule or execute controller I/O.
 - A successful preflight creates a 15-second single-use lease. Alarm, reset,
   reconnect, disconnect, non-idle state, expiry, or another realtime command
   invalidates it.
-- This slice does not expose a consumer for the lease. The future jog endpoint
-  must consume it atomically inside the same actor before writing `$J=`.
+- The typed step-jog endpoint consumes the lease inside the actor before the
+  controller validates and writes the command. Validation or transport failure
+  does not restore the lease.
+- The GRBL encoder always emits `$J=G91 G21` with exactly one of X/Y/Z. Absolute
+  distance is limited to `0.01..1.00 mm`; feed is limited to
+  `10..100 mm/min`. UI values cannot widen this backend envelope.
+- A successful `ok` means GRBL accepted the jog for execution; periodic status
+  remains authoritative for `Jog` and final position. The UI clears its lease
+  before awaiting the response.
+- Jog Cancel is the named `0x85` realtime operation and is accepted by the actor
+  only while its current snapshot reports `Jog`.
 - The single actor remains the only writer to the port. A realtime byte is
   serialized behind an already active controller transaction; future sender
   work must preserve bounded command transactions and provide priority handling
@@ -155,9 +166,8 @@ does not schedule or execute controller I/O.
 
 ## Near-term sequence
 
-1. Short-distance step jog with authorization consumption and explicit
-   no-homing constraints.
-2. Work coordinates and touch-probe validation.
+1. Work coordinates and stationary touch-probe electrical validation.
+2. Guarded Z probing and probe-result capture.
 3. Command queue and sender state machine.
 4. G-code domain, parser fixtures, and program model.
 5. Visualization read model and Three.js adapter.

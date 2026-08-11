@@ -51,15 +51,16 @@ port names remain untouched.
 
 - One worker serializes polling, realtime bytes, and line queries.
 - Actor-owned periodic polling publishes lifecycle snapshots.
-- Realtime `?` consumes its status response; `!`, `~`, and `Ctrl-X` use their
-  exact one-byte representation.
+- Realtime `?` consumes its status response; `!`, `~`, `0x85`, and `Ctrl-X` use
+  their exact one-byte representation.
 - `$I`, `$$`, `$G`, and `$#` execute in deterministic order and stop at their
   correlated terminal response.
 - `error:n` and `ALARM:n` retain both active command and numeric code.
 - Recorded Inspector fixtures parse firmware/build/options, numbered settings,
   modal state, WCS/TLO, and probe parameters.
-- Mock Inspector responses cover the full Rust-to-UI happy path without motion.
-- The Tauri command surface contains no raw-line or movement endpoint.
+- Mock Inspector responses cover the full Rust-to-UI readiness path.
+- The Tauri command surface contains no raw-line or general movement endpoint;
+  only the typed guarded step jog is exposed.
 
 ## Current hardware readiness coverage
 
@@ -90,11 +91,34 @@ port names remain untouched.
   authorization.
 - Test-jog authorization is single-use and is invalidated by expiry, alarm,
   reset-count change, reconnect-count change, disconnect, or non-idle state.
+- The GRBL encoder accepts only X/Y/Z, one signed `0.01..1.00 mm` axis word, and
+  `10..100 mm/min`; it always injects `G91 G21` and never trusts UI formatting.
+- Actor tests prove a lease produces at most one `$J=` write and remains consumed
+  after validation failure. Missing, stale, or reused leases produce no motion.
+- Mock step jog changes exactly one coordinate, reports `Jog`, completes to
+  `Idle`, models bounded motion duration from distance/feed, and responds to
+  realtime Jog Cancel without Reset.
 - Tauri mock smoke covers Run to Hold, two-stage Reset, reset-banner
-  acknowledgement, and successful preflight without movement.
+  acknowledgement, preflight, one step-jog write, lease relock, and an exact
+  single-axis position update. Rust actor/mock tests cover Jog Cancel gating.
 
 CI does not require a physical controller. For a hardware smoke test, launch
 `npm run tauri dev`, refresh the device list, connect at the controller's baud
 rate, verify that machine coordinates update, unplug the device, and confirm the
 state moves through `Recovering`. Reconnect the device and confirm polling
 returns to `Connected`.
+
+The guarded first-motion smoke example uses the same serial transport, command
+actor, readiness policy, and authorization path as Tauri. It requires an exact
+motion confirmation flag and performs only X `+0.10 mm` at `10 mm/min`:
+
+```bash
+cargo run -p millo-desktop --example hardware_step_jog -- \
+  /dev/cu.usbmodem11101 --confirm-motion
+```
+
+It fails before motion unless the controller is freshly inspected and `Idle`.
+After acceptance it waits at most five seconds for `Idle`, sends Jog Cancel if a
+jog remains active, verifies that only X changed, and disconnects. Never run it
+unattended; the machine has no verified travel envelope or physical emergency
+stop. Normal automated verification compiles this example but never executes it.

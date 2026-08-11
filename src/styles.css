@@ -947,6 +947,16 @@ select:focus-visible {
   background: #29191b;
 }
 
+.safety-actions .jog-cancel-action {
+  grid-column: 1 / -1;
+}
+
+.safety-actions .jog-cancel-action:not(:disabled) {
+  border-color: #a87334;
+  color: #ffbd6a;
+  background: #271f16;
+}
+
 .safety-actions button:disabled {
   opacity: 0.38;
   cursor: default;
@@ -1088,6 +1098,109 @@ select:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.step-jog-control {
+  display: grid;
+  gap: 7px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #315044;
+}
+
+.jog-axis-selector,
+.jog-direction-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.jog-axis-selector button,
+.jog-direction-actions button {
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid #394750;
+  border-radius: 3px;
+  color: #aeb9bf;
+  background: #151d22;
+  cursor: pointer;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.jog-axis-selector button.is-selected {
+  border-color: #64caa1;
+  color: #d2f2e6;
+  background: #173027;
+}
+
+.jog-parameters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.jog-parameters label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  color: #75838c;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.jog-parameters select {
+  min-width: 0;
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid #394750;
+  border-radius: 3px;
+  color: #dce4e9;
+  background: #11181c;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+}
+
+.jog-direction-actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.jog-direction-actions button {
+  min-height: 35px;
+  border-color: #3d6f60;
+  color: #bde7d7;
+  background: #172a23;
+  font-size: 11px;
+}
+
+.jog-axis-selector button:disabled,
+.jog-direction-actions button:disabled,
+.jog-parameters select:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.step-jog-control > small {
+  color: #718089;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 7px;
+  line-height: 11px;
+  text-align: center;
+}
+
+.last-jog {
+  margin-top: 7px;
+  overflow: hidden;
+  color: #7f8e96;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.last-jog code {
+  color: #77d6b3;
+  font-family: "SFMono-Regular", Consolas, monospace;
 }
 
 .preflight-result strong {

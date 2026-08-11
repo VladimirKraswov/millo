@@ -6,6 +6,8 @@ import type {
   HardwareInspection,
   OperatorConfirmation,
   ResetChallenge,
+  StepJogReceipt,
+  StepJogRequest,
   TestJogPreparation,
   TransportDescriptor,
 } from "../shared/machine";
@@ -54,6 +56,12 @@ export const prepareTestJog = (
   confirmation: OperatorConfirmation,
 ): Promise<TestJogPreparation> =>
   invoke<TestJogPreparation>("prepare_test_jog", { confirmation });
+
+export const stepJog = (request: StepJogRequest): Promise<StepJogReceipt> =>
+  invoke<StepJogReceipt>("step_jog", { request });
+
+export const cancelJog = (): Promise<ControllerSnapshot> =>
+  invoke<ControllerSnapshot>("cancel_jog");
 
 export const triggerMockReset = (): Promise<void> =>
   invoke<void>("mock_trigger_reset");

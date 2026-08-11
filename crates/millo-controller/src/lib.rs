@@ -2,9 +2,12 @@ use std::time::Duration;
 
 use millo_domain::{
     AlarmState, CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot,
-    DeviceInspection, MachineMode, MachineState, ResetNotice,
+    DeviceInspection, MachineMode, MachineState, ResetNotice, StepJogReceipt, StepJogRequest,
 };
-use millo_grbl::{IncomingLine, StatusParseError, build_device_inspection, parse_incoming_line};
+use millo_grbl::{
+    IncomingLine, JogValidationError, StatusParseError, build_device_inspection, encode_step_jog,
+    parse_incoming_line,
+};
 use millo_transport::{Transport, TransportError};
 use thiserror::Error;
 
@@ -41,6 +44,14 @@ pub enum ControllerError {
     NotReady(ConnectionState),
     #[error("controller rejected status request: {0}")]
     Device(String),
+    #[error(transparent)]
+    JogValidation(#[from] JogValidationError),
+    #[error("controller rejected '{command}' with {completion:?} (code {code:?})")]
+    CommandRejected {
+        command: String,
+        completion: CommandCompletion,
+        code: Option<u16>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +85,7 @@ pub enum RealtimeCommand {
     Status,
     FeedHold,
     CycleStart,
+    JogCancel,
     SoftReset,
 }
 
@@ -83,6 +95,7 @@ impl RealtimeCommand {
             Self::Status => b'?',
             Self::FeedHold => b'!',
             Self::CycleStart => b'~',
+            Self::JogCancel => 0x85,
             Self::SoftReset => 0x18,
         }
     }
@@ -213,12 +226,13 @@ impl<T: Transport> Controller<T> {
         }
 
         let timeout = self.config.command_timeout;
-        let result = match tokio::time::timeout(timeout, self.query_device_inner(query)).await {
-            Ok(result) => result,
-            Err(_) => Err(ControllerError::CommandTimeout {
-                timeout_ms: duration_ms(timeout),
-            }),
-        };
+        let result =
+            match tokio::time::timeout(timeout, self.line_command_inner(query.command())).await {
+                Ok(result) => result,
+                Err(_) => Err(ControllerError::CommandTimeout {
+                    timeout_ms: duration_ms(timeout),
+                }),
+            };
 
         match result {
             Ok(response) => {
@@ -231,6 +245,52 @@ impl<T: Transport> Controller<T> {
                 Err(error)
             }
         }
+    }
+
+    pub async fn step_jog(
+        &mut self,
+        request: StepJogRequest,
+    ) -> Result<StepJogReceipt, ControllerError> {
+        if self.snapshot.connection != ConnectionState::Connected {
+            return Err(ControllerError::NotReady(self.snapshot.connection));
+        }
+
+        let command = encode_step_jog(request)?;
+        let timeout = self.config.command_timeout;
+        let response = match tokio::time::timeout(timeout, self.line_command_inner(&command)).await
+        {
+            Ok(result) => match result {
+                Ok(response) => response,
+                Err(error) => {
+                    self.record_poll_failure(&error);
+                    return Err(error);
+                }
+            },
+            Err(_) => {
+                let error = ControllerError::CommandTimeout {
+                    timeout_ms: duration_ms(timeout),
+                };
+                self.record_poll_failure(&error);
+                return Err(error);
+            }
+        };
+
+        if response.completion != CommandCompletion::Ok {
+            return Err(ControllerError::CommandRejected {
+                command: response.command,
+                completion: response.completion,
+                code: response.code,
+            });
+        }
+
+        self.snapshot.consecutive_failures = 0;
+        self.snapshot.last_error = None;
+        Ok(StepJogReceipt {
+            command,
+            axis: request.axis,
+            distance_mm: request.distance_mm,
+            feed_mm_per_min: request.feed_mm_per_min,
+        })
     }
 
     pub async fn send_realtime(
@@ -300,11 +360,10 @@ impl<T: Transport> Controller<T> {
         }
     }
 
-    async fn query_device_inner(
+    async fn line_command_inner(
         &mut self,
-        query: DeviceQuery,
+        command: &str,
     ) -> Result<CommandResponse, ControllerError> {
-        let command = query.command();
         self.transport
             .write(format!("{command}\n").as_bytes())
             .await?;
@@ -587,14 +646,52 @@ mod tests {
             .await
             .unwrap();
         controller
+            .send_realtime(RealtimeCommand::JogCancel)
+            .await
+            .unwrap();
+        controller
             .send_realtime(RealtimeCommand::SoftReset)
             .await
             .unwrap();
 
         assert_eq!(
             control.writes(),
-            vec![b"!".to_vec(), b"~".to_vec(), vec![0x18]]
+            vec![b"!".to_vec(), b"~".to_vec(), vec![0x85], vec![0x18]]
         );
+    }
+
+    #[tokio::test]
+    async fn sends_only_a_validated_typed_step_jog() {
+        let (mut controller, control) = test_controller();
+        controller.connect().await.unwrap();
+
+        let receipt = controller
+            .step_jog(StepJogRequest {
+                authorization_id: 7,
+                axis: millo_domain::JogAxis::Z,
+                distance_mm: 0.1,
+                feed_mm_per_min: 25.0,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(receipt.command, "$J=G91 G21 Z0.100 F25.000");
+        assert_eq!(
+            control.writes(),
+            vec![b"$J=G91 G21 Z0.100 F25.000\n".to_vec()]
+        );
+
+        let invalid = controller
+            .step_jog(StepJogRequest {
+                authorization_id: 8,
+                axis: millo_domain::JogAxis::X,
+                distance_mm: 1.1,
+                feed_mm_per_min: 25.0,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(invalid, ControllerError::JogValidation(_)));
+        assert_eq!(control.writes().len(), 1);
     }
 
     #[tokio::test]

@@ -230,3 +230,29 @@ pub struct TestJogPreparation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authorization: Option<TestJogAuthorization>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum JogAxis {
+    X,
+    Y,
+    Z,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepJogRequest {
+    pub authorization_id: u64,
+    pub axis: JogAxis,
+    pub distance_mm: f64,
+    pub feed_mm_per_min: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StepJogReceipt {
+    pub command: String,
+    pub axis: JogAxis,
+    pub distance_mm: f64,
+    pub feed_mm_per_min: f64,
+}

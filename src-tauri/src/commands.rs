@@ -2,7 +2,7 @@ use millo_command::CommandArbiter;
 use millo_controller::ControllerConfig;
 use millo_domain::{
     ControllerSnapshot, HardwareInspection, HardwareProfile, OperatorConfirmation, ResetChallenge,
-    TestJogPreparation,
+    StepJogReceipt, StepJogRequest, TestJogPreparation,
 };
 use millo_mock::{MockControl, MockTransport};
 use millo_serial::{
@@ -229,6 +229,27 @@ pub async fn prepare_test_jog(
     state
         .arbiter
         .prepare_test_jog(confirmation)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn step_jog(
+    request: StepJogRequest,
+    state: State<'_, AppState>,
+) -> Result<StepJogReceipt, String> {
+    state
+        .arbiter
+        .step_jog(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn cancel_jog(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
+    state
+        .arbiter
+        .cancel_jog()
         .await
         .map_err(|error| error.to_string())
 }

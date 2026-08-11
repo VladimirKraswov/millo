@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  cancelJog,
   confirmSoftReset,
   feedHold,
   prepareTestJog,
   requestSoftReset,
+  stepJog,
 } from "../api/controller";
 import type {
   ControllerSnapshot,
   HardwareInspection,
+  JogAxis,
   OperatorConfirmation,
   ResetChallenge,
+  StepJogReceipt,
   TestJogPreparation,
 } from "../shared/machine";
 
@@ -46,6 +50,10 @@ export function SafetyControls({
     useState<OperatorConfirmation>(emptyConfirmation);
   const [preparation, setPreparation] = useState<TestJogPreparation>();
   const [authorizationDeadline, setAuthorizationDeadline] = useState<number>();
+  const [jogAxis, setJogAxis] = useState<JogAxis>("x");
+  const [jogDistance, setJogDistance] = useState(0.1);
+  const [jogFeed, setJogFeed] = useState(50);
+  const [lastJog, setLastJog] = useState<StepJogReceipt>();
   const [now, setNow] = useState(() => Date.now());
 
   const connected = snapshot.connection === "connected";
@@ -131,6 +139,13 @@ export function SafetyControls({
     }
   };
 
+  const sendJogCancel = () =>
+    run(async () => {
+      onSnapshot(await cancelJog());
+      setPreparation(undefined);
+      setAuthorizationDeadline(undefined);
+    });
+
   const beginReset = () =>
     run(async () => {
       const next = await requestSoftReset();
@@ -163,7 +178,27 @@ export function SafetyControls({
           ? checkedAt + next.authorization.expiresInMs
           : undefined,
       );
+      setLastJog(undefined);
     });
+
+  const executeStepJog = (direction: -1 | 1) => {
+    const authorization = preparation?.authorization;
+    if (!authorizationActive || !authorization) return;
+
+    setPreparation((current) =>
+      current ? { ...current, authorization: undefined } : undefined,
+    );
+    setAuthorizationDeadline(undefined);
+    void run(async () => {
+      const receipt = await stepJog({
+        authorizationId: authorization.id,
+        axis: jogAxis,
+        distanceMm: direction * jogDistance,
+        feedMmPerMin: jogFeed,
+      });
+      setLastJog(receipt);
+    });
+  };
 
   const updateConfirmation = (
     key: keyof OperatorConfirmation,
@@ -203,6 +238,17 @@ export function SafetyControls({
           <span aria-hidden="true">↻</span>
           Soft Reset
         </button>
+        {snapshot.machine.mode === "jog" && (
+          <button
+            className="jog-cancel-action"
+            disabled={!desktopRuntime || busy}
+            onClick={() => void sendJogCancel()}
+            type="button"
+          >
+            <span aria-hidden="true">■</span>
+            Jog Cancel
+          </button>
+        )}
       </div>
 
       {challenge && (
@@ -273,6 +319,76 @@ export function SafetyControls({
                   ? `Одноразовый lease #${preparation.authorization?.id}`
                   : `${preparation.inspection.readiness.blockerCount} blocker(s)`}
               </span>
+            </div>
+          )}
+          {authorizationActive && (
+            <div className="step-jog-control" aria-label="Step jog control">
+              <div className="jog-axis-selector" role="group" aria-label="Ось jog">
+                {(["x", "y", "z"] as const).map((axis) => (
+                  <button
+                    aria-pressed={jogAxis === axis}
+                    className={jogAxis === axis ? "is-selected" : undefined}
+                    disabled={busy}
+                    key={axis}
+                    onClick={() => setJogAxis(axis)}
+                    type="button"
+                  >
+                    {axis.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+              <div className="jog-parameters">
+                <label>
+                  <span>Шаг, мм</span>
+                  <select
+                    disabled={busy}
+                    onChange={(event) => setJogDistance(Number(event.target.value))}
+                    value={jogDistance}
+                  >
+                    <option value={0.01}>0.01</option>
+                    <option value={0.1}>0.10</option>
+                    <option value={0.5}>0.50</option>
+                    <option value={1}>1.00</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Подача</span>
+                  <select
+                    disabled={busy}
+                    onChange={(event) => setJogFeed(Number(event.target.value))}
+                    value={jogFeed}
+                  >
+                    <option value={10}>10 мм/мин</option>
+                    <option value={25}>25 мм/мин</option>
+                    <option value={50}>50 мм/мин</option>
+                    <option value={100}>100 мм/мин</option>
+                  </select>
+                </label>
+              </div>
+              <div className="jog-direction-actions">
+                <button
+                  aria-label={`Jog ${jogAxis.toUpperCase()} в минус`}
+                  disabled={busy}
+                  onClick={() => executeStepJog(-1)}
+                  type="button"
+                >
+                  − {jogAxis.toUpperCase()}
+                </button>
+                <button
+                  aria-label={`Jog ${jogAxis.toUpperCase()} в плюс`}
+                  disabled={busy}
+                  onClick={() => executeStepJog(1)}
+                  type="button"
+                >
+                  + {jogAxis.toUpperCase()}
+                </button>
+              </div>
+              <small>Один клик · один lease · максимум 1 мм / 100 мм/мин</small>
+            </div>
+          )}
+          {lastJog && (
+            <div className="last-jog" aria-live="polite">
+              Принято: <code>{lastJog.command}</code>
             </div>
           )}
         </div>

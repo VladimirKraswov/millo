@@ -148,6 +148,22 @@ export interface TestJogPreparation {
   authorization?: TestJogAuthorization;
 }
 
+export type JogAxis = "x" | "y" | "z";
+
+export interface StepJogRequest {
+  authorizationId: number;
+  axis: JogAxis;
+  distanceMm: number;
+  feedMmPerMin: number;
+}
+
+export interface StepJogReceipt {
+  command: string;
+  axis: JogAxis;
+  distanceMm: number;
+  feedMmPerMin: number;
+}
+
 export const emptySnapshot: ControllerSnapshot = {
   connection: "disconnected",
   machine: {
