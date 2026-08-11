@@ -3,6 +3,7 @@ use millo_controller::ControllerConfig;
 use millo_domain::{
     ControllerSnapshot, HardwareInspection, HardwareProfile, JogPadStepOutcome, JogPadStepRequest,
     OperatorConfirmation, ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation,
+    WorkZeroOutcome, WorkZeroRequest,
 };
 use millo_mock::{MockControl, MockTransport};
 use millo_serial::{
@@ -253,6 +254,18 @@ pub async fn jog_pad_step(
     state
         .arbiter
         .jog_pad_step(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_work_zero(
+    request: WorkZeroRequest,
+    state: State<'_, AppState>,
+) -> Result<WorkZeroOutcome, String> {
+    state
+        .arbiter
+        .set_work_zero(request)
         .await
         .map_err(|error| error.to_string())
 }

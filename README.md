@@ -51,17 +51,28 @@ Inspector, readiness, and one-use authorization cycle inside the Rust actor.
 React reaches it through a platform-neutral `MachineCommandGateway`, establishing
 the same capability boundary planned for plugins.
 
+Manual work-zero controls are another narrow typed use case. Zero X, Y, and Z
+are available only for a connected, stable `Idle` controller after an explicit
+operator confirmation. The actor reads a fresh status and `$G`, maps the active
+G54-G59 system to the matching `G10 L20 Pn` command, reads `$#`, and checks both
+the selected offset and final work position before reporting success. React
+cannot choose `Pn`, format a line, or reuse the confirmation. This operation has
+been verified against Mock GRBL only; no work-zero write was sent to the physical
+machine in this slice. The probe is not installed or connected, so probing and
+heightmap motion remain unavailable.
+
 UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
-first core contribution in the named `control.machine` slot. Contributions have
-stable IDs, owners, ordering, replacement declarations, and deterministic
-unload. The first in-memory plugin host validates a versioned manifest before
-activation and intersects required/optional capabilities with explicit grants
-and host support. Its built-in test plugin can replace Jog Pad and unload cleanly
-without loading external code. `ui.contribute` and guarded `machine.jog` are the
-first implemented host capabilities. `machine.read` now exposes detached,
-deeply frozen controller snapshots and tracked subscriptions when the host wires
-a state source. Unload and failed activation remove those subscriptions and
-close retained proxies. Job creation remains a declared future contract.
+first core contribution in the named `control.machine` slot; Work Zero occupies
+the separate `control.coordinates` slot. Contributions have stable IDs, owners,
+ordering, replacement declarations, and deterministic unload. The first
+in-memory plugin host validates a versioned manifest before activation and
+intersects required/optional capabilities with explicit grants and host support.
+Its built-in test plugin can replace Jog Pad and unload cleanly without loading
+external code. `ui.contribute` and guarded `machine.jog` are the first implemented
+host capabilities. `machine.read` now exposes detached, deeply frozen controller
+snapshots and tracked subscriptions when the host wires a state source. Unload
+and failed activation remove those subscriptions and close retained proxies. Job
+creation remains a declared future contract.
 
 The application now creates one `PluginHost` bootstrap containing the UI
 registry, machine snapshot store, and in-memory loader. React observes that store
@@ -132,7 +143,8 @@ then the [extension host boundary](docs/decisions/0010-extension-host-boundaries
 and [versioned plugin manifest](docs/decisions/0011-versioned-plugin-manifest.md),
 followed by the
 [read-only machine capability](docs/decisions/0012-machine-read-capability.md)
-and [PluginHost bootstrap](docs/decisions/0013-plugin-host-bootstrap.md).
+and [PluginHost bootstrap](docs/decisions/0013-plugin-host-bootstrap.md), then the
+[guarded work-zero transaction](docs/decisions/0014-guarded-work-zero.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

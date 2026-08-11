@@ -12,6 +12,8 @@ import type {
   StepJogRequest,
   TestJogPreparation,
   TransportDescriptor,
+  WorkZeroOutcome,
+  WorkZeroRequest,
 } from "../shared/machine";
 
 export const isDesktopRuntime = (): boolean => "__TAURI_INTERNALS__" in window;
@@ -66,6 +68,11 @@ export const jogPadStep = (
   request: JogPadStepRequest,
 ): Promise<JogPadStepOutcome> =>
   invoke<JogPadStepOutcome>("jog_pad_step", { request });
+
+export const setWorkZero = (
+  request: WorkZeroRequest,
+): Promise<WorkZeroOutcome> =>
+  invoke<WorkZeroOutcome>("set_work_zero", { request });
 
 export const cancelJog = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("cancel_jog");

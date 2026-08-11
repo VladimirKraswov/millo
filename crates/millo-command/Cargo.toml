@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 millo-controller = { path = "../millo-controller" }
 millo-domain = { path = "../millo-domain" }
+millo-grbl = { path = "../millo-grbl" }
 millo-readiness = { path = "../millo-readiness" }
 millo-safety = { path = "../millo-safety" }
 millo-transport = { path = "../millo-transport" }

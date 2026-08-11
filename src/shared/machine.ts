@@ -175,6 +175,23 @@ export interface JogPadStepOutcome {
   receipt?: StepJogReceipt;
 }
 
+export type WorkAxis = "x" | "y" | "z";
+export type WorkCoordinateSystem = "g54" | "g55" | "g56" | "g57" | "g58" | "g59";
+
+export interface WorkZeroRequest {
+  axis: WorkAxis;
+  positionConfirmed: boolean;
+}
+
+export interface WorkZeroOutcome {
+  axis: WorkAxis;
+  coordinateSystem: WorkCoordinateSystem;
+  command: string;
+  parameterValue: string;
+  workPosition: number;
+  snapshot: ControllerSnapshot;
+}
+
 export const emptySnapshot: ControllerSnapshot = {
   connection: "disconnected",
   machine: {

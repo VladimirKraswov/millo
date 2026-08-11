@@ -12,6 +12,7 @@ import {
 } from "../platform/extensions/UiExtensionRegistry";
 import { UiExtensionSlot } from "../platform/extensions/UiExtensionSlot";
 import type { MachineCommandGateway } from "../platform/machine/MachineCommandGateway";
+import type { WorkCoordinateGateway } from "../platform/machine/WorkCoordinateGateway";
 import type {
   ControllerSnapshot,
   HardwareInspection,
@@ -23,6 +24,7 @@ interface SafetyControlsProps {
   desktopRuntime: boolean;
   extensionRegistry: UiExtensionRegistry;
   machineGateway: MachineCommandGateway;
+  workCoordinateGateway: WorkCoordinateGateway;
   onSnapshot: (snapshot: ControllerSnapshot) => void;
   onInspection: (inspection?: HardwareInspection) => void;
   onError: (error?: string) => void;
@@ -36,6 +38,7 @@ export function SafetyControls({
   desktopRuntime,
   extensionRegistry,
   machineGateway,
+  workCoordinateGateway,
   onSnapshot,
   onInspection,
   onError,
@@ -195,11 +198,27 @@ export function SafetyControls({
           desktopRuntime,
           controlsDisabled: busy || holdPending,
           machineCommands: machineGateway,
+          workCoordinates: workCoordinateGateway,
+          updateSnapshot: onSnapshot,
           updateInspection: onInspection,
           reportError: onError,
         }}
         registry={extensionRegistry}
         slot={uiSlots.controlMachine}
+      />
+      <UiExtensionSlot
+        context={{
+          snapshot,
+          desktopRuntime,
+          controlsDisabled: busy || holdPending,
+          machineCommands: machineGateway,
+          workCoordinates: workCoordinateGateway,
+          updateSnapshot: onSnapshot,
+          updateInspection: onInspection,
+          reportError: onError,
+        }}
+        registry={extensionRegistry}
+        slot={uiSlots.controlCoordinates}
       />
     </section>
   );

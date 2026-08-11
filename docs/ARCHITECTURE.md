@@ -110,7 +110,23 @@ does not schedule or execute controller I/O.
 - Rust parses firmware, settings, modal state, and coordinate parameters. The UI
   never receives a responsibility to interpret wire lines.
 - Tauri exposes no raw command, general G-code, or spindle-control endpoint. Its
-  motion calls are typed, actor-authorized step-jog use cases described below.
+  machine-changing calls are named, typed use cases described below.
+
+### Work-coordinate boundary
+
+- Work Zero accepts only X, Y, or Z plus a one-attempt operator confirmation.
+  Missing confirmation is rejected before controller I/O.
+- The actor obtains a fresh status and requires stable `Connected + Idle` with no
+  alarm or pending reset before any write.
+- A fresh `$G` determines the active G54-G59 coordinate system. The Rust encoder,
+  not React, maps it to `P1..P6` and emits exactly one `G10 L20 Pn <axis>0` line.
+- The actor then reads `$#`, requires the matching coordinate parameter to be
+  present and parseable, refreshes status, and verifies the selected work
+  coordinate is within `0.002 mm` of zero.
+- Any work-zero attempt invalidates an outstanding test-jog authorization. It
+  grants no movement capability and exposes no arbitrary coordinate command.
+- The first slice is covered by Mock GRBL and unit/UI tests only. Physical
+  execution remains a separate operator-confirmed hardware check.
 
 ### Hardware readiness boundary
 
@@ -183,10 +199,11 @@ does not schedule or execute controller I/O.
 - The generic `ExtensionRegistry` composes named slots and gives each
   contribution an ID, owner, order, replacement list, and deterministic unload
   lifecycle. It has no React, Tauri, or machine dependency.
-- The React bridge currently exposes `control.machine`. Jog Pad is its first
-  `core` contribution, proving that a later plugin replacement can hide it and
-  that unloading the replacement restores the core UI without remounting the
-  application shell.
+- The React bridge exposes `control.machine` and `control.coordinates`. Jog Pad
+  and Work Zero are separate `core` contributions, so coordinate controls do not
+  become part of the guarded motion capability by accident. A later plugin can
+  replace a contribution, and unloading it restores core UI without remounting
+  the application shell.
 - Machine, probing, sender, job, storage, and network access are separate,
   manifest-declared capabilities. A plugin receives only host proxies granted to
   it; it never receives serial I/O, actor internals, or raw command endpoints.
@@ -234,11 +251,13 @@ does not schedule or execute controller I/O.
 
 ## Near-term sequence
 
-1. Work coordinates and stationary touch-probe electrical validation.
-2. Guarded Z probing and probe-result capture.
-3. Command queue and sender state machine.
-4. G-code domain, parser fixtures, and program model.
-5. Visualization read model and Three.js adapter.
+1. G-code domain, parser fixtures, warnings, and immutable program model.
+2. File loading plus a visualization read model and Three.js preview adapter.
+3. Bounded sender state machine with pause, cancel, and correlated line results.
+4. Safe dry run that rejects spindle activation and requires the spindle to stay
+   manually off.
+5. Probe input validation and guarded Z probing only after a physical sensor is
+   installed and connected.
 
 Ant Design and Three.js are intentionally absent from the first slice. They will
 be added when the first operator workflow and visualizer require them, keeping

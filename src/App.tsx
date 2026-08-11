@@ -22,6 +22,7 @@ import { SafetyControls } from "./components/SafetyControls";
 import { bindMachineStateStream } from "./platform/machine/MachineStateEventStream";
 import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineCommandGateway";
 import { tauriMachineStateEventStream } from "./platform/machine/tauriMachineStateEventStream";
+import { tauriWorkCoordinateGateway } from "./platform/machine/tauriWorkCoordinateGateway";
 import {
   emptySnapshot,
   type ControllerSnapshot,
@@ -452,6 +453,7 @@ export default function App() {
             desktopRuntime={desktopRuntime}
             extensionRegistry={pluginHost.uiRegistry}
             machineGateway={tauriMachineCommandGateway}
+            workCoordinateGateway={tauriWorkCoordinateGateway}
             onError={setUiError}
             onInspection={setInspection}
             onSnapshot={pluginHost.machineState.publish}

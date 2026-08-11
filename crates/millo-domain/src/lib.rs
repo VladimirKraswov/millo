@@ -272,3 +272,40 @@ pub struct JogPadStepOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receipt: Option<StepJogReceipt>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkAxis {
+    X,
+    Y,
+    Z,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkCoordinateSystem {
+    G54,
+    G55,
+    G56,
+    G57,
+    G58,
+    G59,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkZeroRequest {
+    pub axis: WorkAxis,
+    pub position_confirmed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkZeroOutcome {
+    pub axis: WorkAxis,
+    pub coordinate_system: WorkCoordinateSystem,
+    pub command: String,
+    pub parameter_value: String,
+    pub work_position: f64,
+    pub snapshot: ControllerSnapshot,
+}

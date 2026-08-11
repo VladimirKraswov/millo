@@ -1209,6 +1209,118 @@ select:focus-visible {
   color: #e9a1a1;
 }
 
+.work-zero {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #263139;
+}
+
+.work-zero-heading,
+.work-zero-heading > div {
+  display: flex;
+}
+
+.work-zero-heading {
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.work-zero-heading > div {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.work-zero-heading span {
+  color: #75838c;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.work-zero-heading strong {
+  color: #dce4e9;
+  font-size: 12px;
+}
+
+.work-zero-heading code {
+  padding: 3px 6px;
+  border: 1px solid #394750;
+  border-radius: 3px;
+  color: #8d9aa2;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
+.work-zero-confirmation {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  color: #aeb9bf;
+  cursor: pointer;
+  font-size: 9px;
+  line-height: 12px;
+}
+
+.work-zero-confirmation input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #77d6b3;
+}
+
+.work-zero-confirmation:has(input:disabled) {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.work-zero-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.work-zero-actions button {
+  display: flex;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #3d6f60;
+  border-radius: 4px;
+  color: #bde7d7;
+  background: #172a23;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.work-zero-actions button span {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+}
+
+.work-zero-actions button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.work-zero-status {
+  min-height: 27px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid #263139;
+  overflow: hidden;
+  color: #7f8e96;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .transport-config {
   display: flex;
   flex-direction: column;

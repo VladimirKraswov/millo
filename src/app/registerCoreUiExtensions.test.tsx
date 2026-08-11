@@ -6,6 +6,7 @@ import {
 } from "../platform/extensions/UiExtensionRegistry";
 import {
   CORE_JOG_PAD_CONTRIBUTION,
+  CORE_WORK_ZERO_CONTRIBUTION,
   registerCoreUiExtensions,
 } from "./registerCoreUiExtensions";
 
@@ -27,6 +28,9 @@ describe("core UI extensions", () => {
     replacement.dispose();
     expect(registry.list(uiSlots.controlMachine).map(({ id }) => id)).toEqual([
       CORE_JOG_PAD_CONTRIBUTION,
+    ]);
+    expect(registry.list(uiSlots.controlCoordinates).map(({ id }) => id)).toEqual([
+      CORE_WORK_ZERO_CONTRIBUTION,
     ]);
   });
 });

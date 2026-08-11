@@ -1,5 +1,6 @@
 use millo_domain::{
-    CommandResponse, DeviceInspection, JogAxis, MachineMode, MachineState, Position, StepJogRequest,
+    CommandResponse, DeviceInspection, JogAxis, MachineMode, MachineState, Position,
+    StepJogRequest, WorkAxis, WorkCoordinateSystem,
 };
 use thiserror::Error;
 
@@ -85,6 +86,46 @@ pub fn encode_step_jog(request: StepJogRequest) -> Result<String, JogValidationE
         "$J=G91 G21 {axis}{:.3} F{:.3}",
         request.distance_mm, request.feed_mm_per_min
     ))
+}
+
+pub fn active_work_coordinate_system(modal_state: &[String]) -> Option<WorkCoordinateSystem> {
+    modal_state.iter().find_map(|word| match word.as_str() {
+        "G54" => Some(WorkCoordinateSystem::G54),
+        "G55" => Some(WorkCoordinateSystem::G55),
+        "G56" => Some(WorkCoordinateSystem::G56),
+        "G57" => Some(WorkCoordinateSystem::G57),
+        "G58" => Some(WorkCoordinateSystem::G58),
+        "G59" => Some(WorkCoordinateSystem::G59),
+        _ => None,
+    })
+}
+
+pub fn encode_set_work_zero(axis: WorkAxis, coordinate_system: WorkCoordinateSystem) -> String {
+    let axis = match axis {
+        WorkAxis::X => 'X',
+        WorkAxis::Y => 'Y',
+        WorkAxis::Z => 'Z',
+    };
+    let parameter = match coordinate_system {
+        WorkCoordinateSystem::G54 => 1,
+        WorkCoordinateSystem::G55 => 2,
+        WorkCoordinateSystem::G56 => 3,
+        WorkCoordinateSystem::G57 => 4,
+        WorkCoordinateSystem::G58 => 5,
+        WorkCoordinateSystem::G59 => 6,
+    };
+    format!("G10 L20 P{parameter} {axis}0")
+}
+
+pub const fn work_coordinate_parameter(coordinate_system: WorkCoordinateSystem) -> &'static str {
+    match coordinate_system {
+        WorkCoordinateSystem::G54 => "G54",
+        WorkCoordinateSystem::G55 => "G55",
+        WorkCoordinateSystem::G56 => "G56",
+        WorkCoordinateSystem::G57 => "G57",
+        WorkCoordinateSystem::G58 => "G58",
+        WorkCoordinateSystem::G59 => "G59",
+    }
 }
 
 pub fn parse_incoming_line(line: &str) -> Result<IncomingLine, StatusParseError> {
@@ -438,6 +479,34 @@ mod tests {
         assert_eq!(
             encode_step_jog(request(0.1, f64::INFINITY)),
             Err(JogValidationError::InvalidFeed)
+        );
+    }
+
+    #[test]
+    fn encodes_work_zero_only_for_typed_axis_and_coordinate_system() {
+        assert_eq!(
+            encode_set_work_zero(WorkAxis::X, WorkCoordinateSystem::G54),
+            "G10 L20 P1 X0"
+        );
+        assert_eq!(
+            encode_set_work_zero(WorkAxis::Y, WorkCoordinateSystem::G56),
+            "G10 L20 P3 Y0"
+        );
+        assert_eq!(
+            encode_set_work_zero(WorkAxis::Z, WorkCoordinateSystem::G59),
+            "G10 L20 P6 Z0"
+        );
+    }
+
+    #[test]
+    fn finds_only_supported_active_work_coordinate_systems() {
+        assert_eq!(
+            active_work_coordinate_system(&["G0".to_owned(), "G55".to_owned()]),
+            Some(WorkCoordinateSystem::G55)
+        );
+        assert_eq!(
+            active_work_coordinate_system(&["G0".to_owned(), "G53".to_owned()]),
+            None
         );
     }
 

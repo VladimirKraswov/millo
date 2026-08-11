@@ -15,6 +15,10 @@ jog-pad suite verifies one signed fixed-step gateway call per press, rejects a
 non-preset value before IPC, and rejects a concurrent press while the first call
 is unresolved.
 
+The work-zero feature suite rejects an unconfirmed request before the gateway
+and delegates only a typed X/Y/Z request. Registry tests also verify that the
+core panel occupies the separate `control.coordinates` slot.
+
 Extension-registry tests cover deterministic slot ordering, duplicate and
 self-replacement rejection, add/replace/dispose behavior, one-revision owner
 unload, and restoration of `core.jog-pad` after a plugin replacement unloads.
@@ -90,6 +94,21 @@ port names remain untouched.
 - Mock Inspector responses cover the full Rust-to-UI readiness path.
 - The Tauri command surface contains no raw-line or general movement endpoint;
   only typed guarded step-jog use cases are exposed.
+
+## Current work-coordinate coverage
+
+- Domain and GRBL tests map X/Y/Z plus active G54-G59 to exact
+  `G10 L20 P1..P6 <axis>0` lines.
+- Missing operator confirmation is rejected before any controller I/O.
+- A non-idle fresh status prevents `G10` from being written.
+- Actor tests assert the complete transaction for every axis:
+  `?`, `$G`, one `G10 L20`, `$#`, then `?`.
+- Mock GRBL updates only the active work offset, leaves machine position intact,
+  and returns the changed G54-G59 parameter through `$#`.
+- Success requires the final work coordinate to be within `0.002 mm` of zero.
+- TypeScript tests cover the platform-neutral interactor, while the Tauri build
+  verifies the typed command adapter. Automated tests never send work-zero to a
+  physical controller.
 
 ## Current hardware readiness coverage
 

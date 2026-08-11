@@ -8,7 +8,8 @@ until they are read from the controller or measured before cutting.
 - Controller protocol: GRBL.
 - Motion: three axes, X/Y/Z.
 - Tool: milling spindle switched manually by the operator.
-- Probe: touch sensor planned for Z calibration and heightmap probing.
+- Probe: no sensor is installed or connected. A touch sensor may be added later
+  for Z calibration and heightmap probing.
 - Homing: not installed.
 - Limit switches: not installed.
 - Physical emergency stop: not installed.
@@ -19,24 +20,26 @@ until they are read from the controller or measured before cutting.
 - Machine coordinates cannot be treated as a verified physical envelope without
   homing and limits.
 - Approved hardware interactions are the read-only Inspector, realtime Feed
-  Hold, challenge-confirmed Soft Reset, and the guarded single-axis step jog.
-  There is no arbitrary motion or spindle command endpoint.
+  Hold, challenge-confirmed Soft Reset, guarded single-axis step jog, and typed
+  per-axis work zero while Idle. There is no arbitrary motion or spindle command
+  endpoint.
 - Step jog is deliberately limited to `0.01..1.00 mm` at `10..100 mm/min`, with
   one fresh preflight lease required for every attempt and the operator present
   at the machine power control.
 - Software Hold/Reset is not a replacement for a physical emergency stop.
 - Automatic `M3`, `M4`, or spindle-speed control must stay disabled for this
   profile. The sender will require an explicit manual-spindle workflow.
-- Probe and heightmap support must validate probe polarity and a stationary
-  spindle before enabling a probing cycle.
+- Probe, `$H`, and heightmap motion must remain unavailable while their physical
+  hardware is absent. A future probe slice must first validate wiring, polarity,
+  input transitions, and a stationary spindle before enabling a probing cycle.
 
 ## Values to collect before motion
 
-Device Inspector will capture `$I`, `$$`, `$G`, and `$#`. Before the first jog,
-the operator and Millo must review axis steps, direction, acceleration, maximum
-rate, travel, hard/soft limits, homing flags, status-mask behavior, units, active
-WCS, and probe state. Workpiece, cutter, feeds, safe Z, and touch-probe geometry
-will be configured later before milling.
+Device Inspector captures `$I`, `$$`, `$G`, and `$#`. Before milling, the operator
+and Millo must review axis steps, direction, acceleration, maximum rate, travel,
+hard/soft limits, homing flags, status-mask behavior, units, and active WCS.
+Workpiece, cutter, feeds, and safe Z will be configured before a dry run. Probe
+geometry cannot be configured or trusted until a sensor exists.
 
 ## Readiness interpretation
 
@@ -49,6 +52,16 @@ selects milling behavior, and the modal state reports millimetres plus `M5`.
 The report deliberately keeps missing homing, limits, emergency stop, and manual
 spindle operation visible as cautions. A green report does not establish a
 physical machine envelope and does not unlock probing or arbitrary G-code.
+
+## Work-zero procedure
+
+Zero X/Y/Z is an offset update, not a motion command. The operator places the
+tool at the intended datum, explicitly confirms that fact, and selects one axis.
+Millo requires a fresh Idle state, reads the active G54-G59 system, sends one
+typed `G10 L20` command for that system, reads `$#`, and verifies the resulting
+work coordinate. The UI cannot select another coordinate system or submit a raw
+line. This path is automated against Mock GRBL; no physical work-zero command was
+executed as part of the implementation slice.
 
 ## First hardware observation
 

@@ -27,6 +27,8 @@ struct MockState {
     writes: Vec<Vec<u8>>,
     jog_polls_remaining: u32,
     settings: BTreeMap<u16, String>,
+    active_wcs: usize,
+    work_offsets: [[f64; 3]; 6],
 }
 
 #[derive(Debug, Clone)]
@@ -100,6 +102,11 @@ impl MockControl {
         self.lock().settings.insert(number, value.into());
     }
 
+    pub fn set_active_wcs(&self, coordinate_system: u8) {
+        assert!((54..=59).contains(&coordinate_system));
+        self.lock().active_wcs = usize::from(coordinate_system - 54);
+    }
+
     fn lock(&self) -> MutexGuard<'_, MockState> {
         self.state.lock().expect("mock transport lock poisoned")
     }
@@ -130,6 +137,8 @@ impl MockTransport {
                     writes: Vec::new(),
                     jog_polls_remaining: 0,
                     settings: default_settings(),
+                    active_wcs: 0,
+                    work_offsets: [[0.0; 3]; 6],
                 })),
             },
         }
@@ -201,8 +210,23 @@ impl Transport for MockTransport {
         } else if let Some(jog) = parse_step_jog(data) {
             let mut position = status_position(&state.status_line).unwrap_or([0.0; 3]);
             position[jog.axis] += jog.distance_mm;
-            state.status_line = format_status("Jog", position, jog.feed_mm_per_min);
+            let work_position = subtract_position(position, state.work_offsets[state.active_wcs]);
+            state.status_line = format_status("Jog", position, work_position, jog.feed_mm_per_min);
             state.jog_polls_remaining = mock_jog_status_polls(jog);
+            state
+                .active_reads
+                .push_back(MockRead::Line("ok".to_owned()));
+        } else if let Some(work_zero) = parse_work_zero(data) {
+            let machine_position = status_position(&state.status_line).unwrap_or([0.0; 3]);
+            state.work_offsets[work_zero.coordinate_system][work_zero.axis] =
+                machine_position[work_zero.axis];
+            if work_zero.coordinate_system == state.active_wcs {
+                let work_position =
+                    subtract_position(machine_position, state.work_offsets[state.active_wcs]);
+                let mode = status_mode(&state.status_line).unwrap_or("Idle").to_owned();
+                let feed = status_feed(&state.status_line).unwrap_or(0.0);
+                state.status_line = format_status(&mode, machine_position, work_position, feed);
+            }
             state
                 .active_reads
                 .push_back(MockRead::Line("ok".to_owned()));
@@ -218,7 +242,7 @@ impl Transport for MockTransport {
                 state.settings.insert(number, value);
             }
             state.active_reads.extend(response);
-        } else if let Some(default_response) = device_query_response(data, &state.settings) {
+        } else if let Some(default_response) = device_query_response(data, &state) {
             let response = state
                 .planned_queries
                 .pop_front()
@@ -270,6 +294,12 @@ struct MockJog {
     feed_mm_per_min: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MockWorkZero {
+    coordinate_system: usize,
+    axis: usize,
+}
+
 fn parse_step_jog(data: &[u8]) -> Option<MockJog> {
     let command = std::str::from_utf8(data)
         .ok()?
@@ -297,6 +327,30 @@ fn parse_step_jog(data: &[u8]) -> Option<MockJog> {
     })
 }
 
+fn parse_work_zero(data: &[u8]) -> Option<MockWorkZero> {
+    let command = std::str::from_utf8(data)
+        .ok()?
+        .trim_end_matches(['\r', '\n']);
+    let words: Vec<_> = command.split_whitespace().collect();
+    if words.len() != 4 || words[0] != "G10" || words[1] != "L20" {
+        return None;
+    }
+    let parameter = words[2].strip_prefix('P')?.parse::<usize>().ok()?;
+    if !(1..=6).contains(&parameter) {
+        return None;
+    }
+    let axis = match words[3].as_bytes().first()? {
+        b'X' => 0,
+        b'Y' => 1,
+        b'Z' => 2,
+        _ => return None,
+    };
+    (words[3].get(1..)?.parse::<f64>().ok()? == 0.0).then_some(MockWorkZero {
+        coordinate_system: parameter - 1,
+        axis,
+    })
+}
+
 fn parse_setting_write(data: &[u8]) -> Option<(u16, String)> {
     let command = std::str::from_utf8(data)
         .ok()?
@@ -307,9 +361,13 @@ fn parse_setting_write(data: &[u8]) -> Option<(u16, String)> {
 }
 
 fn status_position(status: &str) -> Option<[f64; 3]> {
+    status_named_position(status, "MPos")
+}
+
+fn status_named_position(status: &str, name: &str) -> Option<[f64; 3]> {
     let values = status
         .split('|')
-        .find_map(|field| field.strip_prefix("MPos:"))?
+        .find_map(|field| field.strip_prefix(&format!("{name}:")))?
         .split(',')
         .map(str::parse::<f64>)
         .collect::<Result<Vec<_>, _>>()
@@ -321,14 +379,39 @@ fn status_with_mode(status: &str, mode: &str, feed_mm_per_min: f64) -> String {
     format_status(
         mode,
         status_position(status).unwrap_or([0.0; 3]),
+        status_named_position(status, "WPos").unwrap_or([0.0; 3]),
         feed_mm_per_min,
     )
 }
 
-fn format_status(mode: &str, position: [f64; 3], feed_mm_per_min: f64) -> String {
-    let [x, y, z] = position;
+fn status_mode(status: &str) -> Option<&str> {
+    status.strip_prefix('<')?.split('|').next()
+}
+
+fn status_feed(status: &str) -> Option<f64> {
+    status
+        .split('|')
+        .find_map(|field| field.strip_prefix("FS:"))?
+        .split(',')
+        .next()?
+        .parse()
+        .ok()
+}
+
+fn subtract_position(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
+    [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
+}
+
+fn format_status(
+    mode: &str,
+    machine_position: [f64; 3],
+    work_position: [f64; 3],
+    feed_mm_per_min: f64,
+) -> String {
+    let [mx, my, mz] = machine_position;
+    let [wx, wy, wz] = work_position;
     format!(
-        "<{mode}|MPos:{x:.3},{y:.3},{z:.3}|WPos:{x:.3},{y:.3},{z:.3}|FS:{feed_mm_per_min:.3},0>"
+        "<{mode}|MPos:{mx:.3},{my:.3},{mz:.3}|WPos:{wx:.3},{wy:.3},{wz:.3}|FS:{feed_mm_per_min:.3},0>"
     )
 }
 
@@ -368,10 +451,7 @@ fn default_settings() -> BTreeMap<u16, String> {
     .collect()
 }
 
-fn device_query_response(
-    command: &[u8],
-    settings: &BTreeMap<u16, String>,
-) -> Option<VecDeque<MockRead>> {
+fn device_query_response(command: &[u8], state: &MockState) -> Option<VecDeque<MockRead>> {
     match command {
         b"$I\n" => Some(lines(&[
             "[VER:1.1h.20240101:Millo Mock]",
@@ -379,21 +459,38 @@ fn device_query_response(
             "ok",
         ])),
         b"$$\n" => {
-            let mut response = settings
+            let mut response = state
+                .settings
                 .iter()
                 .map(|(number, value)| MockRead::Line(format!("${number}={value}")))
                 .collect::<VecDeque<_>>();
             response.push_back(MockRead::Line("ok".to_owned()));
             Some(response)
         }
-        b"$G\n" => Some(lines(&["[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]", "ok"])),
-        b"$#\n" => Some(lines(&[
-            "[G54:0.000,0.000,0.000]",
-            "[G92:0.000,0.000,0.000]",
-            "[TLO:0.000]",
-            "[PRB:0.000,0.000,0.000:0]",
+        b"$G\n" => Some(lines(&[
+            &format!(
+                "[GC:G0 G{} G17 G21 G90 G94 M5 M9 T0 F0 S0]",
+                state.active_wcs + 54
+            ),
             "ok",
         ])),
+        b"$#\n" => {
+            let mut response = state
+                .work_offsets
+                .iter()
+                .enumerate()
+                .map(|(index, [x, y, z])| {
+                    MockRead::Line(format!("[G{}:{x:.3},{y:.3},{z:.3}]", index + 54))
+                })
+                .collect::<VecDeque<_>>();
+            response.extend(lines(&[
+                "[G92:0.000,0.000,0.000]",
+                "[TLO:0.000]",
+                "[PRB:0.000,0.000,0.000:0]",
+                "ok",
+            ]));
+            Some(response)
+        }
         _ => None,
     }
 }
@@ -560,6 +657,39 @@ mod tests {
         assert_eq!(
             transport.read_line().await.unwrap(),
             "<Idle|MPos:0.000,-0.100,0.000|WPos:0.000,-0.100,0.000|FS:0.000,0>"
+        );
+    }
+
+    #[tokio::test]
+    async fn work_zero_changes_active_wcs_and_work_position_without_motion() {
+        let mut transport = MockTransport::with_status(
+            "<Idle|MPos:10.000,20.000,30.000|WPos:10.000,20.000,30.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_active_wcs(55);
+        transport.connect().await.unwrap();
+
+        transport.write(b"G10 L20 P2 Y0\n").await.unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), "ok");
+        transport.write(b"?").await.unwrap();
+        assert_eq!(
+            transport.read_line().await.unwrap(),
+            "<Idle|MPos:10.000,20.000,30.000|WPos:10.000,0.000,30.000|FS:0.000,0>"
+        );
+        transport.write(b"$#\n").await.unwrap();
+        let mut parameters = Vec::new();
+        loop {
+            let line = transport.read_line().await.unwrap();
+            if line == "ok" {
+                break;
+            }
+            parameters.push(line);
+        }
+
+        assert!(parameters.contains(&"[G55:0.000,20.000,0.000]".to_owned()));
+        assert_eq!(
+            status_position(&control.lock().status_line),
+            Some([10.0, 20.0, 30.0])
         );
     }
 

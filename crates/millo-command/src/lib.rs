@@ -6,7 +6,11 @@ use millo_controller::{
 use millo_domain::{
     CommandResponse, ConnectionState, ControllerSnapshot, DeviceInspection, HardwareInspection,
     HardwareProfile, JogPadStepOutcome, JogPadStepRequest, MachineMode, OperatorConfirmation,
-    ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation,
+    Position, ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation, WorkAxis,
+    WorkCoordinateSystem, WorkZeroOutcome, WorkZeroRequest,
+};
+use millo_grbl::{
+    active_work_coordinate_system, build_device_inspection, work_coordinate_parameter,
 };
 use millo_readiness::assess;
 use millo_safety::{SafetyError, SafetyManager};
@@ -20,6 +24,7 @@ use tokio::{
 const REQUEST_CAPACITY: usize = 32;
 pub const JOG_PAD_STEPS_MM: [f64; 2] = [0.01, 0.1];
 pub const JOG_PAD_FEED_MM_PER_MIN: f64 = 10.0;
+const WORK_ZERO_TOLERANCE_MM: f64 = 0.002;
 
 #[derive(Debug, Error)]
 pub enum ArbiterError {
@@ -37,6 +42,12 @@ pub enum ArbiterError {
     ConfigurationVerification(String),
     #[error("jog pad distance {0} mm is not one of the fixed presets")]
     UnsupportedJogPadDistance(f64),
+    #[error("work zero requires explicit operator position confirmation")]
+    WorkZeroConfirmationRequired,
+    #[error("active work coordinate system is not one of G54-G59")]
+    ActiveWorkCoordinateSystemUnavailable,
+    #[error("work zero verification failed: {0}")]
+    WorkZeroVerification(String),
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +185,14 @@ impl CommandArbiter {
             .await
     }
 
+    pub async fn set_work_zero(
+        &self,
+        request: WorkZeroRequest,
+    ) -> Result<WorkZeroOutcome, ArbiterError> {
+        self.call(|response| Request::SetWorkZero { request, response })
+            .await
+    }
+
     pub async fn send_realtime(
         &self,
         command: RealtimeCommand,
@@ -245,6 +264,10 @@ enum Request {
     },
     ConfigureUnhomedOperation {
         response: oneshot::Sender<Result<UnhomedConfiguration, ArbiterError>>,
+    },
+    SetWorkZero {
+        request: WorkZeroRequest,
+        response: oneshot::Sender<Result<WorkZeroOutcome, ArbiterError>>,
     },
 }
 
@@ -435,6 +458,149 @@ async fn handle_request(
             publish(snapshots, controller);
             let _ = response.send(result);
         }
+        Request::SetWorkZero { request, response } => {
+            safety.invalidate_test_jog();
+            let result = execute_set_work_zero(controller, request).await;
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+    }
+}
+
+async fn execute_set_work_zero(
+    controller: &mut Controller<BoxedTransport>,
+    request: WorkZeroRequest,
+) -> Result<WorkZeroOutcome, ArbiterError> {
+    if !request.position_confirmed {
+        return Err(ArbiterError::WorkZeroConfirmationRequired);
+    }
+
+    controller.refresh_status().await?;
+    ensure_stable_idle(&controller.snapshot())?;
+
+    let modal_response = controller
+        .query_device(millo_controller::DeviceQuery::ModalState)
+        .await?;
+    let modal = build_device_inspection(vec![modal_response]);
+    let coordinate_system = active_work_coordinate_system(&modal.modal_state)
+        .ok_or(ArbiterError::ActiveWorkCoordinateSystemUnavailable)?;
+
+    ensure_stable_idle(&controller.snapshot())?;
+    let command_response = controller
+        .set_work_zero(request.axis, coordinate_system)
+        .await?;
+    let parameter_response = controller
+        .query_device(millo_controller::DeviceQuery::Parameters)
+        .await?;
+    let parameters = build_device_inspection(vec![parameter_response]);
+    let parameter_name = work_coordinate_parameter(coordinate_system);
+    let parameter_value = parameters
+        .parameters
+        .get(parameter_name)
+        .cloned()
+        .ok_or_else(|| {
+            ArbiterError::WorkZeroVerification(format!("$# did not return {parameter_name}"))
+        })?;
+    parse_xyz_parameter(&parameter_value).ok_or_else(|| {
+        ArbiterError::WorkZeroVerification(format!(
+            "$# returned malformed {parameter_name}: {parameter_value}"
+        ))
+    })?;
+
+    let snapshot = controller.refresh_status().await?;
+    ensure_stable_idle(&snapshot)?;
+    let work_position =
+        verified_work_axis(&snapshot, &parameters, coordinate_system, request.axis)?;
+    if work_position.abs() > WORK_ZERO_TOLERANCE_MM {
+        return Err(ArbiterError::WorkZeroVerification(format!(
+            "expected {:?}=0 in {parameter_name}, read {work_position:.3} mm",
+            request.axis
+        )));
+    }
+
+    Ok(WorkZeroOutcome {
+        axis: request.axis,
+        coordinate_system,
+        command: command_response.command,
+        parameter_value,
+        work_position,
+        snapshot,
+    })
+}
+
+fn verified_work_axis(
+    snapshot: &ControllerSnapshot,
+    parameters: &DeviceInspection,
+    coordinate_system: WorkCoordinateSystem,
+    axis: WorkAxis,
+) -> Result<f64, ArbiterError> {
+    if let Some(work_position) = snapshot.machine.work_position {
+        return Ok(position_axis(work_position, axis));
+    }
+    if let (Some(machine_position), Some(offset)) = (
+        snapshot.machine.machine_position,
+        snapshot.machine.work_coordinate_offset,
+    ) {
+        return Ok(position_axis(machine_position, axis) - position_axis(offset, axis));
+    }
+
+    let machine_position = snapshot.machine.machine_position.ok_or_else(|| {
+        ArbiterError::WorkZeroVerification(
+            "status did not return WPos or enough data to derive it".to_owned(),
+        )
+    })?;
+    let parameter_name = work_coordinate_parameter(coordinate_system);
+    let wcs = parameters
+        .parameters
+        .get(parameter_name)
+        .and_then(|value| parse_xyz_parameter(value))
+        .ok_or_else(|| {
+            ArbiterError::WorkZeroVerification(format!(
+                "$# did not return a valid {parameter_name} position"
+            ))
+        })?;
+    let g92 = parameters
+        .parameters
+        .get("G92")
+        .and_then(|value| parse_xyz_parameter(value))
+        .unwrap_or([0.0; 3]);
+    let tool_length = parameters
+        .parameters
+        .get("TLO")
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let axis_index = work_axis_index(axis);
+    let tool_offset = if axis == WorkAxis::Z {
+        tool_length
+    } else {
+        0.0
+    };
+    Ok(position_axis(machine_position, axis) - wcs[axis_index] - g92[axis_index] - tool_offset)
+}
+
+fn parse_xyz_parameter(value: &str) -> Option<[f64; 3]> {
+    let values = value
+        .split(',')
+        .take(3)
+        .map(str::parse::<f64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    (values.len() == 3).then(|| [values[0], values[1], values[2]])
+}
+
+fn position_axis(position: Position, axis: WorkAxis) -> f64 {
+    match axis {
+        WorkAxis::X => position.x,
+        WorkAxis::Y => position.y,
+        WorkAxis::Z => position.z,
+    }
+}
+
+const fn work_axis_index(axis: WorkAxis) -> usize {
+    match axis {
+        WorkAxis::X => 0,
+        WorkAxis::Y => 1,
+        WorkAxis::Z => 2,
     }
 }
 
@@ -600,6 +766,13 @@ mod tests {
             spindle_off: true,
             tool_clear: true,
             power_control_reachable: true,
+        }
+    }
+
+    fn work_zero_request(axis: WorkAxis, position_confirmed: bool) -> WorkZeroRequest {
+        WorkZeroRequest {
+            axis,
+            position_confirmed,
         }
     }
 
@@ -1117,6 +1290,109 @@ mod tests {
             .filter(|write| write.starts_with(b"$21=") || write.starts_with(b"$22="))
             .collect::<Vec<_>>();
         assert_eq!(setting_writes, vec![b"$21=0\n".to_vec()]);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn work_zero_requires_confirmation_before_controller_io() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let error = arbiter
+            .set_work_zero(work_zero_request(WorkAxis::X, false))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ArbiterError::WorkZeroConfirmationRequired));
+        assert!(control.writes().is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn work_zero_rechecks_idle_before_writing() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        control.set_status("<Run|MPos:1.000,2.000,3.000|WPos:1.000,2.000,3.000|FS:100,0>");
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let error = arbiter
+            .set_work_zero(work_zero_request(WorkAxis::X, true))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArbiterError::Safety(SafetyError::UnsafeControllerState)
+        ));
+        assert_eq!(control.writes(), vec![b"?".to_vec()]);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn work_zero_sets_and_verifies_each_axis_in_the_active_wcs() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:10.000,20.000,30.000|WPos:10.000,20.000,30.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_active_wcs(55);
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(50),
+                failures_before_recovery: 2,
+            },
+            HardwareProfile::first_machine(),
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        for (axis, expected_parameter) in [
+            (WorkAxis::X, "10.000,0.000,0.000"),
+            (WorkAxis::Y, "10.000,20.000,0.000"),
+            (WorkAxis::Z, "10.000,20.000,30.000"),
+        ] {
+            let outcome = arbiter
+                .set_work_zero(work_zero_request(axis, true))
+                .await
+                .unwrap();
+            assert_eq!(outcome.axis, axis);
+            assert_eq!(outcome.coordinate_system, WorkCoordinateSystem::G55);
+            assert_eq!(outcome.parameter_value, expected_parameter);
+            assert!(outcome.work_position.abs() <= WORK_ZERO_TOLERANCE_MM);
+            assert_eq!(
+                outcome.snapshot.machine.machine_position,
+                Some(Position {
+                    x: 10.0,
+                    y: 20.0,
+                    z: 30.0,
+                    a: None,
+                })
+            );
+        }
+
+        assert_eq!(
+            control.writes(),
+            vec![
+                b"?".to_vec(),
+                b"$G\n".to_vec(),
+                b"G10 L20 P2 X0\n".to_vec(),
+                b"$#\n".to_vec(),
+                b"?".to_vec(),
+                b"?".to_vec(),
+                b"$G\n".to_vec(),
+                b"G10 L20 P2 Y0\n".to_vec(),
+                b"$#\n".to_vec(),
+                b"?".to_vec(),
+                b"?".to_vec(),
+                b"$G\n".to_vec(),
+                b"G10 L20 P2 Z0\n".to_vec(),
+                b"$#\n".to_vec(),
+                b"?".to_vec(),
+            ]
+        );
         task.abort();
     }
 }

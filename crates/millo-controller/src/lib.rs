@@ -3,10 +3,11 @@ use std::time::Duration;
 use millo_domain::{
     AlarmState, CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot,
     DeviceInspection, MachineMode, MachineState, ResetNotice, StepJogReceipt, StepJogRequest,
+    WorkAxis, WorkCoordinateSystem,
 };
 use millo_grbl::{
-    IncomingLine, JogValidationError, StatusParseError, build_device_inspection, encode_step_jog,
-    parse_incoming_line,
+    IncomingLine, JogValidationError, StatusParseError, build_device_inspection,
+    encode_set_work_zero, encode_step_jog, parse_incoming_line,
 };
 use millo_transport::{Transport, TransportError};
 use thiserror::Error;
@@ -282,6 +283,15 @@ impl<T: Transport> Controller<T> {
     ) -> Result<CommandResponse, ControllerError> {
         self.execute_acknowledged_line(setting.disable_command())
             .await
+    }
+
+    pub async fn set_work_zero(
+        &mut self,
+        axis: WorkAxis,
+        coordinate_system: WorkCoordinateSystem,
+    ) -> Result<CommandResponse, ControllerError> {
+        let command = encode_set_work_zero(axis, coordinate_system);
+        self.execute_acknowledged_line(&command).await
     }
 
     pub async fn send_realtime(
@@ -722,6 +732,20 @@ mod tests {
             .unwrap_err();
         assert!(matches!(invalid, ControllerError::JogValidation(_)));
         assert_eq!(control.writes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn sends_only_the_typed_work_zero_command() {
+        let (mut controller, control) = test_controller();
+        controller.connect().await.unwrap();
+
+        let response = controller
+            .set_work_zero(WorkAxis::Z, WorkCoordinateSystem::G57)
+            .await
+            .unwrap();
+
+        assert_eq!(response.command, "G10 L20 P4 Z0");
+        assert_eq!(control.writes(), vec![b"G10 L20 P4 Z0\n".to_vec()]);
     }
 
     #[tokio::test]
