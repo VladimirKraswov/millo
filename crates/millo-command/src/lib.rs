@@ -26,7 +26,8 @@ use millo_readiness::assess;
 use millo_run::program_fingerprint;
 use millo_run::{
     FirstCutAuthorizationError, FirstCutConfirmation, FirstCutGate, FirstCutPreparation,
-    ProgramRunIntent, RunPreflightReport, ToolChangeConfirmation,
+    ProgramCheckBinding, ProgramCheckCertificateError, ProgramCheckGate, ProgramRunIntent,
+    RunPreflightCheck, RunPreflightLevel, RunPreflightReport, ToolChangeConfirmation,
     assess_real_run_preflight_with_options,
 };
 use millo_safety::{SafetyError, SafetyManager};
@@ -170,6 +171,8 @@ impl CommandArbiter {
             sender_dispatch_enabled: true,
             safety: SafetyManager::default(),
             first_cut: FirstCutGate::default(),
+            program_check: ProgramCheckGate::default(),
+            pending_program_check: None,
             snapshots: snapshot_tx,
             sender_snapshots: sender_snapshot_tx,
         };
@@ -312,6 +315,22 @@ impl CommandArbiter {
         self.call(|response| Request::AuthorizeFirstCut {
             program,
             confirmation,
+            require_check_certificate: true,
+            response,
+        })
+        .await
+    }
+
+    #[cfg(test)]
+    async fn authorize_first_cut_fixture(
+        &self,
+        program: GcodeProgram,
+        confirmation: FirstCutConfirmation,
+    ) -> Result<FirstCutPreparation, ArbiterError> {
+        self.call(|response| Request::AuthorizeFirstCut {
+            program,
+            confirmation,
+            require_check_certificate: false,
             response,
         })
         .await
@@ -564,6 +583,7 @@ enum Request {
     AuthorizeFirstCut {
         program: GcodeProgram,
         confirmation: FirstCutConfirmation,
+        require_check_certificate: bool,
         response: oneshot::Sender<Result<FirstCutPreparation, ArbiterError>>,
     },
     StartProgramRun {
@@ -645,6 +665,8 @@ struct ActorState {
     sender_dispatch_enabled: bool,
     safety: SafetyManager,
     first_cut: FirstCutGate,
+    program_check: ProgramCheckGate,
+    pending_program_check: Option<ProgramCheckBinding>,
     snapshots: watch::Sender<ControllerSnapshot>,
     sender_snapshots: watch::Sender<SenderSnapshot>,
 }
@@ -682,6 +704,7 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                         let lifecycle = actor.controller.lifecycle_tick().await;
                         actor.safety.observe(&actor.controller.snapshot(), Instant::now());
                         actor.first_cut.observe(&actor.controller.snapshot(), Instant::now());
+                        actor.program_check.observe(&actor.controller.snapshot(), Instant::now());
                         match lifecycle {
                             Ok(_) => reconcile_physical_sender(
                                 &mut actor.controller,
@@ -703,6 +726,8 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                 execute_sender_step(
                     &mut actor.controller,
                     &mut actor.sender,
+                    &mut actor.program_check,
+                    &mut actor.pending_program_check,
                     &actor.snapshots,
                     &actor.sender_snapshots,
                 )
@@ -712,6 +737,8 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                 execute_sender_step(
                     &mut actor.controller,
                     &mut actor.sender,
+                    &mut actor.program_check,
+                    &mut actor.pending_program_check,
                     &actor.snapshots,
                     &actor.sender_snapshots,
                 )
@@ -731,6 +758,8 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         sender_dispatch_enabled,
         safety,
         first_cut,
+        program_check,
+        pending_program_check,
         snapshots,
         sender_snapshots,
     } = actor;
@@ -740,9 +769,18 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             execution_target: replacement_target,
             response,
         } => {
-            cancel_check_run(controller, sender, sender_snapshots).await;
+            cancel_check_run(
+                controller,
+                sender,
+                program_check,
+                pending_program_check,
+                sender_snapshots,
+            )
+            .await;
             let _ = controller.disconnect().await;
             invalidate_authorizations(safety, first_cut);
+            program_check.invalidate();
+            *pending_program_check = None;
             cancel_active_sender(sender, sender_snapshots);
             *sender_dispatch_enabled = true;
             *controller = Controller::with_config(transport, *config);
@@ -752,6 +790,8 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         }
         Request::Connect { response } => {
             invalidate_authorizations(safety, first_cut);
+            program_check.invalidate();
+            *pending_program_check = None;
             cancel_active_sender(sender, sender_snapshots);
             *sender_dispatch_enabled = true;
             let result = controller.connect().await.map_err(ArbiterError::from);
@@ -779,13 +819,23 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         }
         Request::UpdateControllerSetting { request, response } => {
             invalidate_authorizations(safety, first_cut);
+            program_check.invalidate();
             let result = execute_controller_setting_update(controller, request).await;
             publish(snapshots, controller);
             let _ = response.send(result);
         }
         Request::Disconnect { response } => {
             invalidate_authorizations(safety, first_cut);
-            cancel_check_run(controller, sender, sender_snapshots).await;
+            cancel_check_run(
+                controller,
+                sender,
+                program_check,
+                pending_program_check,
+                sender_snapshots,
+            )
+            .await;
+            program_check.invalidate();
+            *pending_program_check = None;
             cancel_active_sender(sender, sender_snapshots);
             *sender_dispatch_enabled = true;
             let result = controller.disconnect().await.map_err(ArbiterError::from);
@@ -808,6 +858,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             };
             safety.observe(&controller.snapshot(), Instant::now());
             first_cut.observe(&controller.snapshot(), Instant::now());
+            program_check.observe(&controller.snapshot(), Instant::now());
             match &result {
                 Ok(_) if !interleaved => {
                     reconcile_physical_sender(controller, sender, sender_snapshots).await
@@ -824,6 +875,8 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         }
         Request::AcknowledgeReset { response } => {
             invalidate_authorizations(safety, first_cut);
+            program_check.invalidate();
+            *pending_program_check = None;
             let result = Ok(controller.acknowledge_reset());
             publish(snapshots, controller);
             let _ = response.send(result);
@@ -866,9 +919,11 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 execute_real_run_preflight(
                     controller,
                     hardware_profile,
+                    program_check,
                     program,
                     intent,
                     execution_options,
+                    true,
                 )
                 .await
             };
@@ -878,6 +933,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         Request::AuthorizeFirstCut {
             program,
             confirmation,
+            require_check_certificate,
             response,
         } => {
             first_cut.invalidate();
@@ -893,8 +949,10 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                     controller,
                     hardware_profile,
                     first_cut,
+                    program_check,
                     program,
                     confirmation,
+                    require_check_certificate,
                 )
                 .await
             };
@@ -930,11 +988,16 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             response,
         } => {
             *sender_dispatch_enabled = true;
+            let binding = ProgramCheckBinding::from_program(&program, execution_options);
             let result = if *execution_target != ExecutionTarget::Serial {
                 Err(ArbiterError::CheckRunTransportUnavailable)
             } else {
-                execute_check_run_start(controller, sender, program, execution_options).await
+                execute_check_run_start(controller, sender, &program, execution_options).await
             };
+            if result.is_ok() {
+                program_check.invalidate();
+                *pending_program_check = Some(binding);
+            }
             publish(snapshots, controller);
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
@@ -967,6 +1030,8 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 invalidate_authorizations(safety, first_cut);
             }
             if command == RealtimeCommand::SoftReset {
+                program_check.invalidate();
+                *pending_program_check = None;
                 cancel_active_sender(sender, sender_snapshots);
             }
             let result = if command == RealtimeCommand::Status && sender.has_in_flight() {
@@ -1008,6 +1073,8 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             response,
         } => {
             first_cut.invalidate();
+            program_check.invalidate();
+            *pending_program_check = None;
             cancel_active_sender(sender, sender_snapshots);
             let result = safety
                 .confirm_soft_reset(challenge_id, Instant::now())
@@ -1116,7 +1183,8 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 sender.cancel().map_err(ArbiterError::from)
             };
             if result.is_ok() {
-                finish_check_mode_after_terminal(controller, sender).await;
+                settle_program_check(controller, sender, program_check, pending_program_check)
+                    .await;
                 publish(snapshots, controller);
             }
             publish_sender(sender_snapshots, sender);
@@ -1135,9 +1203,11 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
 async fn execute_real_run_preflight(
     controller: &mut Controller<BoxedTransport>,
     hardware_profile: &HardwareProfile,
+    program_check: &mut ProgramCheckGate,
     program: GcodeProgram,
     intent: ProgramRunIntent,
     execution_options: ProgramExecutionOptions,
+    require_check_certificate: bool,
 ) -> Result<RunPreflightReport, ArbiterError> {
     controller.refresh_status().await?;
     ensure_stable_idle(&controller.snapshot())?;
@@ -1145,28 +1215,69 @@ async fn execute_real_run_preflight(
     let snapshot = controller.refresh_status().await?;
     let readiness = assess(hardware_profile, &device, &snapshot);
     let hardware = HardwareInspection { device, readiness };
-    Ok(assess_real_run_preflight_with_options(
+    let binding = ProgramCheckBinding::from_program(&program, execution_options);
+    let mut report = assess_real_run_preflight_with_options(
         &program,
         hardware,
         &snapshot,
         intent,
         execution_options,
-    ))
+    );
+    if require_check_certificate && intent == ProgramRunIntent::Cutting {
+        apply_program_check_requirement(
+            &mut report,
+            program_check.validate(&binding, &snapshot, Instant::now()),
+        );
+    }
+    Ok(report)
+}
+
+fn apply_program_check_requirement(
+    report: &mut RunPreflightReport,
+    result: Result<millo_run::ProgramCheckCertificate, ProgramCheckCertificateError>,
+) {
+    match result {
+        Ok(certificate) => report.checks.push(RunPreflightCheck {
+            id: "grbl-check-certificate".to_owned(),
+            level: RunPreflightLevel::Pass,
+            title: "GRBL Check certificate".to_owned(),
+            detail: format!(
+                "Check #{} validated this exact program and execution options in the current controller session",
+                certificate.sequence
+            ),
+            source_line: None,
+        }),
+        Err(error) => {
+            report.ready = false;
+            report.blocker_count = report.blocker_count.saturating_add(1);
+            report.checks.push(RunPreflightCheck {
+                id: "grbl-check-certificate".to_owned(),
+                level: RunPreflightLevel::Blocker,
+                title: "GRBL Check required".to_owned(),
+                detail: error.to_string(),
+                source_line: None,
+            });
+        }
+    }
 }
 
 async fn execute_first_cut_authorization(
     controller: &mut Controller<BoxedTransport>,
     hardware_profile: &HardwareProfile,
     first_cut: &mut FirstCutGate,
+    program_check: &mut ProgramCheckGate,
     program: GcodeProgram,
     confirmation: FirstCutConfirmation,
+    require_check_certificate: bool,
 ) -> Result<FirstCutPreparation, ArbiterError> {
     let report = execute_real_run_preflight(
         controller,
         hardware_profile,
+        program_check,
         program,
         confirmation.intent,
         confirmation.execution_options,
+        require_check_certificate,
     )
     .await?;
     let authorization = first_cut.authorize(
@@ -1222,7 +1333,7 @@ async fn execute_authorized_program_run_start(
 async fn execute_check_run_start(
     controller: &mut Controller<BoxedTransport>,
     sender: &mut Sender,
-    program: GcodeProgram,
+    program: &GcodeProgram,
     execution_options: ProgramExecutionOptions,
 ) -> Result<SenderSnapshot, ArbiterError> {
     let sender_state = sender.snapshot().state;
@@ -1236,11 +1347,8 @@ async fn execute_check_run_start(
         return Err(SenderError::Busy(sender_state).into());
     }
 
-    let plan = build_program_run_plan_with_options(
-        &program,
-        ProgramRunPolicy::Cutting,
-        execution_options,
-    )?;
+    let plan =
+        build_program_run_plan_with_options(program, ProgramRunPolicy::Cutting, execution_options)?;
     let initial = controller.refresh_status().await?;
     ensure_stable_idle(&initial)?;
     let inspection = controller.inspect_device().await?;
@@ -1471,6 +1579,8 @@ fn controller_sender_failure(error: &ControllerError, context: &str) -> SenderFa
 async fn execute_sender_step(
     controller: &mut Controller<BoxedTransport>,
     sender: &mut Sender,
+    program_check: &mut ProgramCheckGate,
+    pending_program_check: &mut Option<ProgramCheckBinding>,
     snapshots: &watch::Sender<ControllerSnapshot>,
     sender_snapshots: &watch::Sender<SenderSnapshot>,
 ) {
@@ -1479,7 +1589,7 @@ async fn execute_sender_step(
             SenderFailureKind::UnsafeState,
             error.to_string(),
         ));
-        finish_check_mode_after_terminal(controller, sender).await;
+        settle_program_check(controller, sender, program_check, pending_program_check).await;
         publish(snapshots, controller);
         publish_sender(sender_snapshots, sender);
         return;
@@ -1497,7 +1607,7 @@ async fn execute_sender_step(
             if physical_run {
                 let _ = controller.abort_program_stream().await;
             }
-            finish_check_mode_after_terminal(controller, sender).await;
+            settle_program_check(controller, sender, program_check, pending_program_check).await;
             publish(snapshots, controller);
             publish_sender(sender_snapshots, sender);
             return;
@@ -1538,7 +1648,7 @@ async fn execute_sender_step(
             }
         }
     }
-    finish_check_mode_after_terminal(controller, sender).await;
+    settle_program_check(controller, sender, program_check, pending_program_check).await;
     publish(snapshots, controller);
     publish_sender(sender_snapshots, sender);
 }
@@ -1568,9 +1678,11 @@ fn ensure_sender_dispatch_ready(
     }
 }
 
-async fn finish_check_mode_after_terminal(
+async fn settle_program_check(
     controller: &mut Controller<BoxedTransport>,
     sender: &mut Sender,
+    program_check: &mut ProgramCheckGate,
+    pending_program_check: &mut Option<ProgramCheckBinding>,
 ) {
     let sender_snapshot = sender.snapshot();
     if sender_snapshot.mode != Some(millo_sender::SenderMode::CheckRun)
@@ -1578,26 +1690,70 @@ async fn finish_check_mode_after_terminal(
             sender_snapshot.state,
             SenderState::Completed | SenderState::Failed | SenderState::Cancelled
         )
-        || controller.snapshot().connection != ConnectionState::Connected
-        || controller.snapshot().machine.mode != MachineMode::Check
     {
         return;
     }
-    if let Err(error) = controller.set_check_mode(false).await {
-        sender.fail(format!("failed to leave GRBL Check mode: {error}"));
+
+    let reset_count_before_cleanup = controller.snapshot().reset_count;
+    let safely_idle = if controller.snapshot().connection != ConnectionState::Connected {
+        false
+    } else if controller.snapshot().machine.mode == MachineMode::Check {
+        match controller.set_check_mode(false).await {
+            Ok(snapshot) => snapshot.machine.mode == MachineMode::Idle,
+            Err(error) => {
+                sender.fail(format!("failed to leave GRBL Check mode: {error}"));
+                false
+            }
+        }
+    } else {
+        controller.snapshot().machine.mode == MachineMode::Idle
+    };
+    let safely_idle = if safely_idle && controller.snapshot().reset_notice.is_some() {
+        let expected_transition_reset =
+            controller.snapshot().reset_count == reset_count_before_cleanup.saturating_add(1);
+        if expected_transition_reset {
+            controller.acknowledge_reset();
+            controller.refresh_status().await.is_ok()
+                && ensure_stable_idle(&controller.snapshot()).is_ok()
+        } else {
+            false
+        }
+    } else {
+        safely_idle
+    };
+
+    let completed = sender.snapshot().state == SenderState::Completed;
+    if completed && safely_idle {
+        if let Some(binding) = pending_program_check.take()
+            && let Err(error) = program_check.issue(binding, &controller.snapshot(), Instant::now())
+        {
+            let snapshot = controller.snapshot();
+            sender.fail(format!(
+                "failed to issue GRBL Check certificate: {error}; connection={:?}, mode={:?}, reset={}, alarm={}",
+                snapshot.connection,
+                snapshot.machine.mode,
+                snapshot.reset_notice.is_some(),
+                snapshot.alarm.is_some(),
+            ));
+        }
+    } else {
+        *pending_program_check = None;
+        program_check.invalidate();
     }
 }
 
 async fn cancel_check_run(
     controller: &mut Controller<BoxedTransport>,
     sender: &mut Sender,
+    program_check: &mut ProgramCheckGate,
+    pending_program_check: &mut Option<ProgramCheckBinding>,
     snapshots: &watch::Sender<SenderSnapshot>,
 ) {
     if sender.snapshot().mode != Some(millo_sender::SenderMode::CheckRun) {
         return;
     }
     cancel_active_sender(sender, snapshots);
-    finish_check_mode_after_terminal(controller, sender).await;
+    settle_program_check(controller, sender, program_check, pending_program_check).await;
     publish_sender(snapshots, sender);
 }
 
@@ -2038,7 +2194,7 @@ mod tests {
         dispatch_immediately: bool,
     ) -> (FirstCutPreparation, SenderSnapshot) {
         let preparation = arbiter
-            .authorize_first_cut(parsed_program(source), first_cut_confirmation())
+            .authorize_first_cut_fixture(parsed_program(source), first_cut_confirmation())
             .await
             .unwrap();
         let started = arbiter
@@ -2965,7 +3121,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cutting_preflight_accepts_spindle_words_without_dispatching_them() {
+    async fn cutting_preflight_accepts_spindle_syntax_but_requires_a_check_certificate() {
         let (arbiter, control, worker) = serial_preflight_arbiter();
         let task = tokio::spawn(worker);
         arbiter.connect().await.unwrap();
@@ -2978,8 +3134,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(report.ready);
+        assert!(!report.ready);
         assert_eq!(report.intent, ProgramRunIntent::Cutting);
+        assert!(report.checks.iter().any(|check| {
+            check.id == "grbl-check-certificate" && check.level == RunPreflightLevel::Blocker
+        }));
         assert!(control.writes().iter().all(|write| matches!(
             write.as_slice(),
             b"?" | b"$I\n" | b"$$\n" | b"$G\n" | b"$#\n"
@@ -2994,7 +3153,7 @@ mod tests {
         arbiter.connect().await.unwrap();
 
         let preparation = arbiter
-            .authorize_first_cut(
+            .authorize_first_cut_fixture(
                 parsed_program("G21 G90 G94\nG0 Z2\nG1 X2 F20\nM5"),
                 first_cut_confirmation(),
             )
@@ -3019,6 +3178,56 @@ mod tests {
             ]
         );
         assert_eq!(arbiter.sender_snapshot().state, SenderState::Idle);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn completed_check_certifies_the_exact_cutting_program_and_options() {
+        let source = "G21 G90 G94\nM3 S1000\nG1 X1 F10\nM5";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        arbiter
+            .start_check_run(parsed_program(source))
+            .await
+            .unwrap();
+        let checked = wait_for_sender(&arbiter, SenderState::Completed).await;
+        assert_eq!(checked.mode, Some(millo_sender::SenderMode::CheckRun));
+        assert_eq!(arbiter.snapshot().machine.mode, MachineMode::Idle);
+
+        let report = arbiter
+            .preflight_real_run(parsed_program(source), ProgramRunIntent::Cutting)
+            .await
+            .unwrap();
+        assert!(report.ready);
+        assert!(report.checks.iter().any(|check| {
+            check.id == "grbl-check-certificate" && check.level == RunPreflightLevel::Pass
+        }));
+
+        let changed_options = arbiter
+            .preflight_real_run_with_options(
+                parsed_program(source),
+                ProgramRunIntent::Cutting,
+                ProgramExecutionOptions {
+                    optional_stop: true,
+                    block_delete: false,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!changed_options.ready);
+        assert!(changed_options.checks.iter().any(|check| {
+            check.id == "grbl-check-certificate" && check.detail.contains("semantics changed")
+        }));
+        assert_eq!(
+            control
+                .writes()
+                .iter()
+                .filter(|write| write.as_slice() == b"$C\n")
+                .count(),
+            2
+        );
         task.abort();
     }
 
@@ -3182,6 +3391,7 @@ mod tests {
 
         assert_eq!(completed.acknowledged_lines, completed.total_lines);
         assert!(control.writes().contains(&b"T5\n".to_vec()));
+        assert!(!control.writes().contains(&b"M30\n".to_vec()));
         assert!(!control.writes().iter().any(|write| {
             String::from_utf8_lossy(write)
                 .split_whitespace()
@@ -3198,6 +3408,7 @@ mod tests {
         let expected_commands = plan
             .lines()
             .iter()
+            .filter(|line| line.kind() != DryRunLineKind::ProgramEnd)
             .map(|line| format!("{}\n", line.command()).into_bytes())
             .collect::<Vec<_>>();
         let (arbiter, control, worker) = serial_preflight_arbiter();
@@ -3243,6 +3454,7 @@ mod tests {
             .unwrap()
             .lines()
             .iter()
+            .filter(|line| line.kind() != DryRunLineKind::ProgramEnd)
             .map(|line| format!("{}\n", line.command()).into_bytes())
             .collect::<Vec<_>>();
         let (arbiter, control, worker) = serial_preflight_arbiter();
@@ -3252,7 +3464,8 @@ mod tests {
         arbiter.start_check_run(program).await.unwrap();
         let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
 
-        assert_eq!(completed.acknowledged_lines, expected.len());
+        assert_eq!(completed.acknowledged_lines, completed.total_lines);
+        assert_eq!(completed.total_lines, expected.len() + 1);
         assert_eq!(arbiter.snapshot().machine.mode, MachineMode::Idle);
         let actual = control
             .writes()

@@ -1867,6 +1867,7 @@ dependencies = [
  "millo-domain",
  "millo-dry-run",
  "millo-gcode",
+ "millo-journal",
  "millo-mock",
  "millo-profile",
  "millo-run",
@@ -1911,6 +1912,16 @@ name = "millo-grbl"
 version = "0.1.0"
 dependencies = [
  "millo-domain",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "millo-journal"
+version = "0.1.0"
+dependencies = [
+ "millo-sender",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

@@ -4,7 +4,7 @@ use std::{
 };
 
 use millo_dry_run::{DryRunLine, DryRunLineKind, DryRunPlan, MAX_DRY_RUN_COMMAND_BYTES};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const MAX_SENDER_LINES: usize = 400_004;
@@ -20,7 +20,7 @@ pub fn usable_rx_buffer_capacity(reported_bytes: Option<u16>) -> usize {
         .unwrap_or(DEFAULT_GRBL_RX_BUFFER_BYTES)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SenderMode {
     MockDryRun,
@@ -48,7 +48,7 @@ impl Default for SenderLimits {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SenderState {
     #[default]
@@ -63,7 +63,7 @@ pub enum SenderState {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SenderFailureKind {
     GrblError,
@@ -76,7 +76,7 @@ pub enum SenderFailureKind {
     Internal,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SenderFailure {
     pub kind: SenderFailureKind,
@@ -117,6 +117,7 @@ impl SenderFailure {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SenderSnapshot {
+    pub run_sequence: u64,
     pub state: SenderState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<SenderMode>,
@@ -149,6 +150,7 @@ pub struct SenderSnapshot {
 impl Default for SenderSnapshot {
     fn default() -> Self {
         Self {
+            run_sequence: 0,
             state: SenderState::Idle,
             mode: None,
             source_name: None,
@@ -205,6 +207,7 @@ pub enum SenderError {
 
 pub struct Sender {
     limits: SenderLimits,
+    run_sequence: u64,
     plan: Option<DryRunPlan>,
     state: SenderState,
     mode: Option<SenderMode>,
@@ -239,6 +242,7 @@ impl Sender {
     pub fn with_limits(limits: SenderLimits) -> Self {
         Self {
             limits,
+            run_sequence: 0,
             plan: None,
             state: SenderState::Idle,
             mode: None,
@@ -319,6 +323,7 @@ impl Sender {
             return Err(SenderError::Busy(self.state));
         }
         self.validate_plan(&plan)?;
+        self.run_sequence = self.run_sequence.saturating_add(1);
         self.shutdown_total = plan
             .lines()
             .iter()
@@ -518,7 +523,10 @@ impl Sender {
                 return None;
             }
             let line = plan.lines()[self.dispatched_lines].clone();
-            if line.kind() == DryRunLineKind::ToolChange {
+            if line.kind() == DryRunLineKind::ToolChange
+                || (self.mode == Some(SenderMode::CheckRun)
+                    && line.kind() == DryRunLineKind::ProgramEnd)
+            {
                 if !self.in_flight.is_empty() {
                     return None;
                 }
@@ -663,6 +671,7 @@ impl Sender {
             .or(self.last_line.as_ref());
         let estimated_total_ms = self.plan.as_ref().map_or(0, DryRunPlan::estimated_total_ms);
         SenderSnapshot {
+            run_sequence: self.run_sequence,
             state: self.state,
             mode: self.mode,
             source_name: self.plan.as_ref().map(|plan| plan.source_name().to_owned()),
@@ -1152,8 +1161,11 @@ mod tests {
         sender.start().unwrap();
 
         let mut checked_pauses = 0;
+        let mut sent_program_end = false;
         while sender.snapshot().state == SenderState::Running {
-            let line = sender.next_line().unwrap();
+            let Some(line) = sender.next_line() else {
+                break;
+            };
             assert!(sender.next_line().is_none());
             sender.acknowledge_ok().unwrap();
             if line.kind() == DryRunLineKind::ProgramPause {
@@ -1161,7 +1173,7 @@ mod tests {
                 assert_eq!(sender.snapshot().state, SenderState::Running);
             }
             if line.kind() == DryRunLineKind::ProgramEnd {
-                break;
+                sent_program_end = true;
             }
         }
 
@@ -1170,6 +1182,7 @@ mod tests {
         assert_eq!(completed.state, SenderState::Completed);
         assert_eq!(completed.acknowledged_lines, completed.total_lines);
         assert_eq!(checked_pauses, 1);
+        assert!(!sent_program_end);
         assert!(sender.deferred_program_end().is_none());
     }
 

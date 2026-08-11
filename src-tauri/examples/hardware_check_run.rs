@@ -5,6 +5,7 @@ use millo_controller::ControllerConfig;
 use millo_domain::{HardwareProfile, MachineMode};
 use millo_dry_run::ProgramExecutionOptions;
 use millo_gcode::{ProgramParseOptions, ProgramParseRequest, parse_program_with_options};
+use millo_run::{ProgramRunIntent, RunPreflightLevel};
 use millo_sender::SenderState;
 use millo_serial::{SerialConfig, SerialTransport};
 
@@ -84,6 +85,7 @@ async fn run(
         .into());
     }
 
+    let preflight_program = program.clone();
     let mut updates = arbiter.subscribe_sender();
     let started = arbiter
         .start_check_run_with_options(program, execution_options)
@@ -147,7 +149,28 @@ async fn run(
         ))
         .into());
     }
-    println!("PASS: every line was accepted and GRBL returned to Idle");
+    let preflight = arbiter
+        .preflight_real_run_with_options(
+            preflight_program,
+            ProgramRunIntent::Cutting,
+            execution_options,
+        )
+        .await?;
+    let certificate = preflight
+        .checks
+        .iter()
+        .find(|check| check.id == "grbl-check-certificate")
+        .ok_or_else(|| input_error("Cutting preflight did not report a Check certificate"))?;
+    if certificate.level != RunPreflightLevel::Pass {
+        return Err(input_error(format!(
+            "Check certificate was not accepted: {}",
+            certificate.detail
+        ))
+        .into());
+    }
+    println!(
+        "PASS: every line was accepted, GRBL returned to Idle, and Cutting preflight accepted the certificate"
+    );
     Ok(())
 }
 

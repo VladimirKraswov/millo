@@ -182,6 +182,11 @@ its deferred end command. Sender snapshots expose the last correlated `ok`, its
 source line, acknowledgement age, a monotonic progress sequence, and whether
 both shutdown commands were accepted. Snapshot work is constant-time; a
 100,000-line regression completes with only the bounded RX FIFO in flight.
+Each loaded plan also receives a stable process-local run sequence.
+`millo-journal` records a bounded 100-run history at start, state transitions,
+throttled progress checkpoints, and terminal state. Its temp/backup JSON keeps
+the preceding valid checkpoint, while failed/cancelled entries are explicitly
+diagnostic and cannot be used as a resume lease.
 
 A separate serial-only Check run validates an approved file through GRBL's
 typed `$C` mode without executing motion. The actor enters only from fresh
@@ -192,11 +197,18 @@ The complex multi-plane fixture has passed 25/25 lines on the physical GRBL
 requirement for an explicit axis target on a full-circle arc.
 Check uses Cutting grammar, so production `M3/M4/S` syntax can be firmware-
 validated while Air policy continues to reject it. A second physical fixture
-passed 26/26 lines, including validation-only M0/M1, and returned to Idle.
+completed 27/27 sender steps, including validation-only M0/M1, returned to Idle,
+and produced a certificate accepted by fresh Cutting preflight. M2/M30 is
+host-validated during Check and is still sent only by physical Air/Cut runs.
 Program workspace exposes this lifecycle through typed `GRBL Check`; Tauri
 reparses the retained source before the actor enters `$C`. Optional-block and
 checksum semantics are covered by the same Check path; metadata-only `O`
 program headers are retained but never sent.
+A completed Check mints a 15-minute certificate only after the controller has
+returned to verified `Idle`. Cutting preflight requires that certificate to
+match the exact source fingerprint, Optional Stop/Block Delete options, reset
+count, and reconnect count. Air run remains available without it as the
+spindle-off physical validation path.
 
 The execution-core differences from the Candle reference, the problem each one
 solves, and the remaining deliberate capability gates are maintained in
@@ -270,6 +282,7 @@ successful GRBL status exchange.
 | --- | --- |
 | `millo-domain` | Stable machine and controller types |
 | `millo-gcode` | Immutable G-code program, warnings, parser, and preview geometry |
+| `millo-journal` | Bounded crash-diagnostic history with throttled atomic JSON checkpoints |
 | `millo-grbl` | GRBL wire-format parsing and encoding |
 | `millo-transport` | Controller-independent I/O contract |
 | `millo-mock` | Deterministic virtual machine for tests |
@@ -322,6 +335,8 @@ Responsive interleaved sender I/O is recorded in
 [ADR 0028](docs/decisions/0028-responsive-sender-io.md).
 Host-managed tool change is recorded in
 [ADR 0034](docs/decisions/0034-host-managed-tool-change.md).
+Certified Check evidence and the bounded run journal are recorded in
+[ADR 0037](docs/decisions/0037-certified-check-and-run-journal.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

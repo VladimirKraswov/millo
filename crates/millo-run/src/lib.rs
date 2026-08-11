@@ -16,6 +16,7 @@ use thiserror::Error;
 const MAX_REPORTED_PROGRAM_BLOCKERS: usize = 20;
 const FIRST_CUT_POSITION_TOLERANCE_MM: f64 = 0.002;
 pub const FIRST_CUT_AUTHORIZATION_TTL: Duration = Duration::from_secs(30);
+pub const PROGRAM_CHECK_CERTIFICATE_TTL: Duration = Duration::from_secs(15 * 60);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -23,6 +24,148 @@ pub enum ProgramRunIntent {
     #[default]
     AirRun,
     Cutting,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramCheckBinding {
+    pub source_name: String,
+    pub program_fingerprint: String,
+    pub execution_options: ProgramExecutionOptions,
+}
+
+impl ProgramCheckBinding {
+    pub fn from_program(
+        program: &GcodeProgram,
+        execution_options: ProgramExecutionOptions,
+    ) -> Self {
+        Self {
+            source_name: program.source_name.clone(),
+            program_fingerprint: program_fingerprint(program),
+            execution_options,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramCheckCertificate {
+    pub sequence: u64,
+    pub source_name: String,
+    pub program_fingerprint: String,
+    pub execution_options: ProgramExecutionOptions,
+    pub reset_count: u64,
+    pub reconnect_count: u32,
+}
+
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum ProgramCheckCertificateError {
+    #[error("GRBL Check has not validated this program in the current controller session")]
+    Missing,
+    #[error("the GRBL Check certificate expired")]
+    Expired,
+    #[error("the loaded program changed after GRBL Check")]
+    ProgramChanged,
+    #[error("optional-stop or block-delete semantics changed after GRBL Check")]
+    ExecutionOptionsChanged,
+    #[error("the controller reset or reconnected after GRBL Check")]
+    ControllerSessionChanged,
+    #[error("the controller is not safely connected and Idle")]
+    UnsafeControllerState,
+}
+
+#[derive(Debug, Clone)]
+struct ProgramCheckLease {
+    certificate: ProgramCheckCertificate,
+    issued_at: Instant,
+}
+
+#[derive(Debug, Default)]
+pub struct ProgramCheckGate {
+    next_sequence: u64,
+    lease: Option<ProgramCheckLease>,
+}
+
+impl ProgramCheckGate {
+    pub fn issue(
+        &mut self,
+        binding: ProgramCheckBinding,
+        snapshot: &ControllerSnapshot,
+        now: Instant,
+    ) -> Result<ProgramCheckCertificate, ProgramCheckCertificateError> {
+        if !stable_idle(snapshot) {
+            self.invalidate();
+            return Err(ProgramCheckCertificateError::UnsafeControllerState);
+        }
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        let certificate = ProgramCheckCertificate {
+            sequence: self.next_sequence,
+            source_name: binding.source_name,
+            program_fingerprint: binding.program_fingerprint,
+            execution_options: binding.execution_options,
+            reset_count: snapshot.reset_count,
+            reconnect_count: snapshot.reconnect_count,
+        };
+        self.lease = Some(ProgramCheckLease {
+            certificate: certificate.clone(),
+            issued_at: now,
+        });
+        Ok(certificate)
+    }
+
+    pub fn validate(
+        &mut self,
+        binding: &ProgramCheckBinding,
+        snapshot: &ControllerSnapshot,
+        now: Instant,
+    ) -> Result<ProgramCheckCertificate, ProgramCheckCertificateError> {
+        let Some(lease) = self.lease.clone() else {
+            return Err(ProgramCheckCertificateError::Missing);
+        };
+        let error = if now.duration_since(lease.issued_at) > PROGRAM_CHECK_CERTIFICATE_TTL {
+            Some(ProgramCheckCertificateError::Expired)
+        } else if lease.certificate.reset_count != snapshot.reset_count
+            || lease.certificate.reconnect_count != snapshot.reconnect_count
+        {
+            Some(ProgramCheckCertificateError::ControllerSessionChanged)
+        } else if !stable_idle(snapshot) {
+            Some(ProgramCheckCertificateError::UnsafeControllerState)
+        } else if lease.certificate.program_fingerprint != binding.program_fingerprint {
+            Some(ProgramCheckCertificateError::ProgramChanged)
+        } else if lease.certificate.execution_options != binding.execution_options {
+            Some(ProgramCheckCertificateError::ExecutionOptionsChanged)
+        } else {
+            None
+        };
+        if let Some(error) = error {
+            if matches!(
+                error,
+                ProgramCheckCertificateError::Expired
+                    | ProgramCheckCertificateError::ControllerSessionChanged
+            ) {
+                self.invalidate();
+            }
+            return Err(error);
+        }
+        Ok(lease.certificate.clone())
+    }
+
+    pub fn observe(&mut self, snapshot: &ControllerSnapshot, now: Instant) {
+        let Some(lease) = self.lease.clone() else {
+            return;
+        };
+        if snapshot.connection != ConnectionState::Connected
+            || snapshot.reset_count != lease.certificate.reset_count
+            || snapshot.reconnect_count != lease.certificate.reconnect_count
+            || now.duration_since(lease.issued_at) > PROGRAM_CHECK_CERTIFICATE_TTL
+        {
+            self.invalidate();
+        }
+    }
+
+    pub fn invalidate(&mut self) {
+        self.lease = None;
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -888,6 +1031,103 @@ mod tests {
         );
         assert!(report.ready);
         (program, report)
+    }
+
+    #[test]
+    fn check_certificate_is_program_option_and_session_bound() {
+        let now = Instant::now();
+        let controller = snapshot(MachineMode::Idle);
+        let checked = program("G21 G90 G94\nG1 X5 F50\nM5");
+        let binding = ProgramCheckBinding::from_program(
+            &checked,
+            ProgramExecutionOptions {
+                optional_stop: true,
+                block_delete: false,
+            },
+        );
+        let mut gate = ProgramCheckGate::default();
+
+        let certificate = gate.issue(binding.clone(), &controller, now).unwrap();
+        assert_eq!(certificate.sequence, 1);
+        assert_eq!(
+            gate.validate(&binding, &controller, now + Duration::from_secs(1)),
+            Ok(certificate)
+        );
+
+        let changed_program = ProgramCheckBinding::from_program(
+            &program("G21 G90 G94\nG1 X6 F50\nM5"),
+            binding.execution_options,
+        );
+        assert_eq!(
+            gate.validate(&changed_program, &controller, now),
+            Err(ProgramCheckCertificateError::ProgramChanged)
+        );
+        let changed_options = ProgramCheckBinding {
+            execution_options: ProgramExecutionOptions {
+                optional_stop: false,
+                block_delete: false,
+            },
+            ..binding.clone()
+        };
+        assert_eq!(
+            gate.validate(&changed_options, &controller, now),
+            Err(ProgramCheckCertificateError::ExecutionOptionsChanged)
+        );
+
+        let mut reset = controller.clone();
+        reset.reset_count += 1;
+        assert_eq!(
+            gate.validate(&binding, &reset, now),
+            Err(ProgramCheckCertificateError::ControllerSessionChanged)
+        );
+        assert_eq!(
+            gate.validate(&binding, &controller, now),
+            Err(ProgramCheckCertificateError::Missing)
+        );
+    }
+
+    #[test]
+    fn check_certificate_expires_and_observation_clears_disconnects() {
+        let now = Instant::now();
+        let controller = snapshot(MachineMode::Idle);
+        let binding = ProgramCheckBinding::from_program(
+            &program("G21 G90 G94\nG1 X5 F50\nM5"),
+            ProgramExecutionOptions::default(),
+        );
+        let mut gate = ProgramCheckGate::default();
+        gate.issue(binding.clone(), &controller, now).unwrap();
+
+        assert_eq!(
+            gate.validate(
+                &binding,
+                &controller,
+                now + PROGRAM_CHECK_CERTIFICATE_TTL + Duration::from_millis(1),
+            ),
+            Err(ProgramCheckCertificateError::Expired)
+        );
+
+        gate.issue(binding.clone(), &controller, now).unwrap();
+        let mut disconnected = controller.clone();
+        disconnected.connection = ConnectionState::Disconnected;
+        gate.observe(&disconnected, now);
+        assert_eq!(
+            gate.validate(&binding, &controller, now),
+            Err(ProgramCheckCertificateError::Missing)
+        );
+    }
+
+    #[test]
+    fn check_certificate_can_only_be_issued_from_stable_idle() {
+        let binding = ProgramCheckBinding::from_program(
+            &program("G21 G90 G94\nG1 X5 F50\nM5"),
+            ProgramExecutionOptions::default(),
+        );
+        let mut gate = ProgramCheckGate::default();
+
+        assert_eq!(
+            gate.issue(binding, &snapshot(MachineMode::Run), Instant::now()),
+            Err(ProgramCheckCertificateError::UnsafeControllerState)
+        );
     }
 
     #[test]

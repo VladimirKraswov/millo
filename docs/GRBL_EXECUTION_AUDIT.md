@@ -17,7 +17,7 @@
 | M0/M1 | M0 barrier; M1 conditional on explicit Optional Stop | M0 validated; M1 sent only when Optional Stop is enabled | M0 pause; optional M1 pause | M0 pause; optional M1 pause |
 | Leading `/` | Retained; modal state and geometry depend on Block Delete | Included or omitted by explicit option | Included or omitted by authorized option | Included or omitted by authorized option |
 | `N...*checksum` | Decimal XOR checked before normalization; N retained, checksum removed | Yes | Yes | Yes |
-| M2/M30 | Program end barrier | Yes | Deferred until fresh Idle | Deferred until fresh Idle |
+| M2/M30 | Program end barrier | Host-validated; not sent | Deferred until fresh Idle | Deferred until fresh Idle |
 | M3/M4/S/M5 | Parsed and marked | Yes under Cutting grammar | Start/speed blocked; M5 allowed | Yes after Cutting authorization |
 | M9 | Yes | Yes | Yes | Yes |
 | M6 | Host-managed barrier with bounded T0-T255 | Tn validated; M6 skipped locally | Blocked | Verified operator barrier; M6 never sent |
@@ -33,6 +33,10 @@
   Inspector, explicit modal contract, policy-approved immutable parse result.
 - Authorization: intent, program SHA-256, controller session, observed position,
   execution options, 30-second expiry, atomic one-time consume.
+- Cutting validation: a successful full Check run mints a 15-minute certificate
+  bound to the same SHA-256, execution options, reset count, and reconnect count.
+  Missing, expired, changed, reset, or reconnected evidence blocks Cutting
+  preflight. Air run does not require this syntax certificate.
 - Optional semantics: Block Delete is applied during parsing, not by dropping
   text at dispatch; Optional Stop and Block Delete are included in preflight,
   confirmation and the consumed lease. Preview is reparsed when Block Delete
@@ -54,7 +58,12 @@
 - Progress data: monotonic acknowledgement sequence, last acknowledged source
   line/command, acknowledgement age, and shutdown-tail completion. Snapshot
   generation is constant-time regardless of program length.
-- Check: serial-only typed `$C`, one command in flight, automatic verified exit.
+- Crash diagnostics: a monotonic run sequence identifies each sender load.
+  `millo-journal` records start/state transitions, throttled progress checkpoints,
+  and every terminal result in a bounded 100-entry JSON file with a backup.
+  Failed/cancelled entries are explicitly non-executable recovery evidence.
+- Check: serial-only typed `$C`, one command in flight, host-validated M2/M30,
+  automatic verified exit, and an exact program/session certificate.
 - Tool change: isolated `M6` drains the response FIFO into a host-only
   `ToolChange` state; continuation is line/tool-bound and repeats fresh
   `Idle -> Inspector -> Idle` verification. Runtime excludes operator time.
@@ -65,9 +74,12 @@ On `/dev/cu.usbmodem11101`, GRBL `1.1f.20230316`:
 
 - `grbl-complex-check.nc`: 25/25 accepted after parser correction for full-circle
   endpoint requirements; repeated after response demultiplexing changes.
-- `grbl-cutting-check.nc`: 26/26 accepted on 2026-08-12, including `N` words,
+- `grbl-cutting-check.nc`: 27/27 sender steps completed on 2026-08-12, including `N` words,
   metadata-only `O2026` omission, M3/M4/S syntax, all three arc planes,
-  G90/G91, G93/G94, dwell, M0/M1, full circle, and M30; returned to Idle.
+  G90/G91, G93/G94, dwell, M0/M1, full circle, and host-validated M30. The
+  controller returned to Idle and an immediate Cutting preflight accepted the
+  newly issued certificate. This firmware emits a reset banner while disabling
+  `$C`; only the one banner created inside that verified transition is cleared.
 - `grbl-path-control-check.nc`: 7/7 accepted on 2026-08-12 with `G61` exact
   path mode. The same board rejected `G64` with `error:20`, so Millo blocks
   that LinuxCNC-style command during parsing instead of failing mid-program.
@@ -89,8 +101,8 @@ blocked hardware workflows listed above.
 ## Completion boundary
 
 The sender core is complete for the declared first-machine profile: GRBL 1.1,
-XYZ motion, manual spindle, no homing/limits/probe, whole-file Check, Air and
-Cut plans, and files using only the enabled command surface above. Completion
+XYZ motion, manual spindle, no homing/limits/probe, whole-file certified Check,
+Air and Cut plans, and files using only the enabled command surface above. Completion
 means immutable parse-to-plan input, bounded/correlated streaming, realtime
 safety and overrides, terminal drain, typed failures, runtime timing, Mock
 fault coverage, and physical Check/Air evidence all pass together.

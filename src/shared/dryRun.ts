@@ -32,6 +32,7 @@ export interface SenderFailure {
 }
 
 export interface SenderSnapshot {
+  readonly runSequence: number;
   readonly state: SenderState;
   readonly mode?: SenderMode;
   readonly sourceName?: string;
@@ -69,6 +70,7 @@ export interface DryRunGateway {
 }
 
 export const idleSenderSnapshot: SenderSnapshot = {
+  runSequence: 0,
   state: "idle",
   totalLines: 0,
   dispatchedLines: 0,

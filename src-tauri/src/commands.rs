@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::Arc,
+    time::{Instant, SystemTime},
+};
 
 use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
@@ -13,6 +18,7 @@ use millo_gcode::{
     GcodeProgram, ProgramParseOptions, ProgramParseRequest, parse_program,
     parse_program_with_options,
 };
+use millo_journal::{RunJournal, RunJournalEntry};
 use millo_mock::{MockControl, MockTransport};
 use millo_profile::{
     DetectedController, IdentityConfidence, MachineConnectionPreset, MachineFingerprint,
@@ -123,11 +129,16 @@ pub struct AppState {
     event_task: Mutex<Option<JoinHandle<()>>>,
     settings_root: Option<PathBuf>,
     settings_session: Mutex<Option<ActiveControllerSettings>>,
+    run_journal: Arc<Mutex<RunJournal>>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
-        Self::from_profile_store(MachineProfileStore::in_memory(), None)
+        Self::from_profile_store(
+            MachineProfileStore::in_memory(),
+            None,
+            RunJournal::in_memory(),
+        )
     }
 }
 
@@ -135,12 +146,24 @@ impl AppState {
     pub fn load(profile_path: impl Into<PathBuf>) -> Result<Self, String> {
         let profile_path = profile_path.into();
         let settings_root = profile_path.parent().map(|parent| parent.join("machines"));
+        let journal_path = profile_path
+            .parent()
+            .map(|parent| parent.join("sender-runs.json"));
         let profiles =
             MachineProfileStore::load(profile_path).map_err(|error| error.to_string())?;
-        Ok(Self::from_profile_store(profiles, settings_root))
+        let journal = journal_path
+            .map(RunJournal::load)
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_else(RunJournal::in_memory);
+        Ok(Self::from_profile_store(profiles, settings_root, journal))
     }
 
-    fn from_profile_store(profiles: MachineProfileStore, settings_root: Option<PathBuf>) -> Self {
+    fn from_profile_store(
+        profiles: MachineProfileStore,
+        settings_root: Option<PathBuf>,
+        run_journal: RunJournal,
+    ) -> Self {
         let initial = ResolvedTransport::mock();
         let descriptor = initial.descriptor;
         let mock = initial.mock;
@@ -166,6 +189,7 @@ impl AppState {
             event_task: Mutex::new(None),
             settings_root,
             settings_session: Mutex::new(None),
+            run_journal: Arc::new(Mutex::new(run_journal)),
         }
     }
 
@@ -177,6 +201,7 @@ impl AppState {
 
         let mut snapshots = self.arbiter.subscribe();
         let mut sender_snapshots = self.arbiter.subscribe_sender();
+        let run_journal = Arc::clone(&self.run_journal);
         *event_task = Some(tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -192,12 +217,26 @@ impl AppState {
                             break;
                         }
                         let snapshot = sender_snapshots.borrow_and_update().clone();
+                        if let Err(error) = run_journal.lock().await.observe(
+                            &snapshot,
+                            SystemTime::now(),
+                            Instant::now(),
+                        ) {
+                            eprintln!("sender journal checkpoint failed: {error}");
+                        }
                         let _ = app.emit("dry-run-state", snapshot);
                     }
                 }
             }
         }));
     }
+}
+
+#[tauri::command]
+pub async fn sender_run_history(
+    state: State<'_, AppState>,
+) -> Result<Vec<RunJournalEntry>, String> {
+    Ok(state.run_journal.lock().await.entries().to_vec())
 }
 
 #[tauri::command]

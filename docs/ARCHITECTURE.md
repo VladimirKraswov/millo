@@ -83,6 +83,8 @@ GRBL Check is a sibling validation path, not a weaker run authorization:
 Original source -> typed Tauri command -> Rust reparse -> Cutting policy
                                                    -> actor -> $C -> one-line FIFO
                                                    -> verified $C exit -> Idle
+                                                   -> program/session certificate
+                                                   -> Cutting preflight
 ```
 
 The UI cannot pass a prepared plan or toggle `$C`. M0 is a syntax-validation
@@ -221,6 +223,8 @@ does not schedule or execute controller I/O.
 - `millo-sender` limits plan lines and bytes, fills at most its configured GRBL
   RX byte window, releases exact command-plus-newline bytes on correlated FIFO
   `ok`, and models Ready/Running/Paused/ToolChange/Draining/Completed/Failed/Cancelled.
+- Every successful plan load increments `runSequence`; it is stable for the
+  complete run and independent from the per-acknowledgement progress sequence.
 - Cutting policy compiles isolated `M6` into a private host barrier. Any `Tn`
   is sent and acknowledged first; the barrier waits for an empty FIFO and never
   reaches GRBL. Completion is a separate typed actor request bound to source
@@ -244,6 +248,10 @@ does not schedule or execute controller I/O.
 - React receives a separate `dry-run-state` event with bounded progress,
   current source line, and terminal error. Plugins receive no sender or raw-line
   capability. `jobs.create` remains reserved.
+- The same event bridge passes snapshots to `millo-journal`. It updates one
+  bounded record per run at start, state changes, every 250 acknowledgements or
+  two seconds, and terminal state. The adapter owns the config path; the journal
+  crate owns schema, throttling, backup replacement, and recovery labels.
 
 ### GRBL Check-run boundary
 
@@ -257,14 +265,25 @@ does not schedule or execute controller I/O.
   validation but allows only one unacknowledged command. A rejected block
   therefore leaves no later response tail that could be mistaken for the `$C`
   cleanup acknowledgement.
-- Program end is acknowledged immediately in Check mode; there is no motion
-  planner to drain. Completion, correlated error, cancellation, disconnect,
+- Program end is parser/policy-validated and acknowledged locally in Check mode;
+  M2/M30 does not reach firmware and there is no motion planner to drain.
+  Completion, correlated error, cancellation, disconnect,
   and transport replacement all attempt a verified `Check -> Idle` transition.
+- Firmware may emit a reset banner while disabling `$C`. The actor accepts only
+  one reset count increment first observed inside that successful cleanup,
+  clears its notice, and requires another clean `Idle` status. Any earlier or
+  unrelated reset still fails the run and mints no certificate.
+- Completion mints a `ProgramCheckCertificate` only after the verified exit.
+  The certificate expires after 15 minutes and is bound to source SHA-256,
+  Optional Stop, Block Delete, reset count, and reconnect count. Failed,
+  cancelled, disconnected, or uncleanly closed Check runs mint nothing.
 - Check-run failures do not send Feed Hold or Soft Reset. Physical Air/Cut runs
   retain their buffered-motion abort policy and full RX-window streaming.
 - The physical GRBL 1.1f fixture covers G17/G18/G19 arcs, helices, explicit
   full-circle endpoints, G90/G91, G93/G94, and G4. All 25 sender lines were
-  accepted and the controller returned to `Idle`.
+  accepted and the controller returned to `Idle`. The newer cutting fixture
+  completed 27/27 sender steps and its post-Check Cutting preflight accepted the
+  certificate on the physical controller.
 
 ### Real-run execution boundary
 
@@ -282,6 +301,10 @@ does not schedule or execute controller I/O.
   checklist. Coolant, probing, machine/reference-coordinate motion,
   coordinate mutation, malformed geometry, and unsupported safety behavior
   remain blockers in both modes.
+- `Cutting` additionally requires a valid program/session-bound Check
+  certificate. Rechecking a different file or changing Optional Stop/Block
+  Delete cannot authorize the current preflight. `AirRun` remains available as
+  the spindle-off physical validation path.
 - An isolated Cutting `M6` is the exception: it becomes a host-only barrier,
   and the operator must verify the replacement tool, Z zero, safe Z, remaining
   path, manual spindle, and power access. Ordinary Resume cannot leave this

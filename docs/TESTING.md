@@ -187,6 +187,8 @@ port names remain untouched.
 - A 100,000-line sender regression finishes in bounded FIFO state, asserts every
   snapshot remains within RX capacity, and prevents accidental O(n) heartbeat
   work. The test exposed and fixed an initial quadratic shutdown-counter scan.
+- Sender snapshots carry a monotonic `runSequence` for journal correlation in
+  addition to the acknowledgement sequence used by the live heartbeat.
 - Heartbeat tests verify that each `ok` resets acknowledgement age, updates the
   exact line/command and sequence, and freezes evidence on terminal state.
 - Sender and actor tests assert structured failure kind, GRBL code, source line,
@@ -230,6 +232,9 @@ port names remain untouched.
 - `millo-run` tests cover incomplete confirmations, blocked/stale evidence,
   SHA-256 program binding, 30-second expiry, single-use consumption, and
   position/session invalidation.
+- `ProgramCheckGate` tests cover exact program and execution-option binding,
+  15-minute expiry, reset/reconnect invalidation, disconnect observation, and
+  stable-Idle-only issuance.
 - Actor fixtures model a Serial execution target with deterministic Mock GRBL.
   A successful authorization repeats exactly `?`, `$I`, `$$`, `$G`, `$#`, `?`,
   leaves the sender Idle, and emits no program line. Incomplete confirmation
@@ -288,7 +293,7 @@ port names remain untouched.
 - Mock GRBL models `$C`, reports `Check`, rejects the transition from Run, and
   returns to `Idle` after the second toggle.
 - Check sender mode keeps one line in flight, preserves exact source-line errors,
-  acknowledges `M30` without physical draining, and never emits Hold or Reset.
+  acknowledges `M2/M30` locally without writing it, and never emits Hold or Reset.
 - Check plans use Cutting grammar: M3/M4/S are accepted for firmware validation,
   while the same source remains forbidden by Air policy. An isolated M6 is a
   locally acknowledged host barrier after its `Tn`; coolant, probing,
@@ -296,6 +301,9 @@ port names remain untouched.
 - Actor tests reject non-serial targets before I/O, run the complete multi-plane
   fixture, verify every approved line exactly once, cover correlated error, and
   require automatic cleanup to `Idle`.
+- An actor integration test proves Cutting is blocked before Check, then follows
+  `Check completed -> verified Idle -> certificate -> ready preflight`; changing
+  Optional Stop afterwards blocks the same source again.
 - The physical command below first rejected a center-only full circle with
   `error:26` at source line 10. The parser now rejects that form locally and the
   fixture names the unchanged endpoint explicitly. A repeat on 2026-08-11
@@ -312,13 +320,20 @@ cargo run -p millo-desktop --example hardware_check_run -- \
 - `grbl-cutting-check.nc` adds metadata-only O headers, N words, M3/M4/S, all
   three arc planes, distance/feed mode transitions, dwell, M0/M1, and an
   explicit-endpoint full circle. Check validates M0/M1 without entering the
-  physical-run operator pause state. The physical controller accepted 26/26 lines on
-  2026-08-12 and returned to `Idle`:
+  physical-run operator pause state. The physical controller completed 27/27
+  sender steps on 2026-08-12, returned to `Idle`, and the utility then proved
+  the issued certificate through a fresh Cutting preflight:
 
 ```bash
 cargo run -p millo-desktop --example hardware_check_run -- \
   /dev/cu.usbmodem11101 fixtures/programs/grbl-cutting-check.nc
 ```
+
+The current firmware emits a reset banner while disabling `$C`. Two initial
+certificate runs correctly failed closed on that notice. The final path accepts
+only one newly observed reset count inside the verified Check cleanup, clears
+it, repeats status, and then issues the certificate. M30 is now host-validated
+in Check and never written; physical Air/Cut behavior is unchanged.
 
 - `grbl-path-control-check.nc` validates the exact-path command accepted by the
   target GRBL 1.1 controller:
@@ -363,6 +378,18 @@ additional two steps are the typed M5/M9 shutdown epilogue before M30.
 - Browser inspection at 1440 x 900 and 390 x 844 verifies the additional action
   in the preflight panel. The mobile page remains exactly 390 px wide; the
   340 px Check button stays inside its 25..365 px content bounds.
+
+## Sender journal coverage
+
+- `millo-journal` persists a new run immediately, throttles same-state progress
+  to 250 acknowledgements or two seconds, and always persists state changes and
+  terminal snapshots.
+- Failed entries preserve typed GRBL failure, exact current/last-acknowledged
+  line and command, but expose `RestartBlocked`, not an executable resume token.
+- The JSON store keeps at most 100 runs. Tests use a two-entry bound, corrupt
+  the active file, and prove load recovery from the preceding `.bak` checkpoint.
+- Tauri owns only the platform config path and observes the existing sender
+  event stream; it cannot alter journal recovery disposition.
 
 ### Hardware Air-run fixture
 

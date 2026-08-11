@@ -21,7 +21,10 @@ Buffered lines also complicate cleanup after a correlated parser error.
 - `SenderMode::CheckRun` validates normal command and plan bounds, but dispatches
   only one unacknowledged line. This keeps an error attached to one source block
   and leaves no queued response ahead of the cleanup `$C` acknowledgement.
-- Check run does not use physical motion draining and sends `M30` normally.
+- Check run does not use physical motion draining. M2/M30 is acknowledged as a
+  host validation barrier and is not sent; ADR 0037 supersedes the original
+  firmware-dispatch behavior after physical `$C` cleanup exposed reset side
+  effects.
 - Completion, error, cancellation, disconnect, or transport replacement exits
   Check mode and verifies fresh `Idle`. A cleanup failure changes the sender to
   Failed.

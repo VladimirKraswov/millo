@@ -119,6 +119,8 @@ export const previewFixtureFirstCutGateway: RealRunPreflightGateway = {
     };
   },
   startProgram: async () => ({
+    ...idleSenderSnapshot,
+    runSequence: 1,
     state: "running",
     mode: fixtureIntent === "airRun" ? "airRun" : "cutRun",
     sourceName: fixtureSourceName,
@@ -138,6 +140,8 @@ export const previewFixtureFirstCutGateway: RealRunPreflightGateway = {
     timeEstimateComplete: false,
   }),
   startCheck: async (request) => ({
+    ...idleSenderSnapshot,
+    runSequence: 2,
     state: "running",
     mode: "checkRun",
     sourceName: request.sourceName,
@@ -156,6 +160,8 @@ export const previewFixtureFirstCutGateway: RealRunPreflightGateway = {
     timeEstimateComplete: false,
   }),
   resumeProgram: async () => ({
+    ...idleSenderSnapshot,
+    runSequence: 1,
     state: "running",
     mode: fixtureIntent === "airRun" ? "airRun" : "cutRun",
     sourceName: fixtureSourceName,

@@ -8,6 +8,7 @@ members = [
   "crates/millo-gcode",
   "crates/millo-grbl",
   "crates/millo-mock",
+  "crates/millo-journal",
   "crates/millo-profile",
   "crates/millo-readiness",
   "crates/millo-run",
