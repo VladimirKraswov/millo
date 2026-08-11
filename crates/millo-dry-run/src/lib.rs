@@ -43,6 +43,7 @@ pub enum DryRunLineKind {
     SafetyPreamble,
     Program,
     ProgramPause,
+    ToolChange,
     ProgramEnd,
 }
 
@@ -52,6 +53,7 @@ pub struct DryRunLine {
     source_line: Option<usize>,
     command: String,
     kind: DryRunLineKind,
+    tool_number: Option<u8>,
     estimated_duration_ms: Option<u64>,
 }
 
@@ -66,6 +68,10 @@ impl DryRunLine {
 
     pub fn kind(&self) -> DryRunLineKind {
         self.kind
+    }
+
+    pub fn tool_number(&self) -> Option<u8> {
+        self.tool_number
     }
 
     pub fn estimated_duration_ms(&self) -> Option<u64> {
@@ -201,16 +207,34 @@ pub fn build_program_run_plan(
 
     let line_timings = line_timings(program);
     let mut program_lines = Vec::new();
+    let mut selected_tool = None;
     for line in program
         .lines
         .iter()
         .filter(|line| line.executable && !line.normalized.is_empty())
     {
         let kind = classify_line(&line.normalized);
+        if let Some(tool_number) = tool_number(&line.normalized) {
+            selected_tool = Some(tool_number);
+            if kind == DryRunLineKind::ToolChange {
+                program_lines.push(DryRunLine {
+                    source_line: Some(line.source_line),
+                    command: format!("T{tool_number}"),
+                    kind: DryRunLineKind::Program,
+                    tool_number: None,
+                    estimated_duration_ms: Some(0),
+                });
+            }
+        }
         program_lines.push(DryRunLine {
             source_line: Some(line.source_line),
             command: line.normalized.clone(),
             kind,
+            tool_number: if kind == DryRunLineKind::ToolChange {
+                selected_tool
+            } else {
+                None
+            },
             estimated_duration_ms: line_timings.get(&line.source_line).copied().flatten(),
         });
         if kind == DryRunLineKind::ProgramEnd {
@@ -226,6 +250,7 @@ pub fn build_program_run_plan(
         source_line: None,
         command: command.to_owned(),
         kind: DryRunLineKind::SafetyPreamble,
+        tool_number: None,
         estimated_duration_ms: Some(0),
     }));
     lines.extend(program_lines);
@@ -331,7 +356,7 @@ fn inspect_normalized_line(
                 DryRunBlockerKind::CoolantActivation,
                 "M7/M8 coolant activation is forbidden by dry-run policy",
             ),
-            'M' if code_is(value, 6.0) => add_blocker(
+            'M' if code_is(value, 6.0) && policy == ProgramRunPolicy::AirRun => add_blocker(
                 blockers,
                 seen,
                 Some(source_line),
@@ -371,6 +396,24 @@ fn inspect_normalized_line(
             _ => {}
         }
     }
+    if policy == ProgramRunPolicy::Cutting && has_code(normalized, 'M', 6.0) {
+        for word in normalized.split_whitespace() {
+            let Some((letter, value)) = split_word(word) else {
+                continue;
+            };
+            let allowed = letter == 'N' || letter == 'T' || (letter == 'M' && code_is(value, 6.0));
+            if !allowed {
+                add_blocker(
+                    blockers,
+                    seen,
+                    Some(source_line),
+                    DryRunBlockerKind::ToolChange,
+                    "M6 must be isolated from motion, spindle, coolant, and coordinate words",
+                );
+                break;
+            }
+        }
+    }
 }
 
 fn warning_allowed_by_policy(
@@ -381,7 +424,9 @@ fn warning_allowed_by_policy(
     policy == ProgramRunPolicy::Cutting
         && matches!(
             warning.code,
-            ProgramWarningCode::SpindleActivation | ProgramWarningCode::SpindleSpeed
+            ProgramWarningCode::SpindleActivation
+                | ProgramWarningCode::SpindleSpeed
+                | ProgramWarningCode::ToolChange
         )
 }
 
@@ -394,6 +439,9 @@ fn classify_line(normalized: &str) -> DryRunLineKind {
         if code_is(value, 2.0) || code_is(value, 30.0) {
             return DryRunLineKind::ProgramEnd;
         }
+        if code_is(value, 6.0) {
+            return DryRunLineKind::ToolChange;
+        }
         if code_is(value, 0.0) || code_is(value, 1.0) {
             pause = true;
         }
@@ -403,6 +451,24 @@ fn classify_line(normalized: &str) -> DryRunLineKind {
     } else {
         DryRunLineKind::Program
     }
+}
+
+fn has_code(normalized: &str, letter: char, expected: f64) -> bool {
+    normalized.split_whitespace().any(|word| {
+        split_word(word).is_some_and(|(actual_letter, value)| {
+            actual_letter == letter && code_is(value, expected)
+        })
+    })
+}
+
+fn tool_number(normalized: &str) -> Option<u8> {
+    normalized.split_whitespace().rev().find_map(|word| {
+        let ('T', value) = split_word(word)? else {
+            return None;
+        };
+        (value >= 0.0 && value <= u8::MAX as f64 && value.fract().abs() < f64::EPSILON)
+            .then_some(value as u8)
+    })
 }
 
 fn split_word(word: &str) -> Option<(char, f64)> {
@@ -542,6 +608,51 @@ mod tests {
                 .iter()
                 .any(|blocker| blocker.kind == DryRunBlockerKind::CoolantActivation)
         );
+    }
+
+    #[test]
+    fn cutting_policy_turns_m6_into_an_isolated_host_barrier() {
+        let plan = build_program_run_plan(
+            &parse("G21 G90 G94\nT2 M6\nG1 X1 F50\nT7\nM6\nM30"),
+            ProgramRunPolicy::Cutting,
+        )
+        .unwrap();
+        let lines = plan.lines();
+
+        let first_change = lines
+            .iter()
+            .position(|line| line.kind() == DryRunLineKind::ToolChange)
+            .unwrap();
+        assert_eq!(lines[first_change - 1].command(), "T2");
+        assert_eq!(lines[first_change].command(), "T2 M6");
+        assert_eq!(lines[first_change].tool_number(), Some(2));
+
+        let changes = lines
+            .iter()
+            .filter(|line| line.kind() == DryRunLineKind::ToolChange)
+            .collect::<Vec<_>>();
+        assert_eq!(changes.len(), 2);
+        assert_eq!(changes[1].command(), "M6");
+        assert_eq!(changes[1].tool_number(), Some(7));
+    }
+
+    #[test]
+    fn m6_remains_blocked_in_air_runs_and_cannot_share_a_cutting_block() {
+        let air = build_program_run_plan(&parse("T2 M6"), ProgramRunPolicy::AirRun).unwrap_err();
+        assert!(
+            air.blockers()
+                .iter()
+                .any(|blocker| blocker.kind == DryRunBlockerKind::ToolChange)
+        );
+
+        for source in ["M6 G0 X1", "M6 S12000", "M6 M5", "M6 P1"] {
+            let error =
+                build_program_run_plan(&parse(source), ProgramRunPolicy::Cutting).unwrap_err();
+            assert!(error.blockers().iter().any(|blocker| {
+                blocker.kind == DryRunBlockerKind::ToolChange
+                    && blocker.message.contains("must be isolated")
+            }));
+        }
     }
 
     #[test]

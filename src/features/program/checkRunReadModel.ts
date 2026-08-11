@@ -15,4 +15,4 @@ export const canStartCheckRun = (
   context.serialAvailable &&
   context.programLoaded &&
   !context.loading &&
-  !["running", "paused", "draining"].includes(sender.state);
+  !["running", "paused", "toolChange", "draining"].includes(sender.state);

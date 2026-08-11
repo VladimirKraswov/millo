@@ -64,7 +64,9 @@ export const dryRunControls = (
   sender: SenderSnapshot,
   context: DryRunControlContext,
 ): DryRunControls => {
-  const active = ["running", "paused", "draining"].includes(sender.state);
+  const active = ["running", "paused", "toolChange", "draining"].includes(
+    sender.state,
+  );
   return {
     canStart:
       !active &&

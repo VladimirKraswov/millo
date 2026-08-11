@@ -471,6 +471,19 @@ impl Parser {
                         "spindle speed is recorded but will be blocked by dry run",
                     );
                 }
+                'T' if word.value < 0.0
+                    || word.value.fract().abs() > f64::EPSILON
+                    || word.value > u8::MAX as f64 =>
+                {
+                    skip_motion = true;
+                    self.preview_complete = false;
+                    self.warn(
+                        source_line,
+                        ProgramWarningSeverity::Error,
+                        ProgramWarningCode::UnsupportedWord,
+                        "T tool number must be an integer from 0 to 255",
+                    );
+                }
                 'N' | 'O' | 'X' | 'Y' | 'Z' | 'I' | 'J' | 'K' | 'R' | 'F' | 'S' | 'T' | 'P'
                 | 'L' | 'H' | 'D' | 'Q' => {}
                 letter => {
@@ -880,7 +893,7 @@ impl Parser {
                 source_line,
                 ProgramWarningSeverity::Safety,
                 ProgramWarningCode::ToolChange,
-                "M6 tool change requires a future explicit operator workflow",
+                "M6 requires a host-managed operator tool-change barrier",
             );
         } else if code_is(value, 7.0) || code_is(value, 8.0) {
             self.warn(

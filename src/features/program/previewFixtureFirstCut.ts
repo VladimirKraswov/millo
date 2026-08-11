@@ -1,4 +1,6 @@
 import type { GcodeProgram } from "../../shared/program";
+import { idleSenderSnapshot } from "../../shared/dryRun";
+import type { SenderSnapshot } from "../../shared/dryRun";
 import type {
   FirstCutPreparation,
   RealRunPreflightGateway,
@@ -22,6 +24,25 @@ export const previewFixtureFirstCutProgram: GcodeProgram = {
     executableLineCount: previewFixtureProgram.summary.executableLineCount - 1,
     dryRunEligible: true,
   },
+};
+
+export const previewFixtureToolChangeSender: SenderSnapshot = {
+  ...idleSenderSnapshot,
+  state: "toolChange",
+  mode: "cutRun",
+  sourceName: previewFixtureFirstCutProgram.sourceName,
+  totalLines: 12,
+  dispatchedLines: 7,
+  acknowledgedLines: 6,
+  currentSourceLine: 5,
+  currentCommand: "T2 M6",
+  requestedTool: 2,
+  progress: 0.5,
+  elapsedSeconds: 42,
+  estimatedCompletedSeconds: 38,
+  estimatedRemainingSeconds: 31,
+  estimatedTotalSeconds: 69,
+  timeEstimateComplete: false,
 };
 
 export const previewFixtureFirstCutReport: RunPreflightReport = {
@@ -148,5 +169,23 @@ export const previewFixtureFirstCutGateway: RealRunPreflightGateway = {
     estimatedRemainingSeconds: 28,
     estimatedTotalSeconds: 48,
     timeEstimateComplete: false,
+  }),
+  completeToolChange: async () => ({
+    ...idleSenderSnapshot,
+    state: "running",
+    mode: "cutRun",
+    sourceName: fixtureSourceName,
+    totalLines: 12,
+    dispatchedLines: 8,
+    acknowledgedLines: 7,
+    inFlightLines: 1,
+    rxBufferBytes: 12,
+    currentSourceLine: 6,
+    currentCommand: "G1 X20 F120",
+    progress: 7 / 12,
+    elapsedSeconds: 42,
+    estimatedCompletedSeconds: 38,
+    estimatedRemainingSeconds: 31,
+    estimatedTotalSeconds: 69,
   }),
 };

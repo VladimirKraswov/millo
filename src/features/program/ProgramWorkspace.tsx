@@ -13,6 +13,7 @@ import {
   Trash2,
   TriangleAlert,
   Upload,
+  Wrench,
   X,
 } from "lucide-react";
 import {
@@ -40,10 +41,12 @@ import type {
   ProgramRunIntent,
   RealRunPreflightGateway,
   RunPreflightReport,
+  ToolChangeConfirmation,
 } from "../../shared/realRun";
 import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramLineTable } from "./ProgramLineTable";
+import { ToolChangeDialog } from "./ToolChangeDialog";
 import { canStartCheckRun } from "./checkRunReadModel";
 import {
   dryRunControls,
@@ -64,6 +67,7 @@ interface ProgramWorkspaceProps {
   readonly dryRunGateway?: DryRunGateway;
   readonly gateway: ProgramGateway;
   readonly initialProgram?: GcodeProgram;
+  readonly initialSender?: SenderSnapshot;
   readonly initialSource?: string;
   readonly onInspection?: (inspection: HardwareInspection) => void;
   readonly realRunAvailable?: boolean;
@@ -109,6 +113,7 @@ const senderLabels: Record<SenderState, string> = {
   ready: "Ready",
   running: "Running",
   paused: "Paused",
+  toolChange: "Tool change",
   draining: "Physical motion",
   completed: "Completed",
   failed: "Stopped on error",
@@ -121,6 +126,7 @@ export function ProgramWorkspace({
   dryRunGateway,
   gateway,
   initialProgram,
+  initialSender,
   initialSource = "",
   onInspection,
   realRunAvailable = false,
@@ -131,7 +137,9 @@ export function ProgramWorkspace({
   const [loaded, setLoaded] = useState<LoadedProgram | undefined>(
     initialProgram ? { program: initialProgram, source: initialSource } : undefined,
   );
-  const [sender, setSender] = useState<SenderSnapshot>(idleSenderSnapshot);
+  const [sender, setSender] = useState<SenderSnapshot>(
+    initialSender ?? idleSenderSnapshot,
+  );
   const [view, setView] = useState<PreviewView>("iso");
   const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -143,12 +151,15 @@ export function ProgramWorkspace({
   const [programRunIntent, setProgramRunIntent] =
     useState<ProgramRunIntent>("airRun");
   const [firstCutOpen, setFirstCutOpen] = useState(false);
+  const [toolChangeOpen, setToolChangeOpen] = useState(false);
   const [firstCutPreparation, setFirstCutPreparation] =
     useState<FirstCutPreparation>();
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [error, setError] = useState<string>();
   const program = loaded?.program;
-  const senderActive = ["running", "paused", "draining"].includes(sender.state);
+  const senderActive = ["running", "paused", "toolChange", "draining"].includes(
+    sender.state,
+  );
 
   useEffect(() => {
     if (!desktopRuntime || !dryRunGateway) return;
@@ -184,8 +195,17 @@ export function ProgramWorkspace({
       setRealRunReport(undefined);
       setFirstCutPreparation(undefined);
       setFirstCutOpen(false);
+      setToolChangeOpen(false);
     }
   }, [realRunAvailable, realRunTarget]);
+
+  useEffect(() => {
+    if (sender.state === "toolChange") {
+      setToolChangeOpen(true);
+    } else {
+      setToolChangeOpen(false);
+    }
+  }, [sender.currentSourceLine, sender.requestedTool, sender.state]);
 
   const loadFile = async (file?: File) => {
     if (!file || loading || !desktopRuntime) return;
@@ -199,6 +219,7 @@ export function ProgramWorkspace({
       setRealRunReport(undefined);
       setFirstCutPreparation(undefined);
       setFirstCutOpen(false);
+      setToolChangeOpen(false);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -336,6 +357,14 @@ export function ProgramWorkspace({
         source: loaded.source,
       }),
     );
+  };
+  const completeToolChange = async (
+    confirmation: ToolChangeConfirmation,
+  ): Promise<void> => {
+    if (!realRunGateway) {
+      throw new Error("Tool-change gateway is unavailable");
+    }
+    setSender(await realRunGateway.completeToolChange(confirmation));
   };
   const programRunVisible =
     senderForProgram && (sender.mode === "airRun" || sender.mode === "cutRun");
@@ -550,6 +579,15 @@ export function ProgramWorkspace({
                       Resume
                     </button>
                   )}
+                  {displayedSender.state === "toolChange" && realRunGateway && (
+                    <button
+                      onClick={() => setToolChangeOpen(true)}
+                      type="button"
+                    >
+                      <Wrench aria-hidden="true" size={13} />
+                      Подтвердить замену
+                    </button>
+                  )}
                 </div>
                 <small>
                   {displayedSender.state === "completed"
@@ -558,6 +596,8 @@ export function ProgramWorkspace({
                       : "Все строки подтверждены; контроллер вернулся в Idle"
                     : displayedSender.state === "failed"
                       ? displayedSenderFailure
+                      : displayedSender.state === "toolChange"
+                        ? `M6 удерживается приложением${displayedSender.requestedTool === undefined ? "" : ` · требуется T${displayedSender.requestedTool}`}`
                       : checkRunVisible
                         ? "По одной строке · без движения и включения выходов"
                         : "Остановка: Feed Hold, затем подтверждаемый Soft Reset справа"}
@@ -918,6 +958,18 @@ export function ProgramWorkspace({
         open={firstCutOpen}
         report={reportForProgram}
       />
+
+      {displayedSender.state === "toolChange" &&
+        displayedSender.currentSourceLine !== undefined &&
+        realRunGateway && (
+          <ToolChangeDialog
+            onClose={() => setToolChangeOpen(false)}
+            onComplete={completeToolChange}
+            open={toolChangeOpen}
+            requestedTool={displayedSender.requestedTool}
+            sourceLine={displayedSender.currentSourceLine}
+          />
+        )}
 
       {error && <p className="program-error">{error}</p>}
     </section>

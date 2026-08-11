@@ -123,4 +123,7 @@ export const previewFixturePreflightGateway: RealRunPreflightGateway = {
   resumeProgram: async () => {
     throw new Error("Blocked fixture cannot resume");
   },
+  completeToolChange: async () => {
+    throw new Error("Blocked fixture has no tool change");
+  },
 };

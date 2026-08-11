@@ -352,6 +352,27 @@ fn unknown_m_codes_fail_the_future_dry_run_gate() {
     }));
 }
 
+#[test]
+fn tool_selection_is_bounded_and_m6_is_explicitly_host_managed() {
+    let valid = parse_fixture("tool-change.nc", "G21 G90\nT2 M6\nG1 X1 F10");
+    assert!(valid.summary.preview_complete);
+    assert!(!valid.summary.dry_run_eligible);
+    assert!(valid.warnings.iter().any(|warning| {
+        warning.source_line == 2
+            && warning.code == ProgramWarningCode::ToolChange
+            && warning.message.contains("host-managed")
+    }));
+
+    for source in ["T-1", "T2.5", "T256"] {
+        let invalid = parse_fixture("bad-tool.nc", source);
+        assert!(!invalid.summary.preview_complete);
+        assert!(invalid.warnings.iter().any(|warning| {
+            warning.code == ProgramWarningCode::UnsupportedWord
+                && warning.severity == ProgramWarningSeverity::Error
+        }));
+    }
+}
+
 fn assert_point(point: millo_gcode::ProgramPoint, expected: [f64; 3]) {
     assert!((point.x - expected[0]).abs() < 0.001, "x={}", point.x);
     assert!((point.y - expected[1]).abs() < 0.001, "y={}", point.y);

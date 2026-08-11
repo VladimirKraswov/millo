@@ -174,7 +174,7 @@ port names remain untouched.
 ## Current dry-run sender coverage
 
 - Policy tests independently reject spindle activation, non-zero spindle
-  speed, coolant activation, probing, M6, machine/reference-coordinate motion,
+  speed, coolant activation, probing, Air-run M6, machine/reference-coordinate motion,
   coordinate mutation, parser safety/errors, incomplete previews, and commands
   over 255 bytes.
 - Approved plans contain normalized executable lines plus only an M5/M9 safety
@@ -239,6 +239,12 @@ port names remain untouched.
   Hold/Resume, Reset cancellation, and terminal-command timeout while deferred.
   Physical command failures also verify automatic Hold plus Soft Reset and that
   reset flushes every queued Mock GRBL response.
+- Cutting `M6` fixtures prove that `Tn` is acknowledged before an empty-FIFO
+  host barrier, no `M6` bytes reach Mock/serial transport, ordinary Resume is
+  rejected, stale line/tool confirmation is rejected before I/O, and valid
+  completion repeats fresh status, Inspector, G54-G59, and final status checks.
+- TypeScript tests bind all six operator facts to the exact line/tool dialog;
+  sender read models keep `toolChange` active and non-restartable.
 - Delayed-response fixtures prove Feed Hold is serviced within one 10 ms read
   slice instead of waiting for the command timeout. A separate fixture injects
   realtime status ahead of a delayed `ok`, verifies live `Bf/Ov` telemetry, and
@@ -269,7 +275,8 @@ port names remain untouched.
 - Check sender mode keeps one line in flight, preserves exact source-line errors,
   acknowledges `M30` without physical draining, and never emits Hold or Reset.
 - Check plans use Cutting grammar: M3/M4/S are accepted for firmware validation,
-  while the same source remains forbidden by Air policy. M6, coolant, probing,
+  while the same source remains forbidden by Air policy. An isolated M6 is a
+  locally acknowledged host barrier after its `Tn`; coolant, probing,
   coordinate mutation, and reference/machine movement remain blocked.
 - Actor tests reject non-serial targets before I/O, run the complete multi-plane
   fixture, verify every approved line exactly once, cover correlated error, and
@@ -309,6 +316,16 @@ cargo run -p millo-desktop --example hardware_check_run -- \
 The physical target accepted `G61` and rejected `G64` with `error:20` on
 2026-08-12. Parser regression coverage therefore rejects `G64` before a plan
 can reach the sender.
+
+- `grbl-tool-change-check.nc` exercises `T2 M6` plus linear and arc geometry.
+  On 2026-08-12 the physical run completed 16/16 sender steps and returned to
+  `Idle`; core and actor assertions prove `T2` is the controller line while M6
+  is a locally acknowledged host barrier:
+
+```bash
+cargo run -p millo-desktop --example hardware_check_run -- \
+  /dev/cu.usbmodem11101 fixtures/programs/grbl-tool-change-check.nc
+```
 
 - The React check-run read model requires a loaded program, typed gateway, and
   serial target and refuses to replace an active sender. Program workspace

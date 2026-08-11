@@ -56,6 +56,7 @@ pub enum SenderState {
     Ready,
     Running,
     Paused,
+    ToolChange,
     Draining,
     Completed,
     Failed,
@@ -128,6 +129,7 @@ pub struct SenderSnapshot {
     pub rx_buffer_capacity: usize,
     pub current_source_line: Option<usize>,
     pub current_command: Option<String>,
+    pub requested_tool: Option<u8>,
     pub last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<SenderFailure>,
@@ -153,6 +155,7 @@ impl Default for SenderSnapshot {
             rx_buffer_capacity: DEFAULT_GRBL_RX_BUFFER_BYTES,
             current_source_line: None,
             current_command: None,
+            requested_tool: None,
             last_error: None,
             failure: None,
             progress: 0.0,
@@ -251,7 +254,11 @@ impl Sender {
     ) -> Result<SenderSnapshot, SenderError> {
         if matches!(
             self.state,
-            SenderState::Ready | SenderState::Running | SenderState::Paused | SenderState::Draining
+            SenderState::Ready
+                | SenderState::Running
+                | SenderState::Paused
+                | SenderState::Draining
+                | SenderState::ToolChange
         ) {
             return Err(SenderError::Busy(self.state));
         }
@@ -284,7 +291,10 @@ impl Sender {
     ) -> Result<SenderSnapshot, SenderError> {
         if matches!(
             self.state,
-            SenderState::Running | SenderState::Paused | SenderState::Draining
+            SenderState::Running
+                | SenderState::Paused
+                | SenderState::Draining
+                | SenderState::ToolChange
         ) {
             return Err(SenderError::Busy(self.state));
         }
@@ -349,7 +359,11 @@ impl Sender {
     pub fn cancel(&mut self) -> Result<SenderSnapshot, SenderError> {
         if !matches!(
             self.state,
-            SenderState::Ready | SenderState::Running | SenderState::Paused | SenderState::Draining
+            SenderState::Ready
+                | SenderState::Running
+                | SenderState::Paused
+                | SenderState::ToolChange
+                | SenderState::Draining
         ) {
             return Err(SenderError::InvalidTransition {
                 action: "cancel",
@@ -419,6 +433,19 @@ impl Sender {
         self.state == SenderState::Running
     }
 
+    pub fn complete_tool_change(&mut self) -> Result<SenderSnapshot, SenderError> {
+        if self.state != SenderState::ToolChange {
+            return Err(SenderError::InvalidTransition {
+                action: "complete tool change",
+                state: self.state,
+            });
+        }
+        self.acknowledged_lines = self.acknowledged_lines.saturating_add(1);
+        self.state = SenderState::Running;
+        self.resume_clock();
+        Ok(self.snapshot())
+    }
+
     pub fn has_in_flight(&self) -> bool {
         !self.in_flight.is_empty()
     }
@@ -438,21 +465,40 @@ impl Sender {
         if self.mode == Some(SenderMode::CheckRun) && !self.in_flight.is_empty() {
             return None;
         }
-        let plan = self.plan.as_ref()?;
-        if self.dispatched_lines >= plan.lines().len() {
-            if self.in_flight.is_empty() {
-                self.state = self.finished_state();
+        loop {
+            let plan = self.plan.as_ref()?;
+            if self.dispatched_lines >= plan.lines().len() {
+                if self.in_flight.is_empty() {
+                    self.state = self.finished_state();
+                }
+                return None;
             }
-            return None;
+            if self.in_flight.back().is_some_and(|line| {
+                matches!(
+                    line.kind(),
+                    DryRunLineKind::ProgramPause | DryRunLineKind::ProgramEnd
+                )
+            }) {
+                return None;
+            }
+            let line = plan.lines()[self.dispatched_lines].clone();
+            if line.kind() == DryRunLineKind::ToolChange {
+                if !self.in_flight.is_empty() {
+                    return None;
+                }
+                self.dispatched_lines = self.dispatched_lines.saturating_add(1);
+                self.last_line = Some(line);
+                if self.mode == Some(SenderMode::CheckRun) {
+                    self.acknowledged_lines = self.acknowledged_lines.saturating_add(1);
+                    continue;
+                }
+                self.state = SenderState::ToolChange;
+                self.pause_clock();
+                return None;
+            }
+            break;
         }
-        if self.in_flight.back().is_some_and(|line| {
-            matches!(
-                line.kind(),
-                DryRunLineKind::ProgramPause | DryRunLineKind::ProgramEnd
-            )
-        }) {
-            return None;
-        }
+        let plan = self.plan.as_ref()?;
         let line = plan.lines()[self.dispatched_lines].clone();
         if self.requires_motion_drain() && line.kind() == DryRunLineKind::ProgramEnd {
             if self.in_flight.is_empty() {
@@ -584,6 +630,7 @@ impl Sender {
             rx_buffer_capacity: self.limits.rx_buffer_bytes,
             current_source_line: current.and_then(DryRunLine::source_line),
             current_command: current.map(|line| line.command().to_owned()),
+            requested_tool: current.and_then(DryRunLine::tool_number),
             last_error: self.last_error.clone(),
             failure: self.failure.clone(),
             progress: if total_lines == 0 {
@@ -825,6 +872,93 @@ mod tests {
 
         sender.resume().unwrap();
         assert_eq!(sender.next_line().unwrap().command(), "G1 X1 F10");
+    }
+
+    #[test]
+    fn tool_change_waits_for_an_empty_fifo_and_never_reaches_grbl() {
+        let mut sender = Sender::default();
+        sender
+            .load_cut_run(cutting_plan("G21 G90 G94\nG1 X1 F10\nT2 M6\nG1 X2 F10"))
+            .unwrap();
+        sender.start().unwrap();
+
+        let mut dispatched = Vec::new();
+        while let Some(line) = sender.next_line() {
+            dispatched.push(line.command().to_owned());
+        }
+        assert!(sender.has_in_flight());
+        assert_eq!(sender.snapshot().state, SenderState::Running);
+        assert!(!dispatched.iter().any(|command| command.contains("M6")));
+
+        while sender.has_in_flight() {
+            sender.acknowledge_ok().unwrap();
+        }
+        assert!(sender.next_line().is_none());
+        let barrier = sender.snapshot();
+        assert_eq!(barrier.state, SenderState::ToolChange);
+        assert_eq!(barrier.current_source_line, Some(3));
+        assert_eq!(barrier.current_command.as_deref(), Some("T2 M6"));
+        assert_eq!(barrier.requested_tool, Some(2));
+        assert_eq!(
+            sender.resume(),
+            Err(SenderError::InvalidTransition {
+                action: "resume",
+                state: SenderState::ToolChange,
+            })
+        );
+
+        let acknowledged_before = barrier.acknowledged_lines;
+        let resumed = sender.complete_tool_change().unwrap();
+        assert_eq!(resumed.state, SenderState::Running);
+        assert_eq!(resumed.acknowledged_lines, acknowledged_before + 1);
+        assert_eq!(sender.next_line().unwrap().command(), "G1 X2 F10");
+    }
+
+    #[test]
+    fn check_run_validates_tool_selection_but_skips_the_host_barrier() {
+        let mut sender = Sender::default();
+        sender
+            .load_check_run(cutting_plan("G21 G90\nT4 M6\nG1 X1 F10\nM30"))
+            .unwrap();
+        sender.start().unwrap();
+
+        let mut dispatched = Vec::new();
+        while sender.snapshot().state == SenderState::Running {
+            if let Some(line) = sender.next_line() {
+                dispatched.push(line.command().to_owned());
+                sender.acknowledge_ok().unwrap();
+            }
+        }
+
+        assert_eq!(sender.snapshot().state, SenderState::Completed);
+        assert!(dispatched.iter().any(|command| command == "T4"));
+        assert!(!dispatched.iter().any(|command| command.contains("M6")));
+        assert_eq!(
+            sender.snapshot().acknowledged_lines,
+            sender.snapshot().total_lines
+        );
+    }
+
+    #[test]
+    fn tool_change_time_is_excluded_from_sender_elapsed_time() {
+        let mut sender = Sender::default();
+        sender
+            .load_cut_run(cutting_plan("G21\nT1 M6\nG1 X1 F10"))
+            .unwrap();
+        sender.start().unwrap();
+        loop {
+            if sender.next_line().is_some() {
+                sender.acknowledge_ok().unwrap();
+            } else if sender.snapshot().state == SenderState::ToolChange {
+                break;
+            }
+        }
+
+        let paused = sender.snapshot().elapsed_seconds;
+        std::thread::sleep(Duration::from_millis(12));
+        let still_paused = sender.snapshot().elapsed_seconds;
+        assert!((still_paused - paused).abs() < 0.003);
+        sender.complete_tool_change().unwrap();
     }
 
     #[test]

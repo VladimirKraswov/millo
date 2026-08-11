@@ -1,0 +1,14 @@
+(Host-managed M6 validation fixture: M6 must never reach GRBL)
+G21 G90 G94 G17
+G54
+T2 M6
+G0 X0 Y0 Z2
+G1 Z-0.10 F30
+G1 X5 Y0 F120
+G2 X10 Y5 I0 J5
+G1 X10 Y10
+G3 X5 Y15 I-5 J0
+G1 X0 Y15
+G0 Z2
+M5
+M30

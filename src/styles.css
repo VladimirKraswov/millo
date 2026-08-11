@@ -1605,6 +1605,16 @@ select:focus-visible {
   color: #77d6b3;
 }
 
+.dry-run-card.is-toolChange {
+  border-bottom-color: #806a3e;
+  background: #1d1911;
+}
+
+.dry-run-card.is-toolChange .dry-run-heading strong,
+.dry-run-card.is-toolChange .dry-run-line code {
+  color: #f0bd68;
+}
+
 .dry-run-card.is-failed .dry-run-heading strong,
 .dry-run-card > small.is-error {
   color: #ef8585;
@@ -1933,6 +1943,37 @@ select:focus-visible {
 
 .program-run-card {
   border-color: #3e806a;
+}
+
+.tool-change-identity {
+  display: grid;
+  min-height: 44px;
+  grid-template-columns: 20px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 18px;
+  border-bottom: 1px solid #463b27;
+  color: #e0ad57;
+  background: #1d1911;
+}
+
+.tool-change-identity span {
+  color: #8e8576;
+  font-size: 9px;
+}
+
+.tool-change-identity strong {
+  overflow: hidden;
+  color: #f0d49f;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-change-identity code {
+  color: #d9b777;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
 }
 
 .first-cut-error {

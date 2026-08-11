@@ -5,6 +5,7 @@ import type {
   FirstCutPreparation,
   RealRunPreflightGateway,
   RunPreflightReport,
+  ToolChangeConfirmation,
 } from "../../shared/realRun";
 import type { SenderSnapshot } from "../../shared/dryRun";
 
@@ -21,4 +22,6 @@ export const tauriRealRunPreflightGateway: RealRunPreflightGateway = {
   startCheck: (request) =>
     invoke<SenderSnapshot>("start_check_run", { request }),
   resumeProgram: () => invoke<SenderSnapshot>("resume_program_run"),
+  completeToolChange: (confirmation: ToolChangeConfirmation) =>
+    invoke<SenderSnapshot>("complete_tool_change", { confirmation }),
 };

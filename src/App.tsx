@@ -35,6 +35,7 @@ import { previewFixturePreflightGateway } from "./features/program/previewFixtur
 import {
   previewFixtureFirstCutGateway,
   previewFixtureFirstCutProgram,
+  previewFixtureToolChangeSender,
 } from "./features/program/previewFixtureFirstCut";
 import { ProgramWorkspace } from "./features/program/ProgramWorkspace";
 import { MachineProfiles } from "./features/machine-profiles/MachineProfiles";
@@ -88,7 +89,7 @@ const developmentFixture = import.meta.env.DEV
 const developmentPreviewFixture =
   developmentFixture === "air-square"
     ? previewFixtureAirSquareProgram
-    : developmentFixture === "first-cut"
+    : developmentFixture === "first-cut" || developmentFixture === "tool-change"
     ? previewFixtureFirstCutProgram
     : developmentFixture === "program" || developmentFixture === "preflight"
       ? previewFixtureProgram
@@ -96,9 +97,12 @@ const developmentPreviewFixture =
 const developmentPreflightFixture =
   developmentFixture === "preflight" ||
   developmentFixture === "first-cut" ||
+  developmentFixture === "tool-change" ||
   developmentFixture === "air-square";
 const developmentFirstCutFixture =
-  developmentFixture === "first-cut" || developmentFixture === "air-square";
+  developmentFixture === "first-cut" ||
+  developmentFixture === "tool-change" ||
+  developmentFixture === "air-square";
 const developmentProfileFixture: MachineProfileState = {
   profiles: [
     {
@@ -636,6 +640,11 @@ export default function App() {
               dryRunGateway={desktopRuntime ? tauriDryRunGateway : undefined}
               gateway={tauriProgramGateway}
               initialProgram={developmentPreviewFixture}
+              initialSender={
+                developmentFixture === "tool-change"
+                  ? previewFixtureToolChangeSender
+                  : undefined
+              }
               onInspection={setInspection}
               realRunAvailable={
                 developmentPreflightFixture ||

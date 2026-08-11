@@ -18,7 +18,8 @@
 | M2/M30 | Program end barrier | Yes | Deferred until fresh Idle | Deferred until fresh Idle |
 | M3/M4/S/M5 | Parsed and marked | Yes under Cutting grammar | Start/speed blocked; M5 allowed | Yes after Cutting authorization |
 | M9 | Yes | Yes | Yes | Yes |
-| M6, M7/M8 | Detected | Blocked by current hardware policy | Blocked | Blocked |
+| M6 | Host-managed barrier with bounded T0-T255 | Tn validated; M6 skipped locally | Blocked | Verified operator barrier; M6 never sent |
+| M7/M8 | Detected | Blocked by current hardware policy | Blocked | Blocked |
 | G10/G92 | Detected as coordinate mutation | Blocked | Blocked | Blocked |
 | G28/G30/G53 | Detected as reference/machine motion | Blocked | Blocked | Blocked |
 | G38.x | Detected as probing | Blocked | Blocked | Blocked |
@@ -43,6 +44,9 @@
   code, source line, and exact command after the FIFO is cleared. Text remains
   display-only compatibility data.
 - Check: serial-only typed `$C`, one command in flight, automatic verified exit.
+- Tool change: isolated `M6` drains the response FIFO into a host-only
+  `ToolChange` state; continuation is line/tool-bound and repeats fresh
+  `Idle -> Inspector -> Idle` verification. Runtime excludes operator time.
 
 ## Physical evidence
 
@@ -56,6 +60,9 @@ On `/dev/cu.usbmodem11101`, GRBL `1.1f.20230316`:
 - `grbl-path-control-check.nc`: 7/7 accepted on 2026-08-12 with `G61` exact
   path mode. The same board rejected `G64` with `error:20`, so Millo blocks
   that LinuxCNC-style command during parsing instead of failing mid-program.
+- `grbl-tool-change-check.nc`: 16/16 sender steps completed on 2026-08-12.
+  Physical GRBL validated `T2` and mixed geometry, Millo acknowledged the M6
+  barrier locally, and the controller returned to Idle.
 - `air-square-20mm.nc`: 10/10 physical Air run, planner drained, WPos returned
   to XYZ zero.
 - Realtime override smoke: observed `Ov:110,50,99`, then verified restore to
@@ -73,7 +80,7 @@ means immutable parse-to-plan input, bounded/correlated streaming, realtime
 safety and overrides, terminal drain, typed failures, runtime timing, Mock
 fault coverage, and physical Check/Air evidence all pass together.
 
-This statement deliberately excludes partial-file restart, M6, probing,
+This statement deliberately excludes partial-file restart, probing,
 heightmaps, coolant, machine/reference-coordinate movement, coordinate
 mutation, and tool-length offsets. Those features can change physical meaning
 or depend on absent hardware, so each remains a separate typed workflow rather

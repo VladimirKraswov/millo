@@ -25,7 +25,7 @@ use millo_readiness::assess;
 use millo_run::program_fingerprint;
 use millo_run::{
     FirstCutAuthorizationError, FirstCutConfirmation, FirstCutGate, FirstCutPreparation,
-    ProgramRunIntent, RunPreflightReport, assess_real_run_preflight,
+    ProgramRunIntent, RunPreflightReport, ToolChangeConfirmation, assess_real_run_preflight,
 };
 use millo_safety::{SafetyError, SafetyManager};
 use millo_sender::{
@@ -83,6 +83,14 @@ pub enum ArbiterError {
     CheckRunTransportUnavailable,
     #[error("program run can resume only from GRBL Hold or Idle, current mode is {0:?}")]
     ProgramRunResumeUnavailable(MachineMode),
+    #[error("tool change can be completed only at an active M6 barrier, sender is {0:?}")]
+    ToolChangeUnavailable(SenderState),
+    #[error("tool-change confirmation does not match the active source line or requested tool")]
+    ToolChangeMismatch,
+    #[error("tool-change confirmation is incomplete: {0:?}")]
+    ToolChangeConfirmationIncomplete(Vec<&'static str>),
+    #[error("tool change can continue only from fresh GRBL Idle, current mode is {0:?}")]
+    ToolChangeControllerUnavailable(MachineMode),
     #[error("a physical program run can be stopped only with Feed Hold followed by Soft Reset")]
     ProgramRunStopRequiresReset,
     #[error(transparent)]
@@ -323,6 +331,17 @@ impl CommandArbiter {
             .await
     }
 
+    pub async fn complete_tool_change(
+        &self,
+        confirmation: ToolChangeConfirmation,
+    ) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::CompleteToolChange {
+            confirmation,
+            response,
+        })
+        .await
+    }
+
     pub async fn feed_hold(&self) -> Result<ControllerSnapshot, ArbiterError> {
         self.send_realtime(RealtimeCommand::FeedHold).await
     }
@@ -531,6 +550,10 @@ enum Request {
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
     ResumeProgramRun {
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
+    },
+    CompleteToolChange {
+        confirmation: ToolChangeConfirmation,
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
     Realtime {
@@ -886,6 +909,19 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
         }
+        Request::CompleteToolChange {
+            confirmation,
+            response,
+        } => {
+            let result = if *execution_target != ExecutionTarget::Serial {
+                Err(ArbiterError::RealRunTransportUnavailable)
+            } else {
+                execute_tool_change_completion(controller, sender, confirmation).await
+            };
+            publish(snapshots, controller);
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
         Request::Realtime { command, response } => {
             if command != RealtimeCommand::Status {
                 invalidate_authorizations(safety, first_cut);
@@ -1105,7 +1141,10 @@ async fn execute_authorized_program_run_start(
     let sender_state = sender.snapshot().state;
     if matches!(
         sender_state,
-        SenderState::Running | SenderState::Paused | SenderState::Draining
+        SenderState::Running
+            | SenderState::Paused
+            | SenderState::ToolChange
+            | SenderState::Draining
     ) {
         return Err(SenderError::Busy(sender_state).into());
     }
@@ -1137,7 +1176,10 @@ async fn execute_check_run_start(
     let sender_state = sender.snapshot().state;
     if matches!(
         sender_state,
-        SenderState::Running | SenderState::Paused | SenderState::Draining
+        SenderState::Running
+            | SenderState::Paused
+            | SenderState::ToolChange
+            | SenderState::Draining
     ) {
         return Err(SenderError::Busy(sender_state).into());
     }
@@ -1173,6 +1215,14 @@ async fn execute_program_run_resume(
     controller: &mut Controller<BoxedTransport>,
     sender: &mut Sender,
 ) -> Result<SenderSnapshot, ArbiterError> {
+    let sender_state = sender.snapshot().state;
+    if sender_state != SenderState::Paused {
+        return Err(SenderError::InvalidTransition {
+            action: "resume",
+            state: sender_state,
+        }
+        .into());
+    }
     let snapshot = controller.refresh_status().await?;
     match snapshot.machine.mode {
         MachineMode::Hold => {
@@ -1184,6 +1234,46 @@ async fn execute_program_run_resume(
         mode => return Err(ArbiterError::ProgramRunResumeUnavailable(mode)),
     }
     sender.resume().map_err(ArbiterError::from)
+}
+
+async fn execute_tool_change_completion(
+    controller: &mut Controller<BoxedTransport>,
+    sender: &mut Sender,
+    confirmation: ToolChangeConfirmation,
+) -> Result<SenderSnapshot, ArbiterError> {
+    let active = sender.snapshot();
+    if active.state != SenderState::ToolChange {
+        return Err(ArbiterError::ToolChangeUnavailable(active.state));
+    }
+    if active.current_source_line != Some(confirmation.source_line)
+        || active.requested_tool != confirmation.requested_tool
+    {
+        return Err(ArbiterError::ToolChangeMismatch);
+    }
+    let missing = confirmation.missing();
+    if !missing.is_empty() {
+        return Err(ArbiterError::ToolChangeConfirmationIncomplete(missing));
+    }
+
+    let initial = controller.refresh_status().await?;
+    if initial.machine.mode != MachineMode::Idle {
+        return Err(ArbiterError::ToolChangeControllerUnavailable(
+            initial.machine.mode,
+        ));
+    }
+    ensure_stable_idle(&initial)?;
+    let inspection = controller.inspect_device().await?;
+    active_work_coordinate_system(&inspection.modal_state)
+        .ok_or(ArbiterError::ActiveWorkCoordinateSystemUnavailable)?;
+    let final_snapshot = controller.refresh_status().await?;
+    if final_snapshot.machine.mode != MachineMode::Idle {
+        return Err(ArbiterError::ToolChangeControllerUnavailable(
+            final_snapshot.machine.mode,
+        ));
+    }
+    ensure_stable_idle(&final_snapshot)?;
+
+    sender.complete_tool_change().map_err(ArbiterError::from)
 }
 
 fn invalidate_authorizations(safety: &mut SafetyManager, first_cut: &mut FirstCutGate) {
@@ -1200,7 +1290,10 @@ async fn reconcile_physical_sender(
     let sender_state = sender.snapshot().state;
     if !matches!(
         sender_state,
-        SenderState::Running | SenderState::Paused | SenderState::Draining
+        SenderState::Running
+            | SenderState::Paused
+            | SenderState::ToolChange
+            | SenderState::Draining
     ) {
         return;
     }
@@ -1265,7 +1358,10 @@ fn fail_active_sender(
 ) {
     if matches!(
         sender.snapshot().state,
-        SenderState::Running | SenderState::Paused | SenderState::Draining
+        SenderState::Running
+            | SenderState::Paused
+            | SenderState::ToolChange
+            | SenderState::Draining
     ) {
         sender.fail(error);
         publish_sender(sender_snapshots, sender);
@@ -1452,7 +1548,11 @@ async fn cancel_check_run(
 fn cancel_active_sender(sender: &mut Sender, snapshots: &watch::Sender<SenderSnapshot>) {
     if matches!(
         sender.snapshot().state,
-        SenderState::Ready | SenderState::Running | SenderState::Paused | SenderState::Draining
+        SenderState::Ready
+            | SenderState::Running
+            | SenderState::Paused
+            | SenderState::ToolChange
+            | SenderState::Draining
     ) {
         let _ = sender.cancel();
         publish_sender(snapshots, sender);
@@ -1840,6 +1940,22 @@ mod tests {
             manual_spindle_running: false,
             manual_spindle_off: true,
             path_clear: true,
+            power_control_reachable: true,
+        }
+    }
+
+    fn tool_change_confirmation(
+        source_line: usize,
+        requested_tool: Option<u8>,
+    ) -> ToolChangeConfirmation {
+        ToolChangeConfirmation {
+            source_line,
+            requested_tool,
+            tool_secured: true,
+            z_zero_verified: true,
+            safe_z_verified: true,
+            path_clear: true,
+            manual_spindle_running: true,
             power_control_reachable: true,
         }
     }
@@ -2913,6 +3029,87 @@ mod tests {
             String::from_utf8_lossy(write)
                 .split_whitespace()
                 .all(|word| word != "M3" && word != "M4" && !word.starts_with('S'))
+        }));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn serial_tool_change_is_host_managed_verified_and_cannot_be_plain_resumed() {
+        let source = "G21 G90 G94\nG1 X1 F20\nT2 M6\nG1 X2 F20\nM30";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        let barrier = wait_for_sender(&arbiter, SenderState::ToolChange).await;
+        assert_eq!(barrier.current_source_line, Some(3));
+        assert_eq!(barrier.requested_tool, Some(2));
+        assert!(control.writes().contains(&b"T2\n".to_vec()));
+        assert!(!control.writes().contains(&b"T2 M6\n".to_vec()));
+        assert!(!control.writes().contains(&b"M6\n".to_vec()));
+
+        let writes_before_resume = control.writes();
+        assert!(matches!(
+            arbiter.resume_program_run().await.unwrap_err(),
+            ArbiterError::Sender(SenderError::InvalidTransition {
+                action: "resume",
+                state: SenderState::ToolChange,
+            })
+        ));
+        assert_eq!(control.writes(), writes_before_resume);
+
+        let mut incomplete = tool_change_confirmation(3, Some(2));
+        incomplete.z_zero_verified = false;
+        assert!(matches!(
+            arbiter.complete_tool_change(incomplete).await.unwrap_err(),
+            ArbiterError::ToolChangeConfirmationIncomplete(_)
+        ));
+        assert!(matches!(
+            arbiter
+                .complete_tool_change(tool_change_confirmation(4, Some(2)))
+                .await
+                .unwrap_err(),
+            ArbiterError::ToolChangeMismatch
+        ));
+
+        let resumed = arbiter
+            .complete_tool_change(tool_change_confirmation(3, Some(2)))
+            .await
+            .unwrap();
+        assert_eq!(resumed.state, SenderState::Running);
+        let draining = wait_for_sender(&arbiter, SenderState::Draining).await;
+        assert_eq!(draining.current_command.as_deref(), Some("M30"));
+        arbiter.refresh_status().await.unwrap();
+        let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
+        assert_eq!(completed.acknowledged_lines, completed.total_lines);
+        assert!(control.writes().contains(&b"G1 X2 F20\n".to_vec()));
+        assert!(!control.writes().iter().any(|write| {
+            String::from_utf8_lossy(write)
+                .split_whitespace()
+                .any(|word| word == "M6")
+        }));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn check_run_validates_tool_number_and_skips_the_host_only_m6_barrier() {
+        let source = "G21 G90 G94\nT5 M6\nG1 X1 F20\nM30";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        arbiter
+            .start_check_run(parsed_program(source))
+            .await
+            .unwrap();
+        let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
+
+        assert_eq!(completed.acknowledged_lines, completed.total_lines);
+        assert!(control.writes().contains(&b"T5\n".to_vec()));
+        assert!(!control.writes().iter().any(|write| {
+            String::from_utf8_lossy(write)
+                .split_whitespace()
+                .any(|word| word == "M6")
         }));
         task.abort();
     }

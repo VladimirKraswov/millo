@@ -16,7 +16,10 @@ use millo_profile::{
     MachineLocalSettingsUpdate, MachineProfile, MachineProfileDraft, MachineProfileState,
     MachineProfileStore,
 };
-use millo_run::{FirstCutConfirmation, FirstCutPreparation, ProgramRunIntent, RunPreflightReport};
+use millo_run::{
+    FirstCutConfirmation, FirstCutPreparation, ProgramRunIntent, RunPreflightReport,
+    ToolChangeConfirmation,
+};
 use millo_sender::SenderSnapshot;
 use millo_serial::{
     SerialConfig, SerialPortDescriptor, SerialPortKind, SerialTransport,
@@ -1174,6 +1177,23 @@ pub async fn resume_program_run(state: State<'_, AppState>) -> Result<SenderSnap
     state
         .arbiter
         .resume_program_run()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn complete_tool_change(
+    confirmation: ToolChangeConfirmation,
+    state: State<'_, AppState>,
+) -> Result<SenderSnapshot, String> {
+    let _transition = state.transition_lock.lock().await;
+    ensure_machine_bound(&state).await?;
+    if state.active_transport.lock().await.kind != TransportKind::Serial {
+        return Err("tool change requires an active serial transport".to_owned());
+    }
+    state
+        .arbiter
+        .complete_tool_change(confirmation)
         .await
         .map_err(|error| error.to_string())
 }

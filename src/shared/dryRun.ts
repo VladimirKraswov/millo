@@ -5,6 +5,7 @@ export type SenderState =
   | "ready"
   | "running"
   | "paused"
+  | "toolChange"
   | "draining"
   | "completed"
   | "failed"
@@ -42,6 +43,7 @@ export interface SenderSnapshot {
   readonly rxBufferCapacity: number;
   readonly currentSourceLine?: number;
   readonly currentCommand?: string;
+  readonly requestedTool?: number;
   readonly lastError?: string;
   readonly failure?: SenderFailure;
   readonly progress: number;

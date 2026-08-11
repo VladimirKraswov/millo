@@ -17,6 +17,7 @@ cases. Source references describe the audited Candle checkout in
 | Error policy | Can show a dialog and continue when `Ignore` or global `ignoreErrors` is selected | Physical `error`, `ALARM`, timeout, reset, or link loss fails the exact line and requests Hold then Soft Reset | Buffered commands cannot silently continue after an invalid machine state | Correlated error/alarm/reset/disconnect fixtures |
 | Failure contract | UI derives operator behavior from response text and mutable queue context | Terminal snapshots carry a typed failure kind, GRBL code, immutable source line and exact command; `lastError` remains compatibility text only | UI and plugins do not parse strings such as `Some(33)` and cannot lose the failed line after cleanup | Sender/actor fault assertions and TS read-model test |
 | Completion | Detects the last row or M2/M30 and may complete from UI/device state | Waits for every FIFO acknowledgement, then a newly observed GRBL `Idle`; M2/M30 is deferred until the planner is already Idle | Prevents “job complete” while motion is still queued and avoids a terminal-command timeout | Physical 20 mm Air run; terminal barrier regression tests |
+| Tool change | Sends `M6`, pauses from response handling, and resumes through mutable UI state | Compiles isolated `M6` into a host-only barrier, sends/acknowledges `Tn` first, drains the FIFO, freezes elapsed time, binds confirmation to source line/tool, then rechecks fresh `Idle`, Inspector and G54-G59 before continuing | GRBL 1.1 does not implement a physical tool changer; raw Resume cannot bypass operator verification and `M6` cannot become a firmware-dependent error | Parser/policy/sender/actor/UI tests; `grbl-tool-change-check.nc` |
 | Check mode | Toggles `$C` through the general command path and shadows rows | Uses a serial-only typed `Idle -> Check -> Idle` lifecycle, Rust reparse from Program workspace, one outstanding line, exact failure attribution, validation-only M0/M1, and mandatory cleanup | UI cannot inject a prepared plan; syntax validation cannot become motion, stall on an operator pause, or leave the controller accidentally in Check | Complex physical fixtures: 25/25 and 26/26 |
 | Cutting-file validation | General sender accepts spindle syntax as part of the file | Typed Check plan accepts `M3/M4/S` under Cutting grammar while Air policy still rejects it | A real engraving file can be firmware-validated without activating motion/spindle | `grbl-cutting-check.nc`; physical 26/26 Check pass |
 | Source semantics | Preprocessing is spread across Qt regex helpers and sender code | Parser retains source lines and fails closed on unsupported `/` and `*checksum`; metadata-only `O` headers are omitted, mixed `O` blocks are rejected | Normalization cannot turn an optional/corrupted block into an unconditional command | Parser fixtures for optional block, checksum, and O headers |
@@ -30,10 +31,11 @@ cases. Source references describe the audited Candle checkout in
 
 The following Candle features are not accepted as raw sender behavior in Millo:
 
-- `M6` tool change, `G38.x` probing, `G28/G30/G53` movement, `G10/G92`
-  coordinate mutation, and `M7/M8` coolant require dedicated typed workflows
-  with hardware/profile checks. Until those workflows exist, parser policy
-  blocks them before a plan can be created.
+- `M6` is supported only as the dedicated host-managed Cutting workflow above.
+  It remains forbidden in Air runs and must be isolated from motion, spindle,
+  coolant, and coordinate words. `G38.x` probing, `G28/G30/G53` movement,
+  `G10/G92` coordinate mutation, and `M7/M8` coolant still require dedicated
+  typed workflows with hardware/profile checks.
 - Candle's global `Ignore error responses` setting is not copied. Continuing a
   buffered physical stream after a rejected line is ambiguous and can move from
   an invalid modal or coordinate state.

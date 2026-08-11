@@ -79,6 +79,39 @@ impl FirstCutConfirmation {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolChangeConfirmation {
+    pub source_line: usize,
+    pub requested_tool: Option<u8>,
+    pub tool_secured: bool,
+    pub z_zero_verified: bool,
+    pub safe_z_verified: bool,
+    pub path_clear: bool,
+    pub manual_spindle_running: bool,
+    pub power_control_reachable: bool,
+}
+
+impl ToolChangeConfirmation {
+    pub fn is_complete(self) -> bool {
+        self.missing().is_empty()
+    }
+
+    pub fn missing(self) -> Vec<&'static str> {
+        [
+            (!self.tool_secured).then_some("replacement tool secured"),
+            (!self.z_zero_verified).then_some("Z zero verified for replacement tool"),
+            (!self.safe_z_verified).then_some("safe Z verified"),
+            (!self.path_clear).then_some("remaining program path and fixture clearance verified"),
+            (!self.manual_spindle_running).then_some("manual spindle running"),
+            (!self.power_control_reachable).then_some("power control reachable"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FirstCutAuthorization {
@@ -1116,6 +1149,42 @@ mod tests {
                 now,
             ),
             Err(FirstCutAuthorizationError::ControllerSessionChanged)
+        );
+    }
+
+    #[test]
+    fn tool_change_confirmation_reports_every_missing_safety_fact() {
+        let incomplete = ToolChangeConfirmation {
+            source_line: 42,
+            requested_tool: Some(3),
+            tool_secured: true,
+            ..ToolChangeConfirmation::default()
+        };
+
+        assert!(!incomplete.is_complete());
+        assert_eq!(
+            incomplete.missing(),
+            vec![
+                "Z zero verified for replacement tool",
+                "safe Z verified",
+                "remaining program path and fixture clearance verified",
+                "manual spindle running",
+                "power control reachable",
+            ]
+        );
+
+        assert!(
+            ToolChangeConfirmation {
+                source_line: 42,
+                requested_tool: Some(3),
+                tool_secured: true,
+                z_zero_verified: true,
+                safe_z_verified: true,
+                path_clear: true,
+                manual_spindle_running: true,
+                power_control_reachable: true,
+            }
+            .is_complete()
         );
     }
 }

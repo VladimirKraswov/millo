@@ -213,13 +213,18 @@ does not schedule or execute controller I/O.
   run sends that source back to Rust for a fresh parse and independent policy
   check; the UI's `dryRunEligible` display flag is never authority.
 - `millo-dry-run` rejects every parser safety/error plus explicit M3/M4,
-  non-zero S, M7/M8, M6, G38.x, G28/G30/G53, and G10/G92 families. It limits a
+  non-zero S, M7/M8, Air-run M6, G38.x, G28/G30/G53, and G10/G92 families. It limits a
   normalized command to 255 bytes and prepends only the safe M5/M9 off commands.
 - `DryRunPlan` and `DryRunLine` have private fields and are not deserializable.
   Only the Rust policy can mint commands accepted by the controller sender API.
 - `millo-sender` limits plan lines and bytes, fills at most its configured GRBL
   RX byte window, releases exact command-plus-newline bytes on correlated FIFO
-  `ok`, and models Ready/Running/Paused/Draining/Completed/Failed/Cancelled.
+  `ok`, and models Ready/Running/Paused/ToolChange/Draining/Completed/Failed/Cancelled.
+- Cutting policy compiles isolated `M6` into a private host barrier. Any `Tn`
+  is sent and acknowledged first; the barrier waits for an empty FIFO and never
+  reaches GRBL. Completion is a separate typed actor request bound to source
+  line/tool, full operator confirmation, fresh `Idle`, Inspector, G54-G59, and
+  final `Idle`. See ADR 0034.
 - Sender dispatch runs inside the existing command actor. Requests remain
   prioritized between lines, lifecycle polling uses the same controller, and
   no second task can write to the transport.
@@ -273,9 +278,13 @@ does not schedule or execute controller I/O.
   status, so a stale UI snapshot cannot clear preflight.
 - The selected intent is part of preflight evidence. `AirRun` blocks
   M3/M4/non-zero S; `Cutting` permits those spindle words after its physical
-  checklist. Coolant, probing, M6, machine/reference-coordinate motion,
+  checklist. Coolant, probing, machine/reference-coordinate motion,
   coordinate mutation, malformed geometry, and unsupported safety behavior
   remain blockers in both modes.
+- An isolated Cutting `M6` is the exception: it becomes a host-only barrier,
+  and the operator must verify the replacement tool, Z zero, safe Z, remaining
+  path, manual spindle, and power access. Ordinary Resume cannot leave this
+  state; the actor repeats fresh `Idle -> Inspector -> Idle` before dispatch.
 - Before relevant motion, the file must explicitly establish `G21` units,
   `G90` distance mode, either `G93` or `G94` feed mode, and `G17`, `G18`, or
   `G19` before its first arc. Ambient GRBL modal state cannot fill parser

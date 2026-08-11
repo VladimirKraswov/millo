@@ -119,7 +119,7 @@ Tauri reparses the retained source, and the command actor performs a fresh
 execution policy with motion-critical hardware readiness. `Air run` rejects
 spindle activation and speed words; `Cutting` permits standard `M3/M4/S` while
 the operator separately confirms the physical spindle workflow. Coolant,
-probing, M6, coordinate mutation, and machine/reference-coordinate motion remain
+probing, coordinate mutation, and machine/reference-coordinate motion remain
 blocked until their own hardware-aware workflows exist. The report
 links blockers to exact source lines and keeps unhomed travel, manual spindle,
 and physical setup visible as cautions. A clear report opens a separate
@@ -134,6 +134,15 @@ the first line can be dispatched. The run contract also
 requires explicit `G21`, `G90`, either `G93` or `G94`, and an explicit
 `G17/G18/G19` before arcs, so preview cannot silently rely on ambient controller
 modes.
+
+Cutting programs may contain an isolated `M6`. Millo sends and acknowledges its
+bounded `Tn` selection, drains the sender FIFO, and then stops at a host-only
+tool-change barrier; `M6` itself never reaches GRBL. The operator dialog is
+bound to the exact source line and tool and requires the replacement tool,
+Z zero, safe Z, remaining path, running manual spindle, and reachable power to
+be confirmed. The actor then repeats fresh `Idle`, Inspector, G54-G59, and
+final `Idle` verification. Ordinary Resume cannot bypass this workflow, and
+Air runs continue to reject `M6`.
 
 The production serial sender derives its usable window as `reported RX - 1`
 from the authorization's fresh `[OPT]` inspection, falls back to 127 bytes,
@@ -297,6 +306,8 @@ The verified GRBL Check-run lifecycle is recorded in
 [ADR 0027](docs/decisions/0027-grbl-check-run.md).
 Responsive interleaved sender I/O is recorded in
 [ADR 0028](docs/decisions/0028-responsive-sender-io.md).
+Host-managed tool change is recorded in
+[ADR 0034](docs/decisions/0034-host-managed-tool-change.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

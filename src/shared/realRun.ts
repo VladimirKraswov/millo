@@ -60,6 +60,17 @@ export interface FirstCutPreparation {
   readonly authorization: FirstCutAuthorization;
 }
 
+export interface ToolChangeConfirmation {
+  readonly sourceLine: number;
+  readonly requestedTool?: number;
+  readonly toolSecured: boolean;
+  readonly zZeroVerified: boolean;
+  readonly safeZVerified: boolean;
+  readonly pathClear: boolean;
+  readonly manualSpindleRunning: boolean;
+  readonly powerControlReachable: boolean;
+}
+
 export interface RealRunPreflightGateway {
   preflight(
     request: ProgramParseRequest,
@@ -77,4 +88,7 @@ export interface RealRunPreflightGateway {
     request: ProgramParseRequest,
   ): Promise<import("./dryRun").SenderSnapshot>;
   resumeProgram(): Promise<import("./dryRun").SenderSnapshot>;
+  completeToolChange(
+    confirmation: ToolChangeConfirmation,
+  ): Promise<import("./dryRun").SenderSnapshot>;
 }
