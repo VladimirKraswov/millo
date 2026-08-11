@@ -26,6 +26,13 @@ guarded-jog proxy exposure; owner namespace enforcement; activation rollback;
 and complete UI cleanup on unload. A linked test plugin replaces
 `core.jog-pad`, then proves that unloading restores the core contribution.
 
+Machine-state host tests prove that mutable controller DTOs are cloned and
+deeply frozen, publication stops after an idempotent unsubscribe, and a state
+source does not imply a grant. Loader tests cover current/future read access,
+subscriber-error isolation, cleanup after activation failure, automatic
+unsubscribe on unload, and rejection through retained capability proxies after
+their plugin is gone.
+
 The test phase also runs `scripts/check-brand.mjs`, which keeps npm, Cargo,
 Tauri, UI, and documentation naming consistent.
 

@@ -58,8 +58,10 @@ unload. The first in-memory plugin host validates a versioned manifest before
 activation and intersects required/optional capabilities with explicit grants
 and host support. Its built-in test plugin can replace Jog Pad and unload cleanly
 without loading external code. `ui.contribute` and guarded `machine.jog` are the
-currently implemented host capabilities; read-only machine state and job
-creation remain declared future contracts.
+first implemented host capabilities. `machine.read` now exposes detached,
+deeply frozen controller snapshots and tracked subscriptions when the host wires
+a state source. Unload and failed activation remove those subscriptions and
+close retained proxies. Job creation remains a declared future contract.
 
 ## Run
 
@@ -120,7 +122,9 @@ See [Architecture](docs/ARCHITECTURE.md), the decisions for the
 the [guarded step jog](docs/decisions/0008-guarded-step-jog.md) and
 [verified unhomed configuration](docs/decisions/0009-unhomed-controller-configuration.md),
 then the [extension host boundary](docs/decisions/0010-extension-host-boundaries.md)
-and [versioned plugin manifest](docs/decisions/0011-versioned-plugin-manifest.md).
+and [versioned plugin manifest](docs/decisions/0011-versioned-plugin-manifest.md),
+followed by the
+[read-only machine capability](docs/decisions/0012-machine-read-capability.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

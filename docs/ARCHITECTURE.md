@@ -196,10 +196,19 @@ does not schedule or execute controller I/O.
   both are version `1`. Required capabilities fail activation when absent, while
   denied optional capabilities are reported and omitted from the activation
   context.
-- The current in-memory loader supports `ui.contribute` and `machine.jog`.
-  `machine.read` and `jobs.create` are reserved catalog entries and remain
-  unavailable until their typed host services exist. Unknown capabilities and
-  API versions are rejected.
+- The current in-memory loader supports `ui.contribute`, `machine.jog`, and
+  `machine.read` when their typed host services are supplied. `jobs.create`
+  remains a reserved catalog entry. Unknown capabilities and API versions are
+  rejected.
+- `MachineSnapshotStore` clones each controller DTO and freezes the snapshot,
+  machine state, positions, alarms, and reset notices before exposing them.
+  `machine.read` provides only `current()` and future-update `subscribe()`; it
+  cannot refresh, poll, connect, send commands, or access Tauri events.
+- Every plugin activation owns a resource scope. Machine subscriptions are
+  tracked there and disposed as unload begins or after failed activation, before
+  waiting for plugin deactivation. Retained UI, read, and jog proxies reject use
+  after that scope closes. Subscriber failures are isolated and may be reported
+  through the host error callback without interrupting other listeners.
 - UI plugins receive a registrar that binds contributions to the manifest owner
   and enforces an owner-prefixed ID. They do not receive the shell's internal UI
   context. Activation failure and unload remove every contribution owned by the
@@ -208,7 +217,8 @@ does not schedule or execute controller I/O.
   not read plugin files, dynamically import code, or establish a sandbox or
   signature trust model.
 - See `docs/decisions/0010-extension-host-boundaries.md` and
-  `docs/decisions/0011-versioned-plugin-manifest.md` for the accepted boundaries.
+  `docs/decisions/0011-versioned-plugin-manifest.md`, plus
+  `docs/decisions/0012-machine-read-capability.md` for the accepted boundaries.
 
 ## Near-term sequence
 

@@ -13,10 +13,17 @@ import {
   uiSlots,
 } from "../extensions/UiExtensionRegistry";
 import type { MachineCommandGateway } from "../machine/MachineCommandGateway";
+import { MachineSnapshotStore } from "../machine/MachineStateSource";
 import type {
+  PluginMachineJogCapability,
+  PluginMachineReadCapability,
+} from "./InMemoryPluginLoader";
+import type {
+  ControllerSnapshot,
   JogPadStepOutcome,
   JogPadStepRequest,
 } from "../../shared/machine";
+import { emptySnapshot } from "../../shared/machine";
 import { CapabilityGrantStore } from "./CapabilityGrantStore";
 import {
   InMemoryPluginLoader,
@@ -31,6 +38,20 @@ import {
 const machineCommands: MachineCommandGateway = {
   jogPadStep: vi.fn(),
 };
+
+function controllerSnapshot(pollSequence: number): ControllerSnapshot {
+  return {
+    ...emptySnapshot,
+    connection: "connected",
+    machine: {
+      ...emptySnapshot.machine,
+      mode: "idle",
+      reportedMode: "Idle",
+      machinePosition: { x: pollSequence, y: 0, z: 0 },
+    },
+    pollSequence,
+  };
+}
 
 function createLoader(capabilities: readonly PluginCapability[]) {
   const uiRegistry = createUiExtensionRegistry();
@@ -122,9 +143,7 @@ describe("InMemoryPluginLoader", () => {
         { pluginId, capabilities: ["machine.jog"] },
       ]),
     });
-    let jog = undefined as
-      | Parameters<InMemoryPluginModule["activate"]>[0]["machineJog"]
-      | undefined;
+    let jog: PluginMachineJogCapability | undefined;
     const plugin = moduleWith(pluginId, ["machine.jog"], (context) => {
       jog = context.machineJog;
     });
@@ -133,6 +152,161 @@ describe("InMemoryPluginLoader", () => {
 
     await expect(jog?.step(request)).resolves.toBe(outcome);
     expect(jogPadStep).toHaveBeenCalledWith(request);
+  });
+
+  it("exposes immutable current state and future updates when granted", async () => {
+    const pluginId = "dev.millo.observer";
+    const machineState = new MachineSnapshotStore(controllerSnapshot(1));
+    const listener = vi.fn();
+    let machineRead: PluginMachineReadCapability | undefined;
+    const loader = new InMemoryPluginLoader({
+      uiRegistry: createUiExtensionRegistry(),
+      machineState,
+      grants: new CapabilityGrantStore([
+        { pluginId, capabilities: ["machine.read"] },
+      ]),
+    });
+    const plugin = moduleWith(pluginId, ["machine.read"], (context) => {
+      machineRead = context.machineRead;
+      context.machineRead?.subscribe(listener);
+    });
+
+    await loader.load(plugin);
+    const current = machineRead?.current();
+    machineState.publish(controllerSnapshot(2));
+
+    expect(current?.pollSequence).toBe(1);
+    expect(Object.isFrozen(current)).toBe(true);
+    expect(Object.isFrozen(current?.machine.machinePosition)).toBe(true);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener.mock.calls[0]?.[0].pollSequence).toBe(2);
+  });
+
+  it("does not grant machine state merely because a source is available", async () => {
+    const pluginId = "dev.millo.ungranted-observer";
+    const activate = vi.fn();
+    const loader = new InMemoryPluginLoader({
+      uiRegistry: createUiExtensionRegistry(),
+      machineState: new MachineSnapshotStore(controllerSnapshot(0)),
+    });
+    const plugin = moduleWith(pluginId, ["machine.read"], activate);
+
+    await expect(loader.load(plugin)).rejects.toThrow(
+      "missing required capabilities: machine.read",
+    );
+    expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("removes machine subscriptions and closes retained proxies on unload", async () => {
+    const pluginId = "dev.millo.lifecycle-observer";
+    const machineState = new MachineSnapshotStore(controllerSnapshot(0));
+    const listener = vi.fn();
+    let machineRead: PluginMachineReadCapability | undefined;
+    const loader = new InMemoryPluginLoader({
+      uiRegistry: createUiExtensionRegistry(),
+      machineState,
+      grants: new CapabilityGrantStore([
+        { pluginId, capabilities: ["machine.read"] },
+      ]),
+    });
+    const plugin = moduleWith(pluginId, ["machine.read"], (context) => {
+      machineRead = context.machineRead;
+      context.machineRead?.subscribe(listener);
+    });
+    await loader.load(plugin);
+
+    await loader.unload(pluginId);
+    machineState.publish(controllerSnapshot(1));
+
+    expect(listener).not.toHaveBeenCalled();
+    expect(() => machineRead?.current()).toThrow(
+      `plugin is no longer active: ${pluginId}`,
+    );
+    expect(() => machineRead?.subscribe(listener)).toThrow(
+      `plugin is no longer active: ${pluginId}`,
+    );
+  });
+
+  it("stops observations before asynchronous deactivation completes", async () => {
+    const pluginId = "dev.millo.slow-deactivation";
+    const machineState = new MachineSnapshotStore(controllerSnapshot(0));
+    const listener = vi.fn();
+    let finishDeactivation: (() => void) | undefined;
+    const loader = new InMemoryPluginLoader({
+      uiRegistry: createUiExtensionRegistry(),
+      machineState,
+      grants: new CapabilityGrantStore([
+        { pluginId, capabilities: ["machine.read"] },
+      ]),
+    });
+    const plugin = moduleWith(pluginId, ["machine.read"], (context) => {
+      context.machineRead?.subscribe(listener);
+      return () =>
+        new Promise<void>((resolve) => {
+          finishDeactivation = resolve;
+        });
+    });
+    await loader.load(plugin);
+
+    const unloading = loader.unload(pluginId);
+    machineState.publish(controllerSnapshot(1));
+
+    expect(listener).not.toHaveBeenCalled();
+    finishDeactivation?.();
+    await expect(unloading).resolves.toBe(true);
+  });
+
+  it("removes subscriptions registered before activation fails", async () => {
+    const pluginId = "dev.millo.failed-observer";
+    const machineState = new MachineSnapshotStore(controllerSnapshot(0));
+    const listener = vi.fn();
+    const loader = new InMemoryPluginLoader({
+      uiRegistry: createUiExtensionRegistry(),
+      machineState,
+      grants: new CapabilityGrantStore([
+        { pluginId, capabilities: ["machine.read"] },
+      ]),
+    });
+    const plugin = moduleWith(pluginId, ["machine.read"], (context) => {
+      context.machineRead?.subscribe(listener);
+      throw new Error("observer activation failed");
+    });
+
+    await expect(loader.load(plugin)).rejects.toThrow(
+      "observer activation failed",
+    );
+    machineState.publish(controllerSnapshot(1));
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("isolates subscriber errors and reports them to the host", async () => {
+    const pluginId = "dev.millo.throwing-observer";
+    const machineState = new MachineSnapshotStore(controllerSnapshot(0));
+    const onPluginError = vi.fn(() => {
+      throw new Error("diagnostics failed");
+    });
+    const survivingListener = vi.fn();
+    const loader = new InMemoryPluginLoader({
+      uiRegistry: createUiExtensionRegistry(),
+      machineState,
+      grants: new CapabilityGrantStore([
+        { pluginId, capabilities: ["machine.read"] },
+      ]),
+      onPluginError,
+    });
+    const plugin = moduleWith(pluginId, ["machine.read"], (context) => {
+      context.machineRead?.subscribe(() => {
+        throw new Error("subscriber failed");
+      });
+      context.machineRead?.subscribe(survivingListener);
+    });
+    await loader.load(plugin);
+
+    machineState.publish(controllerSnapshot(1));
+
+    expect(onPluginError).toHaveBeenCalledWith(pluginId, expect.any(Error));
+    expect(survivingListener).toHaveBeenCalledOnce();
   });
 
   it("fails before activation when a required capability is unavailable", async () => {

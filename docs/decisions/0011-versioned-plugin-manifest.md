@@ -23,7 +23,8 @@ SemVer-compatible form.
 The v1 capability catalog is:
 
 - `ui.contribute`: add, replace, and remove owned UI contributions.
-- `machine.read`: observe typed machine state; reserved, not yet implemented.
+- `machine.read`: observe typed machine state through immutable snapshots and
+  tracked subscriptions.
 - `machine.jog`: invoke the existing typed guarded-jog use case.
 - `jobs.create`: create versioned jobs; reserved, not yet implemented.
 
@@ -38,8 +39,9 @@ The normalized manifest and granted capability list are immutable. Activation
 receives only narrow capability proxies. The UI proxy fixes the owner to the
 plugin ID and requires contribution IDs in that owner's namespace. The guarded
 jog proxy delegates to `MachineCommandGateway`, retaining all Rust-side safety
-checks. Plugins receive no serial handle, Tauri API, raw GRBL endpoint, or shell
-UI context.
+checks. The read proxy delegates to `MachineStateSource` and cannot initiate
+controller I/O. Plugins receive no serial handle, Tauri API, raw GRBL endpoint,
+or shell UI context.
 
 This slice uses only in-memory modules linked into the application. It does not
 read external manifests or assets and does not dynamically execute third-party
@@ -52,8 +54,8 @@ code. A built-in fixture plugin exists only for host regression tests.
   access.
 - Activation failures roll back partial UI registration; unload removes all UI
   owned by the plugin even when its deactivation callback fails.
-- `machine.read` and `jobs.create` requests fail closed until those typed host
-  services are implemented.
+- `machine.read` fails closed unless a typed state source is wired into the host;
+  `jobs.create` remains unavailable until its service is implemented.
 - Persistent user grants, package verification, process isolation, and external
   code loading require separate decisions before third-party plugins are enabled.
 

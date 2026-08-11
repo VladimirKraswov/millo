@@ -7,6 +7,11 @@ import type {
 } from "../extensions/UiExtensionRegistry";
 import type { MachineCommandGateway } from "../machine/MachineCommandGateway";
 import type {
+  MachineStateListener,
+  MachineStateSource,
+  ReadonlyControllerSnapshot,
+} from "../machine/MachineStateSource";
+import type {
   JogPadStepOutcome,
   JogPadStepRequest,
 } from "../../shared/machine";
@@ -34,11 +39,17 @@ export interface PluginMachineJogCapability {
   step(request: JogPadStepRequest): Promise<JogPadStepOutcome>;
 }
 
+export interface PluginMachineReadCapability {
+  current(): ReadonlyControllerSnapshot;
+  subscribe(listener: MachineStateListener): () => void;
+}
+
 export interface PluginActivationContext {
   readonly manifest: PluginManifestV1;
   readonly grantedCapabilities: readonly PluginCapability[];
   readonly hasCapability: (capability: PluginCapability) => boolean;
   readonly ui?: PluginUiCapability;
+  readonly machineRead?: PluginMachineReadCapability;
   readonly machineJog?: PluginMachineJogCapability;
 }
 
@@ -60,12 +71,15 @@ export interface PluginLoadResult {
 
 interface ActivePlugin extends PluginLoadResult {
   readonly deactivate?: () => void | Promise<void>;
+  readonly resources: PluginResourceScope;
 }
 
 interface InMemoryPluginLoaderOptions {
   readonly uiRegistry: UiExtensionRegistry;
   readonly machineCommands?: MachineCommandGateway;
+  readonly machineState?: MachineStateSource;
   readonly grants?: CapabilityGrantStore;
+  readonly onPluginError?: (pluginId: string, error: unknown) => void;
 }
 
 export class PluginLoadError extends Error {
@@ -78,14 +92,18 @@ export class PluginLoadError extends Error {
 export class InMemoryPluginLoader {
   private readonly uiRegistry: UiExtensionRegistry;
   private readonly machineCommands?: MachineCommandGateway;
+  private readonly machineState?: MachineStateSource;
   private readonly grants: CapabilityGrantStore;
+  private readonly onPluginError?: (pluginId: string, error: unknown) => void;
   private readonly active = new Map<string, ActivePlugin>();
   private readonly loading = new Set<string>();
 
   constructor(options: InMemoryPluginLoaderOptions) {
     this.uiRegistry = options.uiRegistry;
     this.machineCommands = options.machineCommands;
+    this.machineState = options.machineState;
     this.grants = options.grants ?? new CapabilityGrantStore();
+    this.onPluginError = options.onPluginError;
   }
 
   async load(plugin: InMemoryPluginModule): Promise<PluginLoadResult> {
@@ -125,10 +143,11 @@ export class InMemoryPluginLoader {
       ]),
     });
 
+    const resources = new PluginResourceScope(manifest.id);
     this.loading.add(manifest.id);
     try {
       const deactivate = await plugin.activate(
-        this.activationContext(manifest, grantedCapabilities),
+        this.activationContext(manifest, grantedCapabilities, resources),
       );
       if (deactivate !== undefined && typeof deactivate !== "function") {
         throw new PluginLoadError(
@@ -140,10 +159,17 @@ export class InMemoryPluginLoader {
       this.active.set(manifest.id, {
         ...result,
         deactivate: deactivateHandler,
+        resources,
       });
       return result;
     } catch (error) {
-      this.uiRegistry.unregisterOwner(manifest.id);
+      try {
+        resources.dispose();
+      } catch (cleanupError) {
+        this.reportPluginError(manifest.id, cleanupError);
+      } finally {
+        this.uiRegistry.unregisterOwner(manifest.id);
+      }
       throw error;
     } finally {
       this.loading.delete(manifest.id);
@@ -154,11 +180,22 @@ export class InMemoryPluginLoader {
     const plugin = this.active.get(pluginId);
     if (!plugin) return false;
     this.active.delete(pluginId);
+    let cleanupError: unknown;
+    try {
+      plugin.resources.dispose();
+    } catch (error) {
+      cleanupError = error;
+    }
+    let deactivationError: unknown;
     try {
       await plugin.deactivate?.();
+    } catch (error) {
+      deactivationError = error;
     } finally {
       this.uiRegistry.unregisterOwner(pluginId);
     }
+    if (deactivationError !== undefined) throw deactivationError;
+    if (cleanupError !== undefined) throw cleanupError;
     return true;
   }
 
@@ -179,6 +216,7 @@ export class InMemoryPluginLoader {
       case "machine.jog":
         return this.machineCommands !== undefined;
       case "machine.read":
+        return this.machineState !== undefined;
       case "jobs.create":
         return false;
     }
@@ -187,17 +225,24 @@ export class InMemoryPluginLoader {
   private activationContext(
     manifest: PluginManifestV1,
     grantedCapabilities: readonly PluginCapability[],
+    resources: PluginResourceScope,
   ): PluginActivationContext {
     const hasCapability = (capability: PluginCapability) =>
       grantedCapabilities.includes(capability);
     const ui = hasCapability("ui.contribute")
-      ? this.uiCapability(manifest.id)
+      ? this.uiCapability(manifest.id, resources)
       : undefined;
+    const machineRead =
+      hasCapability("machine.read") && this.machineState
+        ? this.machineReadCapability(manifest.id, resources)
+        : undefined;
     const machineJog =
       hasCapability("machine.jog") && this.machineCommands
         ? Object.freeze({
-            step: (request: JogPadStepRequest) =>
-              this.machineCommands!.jogPadStep(request),
+            step: (request: JogPadStepRequest) => {
+              resources.assertOpen();
+              return this.machineCommands!.jogPadStep(request);
+            },
           })
         : undefined;
 
@@ -206,13 +251,44 @@ export class InMemoryPluginLoader {
       grantedCapabilities: Object.freeze([...grantedCapabilities]),
       hasCapability,
       ui,
+      machineRead,
       machineJog,
     });
   }
 
-  private uiCapability(pluginId: string): PluginUiCapability {
+  private machineReadCapability(
+    pluginId: string,
+    resources: PluginResourceScope,
+  ): PluginMachineReadCapability {
+    return Object.freeze({
+      current: () => {
+        resources.assertOpen();
+        return this.machineState!.current();
+      },
+      subscribe: (listener: MachineStateListener) => {
+        resources.assertOpen();
+        if (typeof listener !== "function") {
+          throw new PluginLoadError("machine.read listener must be a function");
+        }
+        const unsubscribe = this.machineState!.subscribe((snapshot) => {
+          try {
+            listener(snapshot);
+          } catch (error) {
+            this.reportPluginError(pluginId, error);
+          }
+        });
+        return resources.track(unsubscribe);
+      },
+    });
+  }
+
+  private uiCapability(
+    pluginId: string,
+    resources: PluginResourceScope,
+  ): PluginUiCapability {
     return Object.freeze({
       register: (contribution: PluginUiContribution) => {
+        resources.assertOpen();
         if (!contribution.id.startsWith(`${pluginId}.`)) {
           throw new PluginLoadError(
             `plugin contribution must be namespaced with ${pluginId}.`,
@@ -228,5 +304,58 @@ export class InMemoryPluginLoader {
         });
       },
     });
+  }
+
+  private reportPluginError(pluginId: string, error: unknown): void {
+    try {
+      this.onPluginError?.(pluginId, error);
+    } catch {
+      // Diagnostics must never interrupt host cleanup or state publication.
+    }
+  }
+}
+
+class PluginResourceScope {
+  private open = true;
+  private readonly disposers = new Set<() => void>();
+
+  constructor(private readonly pluginId: string) {}
+
+  assertOpen(): void {
+    if (!this.open) {
+      throw new PluginLoadError(`plugin is no longer active: ${this.pluginId}`);
+    }
+  }
+
+  track(disposer: () => void): () => void {
+    this.assertOpen();
+    let active = true;
+    const trackedDisposer = () => {
+      if (!active) return;
+      active = false;
+      this.disposers.delete(trackedDisposer);
+      disposer();
+    };
+    this.disposers.add(trackedDisposer);
+    return trackedDisposer;
+  }
+
+  dispose(): void {
+    if (!this.open) return;
+    this.open = false;
+    const errors: unknown[] = [];
+    for (const disposer of [...this.disposers].reverse()) {
+      try {
+        disposer();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    this.disposers.clear();
+    if (errors.length > 0) {
+      throw new PluginLoadError(
+        `plugin ${this.pluginId} resource cleanup failed: ${String(errors[0])}`,
+      );
+    }
   }
 }
