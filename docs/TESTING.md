@@ -56,6 +56,9 @@ the asynchronous Tauri listener resolves after disposal.
 
 The test phase also runs `scripts/check-brand.mjs`, which keeps npm, Cargo,
 Tauri, UI, and documentation naming consistent.
+`scripts/check-security.mjs` requires explicit production/development CSP maps,
+the complete critical directive set, production IPC-only `connect-src`, and no
+wildcard or `unsafe-eval` source.
 
 Machine-profile tests cover required names, bounded positive XYZ travel,
 case-insensitive duplicate rejection, stable selection, JSON reload, local-only

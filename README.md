@@ -290,6 +290,9 @@ successful GRBL status exchange.
 | `millo-settings` | GRBL settings catalog, validated writes, session baselines, and per-machine revisions |
 | `millo-serial` | Native asynchronous serial discovery and byte/line I/O |
 | `millo-storage` | Synced temp/backup replacement and crash recovery shared by local JSON stores |
+
+The current cross-layer review, closed findings, dependency evidence, and
+remaining release boundaries are recorded in [`docs/CODE_AUDIT.md`](docs/CODE_AUDIT.md).
 | `millo-controller` | Connection lifecycle and state orchestration |
 | `millo-dry-run` | Fail-closed program policy and opaque approved plans |
 | `millo-command` | Single-owner command actor, polling, and response arbitration |

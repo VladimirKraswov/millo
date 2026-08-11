@@ -103,6 +103,18 @@ the physical-run operator pause state while GRBL is in Check.
    strings.
 8. Parsed source and preview geometry never imply permission to send a program.
 
+### Webview security boundary
+
+- Production CSP admits only bundled/local assets and Tauri IPC. It has no
+  remote network origin, wildcard, object embedding, frame ancestry, or
+  `unsafe-eval`; development adds only the fixed Vite websocket origin.
+- `scripts/check-security.mjs` keeps that policy structural and runs in the
+  default test pipeline. Tauri still injects its build-time nonces/hashes for
+  bundled assets as documented by the official Tauri v2 CSP contract.
+- The main window has only `core:default` capability. Custom Millo commands are
+  additionally constrained by their Rust-side typed state and safety checks;
+  frontend visibility is never treated as authorization.
+
 ### Local persistence boundary
 
 - `millo-storage` is the only implementation of local temp/backup replacement.

@@ -162,7 +162,9 @@ impl MockControl {
     }
 
     fn lock(&self) -> MutexGuard<'_, MockState> {
-        self.state.lock().expect("mock transport lock poisoned")
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -372,7 +374,7 @@ impl Transport for MockTransport {
                 Some(_) => state
                     .active_reads
                     .pop_front()
-                    .expect("front entry must still exist"),
+                    .ok_or(TransportError::NoData)?,
                 None => return Err(TransportError::NoData),
             }
         };
@@ -659,6 +661,21 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+
+    #[test]
+    fn recovers_mock_state_after_a_fixture_thread_panics() {
+        let control = MockTransport::default().control();
+        let fixture = control.clone();
+        let panicked = std::thread::spawn(move || {
+            let _guard = fixture.state.lock().unwrap();
+            panic!("fixture panic");
+        })
+        .join();
+
+        assert!(panicked.is_err());
+        control.set_status(DEFAULT_STATUS);
+        assert!(control.writes().is_empty());
+    }
 
     #[tokio::test]
     async fn responds_to_realtime_status_query() {

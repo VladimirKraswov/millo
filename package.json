@@ -9,8 +9,9 @@
     "typecheck": "tsc --noEmit",
     "test:ui": "vitest run",
     "test:brand": "node scripts/check-brand.mjs",
+    "test:security": "node scripts/check-security.mjs",
     "test:rust": "cargo test --workspace",
-    "test": "npm run typecheck && npm run test:ui && npm run test:brand && npm run test:rust",
+    "test": "npm run typecheck && npm run test:ui && npm run test:brand && npm run test:security && npm run test:rust",
     "lint:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
     "verify": "npm test && npm run build && npm run lint:rust",
     "tauri": "tauri"
