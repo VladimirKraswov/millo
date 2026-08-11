@@ -7,6 +7,7 @@ members = [
   "crates/millo-grbl",
   "crates/millo-mock",
   "crates/millo-readiness",
+  "crates/millo-safety",
   "crates/millo-serial",
   "crates/millo-transport",
   "src-tauri",

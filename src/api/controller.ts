@@ -4,6 +4,9 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ControllerSnapshot,
   HardwareInspection,
+  OperatorConfirmation,
+  ResetChallenge,
+  TestJogPreparation,
   TransportDescriptor,
 } from "../shared/machine";
 
@@ -36,8 +39,27 @@ export const disconnect = (): Promise<ControllerSnapshot> =>
 export const acknowledgeReset = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("acknowledge_reset");
 
+export const feedHold = (): Promise<ControllerSnapshot> =>
+  invoke<ControllerSnapshot>("feed_hold");
+
+export const requestSoftReset = (): Promise<ResetChallenge> =>
+  invoke<ResetChallenge>("request_soft_reset");
+
+export const confirmSoftReset = (
+  challengeId: number,
+): Promise<ControllerSnapshot> =>
+  invoke<ControllerSnapshot>("confirm_soft_reset", { challengeId });
+
+export const prepareTestJog = (
+  confirmation: OperatorConfirmation,
+): Promise<TestJogPreparation> =>
+  invoke<TestJogPreparation>("prepare_test_jog", { confirmation });
+
 export const triggerMockReset = (): Promise<void> =>
   invoke<void>("mock_trigger_reset");
+
+export const triggerMockRun = (): Promise<void> =>
+  invoke<void>("mock_start_run");
 
 export const triggerMockAlarm = (code = 3): Promise<void> =>
   invoke<void>("mock_trigger_alarm", { code });

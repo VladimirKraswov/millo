@@ -1,0 +1,9 @@
+[package]
+name = "millo-safety"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+millo-domain = { path = "../millo-domain" }
+thiserror.workspace = true

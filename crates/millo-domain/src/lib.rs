@@ -194,3 +194,39 @@ pub struct HardwareInspection {
     pub device: DeviceInspection,
     pub readiness: ReadinessReport,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorConfirmation {
+    pub spindle_off: bool,
+    pub tool_clear: bool,
+    pub power_control_reachable: bool,
+}
+
+impl OperatorConfirmation {
+    pub fn is_complete(self) -> bool {
+        self.spindle_off && self.tool_clear && self.power_control_reachable
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResetChallenge {
+    pub id: u64,
+    pub expires_in_ms: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestJogAuthorization {
+    pub id: u64,
+    pub expires_in_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestJogPreparation {
+    pub inspection: HardwareInspection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization: Option<TestJogAuthorization>,
+}

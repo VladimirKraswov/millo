@@ -1,8 +1,12 @@
-use std::future::Future;
+use std::{future::Future, time::Instant};
 
 use millo_controller::{Controller, ControllerConfig, ControllerError, RealtimeCommand};
-use millo_domain::{ConnectionState, ControllerSnapshot, HardwareInspection, HardwareProfile};
+use millo_domain::{
+    ConnectionState, ControllerSnapshot, HardwareInspection, HardwareProfile, OperatorConfirmation,
+    ResetChallenge, TestJogPreparation,
+};
 use millo_readiness::assess;
+use millo_safety::{SafetyError, SafetyManager};
 use millo_transport::BoxedTransport;
 use thiserror::Error;
 use tokio::{
@@ -16,6 +20,8 @@ const REQUEST_CAPACITY: usize = 32;
 pub enum ArbiterError {
     #[error(transparent)]
     Controller(#[from] ControllerError),
+    #[error(transparent)]
+    Safety(#[from] SafetyError),
     #[error("command arbiter is no longer running")]
     Closed,
     #[error("command arbiter dropped a response")]
@@ -97,6 +103,37 @@ impl CommandArbiter {
             .await
     }
 
+    pub async fn feed_hold(&self) -> Result<ControllerSnapshot, ArbiterError> {
+        self.send_realtime(RealtimeCommand::FeedHold).await
+    }
+
+    pub async fn request_soft_reset(&self) -> Result<ResetChallenge, ArbiterError> {
+        self.call(|response| Request::BeginSoftReset { response })
+            .await
+    }
+
+    pub async fn confirm_soft_reset(
+        &self,
+        challenge_id: u64,
+    ) -> Result<ControllerSnapshot, ArbiterError> {
+        self.call(|response| Request::ConfirmSoftReset {
+            challenge_id,
+            response,
+        })
+        .await
+    }
+
+    pub async fn prepare_test_jog(
+        &self,
+        confirmation: OperatorConfirmation,
+    ) -> Result<TestJogPreparation, ArbiterError> {
+        self.call(|response| Request::PrepareTestJog {
+            confirmation,
+            response,
+        })
+        .await
+    }
+
     pub async fn send_realtime(
         &self,
         command: RealtimeCommand,
@@ -107,7 +144,7 @@ impl CommandArbiter {
 
     async fn call<T>(
         &self,
-        request: impl FnOnce(oneshot::Sender<Result<T, ControllerError>>) -> Request,
+        request: impl FnOnce(oneshot::Sender<Result<T, ArbiterError>>) -> Request,
     ) -> Result<T, ArbiterError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.requests
@@ -117,33 +154,43 @@ impl CommandArbiter {
         response_rx
             .await
             .map_err(|_| ArbiterError::ResponseDropped)?
-            .map_err(ArbiterError::from)
     }
 }
 
 enum Request {
     ReplaceTransport {
         transport: BoxedTransport,
-        response: oneshot::Sender<Result<ControllerSnapshot, ControllerError>>,
+        response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
     },
     Connect {
-        response: oneshot::Sender<Result<ControllerSnapshot, ControllerError>>,
+        response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
     },
     Disconnect {
-        response: oneshot::Sender<Result<ControllerSnapshot, ControllerError>>,
+        response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
     },
     RefreshStatus {
-        response: oneshot::Sender<Result<ControllerSnapshot, ControllerError>>,
+        response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
     },
     AcknowledgeReset {
-        response: oneshot::Sender<Result<ControllerSnapshot, ControllerError>>,
+        response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
     },
     InspectDevice {
-        response: oneshot::Sender<Result<HardwareInspection, ControllerError>>,
+        response: oneshot::Sender<Result<HardwareInspection, ArbiterError>>,
     },
     Realtime {
         command: RealtimeCommand,
-        response: oneshot::Sender<Result<ControllerSnapshot, ControllerError>>,
+        response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
+    },
+    BeginSoftReset {
+        response: oneshot::Sender<Result<ResetChallenge, ArbiterError>>,
+    },
+    ConfirmSoftReset {
+        challenge_id: u64,
+        response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
+    },
+    PrepareTestJog {
+        confirmation: OperatorConfirmation,
+        response: oneshot::Sender<Result<TestJogPreparation, ArbiterError>>,
     },
 }
 
@@ -154,6 +201,7 @@ async fn run_actor(
     mut requests: mpsc::Receiver<Request>,
     snapshots: watch::Sender<ControllerSnapshot>,
 ) {
+    let mut safety = SafetyManager::default();
     let mut ticker = interval(config.poll_interval);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
     ticker.tick().await;
@@ -170,6 +218,7 @@ async fn run_actor(
                     &mut controller,
                     config,
                     &hardware_profile,
+                    &mut safety,
                     &snapshots,
                 )
                 .await;
@@ -180,6 +229,7 @@ async fn run_actor(
                     ConnectionState::Connected | ConnectionState::Recovering
                 ) {
                     let _ = controller.lifecycle_tick().await;
+                    safety.observe(&controller.snapshot(), Instant::now());
                     publish(&snapshots, &controller);
                 }
             }
@@ -192,6 +242,7 @@ async fn handle_request(
     controller: &mut Controller<BoxedTransport>,
     config: ControllerConfig,
     hardware_profile: &HardwareProfile,
+    safety: &mut SafetyManager,
     snapshots: &watch::Sender<ControllerSnapshot>,
 ) {
     match request {
@@ -200,22 +251,29 @@ async fn handle_request(
             response,
         } => {
             let _ = controller.disconnect().await;
+            safety.invalidate_test_jog();
             *controller = Controller::with_config(transport, config);
             publish(snapshots, controller);
             let _ = response.send(Ok(controller.snapshot()));
         }
         Request::Connect { response } => {
-            let result = controller.connect().await;
+            safety.invalidate_test_jog();
+            let result = controller.connect().await.map_err(ArbiterError::from);
             publish(snapshots, controller);
             let _ = response.send(result);
         }
         Request::Disconnect { response } => {
-            let result = controller.disconnect().await;
+            safety.invalidate_test_jog();
+            let result = controller.disconnect().await.map_err(ArbiterError::from);
             publish(snapshots, controller);
             let _ = response.send(result);
         }
         Request::RefreshStatus { response } => {
-            let result = controller.refresh_status().await;
+            let result = controller
+                .refresh_status()
+                .await
+                .map_err(ArbiterError::from);
+            safety.observe(&controller.snapshot(), Instant::now());
             publish(snapshots, controller);
             let _ = response.send(result);
         }
@@ -225,19 +283,86 @@ async fn handle_request(
             let _ = response.send(result);
         }
         Request::InspectDevice { response } => {
-            let result = controller.inspect_device().await.map(|device| {
-                let readiness = assess(hardware_profile, &device, &controller.snapshot());
-                HardwareInspection { device, readiness }
-            });
+            let result = controller
+                .inspect_device()
+                .await
+                .map(|device| {
+                    let readiness = assess(hardware_profile, &device, &controller.snapshot());
+                    HardwareInspection { device, readiness }
+                })
+                .map_err(ArbiterError::from);
             publish(snapshots, controller);
             let _ = response.send(result);
         }
         Request::Realtime { command, response } => {
-            let result = controller.send_realtime(command).await;
+            if command != RealtimeCommand::Status {
+                safety.invalidate_test_jog();
+            }
+            let result = controller
+                .send_realtime(command)
+                .await
+                .map_err(ArbiterError::from);
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::BeginSoftReset { response } => {
+            let result = if controller.snapshot().connection == ConnectionState::Connected {
+                Ok(safety.request_soft_reset(Instant::now()))
+            } else {
+                Err(ControllerError::NotReady(controller.snapshot().connection).into())
+            };
+            let _ = response.send(result);
+        }
+        Request::ConfirmSoftReset {
+            challenge_id,
+            response,
+        } => {
+            let result = safety
+                .confirm_soft_reset(challenge_id, Instant::now())
+                .map_err(ArbiterError::from);
+            let result = match result {
+                Ok(()) => controller
+                    .send_realtime(RealtimeCommand::SoftReset)
+                    .await
+                    .map_err(ArbiterError::from),
+                Err(error) => Err(error),
+            };
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::PrepareTestJog {
+            confirmation,
+            response,
+        } => {
+            let result = prepare_test_jog(controller, hardware_profile, safety, confirmation).await;
             publish(snapshots, controller);
             let _ = response.send(result);
         }
     }
+}
+
+async fn prepare_test_jog(
+    controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
+    safety: &mut SafetyManager,
+    confirmation: OperatorConfirmation,
+) -> Result<TestJogPreparation, ArbiterError> {
+    if !confirmation.is_complete() {
+        return Err(SafetyError::IncompleteOperatorConfirmation.into());
+    }
+
+    let device = controller.inspect_device().await?;
+    let snapshot = controller.snapshot();
+    let readiness = assess(hardware_profile, &device, &snapshot);
+    let inspection = HardwareInspection { device, readiness };
+    let authorization = safety
+        .authorize_test_jog(confirmation, &inspection, &snapshot, Instant::now())
+        .ok();
+
+    Ok(TestJogPreparation {
+        inspection,
+        authorization,
+    })
 }
 
 fn publish(snapshots: &watch::Sender<ControllerSnapshot>, controller: &Controller<BoxedTransport>) {
@@ -272,6 +397,14 @@ mod tests {
             HardwareProfile::first_machine(),
         );
         (arbiter, control, worker)
+    }
+
+    fn operator_confirmation() -> OperatorConfirmation {
+        OperatorConfirmation {
+            spindle_off: true,
+            tool_clear: true,
+            power_control_reachable: true,
+        }
     }
 
     #[tokio::test]
@@ -350,6 +483,100 @@ mod tests {
 
         assert_eq!(snapshot.poll_sequence, 1);
         assert_eq!(control.writes(), vec![b"?".to_vec()]);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn test_jog_preparation_runs_a_fresh_inspection_each_time() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+
+        let first = arbiter
+            .prepare_test_jog(operator_confirmation())
+            .await
+            .unwrap();
+        let second = arbiter
+            .prepare_test_jog(operator_confirmation())
+            .await
+            .unwrap();
+
+        assert!(first.authorization.is_some());
+        assert!(second.authorization.is_some());
+        assert_ne!(
+            first.authorization.unwrap().id,
+            second.authorization.unwrap().id
+        );
+        assert_eq!(
+            control.writes(),
+            vec![
+                b"?".to_vec(),
+                b"$I\n".to_vec(),
+                b"$$\n".to_vec(),
+                b"$G\n".to_vec(),
+                b"$#\n".to_vec(),
+                b"$I\n".to_vec(),
+                b"$$\n".to_vec(),
+                b"$G\n".to_vec(),
+                b"$#\n".to_vec(),
+            ]
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn incomplete_operator_confirmation_does_not_touch_the_controller() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        let mut incomplete = operator_confirmation();
+        incomplete.tool_clear = false;
+
+        let error = arbiter.prepare_test_jog(incomplete).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArbiterError::Safety(SafetyError::IncompleteOperatorConfirmation)
+        ));
+        assert!(control.writes().is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn soft_reset_requires_and_consumes_an_actor_challenge() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        let challenge = arbiter.request_soft_reset().await.unwrap();
+
+        arbiter.confirm_soft_reset(challenge.id).await.unwrap();
+        let reused = arbiter.confirm_soft_reset(challenge.id).await.unwrap_err();
+
+        assert!(matches!(
+            reused,
+            ArbiterError::Safety(SafetyError::ResetChallengeMissing)
+        ));
+        assert_eq!(control.writes(), vec![b"\x18".to_vec()]);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn alarm_returns_a_fresh_blocked_report_without_authorization() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        control.queue_alarm(3);
+        arbiter.refresh_status().await.unwrap();
+
+        let preparation = arbiter
+            .prepare_test_jog(operator_confirmation())
+            .await
+            .unwrap();
+
+        assert!(preparation.authorization.is_none());
+        assert!(!preparation.inspection.readiness.test_jog_ready);
+        assert!(preparation.inspection.readiness.blocker_count > 0);
         task.abort();
     }
 }

@@ -15,21 +15,19 @@
                                   |
                         +---------v--------+
                         | command arbiter  |
-                        +----+---------+---+
-                             |         |
-                    +--------v--+   +--v-----------+
-                    | readiness |   | controller   |
-                    +-----+-----+   +------+-------+
-                          |                |
-                    +-----v-----+       +--+-----------+
-                    | Domain    |       |              |
-                    +-----------+  +----v----+   +-----v------+
-                                   | GRBL    |   | Transport  |
-                                   +----+----+   +-----+------+
-                                        |              |
-                                   +----v----+   +-----v------+
-                                   | Domain  |   | Mock/Serial|
-                                   +---------+   +------------+
+                        +----+--------+----+-+
+                             |        |    |
+                      +------v--+ +---v--+ +v----------+
+                      |readiness| |safety| |controller |
+                      +----+----+ +---+--+ +--+------+--+
+                           |          |       |      |
+                      +----v----------v-+ +---v---+ +v---------+
+                      | Domain          | | GRBL  | |Transport |
+                      +-----------------+ +---+---+ +----+-----+
+                                              |          |
+                                          +---v---+ +----v-----+
+                                          |Domain | |Mock/Serial|
+                                          +-------+ +-----------+
 ```
 
 Dependencies point inward. Domain types do not import Tauri, an I/O library, or
@@ -133,15 +131,36 @@ does not schedule or execute controller I/O.
 - Probe readiness stays false until a separate stationary electrical test is
   implemented and passed.
 
+### Realtime safety boundary
+
+- `millo-safety` owns actor-local reset challenges and test-jog authorization;
+  React state cannot authorize a controller write by itself.
+- Feed Hold is encoded as the GRBL realtime `!` byte. It is exposed as a named
+  Tauri command, never as a raw byte or arbitrary G-code endpoint.
+- Soft Reset requires an actor-issued challenge that expires after 10 seconds.
+  Confirmation consumes the challenge before `Ctrl-X` is written, so retrying
+  the same confirmation cannot reset the controller twice.
+- Test-jog preflight requires explicit confirmation that the spindle is off,
+  the tool is clear, and machine power is within operator reach. The actor then
+  re-runs all four Inspector queries and assesses the resulting live snapshot.
+- A successful preflight creates a 15-second single-use lease. Alarm, reset,
+  reconnect, disconnect, non-idle state, expiry, or another realtime command
+  invalidates it.
+- This slice does not expose a consumer for the lease. The future jog endpoint
+  must consume it atomically inside the same actor before writing `$J=`.
+- The single actor remains the only writer to the port. A realtime byte is
+  serialized behind an already active controller transaction; future sender
+  work must preserve bounded command transactions and provide priority handling
+  between streamed lines.
+
 ## Near-term sequence
 
-1. Realtime safety controls and guarded operator acknowledgement.
-2. Short-distance step jog with fresh readiness validation and explicit
+1. Short-distance step jog with authorization consumption and explicit
    no-homing constraints.
-3. Work coordinates and touch-probe validation.
-4. Command queue and sender state machine.
-5. G-code domain, parser fixtures, and program model.
-6. Visualization read model and Three.js adapter.
+2. Work coordinates and touch-probe validation.
+3. Command queue and sender state machine.
+4. G-code domain, parser fixtures, and program model.
+5. Visualization read model and Three.js adapter.
 
 Ant Design and Three.js are intentionally absent from the first slice. They will
 be added when the first operator workflow and visualizer require them, keeping

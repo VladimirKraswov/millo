@@ -127,6 +127,27 @@ export interface HardwareInspection {
   readiness: ReadinessReport;
 }
 
+export interface OperatorConfirmation {
+  spindleOff: boolean;
+  toolClear: boolean;
+  powerControlReachable: boolean;
+}
+
+export interface ResetChallenge {
+  id: number;
+  expiresInMs: number;
+}
+
+export interface TestJogAuthorization {
+  id: number;
+  expiresInMs: number;
+}
+
+export interface TestJogPreparation {
+  inspection: HardwareInspection;
+  authorization?: TestJogAuthorization;
+}
+
 export const emptySnapshot: ControllerSnapshot = {
   connection: "disconnected",
   machine: {

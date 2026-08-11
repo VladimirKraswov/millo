@@ -18,8 +18,9 @@ until they are read from the controller or measured before cutting.
 - Millo must never infer that the machine is homed after power-up or reconnect.
 - Machine coordinates cannot be treated as a verified physical envelope without
   homing and limits.
-- The current read-only Inspector is the only approved hardware interaction in
-  this slice; it cannot send motion or spindle commands.
+- Approved hardware interactions are the read-only Inspector, realtime Feed
+  Hold, and challenge-confirmed Soft Reset. There is still no motion or spindle
+  command endpoint.
 - Future motion controls must start with low-speed, short-distance, explicit jog
   actions and an operator present at the machine power control.
 - Software Hold/Reset is not a replacement for a physical emergency stop.
@@ -65,3 +66,16 @@ Observed through the read-only Inspector on 2026-08-11:
 Only values visible in the operator capture are recorded here. The automated
 fixture uses representative, explicitly synthetic XYZ values rather than
 inventing the unseen portion of the physical controller's `$$` response.
+
+## Test-jog preflight
+
+Before a future test jog, the operator must confirm in the UI that the physical
+spindle is off, the tool is clear of the workpiece, and the machine power control
+is immediately reachable. Millo then reads a new `$I/$$/$G/$#` set and evaluates
+the current controller state. A successful result creates a 15-second,
+single-use backend authorization; it does not move the machine.
+
+Feed Hold is available only while GRBL reports an active `Run`, `Jog`, or `Home`
+state. Soft Reset is intentionally available in connected alarm states, but it
+requires a fresh 10-second confirmation challenge. Neither control substitutes
+for a physical emergency stop or verified machine travel boundaries.

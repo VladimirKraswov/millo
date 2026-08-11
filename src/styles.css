@@ -860,6 +860,247 @@ select:focus-visible {
   font-size: 16px;
 }
 
+.safety-controls {
+  padding: 13px 0;
+  border-bottom: 1px solid #27323a;
+}
+
+.safety-heading,
+.safety-heading > div,
+.reset-confirmation > div:first-child {
+  display: flex;
+  align-items: center;
+}
+
+.safety-heading {
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 9px;
+}
+
+.safety-heading > div,
+.reset-confirmation > div:first-child {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.safety-heading span {
+  color: #75838c;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.safety-heading strong {
+  font-size: 13px;
+}
+
+.safety-heading small {
+  min-width: 44px;
+  padding: 3px 6px;
+  border: 1px solid #394750;
+  border-radius: 3px;
+  color: #93a0a8;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.safety-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.safety-actions button {
+  display: flex;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 8px;
+  border: 1px solid #46545d;
+  border-radius: 4px;
+  color: #dce4e9;
+  background: #182127;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.safety-actions button span {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.safety-actions .hold-action:not(:disabled) {
+  border-color: #a87334;
+  color: #ffbd6a;
+  background: #271f16;
+}
+
+.safety-actions .reset-action:not(:disabled) {
+  border-color: #87464a;
+  color: #ff9696;
+  background: #29191b;
+}
+
+.safety-actions button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.reset-confirmation {
+  margin-top: 8px;
+  padding: 8px;
+  border-left: 2px solid #ff6b6b;
+  background: #2b1819;
+}
+
+.reset-confirmation > div:first-child {
+  margin-bottom: 7px;
+}
+
+.reset-confirmation strong {
+  color: #f3b0b0;
+  font-size: 10px;
+}
+
+.reset-confirmation span {
+  color: #b77e80;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
+.reset-confirmation > div:last-child {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.reset-confirmation button,
+.preflight-action {
+  min-height: 29px;
+  border: 1px solid #714247;
+  border-radius: 3px;
+  color: #e9c3c4;
+  background: #321d20;
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.reset-confirmation button:last-child {
+  border-color: #3c4951;
+  color: #aab6bd;
+  background: #182127;
+}
+
+.reset-confirmation button:disabled,
+.preflight-action:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.test-jog-preflight {
+  margin-top: 8px;
+  border-top: 1px solid #263139;
+}
+
+.test-jog-preflight summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 2px 0;
+  color: #b1bcc2;
+  cursor: pointer;
+  font-size: 10px;
+  list-style-position: inside;
+}
+
+.test-jog-preflight summary small {
+  color: #7c8a93;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.preflight-content {
+  padding-top: 9px;
+}
+
+.operator-checklist {
+  display: grid;
+  gap: 7px;
+}
+
+.operator-checklist label {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  color: #aeb9bf;
+  cursor: pointer;
+  font-size: 9px;
+  line-height: 12px;
+}
+
+.operator-checklist input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #77d6b3;
+}
+
+.operator-checklist label:has(input:disabled) {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.preflight-action {
+  width: 100%;
+  margin-top: 9px;
+  border-color: #3d6f60;
+  color: #bde7d7;
+  background: #172a23;
+}
+
+.preflight-result {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 7px;
+  padding: 7px 8px;
+  border-left: 2px solid #d16060;
+  background: #28191a;
+}
+
+.preflight-result.is-authorized {
+  border-left-color: #64caa1;
+  background: #14251f;
+}
+
+.preflight-result strong,
+.preflight-result span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preflight-result strong {
+  color: #dce4e9;
+  font-size: 9px;
+}
+
+.preflight-result span {
+  color: #7f8e96;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
 .transport-config {
   display: flex;
   flex-direction: column;

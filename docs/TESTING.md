@@ -76,6 +76,23 @@ port names remain untouched.
 - The Tauri mock smoke test confirms a ready report is invalidated after an
   injected alarm rather than leaving stale green readiness on screen.
 
+## Current realtime safety coverage
+
+- Reset confirmation accepts only the active, unexpired actor challenge and
+  consumes it before sending `Ctrl-X`.
+- A mismatched, reused, missing, or expired challenge cannot reset the mock.
+- Feed Hold writes exactly `!`; a running mock reports `Hold:0` on the next poll.
+- Soft Reset makes the mock emit a GRBL reset banner and return to `Idle`.
+- Incomplete operator confirmation performs no controller I/O.
+- Every preflight executes a new `$I/$$/$G/$#` sequence and receives a distinct
+  short-lived authorization.
+- Readiness blockers and alarm state return the fresh inspection report without
+  authorization.
+- Test-jog authorization is single-use and is invalidated by expiry, alarm,
+  reset-count change, reconnect-count change, disconnect, or non-idle state.
+- Tauri mock smoke covers Run to Hold, two-stage Reset, reset-banner
+  acknowledgement, and successful preflight without movement.
+
 CI does not require a physical controller. For a hardware smoke test, launch
 `npm run tauri dev`, refresh the device list, connect at the controller's baud
 rate, verify that machine coordinates update, unplug the device, and confirm the

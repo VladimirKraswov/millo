@@ -29,6 +29,13 @@ cautions for a future guarded test jog; probing remains locked. No arbitrary
 line, motion, or spindle command is exposed by the desktop API. Mock GRBL remains
 the default, so development and lifecycle tests do not require hardware.
 
+The first safety controls are now available without opening a G-code endpoint.
+Feed Hold sends the GRBL realtime `!` byte when the controller reports active
+motion. Soft Reset sends `Ctrl-X` only after a short-lived actor-issued challenge
+is confirmed. Test-jog preflight requires three physical operator confirmations,
+runs a fresh Inspector transaction, and can issue a 15-second single-use backend
+authorization. There is still no command that consumes it to move an axis.
+
 ## Run
 
 Requirements: Node.js 20+, Rust 1.85+, and the platform prerequisites for
@@ -74,6 +81,7 @@ successful GRBL status exchange.
 | `millo-controller` | Connection lifecycle and state orchestration |
 | `millo-command` | Single-owner command actor, polling, and response arbitration |
 | `millo-readiness` | Hardware-profile policy and guarded test-jog readiness |
+| `millo-safety` | Reset challenges and short-lived test-jog authorization |
 | `millo-desktop` | Thin Tauri command/event adapter |
 
 See [Architecture](docs/ARCHITECTURE.md), the decisions for the
@@ -82,7 +90,8 @@ See [Architecture](docs/ARCHITECTURE.md), the decisions for the
 [project naming decision](docs/decisions/0003-project-name-millo.md) and
 [native serial boundary](docs/decisions/0004-native-serial-transport.md), and
 [command arbiter](docs/decisions/0005-command-arbiter-device-inspector.md), plus
-[hardware readiness](docs/decisions/0006-hardware-readiness.md). The
+[hardware readiness](docs/decisions/0006-hardware-readiness.md) and
+[realtime safety controls](docs/decisions/0007-realtime-safety-controls.md). The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).
 

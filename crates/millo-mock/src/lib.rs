@@ -155,6 +155,18 @@ impl Transport for MockTransport {
                 .pop_front()
                 .unwrap_or_else(|| VecDeque::from([MockRead::Line(state.status_line.clone())]));
             state.active_reads.extend(cycle);
+        } else if data == b"!" {
+            if state.status_line.starts_with("<Run") || state.status_line.starts_with("<Jog") {
+                state.status_line = state
+                    .status_line
+                    .replacen("<Run", "<Hold:0", 1)
+                    .replacen("<Jog", "<Hold:0", 1);
+            }
+        } else if data == b"\x18" {
+            state.status_line = DEFAULT_STATUS.to_owned();
+            state
+                .active_reads
+                .push_back(MockRead::Line("Grbl 1.1h ['$' for help]".to_owned()));
         } else if let Some(default_response) = device_query_response(data) {
             let response = state
                 .planned_queries
@@ -316,5 +328,34 @@ mod tests {
         assert!(transport.read_line().await.unwrap().starts_with("[VER:"));
         assert!(transport.read_line().await.unwrap().starts_with("[OPT:"));
         assert_eq!(transport.read_line().await.unwrap(), "ok");
+    }
+
+    #[tokio::test]
+    async fn feed_hold_changes_a_running_mock_before_the_next_status() {
+        let mut transport = MockTransport::with_status(
+            "<Run|MPos:1.000,2.000,3.000|WPos:1.000,2.000,3.000|FS:120,0>",
+        );
+        transport.connect().await.unwrap();
+
+        transport.write(b"!").await.unwrap();
+        transport.write(b"?").await.unwrap();
+
+        assert!(transport.read_line().await.unwrap().starts_with("<Hold:0|"));
+    }
+
+    #[tokio::test]
+    async fn soft_reset_emits_a_banner_and_returns_to_idle() {
+        let mut transport = MockTransport::with_status(
+            "<Alarm|MPos:1.000,2.000,3.000|WPos:1.000,2.000,3.000|FS:0,0>",
+        );
+        transport.connect().await.unwrap();
+
+        transport.write(b"\x18").await.unwrap();
+        assert_eq!(
+            transport.read_line().await.unwrap(),
+            "Grbl 1.1h ['$' for help]"
+        );
+        transport.write(b"?").await.unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), DEFAULT_STATUS);
     }
 }

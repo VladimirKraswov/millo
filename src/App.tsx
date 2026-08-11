@@ -14,10 +14,12 @@ import {
   refreshStatus,
   triggerMockAlarm,
   triggerMockDisconnect,
+  triggerMockRun,
   triggerMockReset,
   triggerMockTimeout,
 } from "./api/controller";
 import { ReadinessPanel } from "./components/ReadinessPanel";
+import { SafetyControls } from "./components/SafetyControls";
 import {
   emptySnapshot,
   type ControllerSnapshot,
@@ -435,6 +437,14 @@ export default function App() {
             <strong>{displayedTransport.label}</strong>
           </div>
 
+          <SafetyControls
+            desktopRuntime={desktopRuntime}
+            onError={setUiError}
+            onInspection={setInspection}
+            onSnapshot={setSnapshot}
+            snapshot={snapshot}
+          />
+
           <div className="transport-config">
             <label className="transport-filter">
               <input
@@ -550,6 +560,13 @@ export default function App() {
             <div className="mock-scenarios">
               <span>Mock scenarios</span>
               <div>
+                <button
+                  disabled={controlsBusy || !isConnected}
+                  onClick={() => void runMockAction(triggerMockRun)}
+                  type="button"
+                >
+                  Run state
+                </button>
                 <button
                   disabled={controlsBusy || !isConnected}
                   onClick={() => void runMockAction(triggerMockReset)}

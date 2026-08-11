@@ -1822,6 +1822,7 @@ dependencies = [
  "millo-domain",
  "millo-mock",
  "millo-readiness",
+ "millo-safety",
  "millo-transport",
  "thiserror 2.0.20",
  "tokio",
@@ -1889,6 +1890,14 @@ dependencies = [
  "millo-grbl",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "millo-safety"
+version = "0.1.0"
+dependencies = [
+ "millo-domain",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

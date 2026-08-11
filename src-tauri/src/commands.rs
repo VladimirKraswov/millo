@@ -1,6 +1,9 @@
 use millo_command::CommandArbiter;
 use millo_controller::ControllerConfig;
-use millo_domain::{ControllerSnapshot, HardwareInspection, HardwareProfile};
+use millo_domain::{
+    ControllerSnapshot, HardwareInspection, HardwareProfile, OperatorConfirmation, ResetChallenge,
+    TestJogPreparation,
+};
 use millo_mock::{MockControl, MockTransport};
 use millo_serial::{
     SerialConfig, SerialPortDescriptor, SerialPortKind, SerialTransport,
@@ -189,8 +192,58 @@ pub async fn acknowledge_reset(state: State<'_, AppState>) -> Result<ControllerS
 }
 
 #[tauri::command]
+pub async fn feed_hold(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
+    state
+        .arbiter
+        .feed_hold()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn request_soft_reset(state: State<'_, AppState>) -> Result<ResetChallenge, String> {
+    state
+        .arbiter
+        .request_soft_reset()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn confirm_soft_reset(
+    challenge_id: u64,
+    state: State<'_, AppState>,
+) -> Result<ControllerSnapshot, String> {
+    state
+        .arbiter
+        .confirm_soft_reset(challenge_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn prepare_test_jog(
+    confirmation: OperatorConfirmation,
+    state: State<'_, AppState>,
+) -> Result<TestJogPreparation, String> {
+    state
+        .arbiter
+        .prepare_test_jog(confirmation)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn mock_trigger_reset(state: State<'_, AppState>) -> Result<(), String> {
     active_mock(&state).await?.queue_reset("1.1h");
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn mock_start_run(state: State<'_, AppState>) -> Result<(), String> {
+    active_mock(&state)
+        .await?
+        .set_status("<Run|MPos:1.000,2.000,3.000|WPos:1.000,2.000,3.000|FS:120,0>");
     Ok(())
 }
 
