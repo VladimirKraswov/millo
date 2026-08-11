@@ -220,6 +220,8 @@ port names remain untouched.
   and rejection when the execution target is not Mock.
 - Tauri adapter tests reparse original source and prove an unsafe request cannot
   mint a plan. Runtime start also checks the active backend transport descriptor.
+- An actor regression keeps a serial-class sender Running and proves Mock
+  Pause/Resume both fail without changing its state.
 - No automated or manual test in this slice sends a program line to the physical
   controller.
 

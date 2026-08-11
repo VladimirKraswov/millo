@@ -265,6 +265,9 @@ does not schedule or execute controller I/O.
 - Tauri checks the active descriptor and the actor checks `DryRunTarget`; both
   must identify Mock GRBL. Serial replacement automatically disables and
   cancels dry-run execution.
+- Mock Pause and Resume are target-checked again inside the actor. Direct IPC or
+  a future adapter cannot apply host-only dry-run transitions to an Air/Cutting
+  sender; physical pause/resume remains the typed Feed Hold/Cycle Start workflow.
 - React receives a separate `dry-run-state` event with bounded progress,
   current source line, and terminal error. Plugins receive no sender or raw-line
   capability. `jobs.create` remains reserved.

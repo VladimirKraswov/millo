@@ -1190,13 +1190,21 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(result);
         }
         Request::PauseDryRun { response } => {
-            let result = sender.pause().map_err(ArbiterError::from);
+            let result = if *execution_target == ExecutionTarget::Mock {
+                sender.pause().map_err(ArbiterError::from)
+            } else {
+                Err(ArbiterError::DryRunTransportUnavailable)
+            };
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
         }
         Request::ResumeDryRun { response } => {
-            let result = ensure_sender_dispatch_ready(sender, &controller.snapshot())
-                .and_then(|()| sender.resume().map_err(ArbiterError::from));
+            let result = if *execution_target == ExecutionTarget::Mock {
+                ensure_sender_dispatch_ready(sender, &controller.snapshot())
+                    .and_then(|()| sender.resume().map_err(ArbiterError::from))
+            } else {
+                Err(ArbiterError::DryRunTransportUnavailable)
+            };
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
         }
@@ -2614,6 +2622,25 @@ mod tests {
         assert!(matches!(
             replacement,
             ArbiterError::TransportReplacementUnavailable(ConnectionState::Connected)
+        ));
+        assert_eq!(arbiter.sender_snapshot().state, SenderState::Running);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn mock_pause_and_resume_cannot_change_a_physical_sender() {
+        let (arbiter, _, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        authorize_and_start_serial_fixture(&arbiter, "G21 G90 G94\nG1 X2 F20", false).await;
+
+        assert!(matches!(
+            arbiter.pause_dry_run().await.unwrap_err(),
+            ArbiterError::DryRunTransportUnavailable
+        ));
+        assert!(matches!(
+            arbiter.resume_dry_run().await.unwrap_err(),
+            ArbiterError::DryRunTransportUnavailable
         ));
         assert_eq!(arbiter.sender_snapshot().state, SenderState::Running);
         task.abort();
