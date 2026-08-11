@@ -169,14 +169,15 @@ port names remain untouched.
   over 255 bytes.
 - Approved plans contain normalized executable lines plus only an M5/M9 safety
   preamble. Plan and line fields are private and have no deserialize path.
-- Sender tests prove one-line-in-flight correlation, pause/resume/cancel
-  transitions, exact failed source-line retention, terminal completion only
-  after every `ok`, and line/byte bounds.
+- Sender tests prove bounded RX-window fill, exact command-plus-newline byte
+  accounting, FIFO response correlation, pause/resume/cancel transitions,
+  exact failed source-line retention, terminal completion only after every
+  `ok`, and line/plan bounds.
 - Mock transport can acknowledge ordinary program lines or inject a correlated
   `error:n`/`ALARM:n` without changing serial hardware.
-- Actor integration tests assert exact writes, stop before the line following an
-  error, publish terminal state, and reject execution when its target is not
-  Mock.
+- Actor integration tests assert multi-line prefill without exceeding 127 RX
+  bytes, exact rejected FIFO-line reporting, terminal state publication, and
+  rejection when the execution target is not Mock.
 - Tauri adapter tests reparse original source and prove an unsafe request cannot
   mint a plan. Runtime start also checks the active backend transport descriptor.
 - No automated or manual test in this slice sends a program line to the physical
@@ -218,6 +219,8 @@ port names remain untouched.
   `M0/M1` program barriers and `M2/M30` plan termination. Physical terminal
   commands are withheld until fresh `Idle`; dedicated fixtures cover
   Hold/Resume, Reset cancellation, and terminal-command timeout while deferred.
+  Physical command failures also verify automatic Hold plus Soft Reset and that
+  reset flushes every queued Mock GRBL response.
 - Reusing a consumed authorization fails after only the fresh status read. No
   second program line can be started from the same lease.
 - Tauri and React expose production Start only for a profile-bound serial target

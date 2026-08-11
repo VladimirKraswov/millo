@@ -198,9 +198,9 @@ does not schedule or execute controller I/O.
   normalized command to 255 bytes and prepends only the safe M5/M9 off commands.
 - `DryRunPlan` and `DryRunLine` have private fields and are not deserializable.
   Only the Rust policy can mint commands accepted by the controller sender API.
-- `millo-sender` limits plan lines and bytes, permits one in-flight command,
-  advances only on correlated `ok`, and models Ready/Running/Paused/Completed/
-  Failed/Cancelled explicitly.
+- `millo-sender` limits plan lines and bytes, fills at most its configured GRBL
+  RX byte window, releases exact command-plus-newline bytes on correlated FIFO
+  `ok`, and models Ready/Running/Paused/Draining/Completed/Failed/Cancelled.
 - Sender dispatch runs inside the existing command actor. Requests remain
   prioritized between lines, lifecycle polling uses the same controller, and
   no second task can write to the transport.
@@ -249,15 +249,18 @@ does not schedule or execute controller I/O.
   by expiry, a non-Idle observation, position/session change, profile/settings
   mutation, jog, work-zero, reset, reconnect, or a failed consumption attempt.
 - Production Start refreshes status, rebuilds the intent-specific plan, consumes
-  the matching lease, and starts the shared one-line-in-flight state machine in
-  one actor request. Authorization alone still emits no program command.
+  the matching lease, and starts the shared bounded-RX state machine in one
+  actor request. Authorization alone still emits no program command.
 - `SenderSnapshot.mode` distinguishes `mockDryRun`, `airRun`, and `cutRun`
   without creating separate implementations. `M0/M1` pause after `ok`;
   `M2/M30` terminate dispatch. For physical modes the terminal line is retained
   as an unsent barrier while the sender enters `Draining`; a fresh `Idle`
   dispatches it and only its `ok` permits completion. Hold/Resume and Reset stay
   responsive while the planner drains. Error, alarm, reset, timeout, polling
-  failure, or transport loss fails at the correlated line.
+  failure, or transport loss fails at the correlated line. Because later FIFO
+  lines may already be accepted by GRBL, a physical command rejection or
+  response failure triggers best-effort realtime Hold followed by Soft Reset to
+  flush the controller receive and planner queues.
 - Physical modes cannot use plain Cancel. Operator stop is Feed Hold followed by
   challenge-confirmed Soft Reset.
 

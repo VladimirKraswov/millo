@@ -14,7 +14,7 @@ The current slices form this path:
 Serial / Mock -> command arbiter -> GRBL lifecycle/parser -> typed Tauri IPC -> React
 File source -> millo-gcode parser -> immutable program DTO -> Three.js preview
 File source -> intent-aware policy -> one-use authorization -> bounded GRBL sender
-Physical run -> one line in flight -> ok/error correlation -> fresh Idle completion
+Physical run -> bounded RX FIFO -> ok/error correlation -> fresh Idle completion
 ```
 
 The command arbiter now owns the active transport, periodic status polling, and
@@ -87,8 +87,9 @@ line numbers; spindle activation, tool change, probing, machine-coordinate
 motion, malformed geometry, and unsupported commands fail the dry-run gate. For
 parser-clean programs, Tauri reparses the original source and `millo-dry-run`
 builds an opaque plan with an `M5/M9` safety preamble. `millo-sender` permits
-only one in-flight line and advances only after its correlated `ok`; `error`,
-`ALARM`, disconnect, reset, timeout, or invalid controller state stops the run.
+only a bounded GRBL RX window and advances only after correlated FIFO `ok`
+responses; `error`, `ALARM`, disconnect, reset, timeout, or invalid controller
+state stops the run.
 The same state machine serves Mock dry runs and authorized serial runs. A lazily
 loaded Three.js adapter renders rapid and
 cutting geometry from a pure read model with top/isometric views. Loading and
@@ -124,15 +125,16 @@ the first line can be dispatched. The run contract also
 requires explicit `G21`, `G90`, `G94`, and `G17` before the motions that depend
 on them, so preview cannot silently rely on ambient controller modes.
 
-The production serial sender keeps exactly one line in flight and correlates
-every terminal response with its source line. `M0/M1` are acknowledged program
-barriers; `M2/M30` end dispatch. After the final `ok`, physical runs enter
-`Draining` and complete only after a fresh GRBL `Idle` status. Feed Hold uses
-realtime `!`, Resume uses `~` when GRBL reports Hold, and a physical run can be
-aborted only through Hold followed by challenge-confirmed Soft Reset. Polling
-failure, `error`, `ALARM`, reset banner, or disconnect fails closed. The sender
-is available only for an active, profile-bound serial target and has no plugin
-or raw-command entry point.
+The production serial sender fills a 127-byte GRBL RX window, accounts for each
+newline, and correlates every FIFO terminal response with its source line.
+`M0/M1` are acknowledged program barriers; `M2/M30` end dispatch. After the
+final `ok`, physical runs enter `Draining` and complete only after a fresh GRBL
+`Idle` status. Feed Hold uses realtime `!`, Resume uses `~` when GRBL reports
+Hold, and an operator stop remains challenge-confirmed. A physical `error`,
+`ALARM`, response timeout, or write failure automatically sends Hold then Soft
+Reset so already-buffered commands cannot continue. Polling failure, reset
+banner, or disconnect also fails closed. The sender is available only for an
+active, profile-bound serial target and has no plugin or raw-command entry point.
 
 UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
 first core contribution in the named `control.machine` slot; Work Zero occupies
@@ -210,7 +212,7 @@ successful GRBL status exchange.
 | `millo-readiness` | Hardware-profile policy and guarded test-jog readiness |
 | `millo-run` | Intent-aware preflight, operator checklist, and one-use program-run lease |
 | `millo-safety` | Reset challenges and short-lived test-jog authorization |
-| `millo-sender` | Bounded one-line-in-flight sender with Mock, air-run, and cutting modes |
+| `millo-sender` | Bounded GRBL RX/FIFO sender with Mock, air-run, and cutting modes |
 | `millo-desktop` | Thin Tauri command/event adapter |
 
 See [Architecture](docs/ARCHITECTURE.md), the decisions for the
@@ -240,6 +242,8 @@ The test-only sender promotion is recorded in
 [ADR 0022](docs/decisions/0022-serial-sender-fixtures.md).
 The production file sender is recorded in
 [ADR 0023](docs/decisions/0023-authorized-file-program-run.md).
+Its bounded receive-buffer streaming contract is recorded in
+[ADR 0025](docs/decisions/0025-grbl-rx-buffer-streaming.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

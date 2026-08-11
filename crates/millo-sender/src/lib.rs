@@ -1,9 +1,12 @@
+use std::collections::VecDeque;
+
 use millo_dry_run::{DryRunLine, DryRunLineKind, DryRunPlan, MAX_DRY_RUN_COMMAND_BYTES};
 use serde::Serialize;
 use thiserror::Error;
 
 pub const MAX_SENDER_LINES: usize = 200_002;
 pub const MAX_SENDER_BYTES: usize = 2 * 1024 * 1024;
+pub const DEFAULT_GRBL_RX_BUFFER_BYTES: usize = 127;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +21,7 @@ pub struct SenderLimits {
     pub max_lines: usize,
     pub max_bytes: usize,
     pub max_command_bytes: usize,
+    pub rx_buffer_bytes: usize,
 }
 
 impl Default for SenderLimits {
@@ -26,6 +30,7 @@ impl Default for SenderLimits {
             max_lines: MAX_SENDER_LINES,
             max_bytes: MAX_SENDER_BYTES,
             max_command_bytes: MAX_DRY_RUN_COMMAND_BYTES,
+            rx_buffer_bytes: DEFAULT_GRBL_RX_BUFFER_BYTES,
         }
     }
 }
@@ -52,7 +57,11 @@ pub struct SenderSnapshot {
     pub mode: Option<SenderMode>,
     pub source_name: Option<String>,
     pub total_lines: usize,
+    pub dispatched_lines: usize,
     pub acknowledged_lines: usize,
+    pub in_flight_lines: usize,
+    pub rx_buffer_bytes: usize,
+    pub rx_buffer_capacity: usize,
     pub current_source_line: Option<usize>,
     pub current_command: Option<String>,
     pub last_error: Option<String>,
@@ -66,7 +75,11 @@ impl Default for SenderSnapshot {
             mode: None,
             source_name: None,
             total_lines: 0,
+            dispatched_lines: 0,
             acknowledged_lines: 0,
+            in_flight_lines: 0,
+            rx_buffer_bytes: 0,
+            rx_buffer_capacity: DEFAULT_GRBL_RX_BUFFER_BYTES,
             current_source_line: None,
             current_command: None,
             last_error: None,
@@ -90,6 +103,8 @@ pub enum SenderError {
     PlanTooLarge { actual: usize, limit: usize },
     #[error("sender command has {actual} bytes; limit is {limit}")]
     CommandTooLong { actual: usize, limit: usize },
+    #[error("sender command requires {actual} RX bytes; GRBL buffer capacity is {limit}")]
+    CommandExceedsRxBuffer { actual: usize, limit: usize },
     #[error("sender has no command awaiting acknowledgement")]
     NoCommandInFlight,
     #[error("sender cannot complete while a command is awaiting acknowledgement")]
@@ -101,8 +116,11 @@ pub struct Sender {
     plan: Option<DryRunPlan>,
     state: SenderState,
     mode: Option<SenderMode>,
+    dispatched_lines: usize,
     acknowledged_lines: usize,
-    in_flight: Option<DryRunLine>,
+    in_flight: VecDeque<DryRunLine>,
+    in_flight_bytes: usize,
+    deferred_program_end: Option<DryRunLine>,
     last_line: Option<DryRunLine>,
     last_error: Option<String>,
     paused_from: Option<SenderState>,
@@ -121,8 +139,11 @@ impl Sender {
             plan: None,
             state: SenderState::Idle,
             mode: None,
+            dispatched_lines: 0,
             acknowledged_lines: 0,
-            in_flight: None,
+            in_flight: VecDeque::new(),
+            in_flight_bytes: 0,
+            deferred_program_end: None,
             last_line: None,
             last_error: None,
             paused_from: None,
@@ -156,8 +177,11 @@ impl Sender {
         self.plan = Some(plan);
         self.state = SenderState::Ready;
         self.mode = Some(mode);
+        self.dispatched_lines = 0;
         self.acknowledged_lines = 0;
-        self.in_flight = None;
+        self.in_flight.clear();
+        self.in_flight_bytes = 0;
+        self.deferred_program_end = None;
         self.last_line = None;
         self.last_error = None;
         self.paused_from = None;
@@ -209,13 +233,36 @@ impl Sender {
             });
         }
         self.state = SenderState::Cancelled;
-        self.in_flight = None;
+        self.in_flight.clear();
+        self.in_flight_bytes = 0;
+        self.deferred_program_end = None;
         self.paused_from = None;
         Ok(self.snapshot())
     }
 
     pub fn fail(&mut self, error: impl Into<String>) -> SenderSnapshot {
-        self.last_line = self.in_flight.take().or_else(|| self.last_line.take());
+        self.last_line = self
+            .in_flight
+            .pop_front()
+            .or_else(|| self.deferred_program_end.take())
+            .or_else(|| self.last_line.take());
+        self.in_flight.clear();
+        self.in_flight_bytes = 0;
+        self.last_error = Some(error.into());
+        self.state = SenderState::Failed;
+        self.paused_from = None;
+        self.snapshot()
+    }
+
+    pub fn fail_dispatched_line(
+        &mut self,
+        line: DryRunLine,
+        error: impl Into<String>,
+    ) -> SenderSnapshot {
+        self.last_line = Some(line);
+        self.in_flight.clear();
+        self.in_flight_bytes = 0;
+        self.deferred_program_end = None;
         self.last_error = Some(error.into());
         self.state = SenderState::Failed;
         self.paused_from = None;
@@ -223,7 +270,19 @@ impl Sender {
     }
 
     pub fn is_dispatchable(&self) -> bool {
-        self.state == SenderState::Running && self.in_flight.is_none()
+        self.state == SenderState::Running
+    }
+
+    pub fn has_in_flight(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+
+    pub fn needs_io(&self) -> bool {
+        self.has_in_flight() || self.is_dispatchable()
+    }
+
+    pub fn oldest_in_flight(&self) -> Option<DryRunLine> {
+        self.in_flight.front().cloned()
     }
 
     pub fn next_line(&mut self) -> Option<DryRunLine> {
@@ -231,20 +290,45 @@ impl Sender {
             return None;
         }
         let plan = self.plan.as_ref()?;
-        if self.acknowledged_lines >= plan.lines().len() {
-            self.state = self.finished_state();
+        if self.dispatched_lines >= plan.lines().len() {
+            if self.in_flight.is_empty() {
+                self.state = self.finished_state();
+            }
             return None;
         }
-        let line = plan.lines()[self.acknowledged_lines].clone();
-        self.in_flight = Some(line.clone());
+        if self.in_flight.back().is_some_and(|line| {
+            matches!(
+                line.kind(),
+                DryRunLineKind::ProgramPause | DryRunLineKind::ProgramEnd
+            )
+        }) {
+            return None;
+        }
+        let line = plan.lines()[self.dispatched_lines].clone();
+        if self.is_physical() && line.kind() == DryRunLineKind::ProgramEnd {
+            if self.in_flight.is_empty() {
+                self.dispatched_lines = self.dispatched_lines.saturating_add(1);
+                self.deferred_program_end = Some(line);
+                self.state = SenderState::Draining;
+            }
+            return None;
+        }
+        let line_bytes = command_rx_bytes(&line);
+        if self.in_flight_bytes.saturating_add(line_bytes) > self.limits.rx_buffer_bytes {
+            return None;
+        }
+        self.dispatched_lines = self.dispatched_lines.saturating_add(1);
+        self.in_flight_bytes = self.in_flight_bytes.saturating_add(line_bytes);
+        self.in_flight.push_back(line.clone());
         Some(line)
     }
 
     pub fn acknowledge_ok(&mut self) -> Result<SenderSnapshot, SenderError> {
         let line = self
             .in_flight
-            .take()
+            .pop_front()
             .ok_or(SenderError::NoCommandInFlight)?;
+        self.in_flight_bytes = self.in_flight_bytes.saturating_sub(command_rx_bytes(&line));
         let line_kind = line.kind();
         self.last_line = Some(line);
         self.acknowledged_lines = self.acknowledged_lines.saturating_add(1);
@@ -252,37 +336,33 @@ impl Sender {
             self.paused_from = Some(SenderState::Running);
             self.state = SenderState::Paused;
         } else if line_kind == DryRunLineKind::ProgramEnd
-            || self
-                .plan
-                .as_ref()
-                .is_some_and(|plan| self.acknowledged_lines == plan.lines().len())
+            || self.plan.as_ref().is_some_and(|plan| {
+                self.acknowledged_lines == plan.lines().len() && self.in_flight.is_empty()
+            })
         {
             self.state = self.finished_state();
         }
         Ok(self.snapshot())
     }
 
-    pub fn defer_program_end(&mut self) -> Result<SenderSnapshot, SenderError> {
-        let Some(line) = self.in_flight.as_ref() else {
+    pub fn dispatch_deferred_program_end(&mut self) -> Result<DryRunLine, SenderError> {
+        let Some(line) = self.deferred_program_end.take() else {
             return Err(SenderError::NoCommandInFlight);
         };
-        if self.state != SenderState::Running || line.kind() != DryRunLineKind::ProgramEnd {
+        if self.state != SenderState::Draining || !self.in_flight.is_empty() {
+            self.deferred_program_end = Some(line);
             return Err(SenderError::InvalidTransition {
-                action: "defer program end",
+                action: "dispatch deferred program end",
                 state: self.state,
             });
         }
-        self.state = SenderState::Draining;
-        Ok(self.snapshot())
+        self.in_flight_bytes = command_rx_bytes(&line);
+        self.in_flight.push_back(line.clone());
+        Ok(line)
     }
 
     pub fn deferred_program_end(&self) -> Option<DryRunLine> {
-        self.in_flight
-            .as_ref()
-            .filter(|line| {
-                self.state == SenderState::Draining && line.kind() == DryRunLineKind::ProgramEnd
-            })
-            .cloned()
+        self.deferred_program_end.clone()
     }
 
     pub fn complete_draining(&mut self) -> Result<SenderSnapshot, SenderError> {
@@ -292,7 +372,7 @@ impl Sender {
                 state: self.state,
             });
         }
-        if self.in_flight.is_some() {
+        if !self.in_flight.is_empty() || self.deferred_program_end.is_some() {
             return Err(SenderError::CommandInFlight);
         }
         self.state = SenderState::Completed;
@@ -305,9 +385,13 @@ impl Sender {
     ) -> Result<SenderSnapshot, SenderError> {
         let line = self
             .in_flight
-            .take()
+            .pop_front()
             .ok_or(SenderError::NoCommandInFlight)?;
+        self.in_flight_bytes = self.in_flight_bytes.saturating_sub(command_rx_bytes(&line));
         self.last_line = Some(line);
+        self.in_flight.clear();
+        self.in_flight_bytes = 0;
+        self.deferred_program_end = None;
         self.last_error = Some(error.into());
         self.state = SenderState::Failed;
         Ok(self.snapshot())
@@ -315,13 +399,21 @@ impl Sender {
 
     pub fn snapshot(&self) -> SenderSnapshot {
         let total_lines = self.plan.as_ref().map_or(0, |plan| plan.lines().len());
-        let current = self.in_flight.as_ref().or(self.last_line.as_ref());
+        let current = self
+            .in_flight
+            .front()
+            .or(self.deferred_program_end.as_ref())
+            .or(self.last_line.as_ref());
         SenderSnapshot {
             state: self.state,
             mode: self.mode,
             source_name: self.plan.as_ref().map(|plan| plan.source_name().to_owned()),
             total_lines,
+            dispatched_lines: self.dispatched_lines,
             acknowledged_lines: self.acknowledged_lines,
+            in_flight_lines: self.in_flight.len(),
+            rx_buffer_bytes: self.in_flight_bytes,
+            rx_buffer_capacity: self.limits.rx_buffer_bytes,
             current_source_line: current.and_then(DryRunLine::source_line),
             current_command: current.map(|line| line.command().to_owned()),
             last_error: self.last_error.clone(),
@@ -349,6 +441,13 @@ impl Sender {
                     limit: self.limits.max_command_bytes,
                 });
             }
+            let rx_bytes = bytes.saturating_add(1);
+            if rx_bytes > self.limits.rx_buffer_bytes {
+                return Err(SenderError::CommandExceedsRxBuffer {
+                    actual: rx_bytes,
+                    limit: self.limits.rx_buffer_bytes,
+                });
+            }
             total_bytes = total_bytes.saturating_add(bytes);
         }
         if total_bytes > self.limits.max_bytes {
@@ -361,12 +460,20 @@ impl Sender {
     }
 
     fn finished_state(&self) -> SenderState {
-        if matches!(self.mode, Some(SenderMode::AirRun | SenderMode::CutRun)) {
+        if self.is_physical() {
             SenderState::Draining
         } else {
             SenderState::Completed
         }
     }
+
+    fn is_physical(&self) -> bool {
+        matches!(self.mode, Some(SenderMode::AirRun | SenderMode::CutRun))
+    }
+}
+
+fn command_rx_bytes(line: &DryRunLine) -> usize {
+    line.command().len().saturating_add(1)
 }
 
 #[cfg(test)]
@@ -395,16 +502,26 @@ mod tests {
     }
 
     #[test]
-    fn never_dispatches_a_second_line_before_acknowledgement() {
+    fn fills_the_grbl_rx_buffer_without_exceeding_it() {
         let mut sender = Sender::default();
-        let loaded = sender.load(plan("G21\nG0 X1")).unwrap();
+        let loaded = sender
+            .load(plan(
+                "G21\nG0 X1\nG0 X2\nG0 X3\nG0 X4\nG0 X5\nG0 X6\nG0 X7\nG0 X8",
+            ))
+            .unwrap();
         assert_eq!(loaded.mode, Some(SenderMode::MockDryRun));
         sender.start().unwrap();
 
-        assert_eq!(sender.next_line().unwrap().command(), "M5");
-        assert!(sender.next_line().is_none());
-        sender.acknowledge_ok().unwrap();
-        assert_eq!(sender.next_line().unwrap().command(), "M9");
+        let mut dispatched = Vec::new();
+        while let Some(line) = sender.next_line() {
+            dispatched.push(line.command().to_owned());
+        }
+
+        let snapshot = sender.snapshot();
+        assert!(dispatched.len() > 1);
+        assert_eq!(snapshot.in_flight_lines, dispatched.len());
+        assert!(snapshot.rx_buffer_bytes <= snapshot.rx_buffer_capacity);
+        assert_eq!(snapshot.acknowledged_lines, 0);
     }
 
     #[test]
@@ -470,14 +587,15 @@ mod tests {
             .unwrap();
         sender.start().unwrap();
         while sender.snapshot().state == SenderState::Running {
-            sender.next_line().unwrap();
-            sender.acknowledge_ok().unwrap();
+            if sender.next_line().is_some() {
+                sender.acknowledge_ok().unwrap();
+            }
         }
 
         let snapshot = sender.snapshot();
         assert_eq!(snapshot.state, SenderState::Draining);
         assert_eq!(snapshot.current_command.as_deref(), Some("M30"));
-        assert_eq!(snapshot.acknowledged_lines, snapshot.total_lines);
+        assert_eq!(snapshot.acknowledged_lines + 1, snapshot.total_lines);
     }
 
     #[test]
@@ -488,15 +606,13 @@ mod tests {
             .unwrap();
         sender.start().unwrap();
 
-        loop {
-            let line = sender.next_line().unwrap();
-            if line.kind() == DryRunLineKind::ProgramEnd {
-                break;
+        while sender.snapshot().state == SenderState::Running {
+            if sender.next_line().is_some() {
+                sender.acknowledge_ok().unwrap();
             }
-            sender.acknowledge_ok().unwrap();
         }
 
-        let draining = sender.defer_program_end().unwrap();
+        let draining = sender.snapshot();
         assert_eq!(draining.state, SenderState::Draining);
         assert_eq!(draining.current_command.as_deref(), Some("M30"));
         assert_eq!(draining.acknowledged_lines + 1, draining.total_lines);
@@ -505,6 +621,10 @@ mod tests {
             Err(SenderError::CommandInFlight)
         );
 
+        assert_eq!(
+            sender.dispatch_deferred_program_end().unwrap().command(),
+            "M30"
+        );
         sender.acknowledge_ok().unwrap();
         assert!(sender.deferred_program_end().is_none());
         assert_eq!(
@@ -519,6 +639,7 @@ mod tests {
             max_lines: 2,
             max_bytes: 1024,
             max_command_bytes: 255,
+            rx_buffer_bytes: DEFAULT_GRBL_RX_BUFFER_BYTES,
         });
 
         assert_eq!(
@@ -579,5 +700,81 @@ mod tests {
         }
         dispatching.pause().unwrap();
         assert_eq!(dispatching.resume().unwrap().state, SenderState::Draining);
+    }
+
+    #[test]
+    fn acknowledgements_release_fifo_bytes_and_errors_keep_the_exact_oldest_line() {
+        let mut sender = Sender::with_limits(SenderLimits {
+            rx_buffer_bytes: 20,
+            ..SenderLimits::default()
+        });
+        sender.load(plan("G21\nG0 X1\nG0 X2\nG0 X3")).unwrap();
+        sender.start().unwrap();
+
+        while sender.next_line().is_some() {}
+        let filled = sender.snapshot();
+        assert!(filled.in_flight_lines > 1);
+        let oldest = sender.oldest_in_flight().unwrap();
+        let before_bytes = filled.rx_buffer_bytes;
+
+        sender.acknowledge_ok().unwrap();
+        assert!(sender.snapshot().rx_buffer_bytes < before_bytes);
+        assert_ne!(sender.oldest_in_flight(), Some(oldest));
+        let failed_line = sender.oldest_in_flight().unwrap();
+        let failed = sender.acknowledge_error("error:20").unwrap();
+        assert_eq!(failed.state, SenderState::Failed);
+        assert_eq!(failed.current_source_line, failed_line.source_line());
+        assert_eq!(failed.in_flight_lines, 0);
+        assert_eq!(failed.rx_buffer_bytes, 0);
+    }
+
+    #[test]
+    fn write_failure_keeps_the_exact_line_that_could_not_be_dispatched() {
+        let mut sender = Sender::default();
+        sender.load(plan("G21\nG0 X1\nG0 X2\nG0 X3")).unwrap();
+        sender.start().unwrap();
+        let first = sender.next_line().unwrap();
+        let second = sender.next_line().unwrap();
+        assert_ne!(first.command(), second.command());
+
+        let failed = sender.fail_dispatched_line(second, "write failed");
+
+        assert_eq!(failed.state, SenderState::Failed);
+        assert_eq!(failed.current_command.as_deref(), Some("M9"));
+        assert_eq!(failed.in_flight_lines, 0);
+        assert_eq!(failed.rx_buffer_bytes, 0);
+    }
+
+    #[test]
+    fn pause_barrier_is_the_last_buffered_line() {
+        let mut sender = Sender::default();
+        sender
+            .load_cut_run(cutting_plan("G21\nG1 X1 F10\nM0\nG1 X2"))
+            .unwrap();
+        sender.start().unwrap();
+
+        let mut commands = Vec::new();
+        while let Some(line) = sender.next_line() {
+            commands.push(line.command().to_owned());
+        }
+
+        assert_eq!(commands.last().map(String::as_str), Some("M0"));
+        assert!(!commands.iter().any(|command| command.contains("X2")));
+    }
+
+    #[test]
+    fn rejects_a_single_line_larger_than_the_rx_buffer() {
+        let mut sender = Sender::with_limits(SenderLimits {
+            rx_buffer_bytes: 8,
+            ..SenderLimits::default()
+        });
+
+        assert_eq!(
+            sender.load(plan("G0 X1234")).unwrap_err(),
+            SenderError::CommandExceedsRxBuffer {
+                actual: 9,
+                limit: 8,
+            }
+        );
     }
 }

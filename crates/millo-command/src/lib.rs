@@ -559,13 +559,22 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
     loop {
         tokio::select! {
             biased;
+            _ = tokio::task::yield_now(), if actor.sender_dispatch_enabled && actor.sender.has_in_flight() => {
+                execute_sender_step(
+                    &mut actor.controller,
+                    &mut actor.sender,
+                    &actor.snapshots,
+                    &actor.sender_snapshots,
+                )
+                .await;
+            }
             request = requests.recv() => {
                 let Some(request) = request else {
                     break;
                 };
                 handle_request(request, &mut actor).await;
             }
-            _ = ticker.tick() => {
+            _ = ticker.tick(), if !actor.sender.has_in_flight() => {
                 if matches!(
                     actor.controller.snapshot().connection,
                     ConnectionState::Connected | ConnectionState::Recovering
@@ -1066,18 +1075,22 @@ async fn reconcile_physical_sender(
                 let _ = sender.pause();
             }
             (SenderState::Draining, MachineMode::Idle) => {
-                if let Some(line) = sender.deferred_program_end() {
-                    match controller.execute_program_line(&line).await {
-                        Ok(_) => {
-                            let _ = sender.acknowledge_ok();
+                if sender.deferred_program_end().is_some() {
+                    match sender.dispatch_deferred_program_end() {
+                        Ok(line) => {
+                            if let Err(error) = controller.write_program_line(&line).await {
+                                sender.fail_dispatched_line(line, error.to_string());
+                                let _ = controller.abort_program_stream().await;
+                            }
                         }
                         Err(error) => {
-                            let _ = sender.acknowledge_error(error.to_string());
+                            sender.fail(error.to_string());
                         }
                     }
                 }
                 if sender.snapshot().state == SenderState::Draining
                     && sender.deferred_program_end().is_none()
+                    && !sender.has_in_flight()
                 {
                     let _ = sender.complete_draining();
                 }
@@ -1113,30 +1126,46 @@ async fn execute_sender_step(
         publish_sender(sender_snapshots, sender);
         return;
     }
-    let Some(line) = sender.next_line() else {
-        publish_sender(sender_snapshots, sender);
-        return;
-    };
-    publish_sender(sender_snapshots, sender);
-
-    if matches!(
-        sender.snapshot().mode,
-        Some(millo_sender::SenderMode::AirRun | millo_sender::SenderMode::CutRun)
-    ) && line.kind() == DryRunLineKind::ProgramEnd
-    {
-        if let Err(error) = sender.defer_program_end() {
-            sender.fail(error.to_string());
+    while let Some(line) = sender.next_line() {
+        if let Err(error) = controller.write_program_line(&line).await {
+            let physical_run = matches!(
+                sender.snapshot().mode,
+                Some(millo_sender::SenderMode::AirRun | millo_sender::SenderMode::CutRun)
+            );
+            sender.fail_dispatched_line(line, error.to_string());
+            if physical_run {
+                let _ = controller.abort_program_stream().await;
+            }
+            publish(snapshots, controller);
+            publish_sender(sender_snapshots, sender);
+            return;
         }
         publish_sender(sender_snapshots, sender);
-        return;
     }
 
-    match controller.execute_program_line(&line).await {
-        Ok(_) => {
-            let _ = sender.acknowledge_ok();
-        }
-        Err(error) => {
-            let _ = sender.acknowledge_error(error.to_string());
+    if let Some(line) = sender.oldest_in_flight() {
+        match controller.read_program_response(&line).await {
+            Ok(_) => {
+                let _ = sender.acknowledge_ok();
+                if line.kind() == DryRunLineKind::ProgramEnd
+                    && sender.snapshot().state == SenderState::Draining
+                    && !sender.has_in_flight()
+                    && sender.deferred_program_end().is_none()
+                    && controller.snapshot().machine.mode == MachineMode::Idle
+                {
+                    let _ = sender.complete_draining();
+                }
+            }
+            Err(error) => {
+                let physical_run = matches!(
+                    sender.snapshot().mode,
+                    Some(millo_sender::SenderMode::AirRun | millo_sender::SenderMode::CutRun)
+                );
+                let _ = sender.acknowledge_error(error.to_string());
+                if physical_run {
+                    let _ = controller.abort_program_stream().await;
+                }
+            }
         }
     }
     publish(snapshots, controller);
@@ -2624,7 +2653,7 @@ mod tests {
 
         control.set_status("<Idle|MPos:2.000,0.000,0.000|WPos:2.000,0.000,0.000|FS:0,0>");
         arbiter.refresh_status().await.unwrap();
-        assert_eq!(arbiter.sender_snapshot().state, SenderState::Completed);
+        wait_for_sender(&arbiter, SenderState::Completed).await;
         assert!(control.writes().iter().all(|write| {
             String::from_utf8_lossy(write)
                 .split_whitespace()
@@ -2658,7 +2687,7 @@ mod tests {
 
         control.set_status("<Idle|MPos:2.000,0.000,0.000|WPos:2.000,0.000,0.000|FS:0,0>");
         arbiter.refresh_status().await.unwrap();
-        let completed = arbiter.sender_snapshot();
+        let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
         assert_eq!(completed.state, SenderState::Completed);
         assert_eq!(completed.acknowledged_lines, completed.total_lines);
         assert_eq!(
@@ -2704,7 +2733,7 @@ mod tests {
         wait_for_sender(&arbiter, SenderState::Draining).await;
 
         arbiter.refresh_status().await.unwrap();
-        let failed = arbiter.sender_snapshot();
+        let failed = wait_for_sender(&arbiter, SenderState::Failed).await;
 
         assert_eq!(failed.state, SenderState::Failed);
         assert_eq!(failed.current_command.as_deref(), Some("M30"));
@@ -2758,7 +2787,7 @@ mod tests {
 
     #[tokio::test]
     async fn serial_fixture_stops_on_correlated_error() {
-        let source = "G21 G90 G94\nG1 X2 F20";
+        let source = "G21 G90 G94\nG1 X2 F20\nG1 X4 F20\nG1 X6 F20";
         let (arbiter, control, worker) = serial_preflight_arbiter();
         control.queue_program_ok();
         control.queue_program_ok();
@@ -2777,6 +2806,15 @@ mod tests {
                 .as_deref()
                 .is_some_and(|value| value.contains("Some(20)"))
         );
+        let writes = control.writes();
+        assert_eq!(
+            writes[writes.len() - 2..],
+            [b"!".to_vec(), b"\x18".to_vec()]
+        );
+
+        let recovered = arbiter.refresh_status().await.unwrap();
+        assert_eq!(recovered.machine.mode, MachineMode::Idle);
+        assert!(recovered.reset_notice.is_some());
         task.abort();
     }
 
@@ -2901,7 +2939,48 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mock_actor_stops_at_the_exact_rejected_program_line() {
+    async fn mock_actor_prefills_but_never_overruns_the_grbl_rx_buffer() {
+        let source = (0..40)
+            .map(|index| format!("G1 X{index} F100"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (arbiter, control, worker) = mock_dry_run_arbiter();
+        control.queue_program_stall();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+        arbiter.start_dry_run(dry_run_plan(&source)).await.unwrap();
+
+        tokio::time::timeout(Duration::from_millis(40), async {
+            loop {
+                if control.writes().len() > 3 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let writes = control.writes();
+        let buffered = writes
+            .iter()
+            .filter(|write| write.as_slice() != b"?")
+            .collect::<Vec<_>>();
+        let buffered_bytes = buffered.iter().map(|write| write.len()).sum::<usize>();
+        assert!(buffered.len() > 1);
+        assert!(buffered_bytes <= millo_sender::DEFAULT_GRBL_RX_BUFFER_BYTES);
+        let snapshot = arbiter.sender_snapshot();
+        assert_eq!(snapshot.in_flight_lines, buffered.len());
+        assert_eq!(snapshot.rx_buffer_bytes, buffered_bytes);
+
+        let failed = wait_for_sender(&arbiter, SenderState::Failed).await;
+        assert_eq!(failed.current_command.as_deref(), Some("M5"));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn mock_actor_correlates_the_exact_rejected_fifo_line() {
         let (arbiter, control, worker) = mock_dry_run_arbiter();
         control.queue_program_ok();
         control.queue_program_ok();
@@ -2931,6 +3010,7 @@ mod tests {
                 b"M5\n".to_vec(),
                 b"M9\n".to_vec(),
                 b"G21\n".to_vec(),
+                b"G0 X1\n".to_vec(),
             ]
         );
         task.abort();

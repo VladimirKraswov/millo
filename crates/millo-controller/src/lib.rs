@@ -327,6 +327,41 @@ impl<T: Transport> Controller<T> {
         self.execute_acknowledged_line(line.command()).await
     }
 
+    pub async fn write_program_line(&mut self, line: &DryRunLine) -> Result<(), ControllerError> {
+        if self.snapshot.connection != ConnectionState::Connected {
+            return Err(ControllerError::NotReady(self.snapshot.connection));
+        }
+        let timeout = self.config.command_timeout;
+        match tokio::time::timeout(
+            timeout,
+            self.transport
+                .write(format!("{}\n", line.command()).as_bytes()),
+        )
+        .await
+        {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => {
+                let error = ControllerError::from(error);
+                self.record_poll_failure(&error);
+                Err(error)
+            }
+            Err(_) => {
+                let error = ControllerError::CommandTimeout {
+                    timeout_ms: duration_ms(timeout),
+                };
+                self.record_poll_failure(&error);
+                Err(error)
+            }
+        }
+    }
+
+    pub async fn read_program_response(
+        &mut self,
+        line: &DryRunLine,
+    ) -> Result<CommandResponse, ControllerError> {
+        self.read_acknowledged_response(line.command()).await
+    }
+
     pub async fn send_realtime(
         &mut self,
         command: RealtimeCommand,
@@ -338,6 +373,35 @@ impl<T: Transport> Controller<T> {
             return Err(ControllerError::NotReady(self.snapshot.connection));
         }
         self.transport.write(&[command.byte()]).await?;
+        Ok(self.snapshot())
+    }
+
+    pub async fn abort_program_stream(&mut self) -> Result<ControllerSnapshot, ControllerError> {
+        if self.snapshot.connection != ConnectionState::Connected {
+            return Err(ControllerError::NotReady(self.snapshot.connection));
+        }
+
+        if let Err(error) = self
+            .transport
+            .write(&[RealtimeCommand::FeedHold.byte()])
+            .await
+        {
+            let error = ControllerError::from(error);
+            self.record_poll_failure(&error);
+            return Err(error);
+        }
+        if let Err(error) = self
+            .transport
+            .write(&[RealtimeCommand::SoftReset.byte()])
+            .await
+        {
+            let error = ControllerError::from(error);
+            self.record_poll_failure(&error);
+            return Err(error);
+        }
+
+        self.snapshot.consecutive_failures = 0;
+        self.snapshot.last_error = None;
         Ok(self.snapshot())
     }
 
@@ -401,6 +465,13 @@ impl<T: Transport> Controller<T> {
         self.transport
             .write(format!("{command}\n").as_bytes())
             .await?;
+        self.command_response_inner(command).await
+    }
+
+    async fn command_response_inner(
+        &mut self,
+        command: &str,
+    ) -> Result<CommandResponse, ControllerError> {
         let mut lines = Vec::new();
 
         loop {
@@ -484,6 +555,43 @@ impl<T: Transport> Controller<T> {
             });
         }
 
+        self.snapshot.consecutive_failures = 0;
+        self.snapshot.last_error = None;
+        Ok(response)
+    }
+
+    async fn read_acknowledged_response(
+        &mut self,
+        command: &str,
+    ) -> Result<CommandResponse, ControllerError> {
+        if self.snapshot.connection != ConnectionState::Connected {
+            return Err(ControllerError::NotReady(self.snapshot.connection));
+        }
+        let timeout = self.config.command_timeout;
+        let response =
+            match tokio::time::timeout(timeout, self.command_response_inner(command)).await {
+                Ok(result) => match result {
+                    Ok(response) => response,
+                    Err(error) => {
+                        self.record_poll_failure(&error);
+                        return Err(error);
+                    }
+                },
+                Err(_) => {
+                    let error = ControllerError::CommandTimeout {
+                        timeout_ms: duration_ms(timeout),
+                    };
+                    self.record_poll_failure(&error);
+                    return Err(error);
+                }
+            };
+        if response.completion != CommandCompletion::Ok {
+            return Err(ControllerError::CommandRejected {
+                command: response.command,
+                completion: response.completion,
+                code: response.code,
+            });
+        }
         self.snapshot.consecutive_failures = 0;
         self.snapshot.last_error = None;
         Ok(response)
@@ -754,6 +862,18 @@ mod tests {
             control.writes(),
             vec![b"!".to_vec(), b"~".to_vec(), vec![0x85], vec![0x18]]
         );
+    }
+
+    #[tokio::test]
+    async fn aborts_a_buffered_program_with_hold_then_soft_reset() {
+        let transport = MockTransport::default();
+        let control = transport.control();
+        let mut controller = Controller::new(transport);
+        controller.connect().await.unwrap();
+
+        controller.abort_program_stream().await.unwrap();
+
+        assert_eq!(control.writes(), vec![b"!".to_vec(), vec![0x18]]);
     }
 
     #[tokio::test]

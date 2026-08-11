@@ -243,6 +243,7 @@ impl Transport for MockTransport {
         } else if data == b"\x18" {
             state.status_line = DEFAULT_STATUS.to_owned();
             state.jog_polls_remaining = 0;
+            state.active_reads.clear();
             state
                 .active_reads
                 .push_back(MockRead::Line("Grbl 1.1h ['$' for help]".to_owned()));
@@ -790,6 +791,28 @@ mod tests {
         transport.write(b"G1 X1\n").await.unwrap();
 
         assert_eq!(transport.read_line().await.unwrap(), "ALARM:2");
+    }
+
+    #[tokio::test]
+    async fn soft_reset_flushes_pending_program_responses() {
+        let mut transport = MockTransport::default();
+        let control = transport.control();
+        control.queue_program_stall();
+        control.queue_program_ok();
+        transport.connect().await.unwrap();
+
+        transport.write(b"G1 X1\n").await.unwrap();
+        transport.write(b"G1 X2\n").await.unwrap();
+        transport.write(b"\x18").await.unwrap();
+
+        assert_eq!(
+            transport.read_line().await.unwrap(),
+            "Grbl 1.1h ['$' for help]"
+        );
+        assert_eq!(
+            transport.read_line().await.unwrap_err(),
+            TransportError::NoData
+        );
     }
 
     #[tokio::test]

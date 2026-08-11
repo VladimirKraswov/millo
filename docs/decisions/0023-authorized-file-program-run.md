@@ -21,8 +21,9 @@ in Program without adding a raw command API or a generated test-square path.
   session, fresh status sequence, and observed machine/work positions.
 - Start refreshes status and atomically consumes that authorization inside the
   single-owner command actor before loading the sender.
-- One line may be in flight. Only `ok` advances. `error`, `ALARM`, reset,
-  timeout, polling failure, or disconnect fail the run at the correlated line.
+- Sender flow control and response correlation use the bounded FIFO contract
+  defined by ADR 0025. Only `ok` advances. `error`, `ALARM`, reset, timeout,
+  polling failure, or disconnect fail the run at the correlated line.
 - `M0/M1` pause dispatch after their acknowledgement. `M2/M30` terminate the
   compiled plan. Physical modes defer the terminal command itself, enter
   `Draining`, and keep polling until a fresh `Idle`; only then is `M2/M30` sent
@@ -39,8 +40,7 @@ in Program without adding a raw command API or a generated test-square path.
 - The first air cut and engraving can use ordinary reviewed `.nc` files; there
   is no privileged built-in square.
 - Mock and serial modes share one sender state machine and snapshot stream.
-- GRBL receive-buffer streaming remains deliberately conservative at one
-  outstanding line. Character-count pipelining can be added behind the same
-  sender contract after hardware latency measurements.
+- ADR 0025 replaces the original one-outstanding-line implementation with
+  character-counted receive-buffer streaming behind the same sender API.
 - This change enables physical execution but does not itself run the connected
   machine. Every hardware program still requires current operator confirmation.
