@@ -276,6 +276,9 @@ does not schedule or execute controller I/O.
   operator acknowledges it.
 - An `ALARM:n` line and `<Alarm|...>` status are machine state, not transport
   failure. Alarm clears only after a non-alarm status arrives.
+- Alarm Unlock is a typed actor operation, not a raw-console command. It requires
+  explicit operator confirmation, rereads `Alarm`, sends exactly `$X`, and is
+  successful only after another status read reports `Idle` without alarm.
 - Disconnect changes actor lifecycle state, closes the transport, and clears
   session telemetry; the dormant ticker performs no I/O while disconnected.
 

@@ -12,7 +12,8 @@ use millo_sender::SenderState;
 use millo_serial::{SerialConfig, SerialTransport};
 
 const INSPECT_ONLY_FLAG: &str = "--inspect-only";
-const REQUIRED_RUN_FLAGS: [&str; 6] = [
+const REQUIRED_RUN_FLAGS: [&str; 7] = [
+    "--confirm-unlock",
     "--confirm-tool-removed",
     "--confirm-spindle-off",
     "--confirm-set-current-xyz-zero",
@@ -20,7 +21,7 @@ const REQUIRED_RUN_FLAGS: [&str; 6] = [
     "--confirm-path-clear",
     "--confirm-power-control",
 ];
-const USAGE: &str = "usage: hardware_air_run <serial-port> <program.nc> --inspect-only\n       hardware_air_run <serial-port> <program.nc> --confirm-tool-removed --confirm-spindle-off --confirm-set-current-xyz-zero --confirm-safe-z --confirm-path-clear --confirm-power-control";
+const USAGE: &str = "usage: hardware_air_run <serial-port> <program.nc> --inspect-only\n       hardware_air_run <serial-port> <program.nc> --confirm-unlock --confirm-tool-removed --confirm-spindle-off --confirm-set-current-xyz-zero --confirm-safe-z --confirm-path-clear --confirm-power-control";
 const POSITION_TOLERANCE_MM: f64 = 0.02;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +77,11 @@ async fn run(
     let mut controller = arbiter.refresh_status().await?;
     if controller.reset_notice.is_some() {
         controller = arbiter.acknowledge_reset().await?;
+    }
+    if controller.machine.mode == MachineMode::Alarm && args.mode == RunMode::ConfirmedAirRun {
+        println!("Unlocking the confirmed alarm state with typed $X");
+        controller = arbiter.unlock_alarm(true).await?;
+        println!("Unlock verified: {:?}", controller.machine.mode);
     }
     if controller.machine.mode != MachineMode::Idle {
         return Err(input_error(format!(
@@ -231,7 +237,7 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, io::Error>
         RunMode::ConfirmedAirRun
     } else {
         return Err(input_error(format!(
-            "inspect-only or all six run confirmations are required; {USAGE}"
+            "inspect-only or all seven run confirmations are required; {USAGE}"
         )));
     };
     Ok(Args {

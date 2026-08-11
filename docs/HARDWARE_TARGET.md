@@ -161,8 +161,18 @@ The physical sender now holds `M2/M30` as a terminal barrier without writing it,
 continues status polling and accepting realtime safety requests, and dispatches
 the terminal command only after a fresh `Idle`. Mock regression tests cover
 Idle gating, Hold/Resume, Reset cancellation, and a correlated terminal-command
-timeout. Clearing the current Alarm and attempting another motion require a new
+timeout. Clearing that Alarm and attempting another motion required a new
 operator confirmation.
+
+A second, separately confirmed attempt on 2026-08-11 used the typed Unlock
+workflow. It observed `Alarm`, sent exactly `$X`, reread `Idle`, and then found
+the interrupted position at work X `+3.386 mm`, Y `+0.000 mm`, Z `+0.000 mm`.
+The harness explicitly set that current position as the new G54 XYZ0 and
+verified all three axes at `0.000 mm` before issuing a new one-use lease. The
+physical sender acknowledged all 10 lines, remained responsive in `Draining`
+while the four sides completed, dispatched `M30` only after fresh `Idle`, and
+finished at WPos X `+0.000`, Y `+0.000`, Z `+0.000 mm`. This is the first
+successful physical file-based Air run for Millo.
 
 At each connection Millo treats the controller's complete `$$` response as the
 truth and keeps a duplicate in

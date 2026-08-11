@@ -60,6 +60,8 @@ pub enum ArbiterError {
     WorkZeroConfirmationRequired,
     #[error("active work coordinate system is not one of G54-G59")]
     ActiveWorkCoordinateSystemUnavailable,
+    #[error("alarm unlock requires explicit operator confirmation")]
+    UnlockConfirmationRequired,
     #[error("work zero verification failed: {0}")]
     WorkZeroVerification(String),
     #[error(transparent)]
@@ -239,6 +241,17 @@ impl CommandArbiter {
     pub async fn acknowledge_reset(&self) -> Result<ControllerSnapshot, ArbiterError> {
         self.call(|response| Request::AcknowledgeReset { response })
             .await
+    }
+
+    pub async fn unlock_alarm(
+        &self,
+        operator_confirmed: bool,
+    ) -> Result<ControllerSnapshot, ArbiterError> {
+        self.call(|response| Request::UnlockAlarm {
+            operator_confirmed,
+            response,
+        })
+        .await
     }
 
     pub async fn inspect_device(&self) -> Result<HardwareInspection, ArbiterError> {
@@ -445,6 +458,10 @@ enum Request {
         response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
     },
     AcknowledgeReset {
+        response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
+    },
+    UnlockAlarm {
+        operator_confirmed: bool,
         response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
     },
     InspectDevice {
@@ -674,6 +691,19 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         Request::AcknowledgeReset { response } => {
             invalidate_authorizations(safety, first_cut);
             let result = Ok(controller.acknowledge_reset());
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::UnlockAlarm {
+            operator_confirmed,
+            response,
+        } => {
+            invalidate_authorizations(safety, first_cut);
+            let result = if operator_confirmed {
+                controller.unlock_alarm().await.map_err(ArbiterError::from)
+            } else {
+                Err(ArbiterError::UnlockConfirmationRequired)
+            };
             publish(snapshots, controller);
             let _ = response.send(result);
         }
@@ -1886,6 +1916,41 @@ mod tests {
             ArbiterError::Safety(SafetyError::ResetChallengeMissing)
         ));
         assert_eq!(control.writes(), vec![b"\x18".to_vec()]);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn alarm_unlock_requires_confirmation_and_verifies_idle_in_the_actor() {
+        let transport = MockTransport::with_status(
+            "<Alarm|MPos:1.000,2.000,3.000|WPos:1.000,2.000,3.000|FS:0,0>",
+        );
+        let control = transport.control();
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(50),
+                failures_before_recovery: 2,
+            },
+            HardwareProfile::first_machine(),
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        assert!(matches!(
+            arbiter.unlock_alarm(false).await.unwrap_err(),
+            ArbiterError::UnlockConfirmationRequired
+        ));
+        assert!(control.writes().is_empty());
+
+        let unlocked = arbiter.unlock_alarm(true).await.unwrap();
+        assert_eq!(unlocked.machine.mode, MachineMode::Idle);
+        assert!(unlocked.alarm.is_none());
+        assert_eq!(
+            control.writes(),
+            vec![b"?".to_vec(), b"$X\n".to_vec(), b"?".to_vec()]
+        );
         task.abort();
     }
 

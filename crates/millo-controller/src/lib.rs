@@ -55,6 +55,10 @@ pub enum ControllerError {
         completion: CommandCompletion,
         code: Option<u16>,
     },
+    #[error("alarm unlock is available only in Alarm, current mode is {0:?}")]
+    UnlockUnavailable(MachineMode),
+    #[error("alarm unlock verification expected Idle, got {0:?}")]
+    UnlockVerification(MachineMode),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -301,6 +305,19 @@ impl<T: Transport> Controller<T> {
     ) -> Result<CommandResponse, ControllerError> {
         let command = encode_set_work_zero(axis, coordinate_system);
         self.execute_acknowledged_line(&command).await
+    }
+
+    pub async fn unlock_alarm(&mut self) -> Result<ControllerSnapshot, ControllerError> {
+        let before = self.refresh_status().await?;
+        if before.machine.mode != MachineMode::Alarm {
+            return Err(ControllerError::UnlockUnavailable(before.machine.mode));
+        }
+        self.execute_acknowledged_line("$X").await?;
+        let after = self.refresh_status().await?;
+        if after.machine.mode != MachineMode::Idle || after.alarm.is_some() {
+            return Err(ControllerError::UnlockVerification(after.machine.mode));
+        }
+        Ok(after)
     }
 
     pub async fn execute_program_line(
@@ -628,6 +645,29 @@ mod tests {
         let idle_snapshot = controller.lifecycle_tick().await.unwrap();
         assert_eq!(idle_snapshot.machine.mode, MachineMode::Idle);
         assert!(idle_snapshot.alarm.is_none());
+    }
+
+    #[tokio::test]
+    async fn typed_alarm_unlock_requires_alarm_and_verifies_fresh_idle() {
+        let transport = MockTransport::with_status(
+            "<Alarm|MPos:1.000,2.000,3.000|WPos:1.000,2.000,3.000|FS:0,0>",
+        );
+        let control = transport.control();
+        let mut controller = Controller::new(transport);
+        controller.connect().await.unwrap();
+
+        let unlocked = controller.unlock_alarm().await.unwrap();
+
+        assert_eq!(unlocked.machine.mode, MachineMode::Idle);
+        assert!(unlocked.alarm.is_none());
+        assert_eq!(
+            control.writes(),
+            vec![b"?".to_vec(), b"$X\n".to_vec(), b"?".to_vec()]
+        );
+        assert!(matches!(
+            controller.unlock_alarm().await.unwrap_err(),
+            ControllerError::UnlockUnavailable(MachineMode::Idle)
+        ));
     }
 
     #[tokio::test]

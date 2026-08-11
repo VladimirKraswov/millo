@@ -251,6 +251,17 @@ impl Transport for MockTransport {
                 state.status_line = status_with_mode(&state.status_line, "Idle", 0.0);
                 state.jog_polls_remaining = 0;
             }
+        } else if data == b"$X\n" {
+            if state.status_line.starts_with("<Alarm") {
+                state.status_line = status_with_mode(&state.status_line, "Idle", 0.0);
+                state
+                    .active_reads
+                    .push_back(MockRead::Line("ok".to_owned()));
+            } else {
+                state
+                    .active_reads
+                    .push_back(MockRead::Line("error:9".to_owned()));
+            }
         } else if let Some(jog) = parse_step_jog(data) {
             let mut position = status_position(&state.status_line).unwrap_or([0.0; 3]);
             position[jog.axis] += jog.distance_mm;

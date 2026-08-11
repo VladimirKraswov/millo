@@ -226,6 +226,8 @@ port names remain untouched.
   manually confirmed attempt on 2026-08-11 sent the 20 mm fixture, detected the
   original premature-`M30` timeout at 9/10 acknowledged lines, and performed the
   emergency Reset path. It is recorded as an interrupted attempt, not a pass.
+  A separately confirmed retry after the terminal-barrier fix completed all
+  10/10 lines and returned to fresh `Idle` at WPos XYZ zero.
 
 ### Hardware Air-run fixture
 
@@ -238,12 +240,13 @@ cargo run -p millo-desktop --example hardware_air_run -- \
 
 The command parses and validates the exact `20 x 20 x 0 mm` fixture before it
 opens serial, then performs only status and Inspector reads. Confirmed execution
-requires all six flags; omission of any one fails before serial connection:
+requires all seven flags; omission of any one fails before serial connection:
 
 ```bash
 cargo run -p millo-desktop --example hardware_air_run -- \
   /dev/cu.usbmodem11101 fixtures/programs/air-square-20mm.nc \
-  --confirm-tool-removed --confirm-spindle-off --confirm-set-current-xyz-zero \
+  --confirm-unlock --confirm-tool-removed --confirm-spindle-off \
+  --confirm-set-current-xyz-zero \
   --confirm-safe-z --confirm-path-clear --confirm-power-control
 ```
 
@@ -253,9 +256,13 @@ position as XYZ work zero, rereads `$#`, and requires observed WPos within
 return to work zero, and handles `Ctrl-C` or timeout by requesting Feed Hold
 followed by challenge-confirmed Soft Reset.
 
-The controller currently reports `Alarm` after the interrupted first attempt.
-Do not rerun this command until the operator has separately confirmed `$X`, the
-new G54 origin, clear positive X/Y travel, and one fresh Air-run authorization.
+The successful hardware run on 2026-08-11 first verified typed `$X` from
+`Alarm` to fresh `Idle`, set and reread the new G54 XYZ0, acknowledged all 10
+sender lines, and returned to WPos XYZ `0.000 mm`. The earlier interrupted
+attempt remains recorded because it exposed the now-fixed and regression-tested
+`M30` planner barrier. Every future invocation still requires all seven
+confirmations and a
+new one-use authorization.
 
 ## Current hardware readiness coverage
 
