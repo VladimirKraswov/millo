@@ -1825,6 +1825,7 @@ dependencies = [
  "millo-grbl",
  "millo-mock",
  "millo-readiness",
+ "millo-run",
  "millo-safety",
  "millo-sender",
  "millo-transport",
@@ -1855,6 +1856,7 @@ dependencies = [
  "millo-dry-run",
  "millo-gcode",
  "millo-mock",
+ "millo-run",
  "millo-sender",
  "millo-serial",
  "millo-transport",
@@ -1916,6 +1918,16 @@ dependencies = [
  "millo-grbl",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "millo-run"
+version = "0.1.0"
+dependencies = [
+ "millo-domain",
+ "millo-dry-run",
+ "millo-gcode",
+ "serde",
 ]
 
 [[package]]

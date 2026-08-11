@@ -170,6 +170,26 @@ port names remain untouched.
 - No automated or manual test in this slice sends a program line to the physical
   controller.
 
+## Current real-run preflight coverage
+
+- `millo-run` tests clear a bounded motion-only program while retaining three
+  operator cautions, reject spindle control at the exact source line, keep a
+  probe-only readiness failure from blocking non-probing motion, and independently
+  detect empty geometry plus a non-idle controller. A separate test rejects a
+  motion file that relies on ambient units, distance, or feed modes.
+- Actor tests require the serial execution target, reject Mock before any I/O,
+  and assert the exact read-only sequence `?`, `$I`, `$$`, `$G`, `$#`, `?`.
+- An unsafe-program actor test proves every emitted byte belongs to that
+  read-only allowlist and no normalized program line is dispatched.
+- TypeScript tests expose only `Check` states; the read model contains no Start
+  action. Missing serial state, missing gateway, and concurrent checks fail
+  closed.
+- The `/?fixture=preflight` browser fixture covers Blocked status, the dedicated
+  Preflight diagnostics tab, internal scrolling, desktop/mobile layout, and the
+  source-line jump from a policy blocker to selected `L8`.
+- This preflight creates no lease or plan. Passing it is evidence for the next
+  operator workflow, not permission to move hardware.
+
 ## Current hardware readiness coverage
 
 - A representative unhomed XYZ fixture passes the guarded test-jog

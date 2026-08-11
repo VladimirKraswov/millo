@@ -1,0 +1,11 @@
+[package]
+name = "millo-run"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+millo-domain = { path = "../millo-domain" }
+millo-dry-run = { path = "../millo-dry-run" }
+millo-gcode = { path = "../millo-gcode" }
+serde.workspace = true

@@ -20,6 +20,7 @@ import {
 import { ReadinessPanel } from "./components/ReadinessPanel";
 import { SafetyControls } from "./components/SafetyControls";
 import { previewFixtureProgram } from "./features/program/previewFixtureProgram";
+import { previewFixturePreflightGateway } from "./features/program/previewFixturePreflight";
 import { ProgramWorkspace } from "./features/program/ProgramWorkspace";
 import { bindMachineStateStream } from "./platform/machine/MachineStateEventStream";
 import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineCommandGateway";
@@ -27,6 +28,7 @@ import { tauriMachineStateEventStream } from "./platform/machine/tauriMachineSta
 import { tauriWorkCoordinateGateway } from "./platform/machine/tauriWorkCoordinateGateway";
 import { tauriProgramGateway } from "./platform/program/tauriProgramGateway";
 import { tauriDryRunGateway } from "./platform/program/tauriDryRunGateway";
+import { tauriRealRunPreflightGateway } from "./platform/program/tauriRealRunPreflightGateway";
 import {
   emptySnapshot,
   type ControllerSnapshot,
@@ -53,11 +55,14 @@ const mockTransport: TransportDescriptor = {
 };
 
 const baudRates = [9_600, 19_200, 38_400, 57_600, 115_200, 230_400];
+const developmentFixture = import.meta.env.DEV
+  ? new URLSearchParams(window.location.search).get("fixture")
+  : undefined;
 const developmentPreviewFixture =
-  import.meta.env.DEV &&
-  new URLSearchParams(window.location.search).get("fixture") === "program"
+  developmentFixture === "program" || developmentFixture === "preflight"
     ? previewFixtureProgram
     : undefined;
+const developmentPreflightFixture = developmentFixture === "preflight";
 
 const formatCoordinate = (value: number | undefined): string =>
   value === undefined ? "--" : value.toFixed(3);
@@ -368,6 +373,26 @@ export default function App() {
               dryRunGateway={desktopRuntime ? tauriDryRunGateway : undefined}
               gateway={tauriProgramGateway}
               initialProgram={developmentPreviewFixture}
+              onInspection={setInspection}
+              realRunAvailable={
+                developmentPreflightFixture ||
+                (desktopRuntime &&
+                  activeTransport.kind === "serial" &&
+                  snapshot.connection === "connected" &&
+                  snapshot.machine.mode === "idle" &&
+                  snapshot.alarm === undefined &&
+                  snapshot.resetNotice === undefined)
+              }
+              realRunGateway={
+                developmentPreflightFixture
+                  ? previewFixturePreflightGateway
+                  : desktopRuntime
+                    ? tauriRealRunPreflightGateway
+                    : undefined
+              }
+              realRunTarget={
+                developmentPreflightFixture || activeTransport.kind === "serial"
+              }
             />
           </div>
 

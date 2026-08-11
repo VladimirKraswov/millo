@@ -10,10 +10,12 @@ use millo_domain::{
     WorkCoordinateSystem, WorkZeroOutcome, WorkZeroRequest,
 };
 use millo_dry_run::DryRunPlan;
+use millo_gcode::GcodeProgram;
 use millo_grbl::{
     active_work_coordinate_system, build_device_inspection, work_coordinate_parameter,
 };
 use millo_readiness::assess;
+use millo_run::{RunPreflightReport, assess_real_run_preflight};
 use millo_safety::{SafetyError, SafetyManager};
 use millo_sender::{Sender, SenderError, SenderSnapshot, SenderState};
 use millo_transport::BoxedTransport;
@@ -54,13 +56,16 @@ pub enum ArbiterError {
     Sender(#[from] SenderError),
     #[error("dry run is disabled for the active transport")]
     DryRunTransportUnavailable,
+    #[error("real-run preflight requires the serial transport target")]
+    RealRunTransportUnavailable,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum DryRunTarget {
+pub enum ExecutionTarget {
     #[default]
     Disabled,
     Mock,
+    Serial,
 }
 
 #[derive(Debug, Clone)]
@@ -83,14 +88,19 @@ impl CommandArbiter {
         config: ControllerConfig,
         hardware_profile: HardwareProfile,
     ) -> (Self, impl Future<Output = ()> + Send + 'static) {
-        Self::new_with_dry_run_target(transport, config, hardware_profile, DryRunTarget::Disabled)
+        Self::new_with_execution_target(
+            transport,
+            config,
+            hardware_profile,
+            ExecutionTarget::Disabled,
+        )
     }
 
-    pub fn new_with_dry_run_target(
+    pub fn new_with_execution_target(
         transport: BoxedTransport,
         config: ControllerConfig,
         hardware_profile: HardwareProfile,
-        dry_run_target: DryRunTarget,
+        execution_target: ExecutionTarget,
     ) -> (Self, impl Future<Output = ()> + Send + 'static) {
         let controller = Controller::with_config(transport, config);
         let initial_snapshot = controller.snapshot();
@@ -102,7 +112,7 @@ impl CommandArbiter {
             controller,
             config,
             hardware_profile,
-            dry_run_target,
+            execution_target,
             sender,
             safety: SafetyManager::default(),
             snapshots: snapshot_tx,
@@ -140,18 +150,18 @@ impl CommandArbiter {
         &self,
         transport: BoxedTransport,
     ) -> Result<ControllerSnapshot, ArbiterError> {
-        self.replace_transport_with_dry_run_target(transport, DryRunTarget::Disabled)
+        self.replace_transport_with_execution_target(transport, ExecutionTarget::Disabled)
             .await
     }
 
-    pub async fn replace_transport_with_dry_run_target(
+    pub async fn replace_transport_with_execution_target(
         &self,
         transport: BoxedTransport,
-        dry_run_target: DryRunTarget,
+        execution_target: ExecutionTarget,
     ) -> Result<ControllerSnapshot, ArbiterError> {
         self.call(|response| Request::ReplaceTransport {
             transport,
-            dry_run_target,
+            execution_target,
             response,
         })
         .await
@@ -177,6 +187,14 @@ impl CommandArbiter {
 
     pub async fn inspect_device(&self) -> Result<HardwareInspection, ArbiterError> {
         self.call(|response| Request::InspectDevice { response })
+            .await
+    }
+
+    pub async fn preflight_real_run(
+        &self,
+        program: GcodeProgram,
+    ) -> Result<RunPreflightReport, ArbiterError> {
+        self.call(|response| Request::PreflightRealRun { program, response })
             .await
     }
 
@@ -287,7 +305,7 @@ impl CommandArbiter {
 enum Request {
     ReplaceTransport {
         transport: BoxedTransport,
-        dry_run_target: DryRunTarget,
+        execution_target: ExecutionTarget,
         response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
     },
     Connect {
@@ -304,6 +322,10 @@ enum Request {
     },
     InspectDevice {
         response: oneshot::Sender<Result<HardwareInspection, ArbiterError>>,
+    },
+    PreflightRealRun {
+        program: GcodeProgram,
+        response: oneshot::Sender<Result<RunPreflightReport, ArbiterError>>,
     },
     Realtime {
         command: RealtimeCommand,
@@ -357,7 +379,7 @@ struct ActorState {
     controller: Controller<BoxedTransport>,
     config: ControllerConfig,
     hardware_profile: HardwareProfile,
-    dry_run_target: DryRunTarget,
+    execution_target: ExecutionTarget,
     sender: Sender,
     safety: SafetyManager,
     snapshots: watch::Sender<ControllerSnapshot>,
@@ -406,7 +428,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         controller,
         config,
         hardware_profile,
-        dry_run_target,
+        execution_target,
         sender,
         safety,
         snapshots,
@@ -415,14 +437,14 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
     match request {
         Request::ReplaceTransport {
             transport,
-            dry_run_target: replacement_target,
+            execution_target: replacement_target,
             response,
         } => {
             let _ = controller.disconnect().await;
             safety.invalidate_test_jog();
             cancel_active_sender(sender, sender_snapshots);
             *controller = Controller::with_config(transport, *config);
-            *dry_run_target = replacement_target;
+            *execution_target = replacement_target;
             publish(snapshots, controller);
             let _ = response.send(Ok(controller.snapshot()));
         }
@@ -463,6 +485,15 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                     HardwareInspection { device, readiness }
                 })
                 .map_err(ArbiterError::from);
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::PreflightRealRun { program, response } => {
+            let result = if *execution_target != ExecutionTarget::Serial {
+                Err(ArbiterError::RealRunTransportUnavailable)
+            } else {
+                execute_real_run_preflight(controller, hardware_profile, program).await
+            };
             publish(snapshots, controller);
             let _ = response.send(result);
         }
@@ -570,7 +601,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(result);
         }
         Request::StartDryRun { plan, response } => {
-            let result = if *dry_run_target != DryRunTarget::Mock {
+            let result = if *execution_target != ExecutionTarget::Mock {
                 Err(ArbiterError::DryRunTransportUnavailable)
             } else {
                 ensure_stable_idle(&controller.snapshot()).and_then(|()| {
@@ -598,6 +629,20 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(result);
         }
     }
+}
+
+async fn execute_real_run_preflight(
+    controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
+    program: GcodeProgram,
+) -> Result<RunPreflightReport, ArbiterError> {
+    controller.refresh_status().await?;
+    ensure_stable_idle(&controller.snapshot())?;
+    let device = controller.inspect_device().await?;
+    let snapshot = controller.refresh_status().await?;
+    let readiness = assess(hardware_profile, &device, &snapshot);
+    let hardware = HardwareInspection { device, readiness };
+    Ok(assess_real_run_preflight(&program, hardware, &snapshot))
 }
 
 async fn execute_sender_step(
@@ -955,12 +1000,16 @@ mod tests {
     }
 
     fn dry_run_plan(source: &str) -> DryRunPlan {
-        let program = parse_program(ProgramParseRequest {
+        let program = parsed_program(source);
+        build_dry_run_plan(&program).unwrap()
+    }
+
+    fn parsed_program(source: &str) -> GcodeProgram {
+        parse_program(ProgramParseRequest {
             source_name: "sender-fixture.nc".to_owned(),
             source: source.to_owned(),
         })
-        .unwrap();
-        build_dry_run_plan(&program).unwrap()
+        .unwrap()
     }
 
     fn mock_dry_run_arbiter() -> (
@@ -970,7 +1019,7 @@ mod tests {
     ) {
         let transport = MockTransport::default();
         let control = transport.control();
-        let (arbiter, worker) = CommandArbiter::new_with_dry_run_target(
+        let (arbiter, worker) = CommandArbiter::new_with_execution_target(
             Box::new(transport),
             ControllerConfig {
                 poll_interval: Duration::from_secs(60),
@@ -979,7 +1028,28 @@ mod tests {
                 failures_before_recovery: 2,
             },
             HardwareProfile::first_machine(),
-            DryRunTarget::Mock,
+            ExecutionTarget::Mock,
+        );
+        (arbiter, control, worker)
+    }
+
+    fn serial_preflight_arbiter() -> (
+        CommandArbiter,
+        millo_mock::MockControl,
+        impl Future<Output = ()> + Send + 'static,
+    ) {
+        let transport = MockTransport::default();
+        let control = transport.control();
+        let (arbiter, worker) = CommandArbiter::new_with_execution_target(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(50),
+                failures_before_recovery: 2,
+            },
+            HardwareProfile::first_machine(),
+            ExecutionTarget::Serial,
         );
         (arbiter, control, worker)
     }
@@ -1616,6 +1686,69 @@ mod tests {
                 b"?".to_vec(),
             ]
         );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn real_run_preflight_is_serial_only_and_performs_read_only_fresh_queries() {
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let report = arbiter
+            .preflight_real_run(parsed_program("G21 G90 G94\nG0 Z2\nG1 X2 F20\nM5"))
+            .await
+            .unwrap();
+
+        assert!(report.ready);
+        assert_eq!(report.poll_sequence, 2);
+        assert_eq!(
+            control.writes(),
+            vec![
+                b"?".to_vec(),
+                b"$I\n".to_vec(),
+                b"$$\n".to_vec(),
+                b"$G\n".to_vec(),
+                b"$#\n".to_vec(),
+                b"?".to_vec(),
+            ]
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn real_run_preflight_rejects_non_serial_target_before_controller_io() {
+        let (arbiter, control, worker) = mock_dry_run_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let error = arbiter
+            .preflight_real_run(parsed_program("G21 G90\nG1 X1 F10"))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(error, ArbiterError::RealRunTransportUnavailable));
+        assert!(control.writes().is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn unsafe_real_run_preflight_never_dispatches_a_program_line() {
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let report = arbiter
+            .preflight_real_run(parsed_program("G21 G90 G94\nM3 S1000\nG1 X1 F10"))
+            .await
+            .unwrap();
+
+        assert!(!report.ready);
+        assert_eq!(report.program_blockers[0].source_line, Some(2));
+        assert!(control.writes().iter().all(|write| matches!(
+            write.as_slice(),
+            b"?" | b"$I\n" | b"$$\n" | b"$G\n" | b"$#\n"
+        )));
         task.abort();
     }
 

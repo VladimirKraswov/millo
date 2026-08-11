@@ -12,8 +12,8 @@ export const previewFixtureProgram: GcodeProgram = {
     },
     {
       sourceLine: 2,
-      source: "G21 G90",
-      normalized: "G21 G90",
+      source: "G21 G90 G94 G17",
+      normalized: "G21 G90 G94 G17",
       executable: true,
       warningCount: 0,
     },

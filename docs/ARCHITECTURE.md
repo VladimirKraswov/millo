@@ -59,6 +59,17 @@ Original source -> Rust reparse -> millo-dry-run -> opaque DryRunPlan
 
 Neither an immutable preview DTO nor a React flag can become a sender plan.
 
+Serial real-run preparation is currently read-only:
+
+```text
+Original source -> Rust reparse -> command actor -> ? + Inspector + ?
+                                      |                    |
+                                   serial-only         fresh snapshot
+                                      +--------> millo-run report -> React
+```
+
+This path mints neither a sender plan nor an authorization.
+
 ## Rules
 
 1. CNC behavior belongs in Rust and must be testable without Tauri.
@@ -141,6 +152,35 @@ does not schedule or execute controller I/O.
 - React receives a separate `dry-run-state` event with bounded progress,
   current source line, and terminal error. Plugins receive no sender or raw-line
   capability. `jobs.create` remains reserved.
+
+### Real-run preflight boundary
+
+- `millo-run` owns the first-run report. React displays its typed checks but
+  does not decide whether a program or controller is ready.
+- Tauri reparses the retained original source. The preview DTO and its
+  `dryRunEligible` flag are not accepted as execution evidence.
+- Both Tauri and the command actor require the serial execution target. Mock and
+  disabled targets fail before controller I/O.
+- The actor performs one serialized `?`, `$I`, `$$`, `$G`, `$#`, `?`
+  transaction. It requires stable `Idle` before Inspector and assesses the final
+  status, so a stale UI snapshot cannot clear preflight.
+- The program must pass the existing fail-closed motion-only policy and contain
+  complete bounded preview motion. M3/M4/non-zero S, coolant, probing, M6,
+  machine/reference-coordinate motion, coordinate mutation, malformed geometry,
+  and unsupported safety behavior remain blockers.
+- Before relevant motion, the file must explicitly establish `G21` units,
+  `G90` distance mode, `G94` feed mode, and `G17` for XY arcs. Ambient GRBL
+  modal state cannot fill parser defaults for a physical run.
+- Probe readiness is not motion-critical for a program that is forbidden from
+  probing. Firmware, XYZ tuning, unhomed settings, units, milling mode, active
+  G54-G59, alarm/reset, and controller state remain enforced.
+- Missing homing/limits, manual spindle workflow, and unconfirmed stock, cutter,
+  work zero, safe Z, and clearance remain explicit cautions.
+- The Preflight diagnostics tab links a source-addressable blocker back to the
+  immutable program-line selection. That selection still cannot alter policy or
+  future execution order.
+- No program command, safety preamble, authorization, serial sender, or Start
+  control exists in this slice.
 
 ### Lifecycle invariants
 
@@ -334,12 +374,12 @@ does not schedule or execute controller I/O.
 
 ## Near-term sequence
 
-1. Mock sender timing and richer simulated position updates without widening
-   the hardware execution gate.
-2. Sender current-line tracking linked to the existing read-only selection
-   model, without allowing selection to change execution order.
-3. Probe input validation and guarded Z probing only after a physical sensor is
-   installed and connected.
+1. Define a first-cut operator authorization covering stock, cutter, verified
+   XYZ work zero, safe Z, manual spindle state, and immediately reachable power.
+2. Generalize the opaque policy-approved plan without giving React raw command
+   authority, then exercise it against Mock with current-line following.
+3. Add a serial sender only after start/hold/cancel/error/reset behavior and
+   one-line-in-flight recovery are proven by fixtures; keep probing unavailable.
 
 Three.js is now isolated behind the program preview adapter and a lazy bundle.
 Ant Design remains absent until a workflow needs its component contracts rather

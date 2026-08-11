@@ -8,8 +8,10 @@ rust-version.workspace = true
 millo-controller = { path = "../millo-controller" }
 millo-dry-run = { path = "../millo-dry-run" }
 millo-domain = { path = "../millo-domain" }
+millo-gcode = { path = "../millo-gcode" }
 millo-grbl = { path = "../millo-grbl" }
 millo-readiness = { path = "../millo-readiness" }
+millo-run = { path = "../millo-run" }
 millo-safety = { path = "../millo-safety" }
 millo-sender = { path = "../millo-sender" }
 millo-transport = { path = "../millo-transport" }
@@ -17,5 +19,4 @@ thiserror.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
-millo-gcode = { path = "../millo-gcode" }
 millo-mock = { path = "../millo-mock" }

@@ -9,6 +9,7 @@ members = [
   "crates/millo-grbl",
   "crates/millo-mock",
   "crates/millo-readiness",
+  "crates/millo-run",
   "crates/millo-safety",
   "crates/millo-sender",
   "crates/millo-serial",

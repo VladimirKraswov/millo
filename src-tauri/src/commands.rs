@@ -1,4 +1,4 @@
-use millo_command::{CommandArbiter, DryRunTarget};
+use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
     ControllerSnapshot, HardwareInspection, HardwareProfile, JogPadStepOutcome, JogPadStepRequest,
@@ -8,6 +8,7 @@ use millo_domain::{
 use millo_dry_run::{DryRunPlan, DryRunPolicyError, build_dry_run_plan};
 use millo_gcode::{GcodeProgram, ProgramParseRequest, parse_program};
 use millo_mock::{MockControl, MockTransport};
+use millo_run::RunPreflightReport;
 use millo_sender::SenderSnapshot;
 use millo_serial::{
     SerialConfig, SerialPortDescriptor, SerialPortKind, SerialTransport,
@@ -44,7 +45,7 @@ struct ResolvedTransport {
     transport: BoxedTransport,
     descriptor: TransportDescriptor,
     mock: Option<MockControl>,
-    dry_run_target: DryRunTarget,
+    execution_target: ExecutionTarget,
 }
 
 impl ResolvedTransport {
@@ -55,7 +56,7 @@ impl ResolvedTransport {
             transport: Box::new(transport),
             descriptor: mock_descriptor(),
             mock: Some(mock),
-            dry_run_target: DryRunTarget::Mock,
+            execution_target: ExecutionTarget::Mock,
         }
     }
 }
@@ -73,11 +74,11 @@ impl Default for AppState {
         let initial = ResolvedTransport::mock();
         let descriptor = initial.descriptor;
         let mock = initial.mock;
-        let (arbiter, worker) = CommandArbiter::new_with_dry_run_target(
+        let (arbiter, worker) = CommandArbiter::new_with_execution_target(
             initial.transport,
             ControllerConfig::default(),
             HardwareProfile::first_machine(),
-            initial.dry_run_target,
+            initial.execution_target,
         );
         tauri::async_runtime::spawn(worker);
 
@@ -158,7 +159,10 @@ pub async fn connect_transport(
 
     state
         .arbiter
-        .replace_transport_with_dry_run_target(replacement.transport, replacement.dry_run_target)
+        .replace_transport_with_execution_target(
+            replacement.transport,
+            replacement.execution_target,
+        )
         .await
         .map_err(|error| error.to_string())?;
     *state.active_transport.lock().await = replacement.descriptor;
@@ -300,6 +304,26 @@ pub async fn parse_gcode_program(request: ProgramParseRequest) -> Result<GcodePr
 }
 
 #[tauri::command]
+pub async fn preflight_real_run(
+    request: ProgramParseRequest,
+    state: State<'_, AppState>,
+) -> Result<RunPreflightReport, String> {
+    let _transition = state.transition_lock.lock().await;
+    if state.active_transport.lock().await.kind != TransportKind::Serial {
+        return Err("real-run preflight requires an active serial transport".to_owned());
+    }
+    let program = tokio::task::spawn_blocking(move || parse_program(request))
+        .await
+        .map_err(|error| format!("real-run parser task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
+    state
+        .arbiter
+        .preflight_real_run(program)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn sender_snapshot(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
     Ok(state.arbiter.sender_snapshot())
 }
@@ -431,7 +455,7 @@ async fn resolve_transport(
         transport: Box::new(SerialTransport::new(config)),
         descriptor: serial_descriptor(port),
         mock: None,
-        dry_run_target: DryRunTarget::Disabled,
+        execution_target: ExecutionTarget::Serial,
     })
 }
 

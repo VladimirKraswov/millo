@@ -4,9 +4,9 @@ use commands::{
     AppState, acknowledge_reset, active_transport, cancel_dry_run, cancel_jog, confirm_soft_reset,
     connect_transport, controller_snapshot, disconnect, feed_hold, inspect_device, jog_pad_step,
     list_transports, mock_clear_alarm, mock_start_run, mock_trigger_alarm, mock_trigger_disconnect,
-    mock_trigger_reset, mock_trigger_timeout, parse_gcode_program, pause_dry_run, prepare_test_jog,
-    refresh_status, request_soft_reset, resume_dry_run, sender_snapshot, set_work_zero,
-    start_mock_dry_run, step_jog,
+    mock_trigger_reset, mock_trigger_timeout, parse_gcode_program, pause_dry_run,
+    preflight_real_run, prepare_test_jog, refresh_status, request_soft_reset, resume_dry_run,
+    sender_snapshot, set_work_zero, start_mock_dry_run, step_jog,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -28,6 +28,7 @@ pub fn run() {
             jog_pad_step,
             set_work_zero,
             parse_gcode_program,
+            preflight_real_run,
             sender_snapshot,
             start_mock_dry_run,
             pause_dry_run,

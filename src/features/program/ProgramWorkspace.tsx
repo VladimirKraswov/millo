@@ -1,8 +1,11 @@
 import {
   Box,
+  CircleAlert,
+  CircleCheck,
   FileCode2,
   Pause,
   Play,
+  RefreshCw,
   ShieldAlert,
   Square,
   Trash2,
@@ -21,6 +24,7 @@ import {
 } from "react";
 
 import type { ProgramGateway } from "../../platform/program/ProgramGateway";
+import type { HardwareInspection } from "../../shared/machine";
 import {
   idleSenderSnapshot,
   type DryRunGateway,
@@ -28,9 +32,14 @@ import {
   type SenderState,
 } from "../../shared/dryRun";
 import type { GcodeProgram, ProgramWarning } from "../../shared/program";
+import type {
+  RealRunPreflightGateway,
+  RunPreflightReport,
+} from "../../shared/realRun";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramLineTable } from "./ProgramLineTable";
 import { dryRunControls } from "./dryRunReadModel";
+import { realRunPreflightControls } from "./realRunPreflightReadModel";
 import type { PreviewView } from "./ToolpathPreview";
 
 const ToolpathPreview = lazy(async () => {
@@ -45,6 +54,10 @@ interface ProgramWorkspaceProps {
   readonly gateway: ProgramGateway;
   readonly initialProgram?: GcodeProgram;
   readonly initialSource?: string;
+  readonly onInspection?: (inspection: HardwareInspection) => void;
+  readonly realRunAvailable?: boolean;
+  readonly realRunGateway?: RealRunPreflightGateway;
+  readonly realRunTarget?: boolean;
 }
 
 const formatDistance = (value: number): string =>
@@ -70,6 +83,10 @@ export function ProgramWorkspace({
   gateway,
   initialProgram,
   initialSource = "",
+  onInspection,
+  realRunAvailable = false,
+  realRunGateway,
+  realRunTarget = false,
 }: ProgramWorkspaceProps) {
   const loader = useMemo(() => new ProgramLoader(gateway), [gateway]);
   const [loaded, setLoaded] = useState<LoadedProgram | undefined>(
@@ -79,10 +96,12 @@ export function ProgramWorkspace({
   const [view, setView] = useState<PreviewView>("iso");
   const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [diagnosticView, setDiagnosticView] = useState<"lines" | "warnings">(
-    "lines",
-  );
+  const [diagnosticView, setDiagnosticView] = useState<
+    "lines" | "warnings" | "preflight"
+  >("lines");
   const [selectedSourceLine, setSelectedSourceLine] = useState<number>();
+  const [realRunReport, setRealRunReport] = useState<RunPreflightReport>();
+  const [preflightLoading, setPreflightLoading] = useState(false);
   const [error, setError] = useState<string>();
   const program = loaded?.program;
   const senderActive = sender.state === "running" || sender.state === "paused";
@@ -116,6 +135,12 @@ export function ProgramWorkspace({
     };
   }, [desktopRuntime, dryRunGateway]);
 
+  useEffect(() => {
+    if (!realRunTarget || !realRunAvailable) {
+      setRealRunReport(undefined);
+    }
+  }, [realRunAvailable, realRunTarget]);
+
   const loadFile = async (file?: File) => {
     if (!file || loading || !desktopRuntime) return;
     setLoading(true);
@@ -125,6 +150,7 @@ export function ProgramWorkspace({
       setSender(idleSenderSnapshot);
       setSelectedSourceLine(undefined);
       setDiagnosticView("lines");
+      setRealRunReport(undefined);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -191,6 +217,34 @@ export function ProgramWorkspace({
     loading,
   });
   const progressPercent = controls.progressPercent;
+  const reportForProgram =
+    realRunReport?.sourceName === program?.sourceName
+      ? realRunReport
+      : undefined;
+  const preflightControls = realRunPreflightControls(reportForProgram, {
+    serialAvailable: realRunAvailable,
+    gatewayAvailable: realRunGateway !== undefined,
+    checking: preflightLoading,
+  });
+  const runRealPreflight = async () => {
+    if (!loaded || !realRunGateway || !preflightControls.canCheck) return;
+    setPreflightLoading(true);
+    setError(undefined);
+    setRealRunReport(undefined);
+    try {
+      const report = await realRunGateway.preflight({
+        sourceName: loaded.program.sourceName,
+        source: loaded.source,
+      });
+      setRealRunReport(report);
+      onInspection?.(report.hardware);
+      setDiagnosticView("preflight");
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setPreflightLoading(false);
+    }
+  };
 
   return (
     <section className="program-workspace" aria-labelledby="program-title">
@@ -231,6 +285,7 @@ export function ProgramWorkspace({
                 setLoaded(undefined);
                 setSender(idleSenderSnapshot);
                 setSelectedSourceLine(undefined);
+                setRealRunReport(undefined);
                 setError(undefined);
               }}
               title="Закрыть программу"
@@ -331,88 +386,127 @@ export function ProgramWorkspace({
                 </strong>
               </div>
             </div>
-            <div className={`dry-run-card is-${displayedSender.state}`}>
-              <div className="dry-run-heading">
-                <div>
-                  <span>Bounded sender</span>
-                  <strong>{senderLabels[displayedSender.state]}</strong>
-                </div>
-                <code>{progressPercent}%</code>
-              </div>
+            {realRunTarget ? (
               <div
-                aria-label="Dry run progress"
-                aria-valuemax={100}
-                aria-valuemin={0}
-                aria-valuenow={progressPercent}
-                className="dry-run-progress"
-                role="progressbar"
+                className={`real-run-preflight is-${preflightControls.status}`}
               >
-                <i style={{ width: `${progressPercent}%` }} />
+                <div className="real-run-preflight-heading">
+                  <div>
+                    <span>Serial preflight</span>
+                    <strong>{preflightControls.statusLabel}</strong>
+                  </div>
+                  {reportForProgram ? (
+                    <code>status #{reportForProgram.pollSequence}</code>
+                  ) : (
+                    <ShieldAlert aria-hidden="true" size={15} />
+                  )}
+                </div>
+                <button
+                  disabled={!preflightControls.canCheck}
+                  onClick={() => void runRealPreflight()}
+                  type="button"
+                >
+                  <RefreshCw
+                    aria-hidden="true"
+                    className={preflightLoading ? "is-spinning" : undefined}
+                    size={13}
+                  />
+                  {reportForProgram ? "Проверить снова" : "Проверить готовность"}
+                </button>
+                <small>
+                  {reportForProgram?.ready
+                    ? `${reportForProgram.cautionCount} caution · Serial sender закрыт`
+                    : reportForProgram
+                      ? `${reportForProgram.blockerCount} blocker · ${reportForProgram.cautionCount} caution`
+                      : "Только чтение GRBL; движения и запуска здесь нет"}
+                </small>
               </div>
-              <div className="dry-run-line">
-                <span>
-                  {displayedSender.currentSourceLine !== undefined
-                    ? `L${displayedSender.currentSourceLine}`
-                    : "Guard"}
-                </span>
-                <code>{displayedSender.currentCommand ?? "M5 · M9 preamble"}</code>
+            ) : (
+              <div className={`dry-run-card is-${displayedSender.state}`}>
+                <div className="dry-run-heading">
+                  <div>
+                    <span>Bounded sender</span>
+                    <strong>{senderLabels[displayedSender.state]}</strong>
+                  </div>
+                  <code>{progressPercent}%</code>
+                </div>
+                <div
+                  aria-label="Dry run progress"
+                  aria-valuemax={100}
+                  aria-valuemin={0}
+                  aria-valuenow={progressPercent}
+                  className="dry-run-progress"
+                  role="progressbar"
+                >
+                  <i style={{ width: `${progressPercent}%` }} />
+                </div>
+                <div className="dry-run-line">
+                  <span>
+                    {displayedSender.currentSourceLine !== undefined
+                      ? `L${displayedSender.currentSourceLine}`
+                      : "Guard"}
+                  </span>
+                  <code>
+                    {displayedSender.currentCommand ?? "M5 · M9 preamble"}
+                  </code>
+                </div>
+                <div className="dry-run-actions">
+                  {!senderActive && displayedSender.state !== "running" && (
+                    <button
+                      disabled={!dryRunGateway || !controls.canStart}
+                      onClick={startDryRun}
+                      title={
+                        dryRunAvailable
+                          ? "Запустить на Mock GRBL"
+                          : "Подключите Mock GRBL в состоянии Idle"
+                      }
+                      type="button"
+                    >
+                      <Play aria-hidden="true" size={13} />
+                      Mock dry run
+                    </button>
+                  )}
+                  {displayedSender.state === "running" && dryRunGateway && (
+                    <button
+                      onClick={() => void runSenderAction(dryRunGateway.pause)}
+                      type="button"
+                    >
+                      <Pause aria-hidden="true" size={13} />
+                      Pause
+                    </button>
+                  )}
+                  {displayedSender.state === "paused" && dryRunGateway && (
+                    <button
+                      disabled={!controls.canResume}
+                      onClick={() => void runSenderAction(dryRunGateway.resume)}
+                      type="button"
+                    >
+                      <Play aria-hidden="true" size={13} />
+                      Resume
+                    </button>
+                  )}
+                  {senderActive && dryRunGateway && (
+                    <button
+                      className="is-cancel"
+                      onClick={() => void runSenderAction(dryRunGateway.cancel)}
+                      type="button"
+                    >
+                      <X aria-hidden="true" size={13} />
+                      Cancel
+                    </button>
+                  )}
+                </div>
+                {!dryRunAvailable && (
+                  <small>Подключите Mock GRBL в состоянии Idle</small>
+                )}
+                {displayedSender.lastError && (
+                  <small className="is-error">{displayedSender.lastError}</small>
+                )}
               </div>
-              <div className="dry-run-actions">
-                {!senderActive && displayedSender.state !== "running" && (
-                  <button
-                    disabled={!dryRunGateway || !controls.canStart}
-                    onClick={startDryRun}
-                    title={
-                      dryRunAvailable
-                        ? "Запустить на Mock GRBL"
-                        : "Подключите Mock GRBL в состоянии Idle"
-                    }
-                    type="button"
-                  >
-                    <Play aria-hidden="true" size={13} />
-                    Mock dry run
-                  </button>
-                )}
-                {displayedSender.state === "running" && dryRunGateway && (
-                  <button
-                    onClick={() => void runSenderAction(dryRunGateway.pause)}
-                    type="button"
-                  >
-                    <Pause aria-hidden="true" size={13} />
-                    Pause
-                  </button>
-                )}
-                {displayedSender.state === "paused" && dryRunGateway && (
-                  <button
-                    disabled={!controls.canResume}
-                    onClick={() => void runSenderAction(dryRunGateway.resume)}
-                    type="button"
-                  >
-                    <Play aria-hidden="true" size={13} />
-                    Resume
-                  </button>
-                )}
-                {senderActive && dryRunGateway && (
-                  <button
-                    className="is-cancel"
-                    onClick={() => void runSenderAction(dryRunGateway.cancel)}
-                    type="button"
-                  >
-                    <X aria-hidden="true" size={13} />
-                    Cancel
-                  </button>
-                )}
-              </div>
-              {!dryRunAvailable && (
-                <small>Подключите Mock GRBL в состоянии Idle</small>
-              )}
-              {displayedSender.lastError && (
-                <small className="is-error">{displayedSender.lastError}</small>
-              )}
-            </div>
+            )}
             <div
               aria-label="Program diagnostics view"
-              className="program-diagnostic-tabs"
+              className={`program-diagnostic-tabs${realRunTarget ? " has-preflight" : ""}`}
               role="tablist"
             >
               <button
@@ -435,6 +529,19 @@ export function ProgramWorkspace({
               >
                 Warnings <strong>{program.warnings.length}</strong>
               </button>
+              {realRunTarget && (
+                <button
+                  aria-controls="program-preflight-panel"
+                  aria-selected={diagnosticView === "preflight"}
+                  disabled={!reportForProgram}
+                  id="program-preflight-tab"
+                  onClick={() => setDiagnosticView("preflight")}
+                  role="tab"
+                  type="button"
+                >
+                  Preflight <strong>{reportForProgram?.blockerCount ?? "--"}</strong>
+                </button>
+              )}
             </div>
             <div
               aria-labelledby="program-lines-tab"
@@ -486,6 +593,53 @@ export function ProgramWorkspace({
                 ))
               )}
             </div>
+            {realRunTarget && (
+              <div
+                aria-labelledby="program-preflight-tab"
+                className="real-run-checks"
+                hidden={diagnosticView !== "preflight"}
+                id="program-preflight-panel"
+                role="tabpanel"
+              >
+                {reportForProgram?.checks.map((item) => {
+                  const sourceLine = item.sourceLine;
+                  const content = (
+                    <>
+                      {item.level === "pass" ? (
+                        <CircleCheck aria-hidden="true" size={13} />
+                      ) : (
+                        <CircleAlert aria-hidden="true" size={13} />
+                      )}
+                      <span>
+                        <strong>{item.title}</strong>
+                        <small>{item.detail}</small>
+                      </span>
+                      {sourceLine !== undefined && <code>L{sourceLine}</code>}
+                    </>
+                  );
+                  return sourceLine !== undefined ? (
+                    <button
+                      className={`real-run-check is-${item.level}`}
+                      key={item.id}
+                      onClick={() => {
+                        setSelectedSourceLine(sourceLine);
+                        setDiagnosticView("lines");
+                      }}
+                      type="button"
+                    >
+                      {content}
+                    </button>
+                  ) : (
+                    <div
+                      className={`real-run-check is-${item.level}`}
+                      key={item.id}
+                    >
+                      {content}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </aside>
         </div>
       ) : senderActive && dryRunGateway ? (

@@ -19,6 +19,7 @@ millo-dry-run = { path = "../crates/millo-dry-run" }
 millo-domain = { path = "../crates/millo-domain" }
 millo-gcode = { path = "../crates/millo-gcode" }
 millo-mock = { path = "../crates/millo-mock" }
+millo-run = { path = "../crates/millo-run" }
 millo-serial = { path = "../crates/millo-serial" }
 millo-sender = { path = "../crates/millo-sender" }
 millo-transport = { path = "../crates/millo-transport" }

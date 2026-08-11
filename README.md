@@ -14,6 +14,7 @@ The current slices form this path:
 Serial / Mock -> command arbiter -> GRBL lifecycle/parser -> typed Tauri IPC -> React
 File source -> millo-gcode parser -> immutable program DTO -> Three.js preview
 Safe source -> dry-run policy -> bounded sender -> Mock GRBL only
+Candidate source -> Rust preflight -> fresh serial Inspector -> read-only report
 ```
 
 The command arbiter now owns the active transport, periodic status polling, and
@@ -87,6 +88,16 @@ selectable and explicitly report that they have no preview geometry. The table
 renders only a small overscanned window, so the 200,000-line parser limit does
 not become 200,000 DOM nodes.
 
+On an active serial target, Program also exposes a read-only real-run preflight.
+Tauri reparses the retained source, and the command actor performs a fresh
+`? -> $I/$$/$G/$# -> ?` transaction before `millo-run` combines the strict
+motion-only program policy with motion-critical hardware readiness. The report
+links blockers to exact source lines and keeps unhomed travel, manual spindle,
+and physical setup visible as cautions. It creates no authorization, sends no
+program line, and exposes no serial Start action. The first-cut contract also
+requires explicit `G21`, `G90`, `G94`, and `G17` before the motions that depend
+on them, so preview cannot silently rely on ambient controller modes.
+
 UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
 first core contribution in the named `control.machine` slot; Work Zero occupies
 the separate `control.coordinates` slot. Contributions have stable IDs, owners,
@@ -154,6 +165,7 @@ successful GRBL status exchange.
 | `millo-dry-run` | Fail-closed program policy and opaque approved plans |
 | `millo-command` | Single-owner command actor, polling, and response arbitration |
 | `millo-readiness` | Hardware-profile policy and guarded test-jog readiness |
+| `millo-run` | Read-only real-run preflight policy and operator report |
 | `millo-safety` | Reset challenges and short-lived test-jog authorization |
 | `millo-sender` | Bounded one-line-in-flight sender state machine |
 | `millo-desktop` | Thin Tauri command/event adapter |
@@ -176,7 +188,8 @@ and [PluginHost bootstrap](docs/decisions/0013-plugin-host-bootstrap.md), then t
 [guarded work-zero transaction](docs/decisions/0014-guarded-work-zero.md) and
 [G-code program boundary](docs/decisions/0015-gcode-program-boundary.md), then
 the [Mock-only bounded sender](docs/decisions/0016-mock-dry-run-sender.md) and
-[immutable line selection](docs/decisions/0017-program-line-selection.md).
+[immutable line selection](docs/decisions/0017-program-line-selection.md), then
+the [serial real-run preflight](docs/decisions/0018-real-run-preflight.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).
