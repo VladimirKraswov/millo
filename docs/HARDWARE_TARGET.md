@@ -74,6 +74,10 @@ Observed through the read-only Inspector on 2026-08-11:
 - A subsequent fresh preflight authorized exactly
   `$J=G91 G21 X0.100 F10.000`. The controller returned to `Idle` and reported
   deltas X `+0.100 mm`, Y `+0.000 mm`, Z `+0.000 mm`.
+- Separate Y and Z processes each repeated connection, settings verification,
+  Inspector, readiness, and one-use authorization. Y reported deltas X `+0.000`,
+  Y `+0.100`, Z `+0.000 mm`; only after its successful `Idle` return, Z reported
+  X `+0.000`, Y `+0.000`, Z `+0.100 mm`. Both used `10 mm/min`.
 
 Only values visible in the operator capture are recorded here. The automated
 fixture uses representative, explicitly synthetic XYZ values rather than
@@ -96,7 +100,9 @@ for a physical emergency stop or verified machine travel boundaries.
 Jog Cancel is available while GRBL reports `Jog`; it sends realtime `0x85` and
 does not grant permission for another movement.
 
-The reproducible first-motion procedure is documented in `docs/TESTING.md`. It
-uses X `+0.10 mm` at `10 mm/min`, verifies the reported coordinate delta, and
-requires separate command-line confirmations for persistent configuration and
-physical motion.
+The reproducible step-motion procedure is documented in `docs/TESTING.md`. It
+accepts exactly one XYZ axis per process, uses `+0.10 mm` at `10 mm/min`, verifies
+that only the selected coordinate changed, and requires separate command-line
+confirmations for persistent configuration and physical motion. Testing another
+axis starts a new process and therefore repeats connection, Inspector, readiness,
+and one-use authorization checks.

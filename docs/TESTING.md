@@ -110,11 +110,12 @@ returns to `Connected`.
 
 The guarded first-motion smoke example uses the same serial transport, command
 actor, readiness policy, and authorization path as Tauri. It requires an exact
-motion confirmation flag and performs only X `+0.10 mm` at `10 mm/min`:
+axis plus an exact motion confirmation flag. One process performs only one
+`+0.10 mm` step at `10 mm/min`:
 
 ```bash
 cargo run -p millo-desktop --example hardware_step_jog -- \
-  /dev/cu.usbmodem11101 \
+  /dev/cu.usbmodem11101 Y \
   --confirm-disable-limits-and-homing --confirm-motion
 ```
 
@@ -123,11 +124,22 @@ changes and the subsequent jog is a separate physical action. The actor reads
 settings before and after, writes only non-zero values, and fails unless both are
 verified as zero. It then requires a fresh `Idle` status and jog authorization.
 After acceptance it waits at most five seconds for `Idle`, sends Jog Cancel if a
-jog remains active, verifies that only X changed, and disconnects. Never run it
-unattended; the machine has no verified travel envelope or physical emergency
-stop. Normal automated verification compiles this example but never executes it.
+jog remains active, verifies that only the selected axis changed, and disconnects.
+Never run it unattended; the machine has no verified travel envelope or physical
+emergency stop. Normal automated verification compiles this example but never
+executes it.
+Run different axes as separate processes so every step reconnects, repeats the
+Inspector/readiness checks, and consumes a fresh authorization. For example,
+after a successful Y run has returned to `Idle`, replace `Y` with `Z` for the
+next run. The example rejects the result unless only the selected axis changes.
 
 The confirmed 2026-08-11 run on `/dev/cu.usbmodem11101` changed `$21` and `$22`
 from `1` to `0`, verified both through a second Inspector read, accepted
 `$J=G91 G21 X0.100 F10.000`, returned to `Idle`, and measured deltas X `+0.100`,
 Y `+0.000`, Z `+0.000 mm`.
+
+Two subsequent, separately launched runs re-inspected `$21=0` and `$22=0`
+without additional writes. The Y run accepted `$J=G91 G21 Y0.100 F10.000`,
+returned to `Idle`, and measured X `+0.000`, Y `+0.100`, Z `+0.000 mm`. Only
+after that succeeded, the Z run accepted `$J=G91 G21 Z0.100 F10.000`, returned
+to `Idle`, and measured X `+0.000`, Y `+0.000`, Z `+0.100 mm`.

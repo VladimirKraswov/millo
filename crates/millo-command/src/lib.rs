@@ -853,6 +853,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn y_and_z_steps_each_require_a_fresh_authorization() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+
+        let mut authorization_ids = Vec::new();
+        for axis in [millo_domain::JogAxis::Y, millo_domain::JogAxis::Z] {
+            let authorization = arbiter
+                .prepare_test_jog(operator_confirmation())
+                .await
+                .unwrap()
+                .authorization
+                .unwrap();
+            authorization_ids.push(authorization.id);
+
+            arbiter
+                .step_jog(StepJogRequest {
+                    authorization_id: authorization.id,
+                    axis,
+                    distance_mm: 0.1,
+                    feed_mm_per_min: 100.0,
+                })
+                .await
+                .unwrap();
+
+            assert_eq!(
+                arbiter.refresh_status().await.unwrap().machine.mode,
+                MachineMode::Jog
+            );
+            assert_eq!(
+                arbiter.refresh_status().await.unwrap().machine.mode,
+                MachineMode::Idle
+            );
+        }
+
+        assert_ne!(authorization_ids[0], authorization_ids[1]);
+        let snapshot = arbiter.snapshot();
+        let position = snapshot.machine.machine_position.unwrap();
+        assert_eq!(position.x, 0.0);
+        assert_eq!(position.y, 0.1);
+        assert_eq!(position.z, 0.1);
+
+        let jog_writes = control
+            .writes()
+            .into_iter()
+            .filter(|write| write.starts_with(b"$J="))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            jog_writes,
+            vec![
+                b"$J=G91 G21 Y0.100 F100.000\n".to_vec(),
+                b"$J=G91 G21 Z0.100 F100.000\n".to_vec()
+            ]
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn disables_and_verifies_unhomed_controller_settings() {
         let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
         control.set_setting(21, "1");

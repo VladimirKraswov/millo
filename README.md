@@ -39,9 +39,10 @@ same Rust actor and emits one `$J=G91 G21` step on exactly one XYZ axis. Distanc
 is limited to `0.01..1.00 mm` and feed to `10..100 mm/min` in the backend. Every
 attempt consumes its lease before writing; another step requires another full
 preflight. GRBL Jog Cancel (`0x85`) is exposed as a separate named safety action.
-The first physical smoke test has now disabled profile-inconsistent `$21/$22`,
-verified the persisted values, and completed X `+0.100 mm` at `10 mm/min` while
-Y/Z remained unchanged.
+Physical smoke tests have now disabled profile-inconsistent `$21/$22`, verified
+the persisted values, and completed separate X, Y, and Z `+0.100 mm` steps at
+`10 mm/min`. Every run returned to `Idle`, and only its selected coordinate
+changed.
 
 ## Run
 

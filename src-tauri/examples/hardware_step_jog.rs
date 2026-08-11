@@ -9,13 +9,18 @@ use millo_serial::{SerialConfig, SerialTransport};
 
 const CONFIRM_MOTION_FLAG: &str = "--confirm-motion";
 const CONFIRM_CONFIGURATION_FLAG: &str = "--confirm-disable-limits-and-homing";
-const USAGE: &str = "usage: hardware_step_jog <serial-port> \
+const USAGE: &str = "usage: hardware_step_jog <serial-port> <axis:X|Y|Z> \
                      --confirm-disable-limits-and-homing --confirm-motion";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let port = args.next().ok_or_else(|| input_error(USAGE))?;
+    let axis = args
+        .next()
+        .as_deref()
+        .and_then(parse_axis)
+        .ok_or_else(|| input_error(USAGE))?;
     let flags = args.collect::<Vec<_>>();
     if flags.len() != 2
         || !flags.iter().any(|flag| flag == CONFIRM_CONFIGURATION_FLAG)
@@ -35,13 +40,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     let worker = tokio::spawn(worker);
 
-    let result = run_smoke(&arbiter, &port).await;
+    let result = run_smoke(&arbiter, &port, axis).await;
     let _ = arbiter.disconnect().await;
     worker.abort();
     result
 }
 
-async fn run_smoke(arbiter: &CommandArbiter, port: &str) -> Result<(), Box<dyn Error>> {
+async fn run_smoke(
+    arbiter: &CommandArbiter,
+    port: &str,
+    axis: JogAxis,
+) -> Result<(), Box<dyn Error>> {
     println!("Connecting to {port} at 115200 baud");
     arbiter.connect().await?;
     let mut snapshot = arbiter.refresh_status().await?;
@@ -109,7 +118,7 @@ async fn run_smoke(arbiter: &CommandArbiter, port: &str) -> Result<(), Box<dyn E
     let receipt = arbiter
         .step_jog(StepJogRequest {
             authorization_id: authorization.id,
-            axis: JogAxis::X,
+            axis,
             distance_mm: 0.1,
             feed_mm_per_min: 10.0,
         })
@@ -135,26 +144,54 @@ async fn run_smoke(arbiter: &CommandArbiter, port: &str) -> Result<(), Box<dyn E
         .machine
         .machine_position
         .ok_or_else(|| input_error("final status has no machine position"))?;
-    let delta = after.x - before.x;
-    if (delta - 0.1).abs() > 0.02
-        || (after.y - before.y).abs() > 0.001
-        || (after.z - before.z).abs() > 0.001
-    {
+    let deltas = [after.x - before.x, after.y - before.y, after.z - before.z];
+    let selected_index = match axis {
+        JogAxis::X => 0,
+        JogAxis::Y => 1,
+        JogAxis::Z => 2,
+    };
+    let positions_match = deltas.iter().enumerate().all(|(index, delta)| {
+        let expected = if index == selected_index { 0.1 } else { 0.0 };
+        let tolerance = if index == selected_index { 0.02 } else { 0.001 };
+        (*delta - expected).abs() <= tolerance
+    });
+
+    if !positions_match {
         return Err(input_error(format!(
-            "unexpected motion delta: X {delta:.3}, Y {:.3}, Z {:.3}",
-            after.y - before.y,
-            after.z - before.z
+            "unexpected motion delta after {} jog: X {:+.3}, Y {:+.3}, Z {:+.3}",
+            axis_name(axis),
+            deltas[0],
+            deltas[1],
+            deltas[2]
         ))
         .into());
     }
 
     println!(
-        "PASS: Idle, X {:+.3} mm, Y {:+.3} mm, Z {:+.3} mm",
-        delta,
-        after.y - before.y,
-        after.z - before.z
+        "PASS: {} jog completed; state=Idle, delta X {:+.3} mm, Y {:+.3} mm, Z {:+.3} mm",
+        axis_name(axis),
+        deltas[0],
+        deltas[1],
+        deltas[2]
     );
     Ok(())
+}
+
+fn parse_axis(value: &str) -> Option<JogAxis> {
+    match value.to_ascii_uppercase().as_str() {
+        "X" => Some(JogAxis::X),
+        "Y" => Some(JogAxis::Y),
+        "Z" => Some(JogAxis::Z),
+        _ => None,
+    }
+}
+
+fn axis_name(axis: JogAxis) -> &'static str {
+    match axis {
+        JogAxis::X => "X",
+        JogAxis::Y => "Y",
+        JogAxis::Z => "Z",
+    }
 }
 
 fn input_error(message: impl Into<String>) -> io::Error {
