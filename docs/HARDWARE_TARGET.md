@@ -144,9 +144,25 @@ A read-only hardware preflight on 2026-08-11 passed with zero blockers and the
 three expected cautions for unverified envelope, manual spindle, and physical
 setup. It sent no program line. GRBL reported work position X `-9.400 mm`, Y
 `-0.500 mm`, Z `+0.500 mm`, so the confirmed-run harness refused to start. The
-operator must position the empty spindle at a safe origin, set XYZ work zero,
-and confirm at least 20 mm of positive X/Y clearance before the physical Air
-run can consume an authorization.
+operator must position the empty spindle at a safe origin and confirm that the
+harness may set it as XYZ work zero, with at least 20 mm of positive X/Y
+clearance, before the physical Air run can consume an authorization.
+
+The first confirmed attempt on 2026-08-11 set the current position as G54 XYZ0
+and verified every axis at `0.000 mm`. GRBL acknowledged the safety preamble,
+modal setup, all four motion lines, and the final `M5 M9`, but the original
+sender dispatched `M30` while motion was still queued. GRBL correctly delayed
+that synchronizing acknowledgement; the generic two-second command timeout
+failed the run at line 11. The harness requested Hold and challenge-confirmed
+Soft Reset, and the next read-only connection reported `Alarm`. No final work
+position was accepted and the attempt is not recorded as a completed Air run.
+
+The physical sender now holds `M2/M30` as a terminal barrier without writing it,
+continues status polling and accepting realtime safety requests, and dispatches
+the terminal command only after a fresh `Idle`. Mock regression tests cover
+Idle gating, Hold/Resume, Reset cancellation, and a correlated terminal-command
+timeout. Clearing the current Alarm and attempting another motion require a new
+operator confirmation.
 
 At each connection Millo treats the controller's complete `$$` response as the
 truth and keeps a duplicate in

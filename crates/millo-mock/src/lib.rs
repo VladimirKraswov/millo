@@ -107,6 +107,12 @@ impl MockControl {
             .push_back(VecDeque::from([MockRead::Line("ok".to_owned())]));
     }
 
+    pub fn queue_program_stall(&self) {
+        self.lock()
+            .planned_program
+            .push_back(VecDeque::from([MockRead::Stall]));
+    }
+
     pub fn queue_program_alarm(&self, code: u16) {
         self.lock()
             .planned_program

@@ -253,9 +253,11 @@ does not schedule or execute controller I/O.
   one actor request. Authorization alone still emits no program command.
 - `SenderSnapshot.mode` distinguishes `mockDryRun`, `airRun`, and `cutRun`
   without creating separate implementations. `M0/M1` pause after `ok`;
-  `M2/M30` terminate dispatch. Hold/Resume retain the same plan, and physical
-  completion waits in `Draining` for a fresh `Idle`. Error, alarm, reset,
-  timeout, polling failure, or transport loss fails at the correlated line.
+  `M2/M30` terminate dispatch. For physical modes the terminal line is retained
+  as an unsent barrier while the sender enters `Draining`; a fresh `Idle`
+  dispatches it and only its `ok` permits completion. Hold/Resume and Reset stay
+  responsive while the planner drains. Error, alarm, reset, timeout, polling
+  failure, or transport loss fails at the correlated line.
 - Physical modes cannot use plain Cancel. Operator stop is Feed Hold followed by
   challenge-confirmed Soft Reset.
 

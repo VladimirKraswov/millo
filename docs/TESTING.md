@@ -215,13 +215,17 @@ port names remain untouched.
   production sender over deterministic Mock GRBL. They cover all-`ok` plus
   fresh-Idle completion, correlated `error`, `ALARM`, Hold/resume, reset banner,
   status failure, and transport disconnect. Sender tests additionally cover
-  `M0/M1` program barriers and `M2/M30` plan termination.
+  `M0/M1` program barriers and `M2/M30` plan termination. Physical terminal
+  commands are withheld until fresh `Idle`; dedicated fixtures cover
+  Hold/Resume, Reset cancellation, and terminal-command timeout while deferred.
 - Reusing a consumed authorization fails after only the fresh status read. No
   second program line can be started from the same lease.
 - Tauri and React expose production Start only for a profile-bound serial target
   and matching one-use authorization. Plugins still have no run capability.
-- No automated or manual test in this implementation slice sends a program line
-  to the physical controller.
+- Automated tests never send a program line to physical hardware. The first
+  manually confirmed attempt on 2026-08-11 sent the 20 mm fixture, detected the
+  original premature-`M30` timeout at 9/10 acknowledged lines, and performed the
+  emergency Reset path. It is recorded as an interrupted attempt, not a pass.
 
 ### Hardware Air-run fixture
 
@@ -239,14 +243,19 @@ requires all six flags; omission of any one fails before serial connection:
 ```bash
 cargo run -p millo-desktop --example hardware_air_run -- \
   /dev/cu.usbmodem11101 fixtures/programs/air-square-20mm.nc \
-  --confirm-tool-removed --confirm-spindle-off --confirm-xyz-zero \
+  --confirm-tool-removed --confirm-spindle-off --confirm-set-current-xyz-zero \
   --confirm-safe-z --confirm-path-clear --confirm-power-control
 ```
 
-The harness additionally requires observed WPos XYZ within `+/-0.02 mm` of
-zero. It monitors the sender for two minutes, verifies final `Idle` and return to
-work zero, and handles `Ctrl-C` or timeout by requesting Feed Hold followed by
-challenge-confirmed Soft Reset.
+The harness uses the typed `G10 L20` workflow to set the confirmed current
+position as XYZ work zero, rereads `$#`, and requires observed WPos within
+`+/-0.02 mm`. It monitors the sender for two minutes, verifies final `Idle` and
+return to work zero, and handles `Ctrl-C` or timeout by requesting Feed Hold
+followed by challenge-confirmed Soft Reset.
+
+The controller currently reports `Alarm` after the interrupted first attempt.
+Do not rerun this command until the operator has separately confirmed `$X`, the
+new G54 origin, clear positive X/Y travel, and one fresh Air-run authorization.
 
 ## Current hardware readiness coverage
 

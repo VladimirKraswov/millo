@@ -92,6 +92,8 @@ pub enum SenderError {
     CommandTooLong { actual: usize, limit: usize },
     #[error("sender has no command awaiting acknowledgement")]
     NoCommandInFlight,
+    #[error("sender cannot complete while a command is awaiting acknowledgement")]
+    CommandInFlight,
 }
 
 pub struct Sender {
@@ -260,12 +262,38 @@ impl Sender {
         Ok(self.snapshot())
     }
 
+    pub fn defer_program_end(&mut self) -> Result<SenderSnapshot, SenderError> {
+        let Some(line) = self.in_flight.as_ref() else {
+            return Err(SenderError::NoCommandInFlight);
+        };
+        if self.state != SenderState::Running || line.kind() != DryRunLineKind::ProgramEnd {
+            return Err(SenderError::InvalidTransition {
+                action: "defer program end",
+                state: self.state,
+            });
+        }
+        self.state = SenderState::Draining;
+        Ok(self.snapshot())
+    }
+
+    pub fn deferred_program_end(&self) -> Option<DryRunLine> {
+        self.in_flight
+            .as_ref()
+            .filter(|line| {
+                self.state == SenderState::Draining && line.kind() == DryRunLineKind::ProgramEnd
+            })
+            .cloned()
+    }
+
     pub fn complete_draining(&mut self) -> Result<SenderSnapshot, SenderError> {
         if self.state != SenderState::Draining {
             return Err(SenderError::InvalidTransition {
                 action: "complete draining",
                 state: self.state,
             });
+        }
+        if self.in_flight.is_some() {
+            return Err(SenderError::CommandInFlight);
         }
         self.state = SenderState::Completed;
         Ok(self.snapshot())
@@ -450,6 +478,39 @@ mod tests {
         assert_eq!(snapshot.state, SenderState::Draining);
         assert_eq!(snapshot.current_command.as_deref(), Some("M30"));
         assert_eq!(snapshot.acknowledged_lines, snapshot.total_lines);
+    }
+
+    #[test]
+    fn physical_program_end_can_wait_for_the_motion_planner_to_drain() {
+        let mut sender = Sender::default();
+        sender
+            .load_cut_run(cutting_plan("G21\nG1 X1 F10\nM30"))
+            .unwrap();
+        sender.start().unwrap();
+
+        loop {
+            let line = sender.next_line().unwrap();
+            if line.kind() == DryRunLineKind::ProgramEnd {
+                break;
+            }
+            sender.acknowledge_ok().unwrap();
+        }
+
+        let draining = sender.defer_program_end().unwrap();
+        assert_eq!(draining.state, SenderState::Draining);
+        assert_eq!(draining.current_command.as_deref(), Some("M30"));
+        assert_eq!(draining.acknowledged_lines + 1, draining.total_lines);
+        assert_eq!(
+            sender.complete_draining(),
+            Err(SenderError::CommandInFlight)
+        );
+
+        sender.acknowledge_ok().unwrap();
+        assert!(sender.deferred_program_end().is_none());
+        assert_eq!(
+            sender.complete_draining().unwrap().state,
+            SenderState::Completed
+        );
     }
 
     #[test]

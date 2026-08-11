@@ -24,8 +24,10 @@ in Program without adding a raw command API or a generated test-square path.
 - One line may be in flight. Only `ok` advances. `error`, `ALARM`, reset,
   timeout, polling failure, or disconnect fail the run at the correlated line.
 - `M0/M1` pause dispatch after their acknowledgement. `M2/M30` terminate the
-  compiled plan. A physical run enters `Draining` after its final acknowledgement
-  and completes only after a fresh `Idle` report.
+  compiled plan. Physical modes defer the terminal command itself, enter
+  `Draining`, and keep polling until a fresh `Idle`; only then is `M2/M30` sent
+  and correlated with `ok`. This avoids treating GRBL planner synchronization as
+  a command timeout while keeping Hold/Resume and Reset responsive.
 - Feed Hold and Cycle Start use the realtime `!` and `~` bytes. Plain sender
   cancellation is forbidden for physical modes; stopping requires Hold and the
   existing challenge-confirmed Soft Reset workflow.

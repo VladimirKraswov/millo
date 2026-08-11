@@ -4,6 +4,7 @@ use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
     DeviceInspection, HardwareProfile, MachineMode, MachineTravel, Position, SpindleControl,
+    WorkAxis, WorkZeroRequest,
 };
 use millo_gcode::{GcodeProgram, ProgramParseRequest, parse_program};
 use millo_run::{FirstCutConfirmation, ProgramRunIntent, RunPreflightLevel};
@@ -14,12 +15,12 @@ const INSPECT_ONLY_FLAG: &str = "--inspect-only";
 const REQUIRED_RUN_FLAGS: [&str; 6] = [
     "--confirm-tool-removed",
     "--confirm-spindle-off",
-    "--confirm-xyz-zero",
+    "--confirm-set-current-xyz-zero",
     "--confirm-safe-z",
     "--confirm-path-clear",
     "--confirm-power-control",
 ];
-const USAGE: &str = "usage: hardware_air_run <serial-port> <program.nc> --inspect-only\n       hardware_air_run <serial-port> <program.nc> --confirm-tool-removed --confirm-spindle-off --confirm-xyz-zero --confirm-safe-z --confirm-path-clear --confirm-power-control";
+const USAGE: &str = "usage: hardware_air_run <serial-port> <program.nc> --inspect-only\n       hardware_air_run <serial-port> <program.nc> --confirm-tool-removed --confirm-spindle-off --confirm-set-current-xyz-zero --confirm-safe-z --confirm-path-clear --confirm-power-control";
 const POSITION_TOLERANCE_MM: f64 = 0.02;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,7 +85,7 @@ async fn run(
         .into());
     }
 
-    let report = arbiter
+    let mut report = arbiter
         .preflight_real_run(program.clone(), ProgramRunIntent::AirRun)
         .await?;
     print_preflight(&report);
@@ -102,6 +103,27 @@ async fn run(
         println!("PASS: read-only preflight is clear; no program line was sent");
         return Ok(());
     }
+    println!("Setting the current position as G54-G59 XYZ work zero");
+    for axis in [WorkAxis::X, WorkAxis::Y, WorkAxis::Z] {
+        let outcome = arbiter
+            .set_work_zero(WorkZeroRequest {
+                axis,
+                position_confirmed: true,
+            })
+            .await?;
+        println!(
+            "  {:?}: {} verified at {:+.3} mm",
+            axis, outcome.command, outcome.work_position
+        );
+    }
+    report = arbiter
+        .preflight_real_run(program.clone(), ProgramRunIntent::AirRun)
+        .await?;
+    if !report.ready {
+        return Err(input_error("post-zero Air-run preflight is blocked").into());
+    }
+    let work_before = observed_work_position(&arbiter.snapshot(), &report.hardware.device)
+        .ok_or_else(|| input_error("post-zero controller status has no work position"))?;
     ensure_work_zero(work_before)?;
 
     let preparation = arbiter
@@ -146,8 +168,9 @@ async fn run(
         match snapshot.state {
             SenderState::Completed => break,
             SenderState::Failed | SenderState::Cancelled => {
+                emergency_stop(arbiter).await;
                 return Err(input_error(format!(
-                    "Air run ended as {:?}: {}",
+                    "Air run ended as {:?}: {}; Hold and Soft Reset requested",
                     snapshot.state,
                     snapshot.last_error.as_deref().unwrap_or("no error detail")
                 ))
@@ -157,7 +180,12 @@ async fn run(
         }
 
         tokio::select! {
-            changed = sender.changed() => changed.map_err(|_| input_error("sender event stream closed"))?,
+            changed = sender.changed() => {
+                if changed.is_err() {
+                    emergency_stop(arbiter).await;
+                    return Err(input_error("sender event stream closed; Hold and Soft Reset requested").into());
+                }
+            },
             _ = tokio::signal::ctrl_c() => {
                 emergency_stop(arbiter).await;
                 return Err(input_error("operator interrupted Air run; Hold and Soft Reset requested").into());
