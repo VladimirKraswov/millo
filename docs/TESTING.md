@@ -19,6 +19,13 @@ Extension-registry tests cover deterministic slot ordering, duplicate and
 self-replacement rejection, add/replace/dispose behavior, one-revision owner
 unload, and restoration of `core.jog-pad` after a plugin replacement unloads.
 
+Plugin-host tests validate manifest/API versions, identifiers and capability
+lists; deterministic grant ordering; required-versus-optional permission
+behavior; unsupported and mismatched API rejection before activation; scoped
+guarded-jog proxy exposure; owner namespace enforcement; activation rollback;
+and complete UI cleanup on unload. A linked test plugin replaces
+`core.jog-pad`, then proves that unloading restores the core contribution.
+
 The test phase also runs `scripts/check-brand.mjs`, which keeps npm, Cargo,
 Tauri, UI, and documentation naming consistent.
 

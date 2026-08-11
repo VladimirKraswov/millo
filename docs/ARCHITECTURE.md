@@ -192,9 +192,23 @@ does not schedule or execute controller I/O.
   it; it never receives serial I/O, actor internals, or raw command endpoints.
 - Machine capability calls still execute Rust application use cases and preserve
   all safety policy regardless of whether the caller is core UI or a plugin.
-- See `docs/decisions/0010-extension-host-boundaries.md` for the accepted
-  direction. Plugin manifests, loading, permission grants, and isolation remain
-  deliberately outside this registry slice.
+- Plugin manifests have independent `manifestVersion` and `apiVersion` fields;
+  both are version `1`. Required capabilities fail activation when absent, while
+  denied optional capabilities are reported and omitted from the activation
+  context.
+- The current in-memory loader supports `ui.contribute` and `machine.jog`.
+  `machine.read` and `jobs.create` are reserved catalog entries and remain
+  unavailable until their typed host services exist. Unknown capabilities and
+  API versions are rejected.
+- UI plugins receive a registrar that binds contributions to the manifest owner
+  and enforces an owner-prefixed ID. They do not receive the shell's internal UI
+  context. Activation failure and unload remove every contribution owned by the
+  plugin.
+- This loader accepts only modules already linked into the application. It does
+  not read plugin files, dynamically import code, or establish a sandbox or
+  signature trust model.
+- See `docs/decisions/0010-extension-host-boundaries.md` and
+  `docs/decisions/0011-versioned-plugin-manifest.md` for the accepted boundaries.
 
 ## Near-term sequence
 

@@ -48,9 +48,10 @@ The future plugin host will use these rules:
   instead of importing Tauri APIs inside components.
 - Direct arbitrary DOM replacement is intentionally unsupported; replacement is
   explicit, ordered, reversible, and attributable to a plugin owner.
-- The minimal in-memory UI registry is now implemented. Manifest parsing,
-  capability grants, isolation, persistence, and the job service remain
-  incremental follow-up decisions.
+- The minimal in-memory UI registry and a versioned, capability-gated loader are
+  now implemented. Grant persistence, untrusted-code isolation, and the job
+  service remain incremental follow-up decisions; manifest v1 is specified in
+  ADR 0011.
 
 ## Validation
 

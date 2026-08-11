@@ -54,9 +54,12 @@ the same capability boundary planned for plugins.
 UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
 first core contribution in the named `control.machine` slot. Contributions have
 stable IDs, owners, ordering, replacement declarations, and deterministic
-unload, so removing a future plugin replacement restores the core control
-without rebuilding the shell. Plugin loading and permission grants are not part
-of this small registry step.
+unload. The first in-memory plugin host validates a versioned manifest before
+activation and intersects required/optional capabilities with explicit grants
+and host support. Its built-in test plugin can replace Jog Pad and unload cleanly
+without loading external code. `ui.contribute` and guarded `machine.jog` are the
+currently implemented host capabilities; read-only machine state and job
+creation remain declared future contracts.
 
 ## Run
 
@@ -116,7 +119,8 @@ See [Architecture](docs/ARCHITECTURE.md), the decisions for the
 [realtime safety controls](docs/decisions/0007-realtime-safety-controls.md), then
 the [guarded step jog](docs/decisions/0008-guarded-step-jog.md) and
 [verified unhomed configuration](docs/decisions/0009-unhomed-controller-configuration.md),
-then the [extension host boundary](docs/decisions/0010-extension-host-boundaries.md).
+then the [extension host boundary](docs/decisions/0010-extension-host-boundaries.md)
+and [versioned plugin manifest](docs/decisions/0011-versioned-plugin-manifest.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).
