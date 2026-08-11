@@ -40,6 +40,10 @@ The following Candle features are not accepted as raw sender behavior in Millo:
 - Arbitrary start/end strings and raw console/plugin writes are not part of the
   execution capability. Future customization must compile into a reviewed,
   typed plan and preserve authorization.
+- Candle-style send-from-selected-line and `autoLine` modal reconstruction are
+  not exposed. A partial run must first prove modal state, work coordinates,
+  physical position, safe approach, and a new program-bound authorization;
+  prepending remembered G words alone cannot establish those facts.
 - Parser-state restoration after Soft Reset is not attempted. Reset terminates
   the lease and run; restoring only modal words would not prove position,
   planner contents, workholding, or spindle state.
