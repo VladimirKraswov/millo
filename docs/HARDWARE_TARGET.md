@@ -67,8 +67,13 @@ Observed through the read-only Inspector on 2026-08-11:
 - The visible machine position included X = -10 mm. Without homing this remains
   an unverified controller coordinate, not a safe travel boundary.
 - The 2026-08-11 hardware smoke stopped at readiness because of the `$21/$22`
-  conflict. No `$J=` command and no physical movement occurred. Those persistent
-  controller settings require an explicit operator decision before a real jog.
+  conflict. No `$J=` command and no physical movement occurred during that first
+  attempt.
+- After separate operator confirmation, Millo wrote `$21=0` and `$22=0`, received
+  `ok` for both, and verified both values through a new complete Inspector read.
+- A subsequent fresh preflight authorized exactly
+  `$J=G91 G21 X0.100 F10.000`. The controller returned to `Idle` and reported
+  deltas X `+0.100 mm`, Y `+0.000 mm`, Z `+0.000 mm`.
 
 Only values visible in the operator capture are recorded here. The automated
 fixture uses representative, explicitly synthetic XYZ values rather than
@@ -93,4 +98,5 @@ does not grant permission for another movement.
 
 The reproducible first-motion procedure is documented in `docs/TESTING.md`. It
 uses X `+0.10 mm` at `10 mm/min`, verifies the reported coordinate delta, and
-requires an explicit command-line motion-confirmation flag.
+requires separate command-line confirmations for persistent configuration and
+physical motion.

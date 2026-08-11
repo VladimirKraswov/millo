@@ -159,6 +159,10 @@ does not schedule or execute controller I/O.
   before awaiting the response.
 - Jog Cancel is the named `0x85` realtime operation and is accepted by the actor
   only while its current snapshot reports `Jog`.
+- First-machine setup exposes no general `$n=value` endpoint. A narrow
+  actor-only operation may disable `$21` hard limits and `$22` homing while
+  stable `Idle`; it reads settings before and after, skips values already zero,
+  and fails verification unless both final values are exactly `0`.
 - The single actor remains the only writer to the port. A realtime byte is
   serialized behind an already active controller transaction; future sender
   work must preserve bounded command transactions and provide priority handling

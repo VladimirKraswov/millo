@@ -39,6 +39,9 @@ same Rust actor and emits one `$J=G91 G21` step on exactly one XYZ axis. Distanc
 is limited to `0.01..1.00 mm` and feed to `10..100 mm/min` in the backend. Every
 attempt consumes its lease before writing; another step requires another full
 preflight. GRBL Jog Cancel (`0x85`) is exposed as a separate named safety action.
+The first physical smoke test has now disabled profile-inconsistent `$21/$22`,
+verified the persisted values, and completed X `+0.100 mm` at `10 mm/min` while
+Y/Z remained unchanged.
 
 ## Run
 
@@ -96,7 +99,9 @@ See [Architecture](docs/ARCHITECTURE.md), the decisions for the
 [command arbiter](docs/decisions/0005-command-arbiter-device-inspector.md), plus
 [hardware readiness](docs/decisions/0006-hardware-readiness.md) and
 [realtime safety controls](docs/decisions/0007-realtime-safety-controls.md), then
-the [guarded step jog](docs/decisions/0008-guarded-step-jog.md). The
+the [guarded step jog](docs/decisions/0008-guarded-step-jog.md) and
+[verified unhomed configuration](docs/decisions/0009-unhomed-controller-configuration.md).
+The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).
 

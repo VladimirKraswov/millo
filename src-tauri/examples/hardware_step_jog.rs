@@ -7,18 +7,24 @@ use millo_domain::{
 };
 use millo_serial::{SerialConfig, SerialTransport};
 
-const CONFIRM_FLAG: &str = "--confirm-motion";
+const CONFIRM_MOTION_FLAG: &str = "--confirm-motion";
+const CONFIRM_CONFIGURATION_FLAG: &str = "--confirm-disable-limits-and-homing";
+const USAGE: &str = "usage: hardware_step_jog <serial-port> \
+                     --confirm-disable-limits-and-homing --confirm-motion";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
-    let port = args
-        .next()
-        .ok_or_else(|| input_error("usage: hardware_step_jog <serial-port> --confirm-motion"))?;
-    if args.next().as_deref() != Some(CONFIRM_FLAG) || args.next().is_some() {
-        return Err(
-            input_error("motion confirmation missing; pass exactly --confirm-motion").into(),
-        );
+    let port = args.next().ok_or_else(|| input_error(USAGE))?;
+    let flags = args.collect::<Vec<_>>();
+    if flags.len() != 2
+        || !flags.iter().any(|flag| flag == CONFIRM_CONFIGURATION_FLAG)
+        || !flags.iter().any(|flag| flag == CONFIRM_MOTION_FLAG)
+    {
+        return Err(input_error(format!(
+            "both persistent-configuration and motion confirmations are required; {USAGE}"
+        ))
+        .into());
     }
 
     let transport = SerialTransport::new(SerialConfig::new(port.clone(), 115_200)?);
@@ -45,6 +51,24 @@ async fn run_smoke(arbiter: &CommandArbiter, port: &str) -> Result<(), Box<dyn E
     if snapshot.machine.mode != MachineMode::Idle {
         return Err(input_error(format!(
             "controller must be Idle, got {:?}",
+            snapshot.machine.mode
+        ))
+        .into());
+    }
+
+    let configuration = arbiter.configure_unhomed_operation().await?;
+    println!(
+        "Settings: $21 {} -> {}, $22 {} -> {} ({} write(s))",
+        setting(&configuration.before, "$21"),
+        setting(&configuration.after, "$21"),
+        setting(&configuration.before, "$22"),
+        setting(&configuration.after, "$22"),
+        configuration.writes.len()
+    );
+    snapshot = arbiter.refresh_status().await?;
+    if snapshot.machine.mode != MachineMode::Idle {
+        return Err(input_error(format!(
+            "controller left Idle after configuration: {:?}",
             snapshot.machine.mode
         ))
         .into());
@@ -135,4 +159,12 @@ async fn run_smoke(arbiter: &CommandArbiter, port: &str) -> Result<(), Box<dyn E
 
 fn input_error(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message.into())
+}
+
+fn setting<'a>(inspection: &'a millo_domain::DeviceInspection, key: &str) -> &'a str {
+    inspection
+        .settings
+        .get(key)
+        .map(String::as_str)
+        .unwrap_or("missing")
 }

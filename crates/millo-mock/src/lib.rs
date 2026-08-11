@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     future::pending,
     sync::{Arc, Mutex, MutexGuard},
 };
@@ -22,9 +22,11 @@ struct MockState {
     status_line: String,
     planned_cycles: VecDeque<VecDeque<MockRead>>,
     planned_queries: VecDeque<VecDeque<MockRead>>,
+    planned_settings: VecDeque<VecDeque<MockRead>>,
     active_reads: VecDeque<MockRead>,
     writes: Vec<Vec<u8>>,
     jog_polls_remaining: u32,
+    settings: BTreeMap<u16, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,8 +86,18 @@ impl MockControl {
             .push_back(VecDeque::from([MockRead::Line(format!("ALARM:{code}"))]));
     }
 
+    pub fn queue_setting_error(&self, code: u16) {
+        self.lock()
+            .planned_settings
+            .push_back(VecDeque::from([MockRead::Line(format!("error:{code}"))]));
+    }
+
     pub fn writes(&self) -> Vec<Vec<u8>> {
         self.lock().writes.clone()
+    }
+
+    pub fn set_setting(&self, number: u16, value: impl Into<String>) {
+        self.lock().settings.insert(number, value.into());
     }
 
     fn lock(&self) -> MutexGuard<'_, MockState> {
@@ -113,9 +125,11 @@ impl MockTransport {
                     status_line: status_line.into(),
                     planned_cycles: VecDeque::new(),
                     planned_queries: VecDeque::new(),
+                    planned_settings: VecDeque::new(),
                     active_reads: VecDeque::new(),
                     writes: Vec::new(),
                     jog_polls_remaining: 0,
+                    settings: default_settings(),
                 })),
             },
         }
@@ -192,7 +206,19 @@ impl Transport for MockTransport {
             state
                 .active_reads
                 .push_back(MockRead::Line("ok".to_owned()));
-        } else if let Some(default_response) = device_query_response(data) {
+        } else if let Some((number, value)) = parse_setting_write(data) {
+            let response = state
+                .planned_settings
+                .pop_front()
+                .unwrap_or_else(|| lines(&["ok"]));
+            if response
+                .back()
+                .is_some_and(|read| matches!(read, MockRead::Line(line) if line == "ok"))
+            {
+                state.settings.insert(number, value);
+            }
+            state.active_reads.extend(response);
+        } else if let Some(default_response) = device_query_response(data, &state.settings) {
             let response = state
                 .planned_queries
                 .pop_front()
@@ -271,6 +297,15 @@ fn parse_step_jog(data: &[u8]) -> Option<MockJog> {
     })
 }
 
+fn parse_setting_write(data: &[u8]) -> Option<(u16, String)> {
+    let command = std::str::from_utf8(data)
+        .ok()?
+        .trim_end_matches(['\r', '\n']);
+    let (number, value) = command.strip_prefix('$')?.split_once('=')?;
+    let number = number.parse().ok()?;
+    (!value.is_empty()).then(|| (number, value.to_owned()))
+}
+
 fn status_position(status: &str) -> Option<[f64; 3]> {
     let values = status
         .split('|')
@@ -304,37 +339,53 @@ fn lines(values: &[&str]) -> VecDeque<MockRead> {
         .collect()
 }
 
-fn device_query_response(command: &[u8]) -> Option<VecDeque<MockRead>> {
+fn default_settings() -> BTreeMap<u16, String> {
+    [
+        (0, "10"),
+        (6, "0"),
+        (10, "3"),
+        (20, "0"),
+        (21, "0"),
+        (22, "0"),
+        (30, "12000"),
+        (31, "0"),
+        (32, "0"),
+        (100, "250.000"),
+        (101, "250.000"),
+        (102, "250.000"),
+        (110, "1000.000"),
+        (111, "1000.000"),
+        (112, "500.000"),
+        (120, "50.000"),
+        (121, "50.000"),
+        (122, "30.000"),
+        (130, "300.000"),
+        (131, "180.000"),
+        (132, "80.000"),
+    ]
+    .into_iter()
+    .map(|(number, value)| (number, value.to_owned()))
+    .collect()
+}
+
+fn device_query_response(
+    command: &[u8],
+    settings: &BTreeMap<u16, String>,
+) -> Option<VecDeque<MockRead>> {
     match command {
         b"$I\n" => Some(lines(&[
             "[VER:1.1h.20240101:Millo Mock]",
             "[OPT:V,15,128]",
             "ok",
         ])),
-        b"$$\n" => Some(lines(&[
-            "$0=10",
-            "$6=0",
-            "$10=3",
-            "$20=0",
-            "$21=0",
-            "$22=0",
-            "$30=12000",
-            "$31=0",
-            "$32=0",
-            "$100=250.000",
-            "$101=250.000",
-            "$102=250.000",
-            "$110=1000.000",
-            "$111=1000.000",
-            "$112=500.000",
-            "$120=50.000",
-            "$121=50.000",
-            "$122=30.000",
-            "$130=300.000",
-            "$131=180.000",
-            "$132=80.000",
-            "ok",
-        ])),
+        b"$$\n" => {
+            let mut response = settings
+                .iter()
+                .map(|(number, value)| MockRead::Line(format!("${number}={value}")))
+                .collect::<VecDeque<_>>();
+            response.push_back(MockRead::Line("ok".to_owned()));
+            Some(response)
+        }
         b"$G\n" => Some(lines(&["[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]", "ok"])),
         b"$#\n" => Some(lines(&[
             "[G54:0.000,0.000,0.000]",
@@ -421,6 +472,43 @@ mod tests {
         assert!(transport.read_line().await.unwrap().starts_with("[VER:"));
         assert!(transport.read_line().await.unwrap().starts_with("[OPT:"));
         assert_eq!(transport.read_line().await.unwrap(), "ok");
+    }
+
+    #[tokio::test]
+    async fn setting_writes_persist_only_after_ok() {
+        let mut transport = MockTransport::default();
+        let control = transport.control();
+        control.set_setting(21, "1");
+        transport.connect().await.unwrap();
+
+        transport.write(b"$21=0\n").await.unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), "ok");
+        transport.write(b"$$\n").await.unwrap();
+        let mut settings = Vec::new();
+        loop {
+            let line = transport.read_line().await.unwrap();
+            if line == "ok" {
+                break;
+            }
+            settings.push(line);
+        }
+        assert!(settings.contains(&"$21=0".to_owned()));
+
+        control.queue_setting_error(2);
+        transport.write(b"$22=1\n").await.unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), "error:2");
+        transport.write(b"$$\n").await.unwrap();
+        let mut homing = None;
+        loop {
+            let line = transport.read_line().await.unwrap();
+            if line == "ok" {
+                break;
+            }
+            if let Some(value) = line.strip_prefix("$22=") {
+                homing = Some(value.to_owned());
+            }
+        }
+        assert_eq!(homing.as_deref(), Some("0"));
     }
 
     #[tokio::test]

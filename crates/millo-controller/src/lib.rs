@@ -62,6 +62,21 @@ pub enum DeviceQuery {
     Parameters,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnhomedSetting {
+    HardLimits,
+    Homing,
+}
+
+impl UnhomedSetting {
+    const fn disable_command(self) -> &'static str {
+        match self {
+            Self::HardLimits => "$21=0",
+            Self::Homing => "$22=0",
+        }
+    }
+}
+
 impl DeviceQuery {
     pub const ALL: [Self; 4] = [
         Self::BuildInfo,
@@ -251,46 +266,22 @@ impl<T: Transport> Controller<T> {
         &mut self,
         request: StepJogRequest,
     ) -> Result<StepJogReceipt, ControllerError> {
-        if self.snapshot.connection != ConnectionState::Connected {
-            return Err(ControllerError::NotReady(self.snapshot.connection));
-        }
-
         let command = encode_step_jog(request)?;
-        let timeout = self.config.command_timeout;
-        let response = match tokio::time::timeout(timeout, self.line_command_inner(&command)).await
-        {
-            Ok(result) => match result {
-                Ok(response) => response,
-                Err(error) => {
-                    self.record_poll_failure(&error);
-                    return Err(error);
-                }
-            },
-            Err(_) => {
-                let error = ControllerError::CommandTimeout {
-                    timeout_ms: duration_ms(timeout),
-                };
-                self.record_poll_failure(&error);
-                return Err(error);
-            }
-        };
-
-        if response.completion != CommandCompletion::Ok {
-            return Err(ControllerError::CommandRejected {
-                command: response.command,
-                completion: response.completion,
-                code: response.code,
-            });
-        }
-
-        self.snapshot.consecutive_failures = 0;
-        self.snapshot.last_error = None;
+        self.execute_acknowledged_line(&command).await?;
         Ok(StepJogReceipt {
             command,
             axis: request.axis,
             distance_mm: request.distance_mm,
             feed_mm_per_min: request.feed_mm_per_min,
         })
+    }
+
+    pub async fn disable_unhomed_setting(
+        &mut self,
+        setting: UnhomedSetting,
+    ) -> Result<CommandResponse, ControllerError> {
+        self.execute_acknowledged_line(setting.disable_command())
+            .await
     }
 
     pub async fn send_realtime(
@@ -414,6 +405,45 @@ impl<T: Transport> Controller<T> {
                 IncomingLine::Message(_) => {}
             }
         }
+    }
+
+    async fn execute_acknowledged_line(
+        &mut self,
+        command: &str,
+    ) -> Result<CommandResponse, ControllerError> {
+        if self.snapshot.connection != ConnectionState::Connected {
+            return Err(ControllerError::NotReady(self.snapshot.connection));
+        }
+
+        let timeout = self.config.command_timeout;
+        let response = match tokio::time::timeout(timeout, self.line_command_inner(command)).await {
+            Ok(result) => match result {
+                Ok(response) => response,
+                Err(error) => {
+                    self.record_poll_failure(&error);
+                    return Err(error);
+                }
+            },
+            Err(_) => {
+                let error = ControllerError::CommandTimeout {
+                    timeout_ms: duration_ms(timeout),
+                };
+                self.record_poll_failure(&error);
+                return Err(error);
+            }
+        };
+
+        if response.completion != CommandCompletion::Ok {
+            return Err(ControllerError::CommandRejected {
+                command: response.command,
+                completion: response.completion,
+                code: response.code,
+            });
+        }
+
+        self.snapshot.consecutive_failures = 0;
+        self.snapshot.last_error = None;
+        Ok(response)
     }
 
     fn apply_status(&mut self, state: MachineState) {
@@ -692,6 +722,28 @@ mod tests {
             .unwrap_err();
         assert!(matches!(invalid, ControllerError::JogValidation(_)));
         assert_eq!(control.writes().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn disables_only_the_two_typed_unhomed_settings() {
+        let (mut controller, control) = test_controller();
+        controller.connect().await.unwrap();
+
+        let hard_limits = controller
+            .disable_unhomed_setting(UnhomedSetting::HardLimits)
+            .await
+            .unwrap();
+        let homing = controller
+            .disable_unhomed_setting(UnhomedSetting::Homing)
+            .await
+            .unwrap();
+
+        assert_eq!(hard_limits.command, "$21=0");
+        assert_eq!(homing.command, "$22=0");
+        assert_eq!(
+            control.writes(),
+            vec![b"$21=0\n".to_vec(), b"$22=0\n".to_vec()]
+        );
     }
 
     #[tokio::test]

@@ -114,11 +114,20 @@ motion confirmation flag and performs only X `+0.10 mm` at `10 mm/min`:
 
 ```bash
 cargo run -p millo-desktop --example hardware_step_jog -- \
-  /dev/cu.usbmodem11101 --confirm-motion
+  /dev/cu.usbmodem11101 \
+  --confirm-disable-limits-and-homing --confirm-motion
 ```
 
-It fails before motion unless the controller is freshly inspected and `Idle`.
+It requires both flags because `$21=0` and `$22=0` are persistent controller
+changes and the subsequent jog is a separate physical action. The actor reads
+settings before and after, writes only non-zero values, and fails unless both are
+verified as zero. It then requires a fresh `Idle` status and jog authorization.
 After acceptance it waits at most five seconds for `Idle`, sends Jog Cancel if a
 jog remains active, verifies that only X changed, and disconnects. Never run it
 unattended; the machine has no verified travel envelope or physical emergency
 stop. Normal automated verification compiles this example but never executes it.
+
+The confirmed 2026-08-11 run on `/dev/cu.usbmodem11101` changed `$21` and `$22`
+from `1` to `0`, verified both through a second Inspector read, accepted
+`$J=G91 G21 X0.100 F10.000`, returned to `Idle`, and measured deltas X `+0.100`,
+Y `+0.000`, Z `+0.000 mm`.

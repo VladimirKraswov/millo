@@ -1,9 +1,12 @@
 use std::{future::Future, time::Instant};
 
-use millo_controller::{Controller, ControllerConfig, ControllerError, RealtimeCommand};
+use millo_controller::{
+    Controller, ControllerConfig, ControllerError, RealtimeCommand, UnhomedSetting,
+};
 use millo_domain::{
-    ConnectionState, ControllerSnapshot, HardwareInspection, HardwareProfile, MachineMode,
-    OperatorConfirmation, ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation,
+    CommandResponse, ConnectionState, ControllerSnapshot, DeviceInspection, HardwareInspection,
+    HardwareProfile, MachineMode, OperatorConfirmation, ResetChallenge, StepJogReceipt,
+    StepJogRequest, TestJogPreparation,
 };
 use millo_readiness::assess;
 use millo_safety::{SafetyError, SafetyManager};
@@ -28,6 +31,15 @@ pub enum ArbiterError {
     ResponseDropped,
     #[error("jog cancel requires Jog state, current mode is {0:?}")]
     JogCancelUnavailable(MachineMode),
+    #[error("unhomed configuration verification failed: {0}")]
+    ConfigurationVerification(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct UnhomedConfiguration {
+    pub before: DeviceInspection,
+    pub after: DeviceInspection,
+    pub writes: Vec<CommandResponse>,
 }
 
 #[derive(Clone)]
@@ -145,6 +157,11 @@ impl CommandArbiter {
         self.call(|response| Request::CancelJog { response }).await
     }
 
+    pub async fn configure_unhomed_operation(&self) -> Result<UnhomedConfiguration, ArbiterError> {
+        self.call(|response| Request::ConfigureUnhomedOperation { response })
+            .await
+    }
+
     pub async fn send_realtime(
         &self,
         command: RealtimeCommand,
@@ -209,6 +226,9 @@ enum Request {
     },
     CancelJog {
         response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
+    },
+    ConfigureUnhomedOperation {
+        response: oneshot::Sender<Result<UnhomedConfiguration, ArbiterError>>,
     },
 }
 
@@ -388,6 +408,66 @@ async fn handle_request(
             publish(snapshots, controller);
             let _ = response.send(result);
         }
+        Request::ConfigureUnhomedOperation { response } => {
+            safety.invalidate_test_jog();
+            let result = configure_unhomed_operation(controller).await;
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+    }
+}
+
+async fn configure_unhomed_operation(
+    controller: &mut Controller<BoxedTransport>,
+) -> Result<UnhomedConfiguration, ArbiterError> {
+    ensure_stable_idle(&controller.snapshot())?;
+    let before = controller.inspect_device().await?;
+    let mut writes = Vec::with_capacity(2);
+
+    if before.settings.get("$21").map(String::as_str) != Some("0") {
+        ensure_stable_idle(&controller.snapshot())?;
+        writes.push(
+            controller
+                .disable_unhomed_setting(UnhomedSetting::HardLimits)
+                .await?,
+        );
+    }
+    if before.settings.get("$22").map(String::as_str) != Some("0") {
+        ensure_stable_idle(&controller.snapshot())?;
+        writes.push(
+            controller
+                .disable_unhomed_setting(UnhomedSetting::Homing)
+                .await?,
+        );
+    }
+
+    ensure_stable_idle(&controller.snapshot())?;
+    let after = controller.inspect_device().await?;
+    for key in ["$21", "$22"] {
+        if after.settings.get(key).map(String::as_str) != Some("0") {
+            return Err(ArbiterError::ConfigurationVerification(format!(
+                "expected {key}=0, read {:?}",
+                after.settings.get(key)
+            )));
+        }
+    }
+
+    Ok(UnhomedConfiguration {
+        before,
+        after,
+        writes,
+    })
+}
+
+fn ensure_stable_idle(snapshot: &ControllerSnapshot) -> Result<(), ArbiterError> {
+    if snapshot.connection == ConnectionState::Connected
+        && snapshot.machine.mode == MachineMode::Idle
+        && snapshot.alarm.is_none()
+        && snapshot.reset_notice.is_none()
+    {
+        Ok(())
+    } else {
+        Err(SafetyError::UnsafeControllerState.into())
     }
 }
 
@@ -769,6 +849,58 @@ mod tests {
             arbiter.refresh_status().await.unwrap().machine.mode,
             MachineMode::Idle
         );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn disables_and_verifies_unhomed_controller_settings() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        control.set_setting(21, "1");
+        control.set_setting(22, "1");
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+
+        let result = arbiter.configure_unhomed_operation().await.unwrap();
+
+        assert_eq!(result.before.settings.get("$21").unwrap(), "1");
+        assert_eq!(result.before.settings.get("$22").unwrap(), "1");
+        assert_eq!(result.after.settings.get("$21").unwrap(), "0");
+        assert_eq!(result.after.settings.get("$22").unwrap(), "0");
+        assert_eq!(result.writes.len(), 2);
+        assert_eq!(
+            control
+                .writes()
+                .into_iter()
+                .filter(|write| write.starts_with(b"$21=") || write.starts_with(b"$22="))
+                .collect::<Vec<_>>(),
+            vec![b"$21=0\n".to_vec(), b"$22=0\n".to_vec()]
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn stops_configuration_after_the_first_rejected_setting() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        control.set_setting(21, "1");
+        control.set_setting(22, "1");
+        control.queue_setting_error(2);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+
+        let error = arbiter.configure_unhomed_operation().await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArbiterError::Controller(ControllerError::CommandRejected { .. })
+        ));
+        let setting_writes = control
+            .writes()
+            .into_iter()
+            .filter(|write| write.starts_with(b"$21=") || write.starts_with(b"$22="))
+            .collect::<Vec<_>>();
+        assert_eq!(setting_writes, vec![b"$21=0\n".to_vec()]);
         task.abort();
     }
 }
