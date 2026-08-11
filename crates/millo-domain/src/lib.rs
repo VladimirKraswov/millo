@@ -256,3 +256,19 @@ pub struct StepJogReceipt {
     pub distance_mm: f64,
     pub feed_mm_per_min: f64,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JogPadStepRequest {
+    pub confirmation: OperatorConfirmation,
+    pub axis: JogAxis,
+    pub distance_mm: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JogPadStepOutcome {
+    pub inspection: HardwareInspection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<StepJogReceipt>,
+}

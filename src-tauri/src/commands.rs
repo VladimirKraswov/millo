@@ -1,8 +1,8 @@
 use millo_command::CommandArbiter;
 use millo_controller::ControllerConfig;
 use millo_domain::{
-    ControllerSnapshot, HardwareInspection, HardwareProfile, OperatorConfirmation, ResetChallenge,
-    StepJogReceipt, StepJogRequest, TestJogPreparation,
+    ControllerSnapshot, HardwareInspection, HardwareProfile, JogPadStepOutcome, JogPadStepRequest,
+    OperatorConfirmation, ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation,
 };
 use millo_mock::{MockControl, MockTransport};
 use millo_serial::{
@@ -241,6 +241,18 @@ pub async fn step_jog(
     state
         .arbiter
         .step_jog(request)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn jog_pad_step(
+    request: JogPadStepRequest,
+    state: State<'_, AppState>,
+) -> Result<JogPadStepOutcome, String> {
+    state
+        .arbiter
+        .jog_pad_step(request)
         .await
         .map_err(|error| error.to_string())
 }

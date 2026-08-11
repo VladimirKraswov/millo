@@ -7,9 +7,10 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
+    "test:ui": "vitest run",
     "test:brand": "node scripts/check-brand.mjs",
     "test:rust": "cargo test --workspace",
-    "test": "npm run typecheck && npm run test:brand && npm run test:rust",
+    "test": "npm run typecheck && npm run test:ui && npm run test:brand && npm run test:rust",
     "lint:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
     "verify": "npm test && npm run build && npm run lint:rust",
     "tauri": "tauri"
@@ -25,6 +26,7 @@
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^4.6.0",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^4.1.10"
   }
 }

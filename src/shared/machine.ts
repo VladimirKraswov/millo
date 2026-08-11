@@ -164,6 +164,17 @@ export interface StepJogReceipt {
   feedMmPerMin: number;
 }
 
+export interface JogPadStepRequest {
+  confirmation: OperatorConfirmation;
+  axis: JogAxis;
+  distanceMm: number;
+}
+
+export interface JogPadStepOutcome {
+  inspection: HardwareInspection;
+  receipt?: StepJogReceipt;
+}
+
 export const emptySnapshot: ControllerSnapshot = {
   connection: "disconnected",
   machine: {

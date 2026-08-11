@@ -110,8 +110,7 @@ does not schedule or execute controller I/O.
 - Rust parses firmware, settings, modal state, and coordinate parameters. The UI
   never receives a responsibility to interpret wire lines.
 - Tauri exposes no raw command, general G-code, or spindle-control endpoint. Its
-  sole motion call is the typed, actor-authorized step-jog operation described
-  below.
+  motion calls are typed, actor-authorized step-jog use cases described below.
 
 ### Hardware readiness boundary
 
@@ -148,6 +147,9 @@ does not schedule or execute controller I/O.
 - A successful preflight creates a 15-second single-use lease. Alarm, reset,
   reconnect, disconnect, non-idle state, expiry, or another realtime command
   invalidates it.
+- Every preflight starts with a fresh realtime status transaction before the
+  four Inspector queries, so a stale UI `Idle` snapshot cannot authorize a
+  second click while GRBL already reports `Jog`.
 - The typed step-jog endpoint consumes the lease inside the actor before the
   controller validates and writes the command. Validation or transport failure
   does not restore the lease.
@@ -155,8 +157,13 @@ does not schedule or execute controller I/O.
   distance is limited to `0.01..1.00 mm`; feed is limited to
   `10..100 mm/min`. UI values cannot widen this backend envelope.
 - A successful `ok` means GRBL accepted the jog for execution; periodic status
-  remains authoritative for `Jog` and final position. The UI clears its lease
-  before awaiting the response.
+  remains authoritative for `Jog` and final position. The jog pad never receives
+  or stores its actor-local lease.
+- The operator jog pad uses one higher-level actor request per click. That
+  request performs status, Inspector, readiness, lease issue, lease consumption,
+  and one typed step without exposing the authorization to React. It accepts
+  only `0.01` or `0.10 mm` and always uses `10 mm/min`; the broader typed
+  step-jog envelope remains available to explicit hardware tooling.
 - Jog Cancel is the named `0x85` realtime operation and is accepted by the actor
   only while its current snapshot reports `Jog`.
 - First-machine setup exposes no general `$n=value` endpoint. A narrow
@@ -167,6 +174,23 @@ does not schedule or execute controller I/O.
   serialized behind an already active controller transaction; future sender
   work must preserve bounded command transactions and provide priority handling
   between streamed lines.
+
+### Extension host boundary
+
+- React feature modules depend on typed platform gateways, not Tauri imports.
+  The jog pad is the first feature following this rule through
+  `MachineCommandGateway`.
+- The planned plugin host composes named UI slots and gives each contribution an
+  owner, order, and deterministic unload lifecycle. Core surfaces will use the
+  same registry so plugins can add, remove, or replace them.
+- Machine, probing, sender, job, storage, and network access are separate,
+  manifest-declared capabilities. A plugin receives only host proxies granted to
+  it; it never receives serial I/O, actor internals, or raw command endpoints.
+- Machine capability calls still execute Rust application use cases and preserve
+  all safety policy regardless of whether the caller is core UI or a plugin.
+- See `docs/decisions/0010-extension-host-boundaries.md` for the accepted
+  direction. Plugin loading and isolation are deliberately not implemented in
+  the jog-pad slice.
 
 ## Near-term sequence
 

@@ -34,15 +34,22 @@ Feed Hold sends the GRBL realtime `!` byte when the controller reports active
 motion. Soft Reset sends `Ctrl-X` only after a short-lived actor-issued challenge
 is confirmed. Test-jog preflight requires three physical operator confirmations,
 runs a fresh Inspector transaction, and can issue a 15-second single-use backend
-authorization. The only motion endpoint consumes that authorization inside the
-same Rust actor and emits one `$J=G91 G21` step on exactly one XYZ axis. Distance
-is limited to `0.01..1.00 mm` and feed to `10..100 mm/min` in the backend. Every
-attempt consumes its lease before writing; another step requires another full
-preflight. GRBL Jog Cancel (`0x85`) is exposed as a separate named safety action.
+authorization. The low-level typed motion use case consumes that authorization
+inside the same Rust actor and emits one `$J=G91 G21` step on exactly one XYZ
+axis. Distance is limited to `0.01..1.00 mm` and feed to `10..100 mm/min` in the
+backend. Every attempt consumes its lease before writing; another step requires
+another full preflight. GRBL Jog Cancel (`0x85`) is a separate named safety
+action.
 Physical smoke tests have now disabled profile-inconsistent `$21/$22`, verified
 the persisted values, and completed separate X, Y, and Z `+0.100 mm` steps at
 `10 mm/min`. Every run returned to `Idle`, and only its selected coordinate
 changed.
+
+The first operator jog pad is a separate feature module. It exposes only fixed
+`0.01` and `0.10 mm` XYZ steps at `10 mm/min`; every press executes a new status,
+Inspector, readiness, and one-use authorization cycle inside the Rust actor.
+React reaches it through a platform-neutral `MachineCommandGateway`, establishing
+the same capability boundary planned for plugins.
 
 ## Run
 
@@ -101,7 +108,8 @@ See [Architecture](docs/ARCHITECTURE.md), the decisions for the
 [hardware readiness](docs/decisions/0006-hardware-readiness.md) and
 [realtime safety controls](docs/decisions/0007-realtime-safety-controls.md), then
 the [guarded step jog](docs/decisions/0008-guarded-step-jog.md) and
-[verified unhomed configuration](docs/decisions/0009-unhomed-controller-configuration.md).
+[verified unhomed configuration](docs/decisions/0009-unhomed-controller-configuration.md),
+then the [extension host boundary](docs/decisions/0010-extension-host-boundaries.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

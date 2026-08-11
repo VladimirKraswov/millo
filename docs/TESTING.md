@@ -10,6 +10,11 @@ npm run verify
 It runs TypeScript type checking, all Rust workspace tests, the production Vite
 build, Rust formatting checks, and Clippy with warnings denied.
 
+`npm run test:ui` runs Vitest policy tests for TypeScript feature modules. The
+jog-pad suite verifies one signed fixed-step gateway call per press, rejects a
+non-preset value before IPC, and rejects a concurrent press while the first call
+is unresolved.
+
 The test phase also runs `scripts/check-brand.mjs`, which keeps npm, Cargo,
 Tauri, UI, and documentation naming consistent.
 
@@ -60,7 +65,7 @@ port names remain untouched.
   modal state, WCS/TLO, and probe parameters.
 - Mock Inspector responses cover the full Rust-to-UI readiness path.
 - The Tauri command surface contains no raw-line or general movement endpoint;
-  only the typed guarded step jog is exposed.
+  only typed guarded step-jog use cases are exposed.
 
 ## Current hardware readiness coverage
 
@@ -85,8 +90,8 @@ port names remain untouched.
 - Feed Hold writes exactly `!`; a running mock reports `Hold:0` on the next poll.
 - Soft Reset makes the mock emit a GRBL reset banner and return to `Idle`.
 - Incomplete operator confirmation performs no controller I/O.
-- Every preflight executes a new `$I/$$/$G/$#` sequence and receives a distinct
-  short-lived authorization.
+- Every preflight executes a new status plus `$I/$$/$G/$#` sequence and receives
+  a distinct short-lived authorization.
 - Readiness blockers and alarm state return the fresh inspection report without
   authorization.
 - Test-jog authorization is single-use and is invalidated by expiry, alarm,
@@ -101,6 +106,9 @@ port names remain untouched.
 - Tauri mock smoke covers Run to Hold, two-stage Reset, reset-banner
   acknowledgement, preflight, one step-jog write, lease relock, and an exact
   single-axis position update. Rust actor/mock tests cover Jog Cancel gating.
+- Jog-pad actor tests prove that every press begins with a fresh status and full
+  Inspector, always uses `10 mm/min`, accepts only `0.01` and `0.10 mm`, and does
+  not issue another `$J` while the refreshed controller state is `Jog`.
 
 CI does not require a physical controller. For a hardware smoke test, launch
 `npm run tauri dev`, refresh the device list, connect at the controller's baud

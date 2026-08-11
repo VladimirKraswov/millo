@@ -2,8 +2,8 @@ mod commands;
 
 use commands::{
     AppState, acknowledge_reset, active_transport, cancel_jog, confirm_soft_reset,
-    connect_transport, controller_snapshot, disconnect, feed_hold, inspect_device, list_transports,
-    mock_clear_alarm, mock_start_run, mock_trigger_alarm, mock_trigger_disconnect,
+    connect_transport, controller_snapshot, disconnect, feed_hold, inspect_device, jog_pad_step,
+    list_transports, mock_clear_alarm, mock_start_run, mock_trigger_alarm, mock_trigger_disconnect,
     mock_trigger_reset, mock_trigger_timeout, prepare_test_jog, refresh_status, request_soft_reset,
     step_jog,
 };
@@ -24,6 +24,7 @@ pub fn run() {
             confirm_soft_reset,
             prepare_test_jog,
             step_jog,
+            jog_pad_step,
             cancel_jog,
             disconnect,
             acknowledge_reset,

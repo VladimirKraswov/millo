@@ -5,8 +5,8 @@ use millo_controller::{
 };
 use millo_domain::{
     CommandResponse, ConnectionState, ControllerSnapshot, DeviceInspection, HardwareInspection,
-    HardwareProfile, MachineMode, OperatorConfirmation, ResetChallenge, StepJogReceipt,
-    StepJogRequest, TestJogPreparation,
+    HardwareProfile, JogPadStepOutcome, JogPadStepRequest, MachineMode, OperatorConfirmation,
+    ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation,
 };
 use millo_readiness::assess;
 use millo_safety::{SafetyError, SafetyManager};
@@ -18,6 +18,8 @@ use tokio::{
 };
 
 const REQUEST_CAPACITY: usize = 32;
+pub const JOG_PAD_STEPS_MM: [f64; 2] = [0.01, 0.1];
+pub const JOG_PAD_FEED_MM_PER_MIN: f64 = 10.0;
 
 #[derive(Debug, Error)]
 pub enum ArbiterError {
@@ -33,6 +35,8 @@ pub enum ArbiterError {
     JogCancelUnavailable(MachineMode),
     #[error("unhomed configuration verification failed: {0}")]
     ConfigurationVerification(String),
+    #[error("jog pad distance {0} mm is not one of the fixed presets")]
+    UnsupportedJogPadDistance(f64),
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +157,14 @@ impl CommandArbiter {
             .await
     }
 
+    pub async fn jog_pad_step(
+        &self,
+        request: JogPadStepRequest,
+    ) -> Result<JogPadStepOutcome, ArbiterError> {
+        self.call(|response| Request::JogPadStep { request, response })
+            .await
+    }
+
     pub async fn cancel_jog(&self) -> Result<ControllerSnapshot, ArbiterError> {
         self.call(|response| Request::CancelJog { response }).await
     }
@@ -223,6 +235,10 @@ enum Request {
     StepJog {
         request: StepJogRequest,
         response: oneshot::Sender<Result<StepJogReceipt, ArbiterError>>,
+    },
+    JogPadStep {
+        request: JogPadStepRequest,
+        response: oneshot::Sender<Result<JogPadStepOutcome, ArbiterError>>,
     },
     CancelJog {
         response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
@@ -394,6 +410,11 @@ async fn handle_request(
             publish(snapshots, controller);
             let _ = response.send(result);
         }
+        Request::JogPadStep { request, response } => {
+            let result = execute_jog_pad_step(controller, hardware_profile, safety, request).await;
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
         Request::CancelJog { response } => {
             safety.invalidate_test_jog();
             let mode = controller.snapshot().machine.mode;
@@ -481,6 +502,7 @@ async fn prepare_test_jog(
         return Err(SafetyError::IncompleteOperatorConfirmation.into());
     }
 
+    controller.refresh_status().await?;
     let device = controller.inspect_device().await?;
     let snapshot = controller.snapshot();
     let readiness = assess(hardware_profile, &device, &snapshot);
@@ -493,6 +515,50 @@ async fn prepare_test_jog(
         inspection,
         authorization,
     })
+}
+
+async fn execute_jog_pad_step(
+    controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
+    safety: &mut SafetyManager,
+    request: JogPadStepRequest,
+) -> Result<JogPadStepOutcome, ArbiterError> {
+    if !is_supported_jog_pad_distance(request.distance_mm) {
+        return Err(ArbiterError::UnsupportedJogPadDistance(request.distance_mm));
+    }
+
+    let preparation =
+        prepare_test_jog(controller, hardware_profile, safety, request.confirmation).await?;
+    let Some(authorization) = preparation.authorization else {
+        return Ok(JogPadStepOutcome {
+            inspection: preparation.inspection,
+            receipt: None,
+        });
+    };
+    let step = StepJogRequest {
+        authorization_id: authorization.id,
+        axis: request.axis,
+        distance_mm: request.distance_mm,
+        feed_mm_per_min: JOG_PAD_FEED_MM_PER_MIN,
+    };
+
+    safety.consume_test_jog(
+        step.authorization_id,
+        &controller.snapshot(),
+        Instant::now(),
+    )?;
+    let receipt = controller.step_jog(step).await?;
+    Ok(JogPadStepOutcome {
+        inspection: preparation.inspection,
+        receipt: Some(receipt),
+    })
+}
+
+fn is_supported_jog_pad_distance(distance_mm: f64) -> bool {
+    distance_mm.is_finite()
+        && JOG_PAD_STEPS_MM
+            .iter()
+            .any(|preset| distance_mm.abs() == *preset)
 }
 
 fn publish(snapshots: &watch::Sender<ControllerSnapshot>, controller: &Controller<BoxedTransport>) {
@@ -642,10 +708,12 @@ mod tests {
             control.writes(),
             vec![
                 b"?".to_vec(),
+                b"?".to_vec(),
                 b"$I\n".to_vec(),
                 b"$$\n".to_vec(),
                 b"$G\n".to_vec(),
                 b"$#\n".to_vec(),
+                b"?".to_vec(),
                 b"$I\n".to_vec(),
                 b"$$\n".to_vec(),
                 b"$G\n".to_vec(),
@@ -908,6 +976,95 @@ mod tests {
                 b"$J=G91 G21 Z0.100 F100.000\n".to_vec()
             ]
         );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn jog_pad_rechecks_motion_and_uses_only_its_fixed_feed() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let first = arbiter
+            .jog_pad_step(JogPadStepRequest {
+                confirmation: operator_confirmation(),
+                axis: millo_domain::JogAxis::Y,
+                distance_mm: 0.1,
+            })
+            .await
+            .unwrap();
+        assert_eq!(first.receipt.unwrap().command, "$J=G91 G21 Y0.100 F10.000");
+
+        let blocked_while_moving = arbiter
+            .jog_pad_step(JogPadStepRequest {
+                confirmation: operator_confirmation(),
+                axis: millo_domain::JogAxis::Z,
+                distance_mm: 0.01,
+            })
+            .await
+            .unwrap();
+        assert!(blocked_while_moving.receipt.is_none());
+        assert!(!blocked_while_moving.inspection.readiness.test_jog_ready);
+
+        for _ in 0..4 {
+            if arbiter.refresh_status().await.unwrap().machine.mode == MachineMode::Idle {
+                break;
+            }
+        }
+        let second = arbiter
+            .jog_pad_step(JogPadStepRequest {
+                confirmation: operator_confirmation(),
+                axis: millo_domain::JogAxis::Z,
+                distance_mm: -0.01,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            second.receipt.unwrap().command,
+            "$J=G91 G21 Z-0.010 F10.000"
+        );
+
+        let writes = control.writes();
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|write| write.as_slice() == b"$I\n")
+                .count(),
+            3
+        );
+        assert_eq!(
+            writes
+                .into_iter()
+                .filter(|write| write.starts_with(b"$J="))
+                .collect::<Vec<_>>(),
+            vec![
+                b"$J=G91 G21 Y0.100 F10.000\n".to_vec(),
+                b"$J=G91 G21 Z-0.010 F10.000\n".to_vec()
+            ]
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn jog_pad_rejects_non_preset_distance_before_controller_io() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let error = arbiter
+            .jog_pad_step(JogPadStepRequest {
+                confirmation: operator_confirmation(),
+                axis: millo_domain::JogAxis::X,
+                distance_mm: 0.5,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArbiterError::UnsupportedJogPadDistance(distance) if distance == 0.5
+        ));
+        assert!(control.writes().is_empty());
         task.abort();
     }
 

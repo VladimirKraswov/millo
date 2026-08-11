@@ -4,6 +4,8 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   ControllerSnapshot,
   HardwareInspection,
+  JogPadStepOutcome,
+  JogPadStepRequest,
   OperatorConfirmation,
   ResetChallenge,
   StepJogReceipt,
@@ -59,6 +61,11 @@ export const prepareTestJog = (
 
 export const stepJog = (request: StepJogRequest): Promise<StepJogReceipt> =>
   invoke<StepJogReceipt>("step_jog", { request });
+
+export const jogPadStep = (
+  request: JogPadStepRequest,
+): Promise<JogPadStepOutcome> =>
+  invoke<JogPadStepOutcome>("jog_pad_step", { request });
 
 export const cancelJog = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("cancel_jog");

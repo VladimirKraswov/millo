@@ -20,6 +20,7 @@ import {
 } from "./api/controller";
 import { ReadinessPanel } from "./components/ReadinessPanel";
 import { SafetyControls } from "./components/SafetyControls";
+import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineCommandGateway";
 import {
   emptySnapshot,
   type ControllerSnapshot,
@@ -439,6 +440,7 @@ export default function App() {
 
           <SafetyControls
             desktopRuntime={desktopRuntime}
+            machineGateway={tauriMachineCommandGateway}
             onError={setUiError}
             onInspection={setInspection}
             onSnapshot={setSnapshot}
