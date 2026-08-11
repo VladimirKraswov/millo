@@ -51,6 +51,13 @@ Inspector, readiness, and one-use authorization cycle inside the Rust actor.
 React reaches it through a platform-neutral `MachineCommandGateway`, establishing
 the same capability boundary planned for plugins.
 
+UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
+first core contribution in the named `control.machine` slot. Contributions have
+stable IDs, owners, ordering, replacement declarations, and deterministic
+unload, so removing a future plugin replacement restores the core control
+without rebuilding the shell. Plugin loading and permission grants are not part
+of this small registry step.
+
 ## Run
 
 Requirements: Node.js 20+, Rust 1.85+, and the platform prerequisites for

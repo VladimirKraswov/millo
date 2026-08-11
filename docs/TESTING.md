@@ -15,6 +15,10 @@ jog-pad suite verifies one signed fixed-step gateway call per press, rejects a
 non-preset value before IPC, and rejects a concurrent press while the first call
 is unresolved.
 
+Extension-registry tests cover deterministic slot ordering, duplicate and
+self-replacement rejection, add/replace/dispose behavior, one-revision owner
+unload, and restoration of `core.jog-pad` after a plugin replacement unloads.
+
 The test phase also runs `scripts/check-brand.mjs`, which keeps npm, Cargo,
 Tauri, UI, and documentation naming consistent.
 

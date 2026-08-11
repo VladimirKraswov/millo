@@ -6,7 +6,11 @@ import {
   feedHold,
   requestSoftReset,
 } from "../api/controller";
-import { JogPad } from "../features/jog-pad/JogPad";
+import {
+  uiSlots,
+  type UiExtensionRegistry,
+} from "../platform/extensions/UiExtensionRegistry";
+import { UiExtensionSlot } from "../platform/extensions/UiExtensionSlot";
 import type { MachineCommandGateway } from "../platform/machine/MachineCommandGateway";
 import type {
   ControllerSnapshot,
@@ -17,6 +21,7 @@ import type {
 interface SafetyControlsProps {
   snapshot: ControllerSnapshot;
   desktopRuntime: boolean;
+  extensionRegistry: UiExtensionRegistry;
   machineGateway: MachineCommandGateway;
   onSnapshot: (snapshot: ControllerSnapshot) => void;
   onInspection: (inspection?: HardwareInspection) => void;
@@ -29,6 +34,7 @@ const secondsRemaining = (deadline: number | undefined, now: number): number =>
 export function SafetyControls({
   snapshot,
   desktopRuntime,
+  extensionRegistry,
   machineGateway,
   onSnapshot,
   onInspection,
@@ -183,13 +189,17 @@ export function SafetyControls({
         </div>
       )}
 
-      <JogPad
-        desktopRuntime={desktopRuntime}
-        disabled={busy || holdPending}
-        gateway={machineGateway}
-        onError={onError}
-        onInspection={onInspection}
-        snapshot={snapshot}
+      <UiExtensionSlot
+        context={{
+          snapshot,
+          desktopRuntime,
+          controlsDisabled: busy || holdPending,
+          machineCommands: machineGateway,
+          updateInspection: onInspection,
+          reportError: onError,
+        }}
+        registry={extensionRegistry}
+        slot={uiSlots.controlMachine}
       />
     </section>
   );

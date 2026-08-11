@@ -180,17 +180,21 @@ does not schedule or execute controller I/O.
 - React feature modules depend on typed platform gateways, not Tauri imports.
   The jog pad is the first feature following this rule through
   `MachineCommandGateway`.
-- The planned plugin host composes named UI slots and gives each contribution an
-  owner, order, and deterministic unload lifecycle. Core surfaces will use the
-  same registry so plugins can add, remove, or replace them.
+- The generic `ExtensionRegistry` composes named slots and gives each
+  contribution an ID, owner, order, replacement list, and deterministic unload
+  lifecycle. It has no React, Tauri, or machine dependency.
+- The React bridge currently exposes `control.machine`. Jog Pad is its first
+  `core` contribution, proving that a later plugin replacement can hide it and
+  that unloading the replacement restores the core UI without remounting the
+  application shell.
 - Machine, probing, sender, job, storage, and network access are separate,
   manifest-declared capabilities. A plugin receives only host proxies granted to
   it; it never receives serial I/O, actor internals, or raw command endpoints.
 - Machine capability calls still execute Rust application use cases and preserve
   all safety policy regardless of whether the caller is core UI or a plugin.
 - See `docs/decisions/0010-extension-host-boundaries.md` for the accepted
-  direction. Plugin loading and isolation are deliberately not implemented in
-  the jog-pad slice.
+  direction. Plugin manifests, loading, permission grants, and isolation remain
+  deliberately outside this registry slice.
 
 ## Near-term sequence
 

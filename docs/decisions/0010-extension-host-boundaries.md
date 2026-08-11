@@ -48,5 +48,15 @@ The future plugin host will use these rules:
   instead of importing Tauri APIs inside components.
 - Direct arbitrary DOM replacement is intentionally unsupported; replacement is
   explicit, ordered, reversible, and attributable to a plugin owner.
-- The extension registry, manifest schema, isolation model, and job service will
-  be introduced incrementally when their first real consumers are implemented.
+- The minimal in-memory UI registry is now implemented. Manifest parsing,
+  capability grants, isolation, persistence, and the job service remain
+  incremental follow-up decisions.
+
+## Validation
+
+Jog Pad is registered by owner `core` as contribution `core.jog-pad` in the
+named `control.machine` slot. The generic registry is independent of React and
+supports deterministic ordering, replacement, individual disposal, and atomic
+owner unload. Removing a plugin replacement reveals the core contribution again.
+The React bridge subscribes only to a monotonically increasing registry revision
+and renders the currently active contributions.

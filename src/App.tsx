@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { registerCoreUiExtensions } from "./app/registerCoreUiExtensions";
 import {
   acknowledgeReset,
   clearMockAlarm,
@@ -20,6 +21,7 @@ import {
 } from "./api/controller";
 import { ReadinessPanel } from "./components/ReadinessPanel";
 import { SafetyControls } from "./components/SafetyControls";
+import { createUiExtensionRegistry } from "./platform/extensions/UiExtensionRegistry";
 import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineCommandGateway";
 import {
   emptySnapshot,
@@ -88,6 +90,11 @@ export default function App() {
   const [discovering, setDiscovering] = useState(false);
   const [uiError, setUiError] = useState<string>();
   const desktopRuntime = useMemo(isDesktopRuntime, []);
+  const extensionRegistry = useMemo(() => {
+    const registry = createUiExtensionRegistry();
+    registerCoreUiExtensions(registry);
+    return registry;
+  }, []);
 
   useEffect(() => {
     if (!desktopRuntime) {
@@ -440,6 +447,7 @@ export default function App() {
 
           <SafetyControls
             desktopRuntime={desktopRuntime}
+            extensionRegistry={extensionRegistry}
             machineGateway={tauriMachineCommandGateway}
             onError={setUiError}
             onInspection={setInspection}
