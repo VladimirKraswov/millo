@@ -22,9 +22,12 @@ communication failures.
 The desktop app discovers native serial ports and can connect to a GRBL
 controller at a selected baud rate. Device Inspector automatically reads `$I`,
 `$$`, `$G`, and `$#`, then displays parsed firmware, settings, modal state, and
-coordinate parameters. No arbitrary line, motion, or spindle command is exposed
-by the desktop API. Mock GRBL remains the default, so development and lifecycle
-tests do not require hardware.
+coordinate parameters. A separate Rust readiness policy evaluates those values
+against the first-machine profile: XYZ motion, manual spindle, no homing, no
+limit switches, and no physical emergency stop. It reports blockers and
+cautions for a future guarded test jog; probing remains locked. No arbitrary
+line, motion, or spindle command is exposed by the desktop API. Mock GRBL remains
+the default, so development and lifecycle tests do not require hardware.
 
 ## Run
 
@@ -70,6 +73,7 @@ successful GRBL status exchange.
 | `millo-serial` | Native asynchronous serial discovery and byte/line I/O |
 | `millo-controller` | Connection lifecycle and state orchestration |
 | `millo-command` | Single-owner command actor, polling, and response arbitration |
+| `millo-readiness` | Hardware-profile policy and guarded test-jog readiness |
 | `millo-desktop` | Thin Tauri command/event adapter |
 
 See [Architecture](docs/ARCHITECTURE.md), the decisions for the
@@ -77,7 +81,8 @@ See [Architecture](docs/ARCHITECTURE.md), the decisions for the
 [controller lifecycle](docs/decisions/0002-controller-lifecycle.md), plus the
 [project naming decision](docs/decisions/0003-project-name-millo.md) and
 [native serial boundary](docs/decisions/0004-native-serial-transport.md), and
-[command arbiter](docs/decisions/0005-command-arbiter-device-inspector.md). The
+[command arbiter](docs/decisions/0005-command-arbiter-device-inspector.md), plus
+[hardware readiness](docs/decisions/0006-hardware-readiness.md). The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).
 

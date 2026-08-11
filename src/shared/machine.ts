@@ -92,6 +92,41 @@ export interface DeviceInspection {
   responses: CommandResponse[];
 }
 
+export type SpindleControl = "manual" | "controller";
+
+export interface HardwareProfile {
+  name: string;
+  axes: string[];
+  spindleControl: SpindleControl;
+  homingInstalled: boolean;
+  limitSwitchesInstalled: boolean;
+  emergencyStopInstalled: boolean;
+}
+
+export type ReadinessLevel = "pass" | "caution" | "blocker";
+
+export interface ReadinessCheck {
+  id: string;
+  level: ReadinessLevel;
+  title: string;
+  detail: string;
+  evidence?: string;
+}
+
+export interface ReadinessReport {
+  profile: HardwareProfile;
+  testJogReady: boolean;
+  probeReady: boolean;
+  blockerCount: number;
+  cautionCount: number;
+  checks: ReadinessCheck[];
+}
+
+export interface HardwareInspection {
+  device: DeviceInspection;
+  readiness: ReadinessReport;
+}
+
 export const emptySnapshot: ControllerSnapshot = {
   connection: "disconnected",
   machine: {

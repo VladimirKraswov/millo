@@ -61,6 +61,21 @@ port names remain untouched.
 - Mock Inspector responses cover the full Rust-to-UI happy path without motion.
 - The Tauri command surface contains no raw-line or movement endpoint.
 
+## Current hardware readiness coverage
+
+- A representative unhomed XYZ fixture passes the guarded test-jog
+  configuration while retaining cautions for G91, manual spindle, missing
+  homing/limits, untested probe input, and missing physical emergency stop.
+- Missing axis tuning blocks readiness.
+- Enabled homing or hard limits block a profile that declares no sensors.
+- Laser mode blocks the milling profile.
+- Alarm or non-idle controller state blocks readiness even when static settings
+  are valid.
+- Mock GRBL exposes all required XYZ values and exercises the ready report across
+  the command actor and typed Tauri response.
+- The Tauri mock smoke test confirms a ready report is invalidated after an
+  injected alarm rather than leaving stale green readiness on screen.
+
 CI does not require a physical controller. For a hardware smoke test, launch
 `npm run tauri dev`, refresh the device list, connect at the controller's baud
 rate, verify that machine coordinates update, unplug the device, and confirm the

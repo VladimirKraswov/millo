@@ -15,19 +15,21 @@
                                   |
                         +---------v--------+
                         | command arbiter  |
-                        +---------+--------+
-                                  |
-                        +---------v--------+
-                        | controller       |
                         +----+---------+---+
                              |         |
                     +--------v--+   +--v-----------+
-                    | GRBL      |   | Transport    |
+                    | readiness |   | controller   |
                     +-----+-----+   +------+-------+
                           |                |
-                    +-----v-----+   +------v-------+
-                    | Domain    |   | Mock / Serial|
-                    +-----------+   +--------------+
+                    +-----v-----+       +--+-----------+
+                    | Domain    |       |              |
+                    +-----------+  +----v----+   +-----v------+
+                                   | GRBL    |   | Transport  |
+                                   +----+----+   +-----+------+
+                                        |              |
+                                   +----v----+   +-----v------+
+                                   | Domain  |   | Mock/Serial|
+                                   +---------+   +------------+
 ```
 
 Dependencies point inward. Domain types do not import Tauri, an I/O library, or
@@ -111,10 +113,31 @@ does not schedule or execute controller I/O.
   never receives a responsibility to interpret wire lines.
 - Tauri exposes no raw command, G-code motion, or spindle-control endpoint.
 
+### Hardware readiness boundary
+
+- `millo-readiness` evaluates parsed domain data; it neither sends GRBL commands
+  nor imports Tauri or a transport implementation.
+- The selected hardware profile is explicit: XYZ, manual spindle, no homing,
+  no limit switches, and no physical emergency stop.
+- Missing or invalid axis steps, rates, acceleration, travel, firmware identity,
+  required query responses, milling mode, or profile-consistent `$20/$21/$22`
+  settings block the future guarded test jog.
+- Unhomed coordinates, manual spindle operation, missing emergency stop, active
+  `G91`, and an electrically untested probe remain visible cautions.
+- `testJogReady` is an inspection result, not a general motion permission. A
+  future movement command must re-check live controller state inside the command
+  actor immediately before writing bytes.
+- React discards the displayed report when the live snapshot leaves stable
+  `Connected + Idle`, receives an alarm, or receives a reset notice. The
+  Inspector must be read again after recovery.
+- Probe readiness stays false until a separate stationary electrical test is
+  implemented and passed.
+
 ## Near-term sequence
 
-1. Safety controls and hardware-profile validation.
-2. Short-distance step jog with explicit no-homing constraints.
+1. Realtime safety controls and guarded operator acknowledgement.
+2. Short-distance step jog with fresh readiness validation and explicit
+   no-homing constraints.
 3. Work coordinates and touch-probe validation.
 4. Command queue and sender state machine.
 5. G-code domain, parser fixtures, and program model.

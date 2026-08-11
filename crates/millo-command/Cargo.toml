@@ -7,6 +7,7 @@ rust-version.workspace = true
 [dependencies]
 millo-controller = { path = "../millo-controller" }
 millo-domain = { path = "../millo-domain" }
+millo-readiness = { path = "../millo-readiness" }
 millo-transport = { path = "../millo-transport" }
 thiserror.workspace = true
 tokio.workspace = true

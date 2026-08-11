@@ -1,6 +1,6 @@
 use millo_command::CommandArbiter;
 use millo_controller::ControllerConfig;
-use millo_domain::{ControllerSnapshot, DeviceInspection};
+use millo_domain::{ControllerSnapshot, HardwareInspection, HardwareProfile};
 use millo_mock::{MockControl, MockTransport};
 use millo_serial::{
     SerialConfig, SerialPortDescriptor, SerialPortKind, SerialTransport,
@@ -64,7 +64,11 @@ impl Default for AppState {
         let initial = ResolvedTransport::mock();
         let descriptor = initial.descriptor;
         let mock = initial.mock;
-        let (arbiter, worker) = CommandArbiter::new(initial.transport, ControllerConfig::default());
+        let (arbiter, worker) = CommandArbiter::new(
+            initial.transport,
+            ControllerConfig::default(),
+            HardwareProfile::first_machine(),
+        );
         tauri::async_runtime::spawn(worker);
 
         Self {
@@ -157,7 +161,7 @@ pub async fn refresh_status(state: State<'_, AppState>) -> Result<ControllerSnap
 }
 
 #[tauri::command]
-pub async fn inspect_device(state: State<'_, AppState>) -> Result<DeviceInspection, String> {
+pub async fn inspect_device(state: State<'_, AppState>) -> Result<HardwareInspection, String> {
     state
         .arbiter
         .inspect_device()

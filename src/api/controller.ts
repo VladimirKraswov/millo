@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
   ControllerSnapshot,
-  DeviceInspection,
+  HardwareInspection,
   TransportDescriptor,
 } from "../shared/machine";
 
@@ -27,8 +27,8 @@ export const connectTransport = (
 export const refreshStatus = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("refresh_status");
 
-export const inspectDevice = (): Promise<DeviceInspection> =>
-  invoke<DeviceInspection>("inspect_device");
+export const inspectDevice = (): Promise<HardwareInspection> =>
+  invoke<HardwareInspection>("inspect_device");
 
 export const disconnect = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("disconnect");

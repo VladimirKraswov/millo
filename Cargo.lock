@@ -1821,6 +1821,7 @@ dependencies = [
  "millo-controller",
  "millo-domain",
  "millo-mock",
+ "millo-readiness",
  "millo-transport",
  "thiserror 2.0.20",
  "tokio",
@@ -1878,6 +1879,16 @@ dependencies = [
  "async-trait",
  "millo-transport",
  "tokio",
+]
+
+[[package]]
+name = "millo-readiness"
+version = "0.1.0"
+dependencies = [
+ "millo-domain",
+ "millo-grbl",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -17,10 +17,11 @@ import {
   triggerMockReset,
   triggerMockTimeout,
 } from "./api/controller";
+import { ReadinessPanel } from "./components/ReadinessPanel";
 import {
   emptySnapshot,
   type ControllerSnapshot,
-  type DeviceInspection,
+  type HardwareInspection,
   type Position,
   type TransportDescriptor,
 } from "./shared/machine";
@@ -78,7 +79,7 @@ export default function App() {
     useState<TransportDescriptor>(mockTransport);
   const [baudRate, setBaudRate] = useState(115_200);
   const [likelyGrblOnly, setLikelyGrblOnly] = useState(true);
-  const [inspection, setInspection] = useState<DeviceInspection>();
+  const [inspection, setInspection] = useState<HardwareInspection>();
   const [inspecting, setInspecting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
@@ -112,6 +113,14 @@ export default function App() {
     void onMachineState((value) => {
       if (active) {
         setSnapshot(value);
+        if (
+          value.connection !== "connected" ||
+          value.machine.mode !== "idle" ||
+          value.alarm !== undefined ||
+          value.resetNotice !== undefined
+        ) {
+          setInspection(undefined);
+        }
         if (value.connection === "connected" && value.consecutiveFailures === 0) {
           setUiError(undefined);
         }
@@ -307,76 +316,97 @@ export default function App() {
             </div>
 
             {inspection ? (
-              <div className="inspector-content">
-                <div className="inspector-identity">
-                  <div className="firmware-readout">
-                    <span>Firmware</span>
-                    <strong>{inspection.firmwareVersion ?? "Unknown GRBL"}</strong>
-                    <small>{inspection.firmwareBuildInfo ?? "No build info"}</small>
-                  </div>
-                  <dl className="inspection-meta">
-                    <div>
-                      <dt>Options</dt>
-                      <dd>{inspection.firmwareOptions ?? "--"}</dd>
-                    </div>
-                    <div>
-                      <dt>Settings</dt>
-                      <dd>{Object.keys(inspection.settings).length}</dd>
-                    </div>
-                    <div>
-                      <dt>Parameters</dt>
-                      <dd>{Object.keys(inspection.parameters).length}</dd>
-                    </div>
-                  </dl>
-                  <div className="modal-state">
-                    <span>Modal state</span>
-                    <div>
-                      {inspection.modalState.map((mode) => (
-                        <code key={mode}>{mode}</code>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="query-results" aria-label="Device query results">
-                    {inspection.responses.map((response) => (
-                      <div
-                        className={`is-${response.completion}`}
-                        key={response.command}
-                      >
-                        <code>{response.command}</code>
+              <>
+                <ReadinessPanel report={inspection.readiness} />
+                <details className="technical-inspection">
+                  <summary>Технические данные контроллера</summary>
+                  <div className="inspector-content">
+                    <div className="inspector-identity">
+                      <div className="firmware-readout">
+                        <span>Firmware</span>
                         <strong>
-                          {response.completion}
-                          {response.code !== undefined ? `:${response.code}` : ""}
+                          {inspection.device.firmwareVersion ?? "Unknown GRBL"}
                         </strong>
+                        <small>
+                          {inspection.device.firmwareBuildInfo ?? "No build info"}
+                        </small>
                       </div>
-                    ))}
-                  </div>
-                </div>
+                      <dl className="inspection-meta">
+                        <div>
+                          <dt>Options</dt>
+                          <dd>{inspection.device.firmwareOptions ?? "--"}</dd>
+                        </div>
+                        <div>
+                          <dt>Settings</dt>
+                          <dd>{Object.keys(inspection.device.settings).length}</dd>
+                        </div>
+                        <div>
+                          <dt>Parameters</dt>
+                          <dd>
+                            {Object.keys(inspection.device.parameters).length}
+                          </dd>
+                        </div>
+                      </dl>
+                      <div className="modal-state">
+                        <span>Modal state</span>
+                        <div>
+                          {inspection.device.modalState.map((mode) => (
+                            <code key={mode}>{mode}</code>
+                          ))}
+                        </div>
+                      </div>
+                      <div
+                        className="query-results"
+                        aria-label="Device query results"
+                      >
+                        {inspection.device.responses.map((response) => (
+                          <div
+                            className={`is-${response.completion}`}
+                            key={response.command}
+                          >
+                            <code>{response.command}</code>
+                            <strong>
+                              {response.completion}
+                              {response.code !== undefined
+                                ? `:${response.code}`
+                                : ""}
+                            </strong>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
 
-                <div className="inspector-registers">
-                  <div>
-                    <span>Controller settings</span>
-                    <div className="register-list">
-                      {Object.entries(inspection.settings).map(([key, value]) => (
-                        <div key={key}>
-                          <code>{key}</code>
-                          <strong>{value}</strong>
+                    <div className="inspector-registers">
+                      <div>
+                        <span>Controller settings</span>
+                        <div className="register-list">
+                          {Object.entries(inspection.device.settings).map(
+                            ([key, value]) => (
+                              <div key={key}>
+                                <code>{key}</code>
+                                <strong>{value}</strong>
+                              </div>
+                            ),
+                          )}
                         </div>
-                      ))}
+                      </div>
+                      <div>
+                        <span>Coordinate parameters</span>
+                        <div className="register-list">
+                          {Object.entries(inspection.device.parameters).map(
+                            ([key, value]) => (
+                              <div key={key}>
+                                <code>{key}</code>
+                                <strong>{value}</strong>
+                              </div>
+                            ),
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  <div>
-                    <span>Coordinate parameters</span>
-                    <div className="register-list">
-                      {Object.entries(inspection.parameters).map(([key, value]) => (
-                        <div key={key}>
-                          <code>{key}</code>
-                          <strong>{value}</strong>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
+                </details>
+              </>
             ) : (
               <div className="inspector-empty">
                 <strong>Профиль контроллера не считан</strong>
@@ -497,7 +527,7 @@ export default function App() {
               onClick={() => void connectSelectedTransport()}
               type="button"
             >
-              Подключить
+              {hasConnection ? connectionLabels[snapshot.connection] : "Подключить"}
             </button>
             <button
               disabled={controlsBusy || !isConnected}

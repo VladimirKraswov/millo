@@ -126,3 +126,71 @@ pub struct DeviceInspection {
     pub parameters: BTreeMap<String, String>,
     pub responses: Vec<CommandResponse>,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpindleControl {
+    Manual,
+    Controller,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HardwareProfile {
+    pub name: String,
+    pub axes: Vec<String>,
+    pub spindle_control: SpindleControl,
+    pub homing_installed: bool,
+    pub limit_switches_installed: bool,
+    pub emergency_stop_installed: bool,
+}
+
+impl HardwareProfile {
+    pub fn first_machine() -> Self {
+        Self {
+            name: "First XYZ router".to_owned(),
+            axes: vec!["X".to_owned(), "Y".to_owned(), "Z".to_owned()],
+            spindle_control: SpindleControl::Manual,
+            homing_installed: false,
+            limit_switches_installed: false,
+            emergency_stop_installed: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReadinessLevel {
+    Pass,
+    Caution,
+    Blocker,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadinessCheck {
+    pub id: String,
+    pub level: ReadinessLevel,
+    pub title: String,
+    pub detail: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadinessReport {
+    pub profile: HardwareProfile,
+    pub test_jog_ready: bool,
+    pub probe_ready: bool,
+    pub blocker_count: usize,
+    pub caution_count: usize,
+    pub checks: Vec<ReadinessCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HardwareInspection {
+    pub device: DeviceInspection,
+    pub readiness: ReadinessReport,
+}

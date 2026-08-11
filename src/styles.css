@@ -375,7 +375,203 @@ select:focus-visible {
   display: grid;
   grid-template-columns: minmax(220px, 0.7fr) minmax(300px, 1.3fr);
   gap: 22px;
+  padding-top: 15px;
   min-height: 140px;
+}
+
+.readiness-panel {
+  overflow: hidden;
+  border: 1px solid #324149;
+  border-radius: 6px;
+  background: #0e1519;
+}
+
+.readiness-panel.is-ready {
+  border-color: #356c5a;
+}
+
+.readiness-panel.is-blocked {
+  border-color: #784447;
+}
+
+.readiness-summary {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  min-height: 72px;
+  padding: 12px 14px;
+  border-bottom: 1px solid #29353d;
+}
+
+.readiness-state {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid #4c5b63;
+  border-radius: 50%;
+}
+
+.readiness-state i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #87949d;
+}
+
+.is-ready .readiness-state {
+  border-color: #3e8c70;
+  background: #183127;
+}
+
+.is-ready .readiness-state i {
+  background: #77d6b3;
+}
+
+.is-blocked .readiness-state {
+  border-color: #a64c51;
+  background: #321b1d;
+}
+
+.is-blocked .readiness-state i {
+  background: #ff7e7e;
+}
+
+.readiness-summary > div:nth-child(2) {
+  min-width: 0;
+}
+
+.readiness-summary span {
+  color: #7f8d96;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.readiness-summary h3 {
+  margin: 2px 0 6px;
+  overflow: hidden;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 12px;
+}
+
+.profile-facts small {
+  color: #8d9aa2;
+  font-size: 9px;
+}
+
+.readiness-summary dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(52px, auto));
+  margin: 0;
+  border-left: 1px solid #29353d;
+}
+
+.readiness-summary dl > div {
+  min-width: 0;
+  padding: 3px 10px;
+  border-right: 1px solid #29353d;
+}
+
+.readiness-summary dl > div:last-child {
+  border-right: 0;
+}
+
+.readiness-summary dt {
+  color: #6f7d86;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.readiness-summary dd {
+  margin: 3px 0 0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+}
+
+.readiness-checks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.readiness-check {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 68px;
+  padding: 10px 12px;
+  border-right: 1px solid #263139;
+  border-bottom: 1px solid #263139;
+}
+
+.readiness-check:nth-child(3n) {
+  border-right: 0;
+}
+
+.readiness-check > i {
+  width: 6px;
+  height: 6px;
+  margin-top: 4px;
+  border-radius: 50%;
+  background: #77d6b3;
+}
+
+.readiness-check.is-caution > i {
+  background: #ffb454;
+}
+
+.readiness-check.is-blocker > i {
+  background: #ff6b6b;
+}
+
+.readiness-check > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.readiness-check strong {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.readiness-check span {
+  color: #89969e;
+  font-size: 9px;
+  line-height: 12px;
+}
+
+.readiness-check code {
+  margin-top: auto;
+  overflow: hidden;
+  color: #66757e;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.technical-inspection {
+  margin-top: 10px;
+  border-top: 1px solid #29353d;
+}
+
+.technical-inspection summary {
+  padding: 10px 2px 0;
+  color: #9aa7af;
+  cursor: pointer;
+  font-size: 10px;
+  user-select: none;
 }
 
 .inspector-identity {
@@ -977,5 +1173,41 @@ kbd {
 
   .alarm-notice > small {
     text-align: left;
+  }
+}
+
+@media (max-width: 1120px) {
+  .readiness-checks {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .readiness-check:nth-child(3n) {
+    border-right: 1px solid #263139;
+  }
+
+  .readiness-check:nth-child(2n) {
+    border-right: 0;
+  }
+}
+
+@media (max-width: 700px) {
+  .readiness-summary {
+    grid-template-columns: 28px minmax(0, 1fr);
+  }
+
+  .readiness-summary dl {
+    grid-column: 1 / -1;
+    border-top: 1px solid #29353d;
+    border-left: 0;
+  }
+
+  .readiness-checks {
+    grid-template-columns: 1fr;
+  }
+
+  .readiness-check,
+  .readiness-check:nth-child(2n),
+  .readiness-check:nth-child(3n) {
+    border-right: 0;
   }
 }

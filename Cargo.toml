@@ -6,6 +6,7 @@ members = [
   "crates/millo-domain",
   "crates/millo-grbl",
   "crates/millo-mock",
+  "crates/millo-readiness",
   "crates/millo-serial",
   "crates/millo-transport",
   "src-tauri",

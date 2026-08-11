@@ -1,0 +1,13 @@
+[package]
+name = "millo-readiness"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+millo-domain = { path = "../millo-domain" }
+
+[dev-dependencies]
+millo-grbl = { path = "../millo-grbl" }
+serde.workspace = true
+serde_json.workspace = true

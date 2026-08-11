@@ -1,7 +1,8 @@
 use std::future::Future;
 
 use millo_controller::{Controller, ControllerConfig, ControllerError, RealtimeCommand};
-use millo_domain::{ConnectionState, ControllerSnapshot, DeviceInspection};
+use millo_domain::{ConnectionState, ControllerSnapshot, HardwareInspection, HardwareProfile};
+use millo_readiness::assess;
 use millo_transport::BoxedTransport;
 use thiserror::Error;
 use tokio::{
@@ -31,12 +32,19 @@ impl CommandArbiter {
     pub fn new(
         transport: BoxedTransport,
         config: ControllerConfig,
+        hardware_profile: HardwareProfile,
     ) -> (Self, impl Future<Output = ()> + Send + 'static) {
         let controller = Controller::with_config(transport, config);
         let initial_snapshot = controller.snapshot();
         let (requests, request_rx) = mpsc::channel(REQUEST_CAPACITY);
         let (snapshot_tx, snapshots) = watch::channel(initial_snapshot);
-        let worker = run_actor(controller, config, request_rx, snapshot_tx);
+        let worker = run_actor(
+            controller,
+            config,
+            hardware_profile,
+            request_rx,
+            snapshot_tx,
+        );
 
         (
             Self {
@@ -84,7 +92,7 @@ impl CommandArbiter {
             .await
     }
 
-    pub async fn inspect_device(&self) -> Result<DeviceInspection, ArbiterError> {
+    pub async fn inspect_device(&self) -> Result<HardwareInspection, ArbiterError> {
         self.call(|response| Request::InspectDevice { response })
             .await
     }
@@ -131,7 +139,7 @@ enum Request {
         response: oneshot::Sender<Result<ControllerSnapshot, ControllerError>>,
     },
     InspectDevice {
-        response: oneshot::Sender<Result<DeviceInspection, ControllerError>>,
+        response: oneshot::Sender<Result<HardwareInspection, ControllerError>>,
     },
     Realtime {
         command: RealtimeCommand,
@@ -142,6 +150,7 @@ enum Request {
 async fn run_actor(
     mut controller: Controller<BoxedTransport>,
     config: ControllerConfig,
+    hardware_profile: HardwareProfile,
     mut requests: mpsc::Receiver<Request>,
     snapshots: watch::Sender<ControllerSnapshot>,
 ) {
@@ -156,7 +165,14 @@ async fn run_actor(
                 let Some(request) = request else {
                     break;
                 };
-                handle_request(request, &mut controller, config, &snapshots).await;
+                handle_request(
+                    request,
+                    &mut controller,
+                    config,
+                    &hardware_profile,
+                    &snapshots,
+                )
+                .await;
             }
             _ = ticker.tick() => {
                 if matches!(
@@ -175,6 +191,7 @@ async fn handle_request(
     request: Request,
     controller: &mut Controller<BoxedTransport>,
     config: ControllerConfig,
+    hardware_profile: &HardwareProfile,
     snapshots: &watch::Sender<ControllerSnapshot>,
 ) {
     match request {
@@ -208,7 +225,10 @@ async fn handle_request(
             let _ = response.send(result);
         }
         Request::InspectDevice { response } => {
-            let result = controller.inspect_device().await;
+            let result = controller.inspect_device().await.map(|device| {
+                let readiness = assess(hardware_profile, &device, &controller.snapshot());
+                HardwareInspection { device, readiness }
+            });
             publish(snapshots, controller);
             let _ = response.send(result);
         }
@@ -249,6 +269,7 @@ mod tests {
                 command_timeout: Duration::from_millis(50),
                 failures_before_recovery: 2,
             },
+            HardwareProfile::first_machine(),
         );
         (arbiter, control, worker)
     }
@@ -262,7 +283,8 @@ mod tests {
         arbiter.refresh_status().await.unwrap();
         let inspection = arbiter.inspect_device().await.unwrap();
 
-        assert_eq!(inspection.responses.len(), 4);
+        assert_eq!(inspection.device.responses.len(), 4);
+        assert!(inspection.readiness.test_jog_ready);
         assert_eq!(
             control.writes(),
             vec![
