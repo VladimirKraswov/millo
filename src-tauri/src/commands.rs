@@ -4,8 +4,9 @@ use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
     ControllerSnapshot, DeviceInspection, HardwareInspection, HardwareProfile, JogPadStepOutcome,
-    JogPadStepRequest, OperatorConfirmation, ResetChallenge, StepJogReceipt, StepJogRequest,
-    TestJogPreparation, WorkZeroOutcome, WorkZeroRequest,
+    JogPadStepRequest, OperatorConfirmation, OverrideAdjustment, RapidOverrideTarget,
+    ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation, WorkZeroOutcome,
+    WorkZeroRequest,
 };
 use millo_dry_run::{DryRunPlan, DryRunPolicyError, build_dry_run_plan};
 use millo_gcode::{GcodeProgram, ProgramParseRequest, parse_program};
@@ -955,6 +956,42 @@ pub async fn feed_hold(state: State<'_, AppState>) -> Result<ControllerSnapshot,
     state
         .arbiter
         .feed_hold()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn adjust_feed_override(
+    adjustment: OverrideAdjustment,
+    state: State<'_, AppState>,
+) -> Result<ControllerSnapshot, String> {
+    state
+        .arbiter
+        .adjust_feed_override(adjustment)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_rapid_override(
+    target: RapidOverrideTarget,
+    state: State<'_, AppState>,
+) -> Result<ControllerSnapshot, String> {
+    state
+        .arbiter
+        .set_rapid_override(target)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn adjust_spindle_override(
+    adjustment: OverrideAdjustment,
+    state: State<'_, AppState>,
+) -> Result<ControllerSnapshot, String> {
+    state
+        .arbiter
+        .adjust_spindle_override(adjustment)
         .await
         .map_err(|error| error.to_string())
 }

@@ -447,6 +447,12 @@ does not schedule or execute controller I/O.
   serialized behind an already active controller transaction; the sender
   returns to the actor queue after every correlated line result so queued
   realtime requests are considered before the next line.
+- Runtime overrides are domain enums, not caller-selected bytes. Feed accepts
+  reset, `+/-10`, and `+/-1`; rapid accepts only `100/50/25`; spindle accepts
+  reset, `+/-10`, and `+/-1`. The controller maps those values to GRBL 1.1
+  realtime bytes and status parsing publishes the resulting `Ov:` telemetry.
+  Override requests may preempt an in-flight sender read without pausing or
+  acknowledging its FIFO line. They do not expose spindle start/stop.
 
 ### Extension host boundary
 

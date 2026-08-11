@@ -235,6 +235,10 @@ port names remain untouched.
   slice instead of waiting for the command timeout. A separate fixture injects
   realtime status ahead of a delayed `ok`, verifies live `Bf/Ov` telemetry, and
   keeps FIFO acknowledgement counts unchanged.
+- Typed override tests cover every GRBL byte family, Mock `Ov:` mutation, and
+  feed/rapid/spindle requests while an acknowledgement is delayed. An explicit
+  status refresh during that delay cannot consume the sender's response or
+  increment its acknowledgement count.
 - A non-default Mock `[OPT:V,15,256]` fixture proves the inspected capacity is
   carried by the one-use lease and becomes a 255-byte sender window at Start.
 - Reusing a consumed authorization fails after only the fresh status read. No
@@ -351,6 +355,10 @@ new one-use authorization.
   consumes it before sending `Ctrl-X`.
 - A mismatched, reused, missing, or expired challenge cannot reset the mock.
 - Feed Hold writes exactly `!`; a running mock reports `Hold:0` on the next poll.
+- Feed override maps reset/`+10`/`-10`/`+1`/`-1` to
+  `0x90..0x94`; rapid `100/50/25` maps to `0x95..0x97`; spindle
+  reset/`+10`/`-10`/`+1`/`-1` maps to `0x99..0x9d`. Mock status reports the
+  bounded result through `Ov:` and reset restores `100/100/100`.
 - Soft Reset makes the mock emit a GRBL reset banner and return to `Idle`.
 - Incomplete operator confirmation performs no controller I/O.
 - Every preflight executes a new status plus `$I/$$/$G/$#` sequence and receives
@@ -378,6 +386,18 @@ CI does not require a physical controller. For a hardware smoke test, launch
 rate, verify that machine coordinates update, unplug the device, and confirm the
 state moves through `Recovering`. Reconnect the device and confirm polling
 returns to `Connected`.
+
+The no-motion override smoke uses the real actor and serial parser, observes
+`Ov:110,50,99`, and restores all channels to `100/100/100` before disconnecting:
+
+```bash
+cargo run -p millo-desktop --example hardware_overrides -- \
+  /dev/cu.usbmodem11101
+```
+
+Run it only while the controller is `Idle`. Cleanup is attempted even when an
+intermediate assertion fails; a cleanup failure is reported explicitly instead
+of silently leaving altered overrides.
 
 The guarded first-motion smoke example uses the same serial transport, command
 actor, readiness policy, and authorization path as Tauri. It requires an exact

@@ -35,6 +35,15 @@ export interface ControllerOverrides {
   spindlePercent: number;
 }
 
+export type OverrideAdjustment =
+  | "reset"
+  | "increaseTen"
+  | "decreaseTen"
+  | "increaseOne"
+  | "decreaseOne";
+
+export type RapidOverrideTarget = "full" | "half" | "quarter";
+
 export interface ControllerPins {
   raw: string;
   xLimit: boolean;

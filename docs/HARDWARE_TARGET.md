@@ -209,6 +209,12 @@ again accepted 25/25 commands and returned to `Idle`. This confirms that real
 serial `status/ok` demultiplexing did not change line correlation or Check-mode
 cleanup.
 
+The typed realtime-override smoke then used the same actor and native serial
+transport without issuing motion or spindle-control commands. The controller
+reported feed/rapid/spindle `Ov:110,50,99`, after which Millo reset and verified
+`Ov:100,100,100` before disconnecting. Runtime spindle override changes firmware
+scaling only; it does not activate the manually controlled spindle.
+
 At each connection Millo treats the controller's complete `$$` response as the
 truth and keeps a duplicate in
 `~/Library/Application Support/io.millo.desktop/machines/machine-0001.settings.json`.

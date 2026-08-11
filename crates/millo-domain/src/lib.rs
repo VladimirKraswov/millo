@@ -29,6 +29,24 @@ pub enum MachineMode {
     Sleep,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OverrideAdjustment {
+    Reset,
+    IncreaseTen,
+    DecreaseTen,
+    IncreaseOne,
+    DecreaseOne,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RapidOverrideTarget {
+    Full,
+    Half,
+    Quarter,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Position {

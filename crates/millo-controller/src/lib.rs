@@ -2,8 +2,8 @@ use std::time::{Duration, Instant};
 
 use millo_domain::{
     AlarmState, CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot,
-    DeviceInspection, MachineMode, MachineState, ResetNotice, StepJogReceipt, StepJogRequest,
-    WorkAxis, WorkCoordinateSystem,
+    DeviceInspection, MachineMode, MachineState, OverrideAdjustment, RapidOverrideTarget,
+    ResetNotice, StepJogReceipt, StepJogRequest, WorkAxis, WorkCoordinateSystem,
 };
 use millo_dry_run::DryRunLine;
 use millo_grbl::{
@@ -121,6 +121,9 @@ pub enum RealtimeCommand {
     CycleStart,
     JogCancel,
     SoftReset,
+    FeedOverride(OverrideAdjustment),
+    RapidOverride(RapidOverrideTarget),
+    SpindleOverride(OverrideAdjustment),
 }
 
 impl RealtimeCommand {
@@ -131,6 +134,25 @@ impl RealtimeCommand {
             Self::CycleStart => b'~',
             Self::JogCancel => 0x85,
             Self::SoftReset => 0x18,
+            Self::FeedOverride(adjustment) => match adjustment {
+                OverrideAdjustment::Reset => 0x90,
+                OverrideAdjustment::IncreaseTen => 0x91,
+                OverrideAdjustment::DecreaseTen => 0x92,
+                OverrideAdjustment::IncreaseOne => 0x93,
+                OverrideAdjustment::DecreaseOne => 0x94,
+            },
+            Self::RapidOverride(target) => match target {
+                RapidOverrideTarget::Full => 0x95,
+                RapidOverrideTarget::Half => 0x96,
+                RapidOverrideTarget::Quarter => 0x97,
+            },
+            Self::SpindleOverride(adjustment) => match adjustment {
+                OverrideAdjustment::Reset => 0x99,
+                OverrideAdjustment::IncreaseTen => 0x9a,
+                OverrideAdjustment::DecreaseTen => 0x9b,
+                OverrideAdjustment::IncreaseOne => 0x9c,
+                OverrideAdjustment::DecreaseOne => 0x9d,
+            },
         }
     }
 }
@@ -1055,10 +1077,34 @@ mod tests {
             .send_realtime(RealtimeCommand::SoftReset)
             .await
             .unwrap();
+        controller
+            .send_realtime(RealtimeCommand::FeedOverride(
+                OverrideAdjustment::IncreaseTen,
+            ))
+            .await
+            .unwrap();
+        controller
+            .send_realtime(RealtimeCommand::RapidOverride(RapidOverrideTarget::Quarter))
+            .await
+            .unwrap();
+        controller
+            .send_realtime(RealtimeCommand::SpindleOverride(
+                OverrideAdjustment::DecreaseOne,
+            ))
+            .await
+            .unwrap();
 
         assert_eq!(
             control.writes(),
-            vec![b"!".to_vec(), b"~".to_vec(), vec![0x85], vec![0x18]]
+            vec![
+                b"!".to_vec(),
+                b"~".to_vec(),
+                vec![0x85],
+                vec![0x18],
+                vec![0x91],
+                vec![0x97],
+                vec![0x9d],
+            ]
         );
     }
 

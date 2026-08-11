@@ -32,6 +32,7 @@ struct MockState {
     active_wcs: usize,
     work_offsets: [[f64; 3]; 6],
     firmware_options: String,
+    overrides: [u16; 3],
 }
 
 #[derive(Debug, Clone)]
@@ -194,6 +195,7 @@ impl MockTransport {
                     active_wcs: 0,
                     work_offsets: [[0.0; 3]; 6],
                     firmware_options: "V,15,128".to_owned(),
+                    overrides: [100, 100, 100],
                 })),
             },
         }
@@ -266,6 +268,7 @@ impl Transport for MockTransport {
             }
         } else if data == b"\x18" {
             state.status_line = DEFAULT_STATUS.to_owned();
+            state.overrides = [100, 100, 100];
             state.jog_polls_remaining = 0;
             state.active_reads.clear();
             state
@@ -276,6 +279,9 @@ impl Transport for MockTransport {
                 state.status_line = status_with_mode(&state.status_line, "Idle", 0.0);
                 state.jog_polls_remaining = 0;
             }
+        } else if let Some((index, value)) = override_update(data, state.overrides) {
+            state.overrides[index] = value;
+            state.status_line = status_with_overrides(&state.status_line, state.overrides);
         } else if data == b"$X\n" {
             if state.status_line.starts_with("<Alarm") {
                 state.status_line = status_with_mode(&state.status_line, "Idle", 0.0);
@@ -513,6 +519,42 @@ fn status_feed(status: &str) -> Option<f64> {
         .next()?
         .parse()
         .ok()
+}
+
+fn override_update(data: &[u8], current: [u16; 3]) -> Option<(usize, u16)> {
+    let (index, value) = match data {
+        [0x90] => (0, 100),
+        [0x91] => (0, current[0].saturating_add(10).min(200)),
+        [0x92] => (0, current[0].saturating_sub(10).max(10)),
+        [0x93] => (0, current[0].saturating_add(1).min(200)),
+        [0x94] => (0, current[0].saturating_sub(1).max(10)),
+        [0x95] => (1, 100),
+        [0x96] => (1, 50),
+        [0x97] => (1, 25),
+        [0x99] => (2, 100),
+        [0x9a] => (2, current[2].saturating_add(10).min(200)),
+        [0x9b] => (2, current[2].saturating_sub(10).max(10)),
+        [0x9c] => (2, current[2].saturating_add(1).min(200)),
+        [0x9d] => (2, current[2].saturating_sub(1).max(10)),
+        _ => return None,
+    };
+    Some((index, value))
+}
+
+fn status_with_overrides(status: &str, overrides: [u16; 3]) -> String {
+    let override_field = format!("Ov:{},{},{}", overrides[0], overrides[1], overrides[2]);
+    let mut fields = status
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .split('|')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if let Some(field) = fields.iter_mut().find(|field| field.starts_with("Ov:")) {
+        *field = override_field;
+    } else {
+        fields.push(override_field);
+    }
+    format!("<{}>", fields.join("|"))
 }
 
 fn subtract_position(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
@@ -759,6 +801,20 @@ mod tests {
         transport.write(b"?").await.unwrap();
 
         assert!(transport.read_line().await.unwrap().starts_with("<Hold:0|"));
+    }
+
+    #[tokio::test]
+    async fn applies_typed_grbl_override_bytes_to_status_telemetry() {
+        let mut transport = MockTransport::default();
+        transport.connect().await.unwrap();
+
+        for byte in [0x91, 0x93, 0x97, 0x9b, 0x9d] {
+            transport.write(&[byte]).await.unwrap();
+        }
+        transport.write(b"?").await.unwrap();
+
+        let status = transport.read_line().await.unwrap();
+        assert!(status.contains("|Ov:111,25,89>"), "{status}");
     }
 
     #[tokio::test]

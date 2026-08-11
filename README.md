@@ -144,6 +144,10 @@ such as Feed Hold and Soft Reset preempt a delayed `ok`. Periodic realtime `?`
 continues during an active FIFO; interleaved status frames update position,
 buffer, overrides, pins, and accessories without consuming a command
 acknowledgement.
+Feed, rapid, and spindle overrides are exposed as typed actor/Tauri operations
+and map only to GRBL 1.1 realtime bytes. They remain responsive while a line is
+in flight and are verified through the parsed `Ov:` status field. This surface
+cannot start a spindle, submit a line, or bypass sender authorization.
 `M0/M1` are acknowledged program barriers; `M2/M30` end dispatch. After the
 final `ok`, physical runs enter `Draining` and complete only after a fresh GRBL
 `Idle` status. Feed Hold uses realtime `!`, Resume uses `~` when GRBL reports

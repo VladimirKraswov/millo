@@ -10,8 +10,9 @@ use millo_controller::{
 use millo_domain::{
     CommandResponse, ConnectionState, ControllerSnapshot, DeviceInspection, HardwareInspection,
     HardwareProfile, JogPadStepOutcome, JogPadStepRequest, MachineMode, OperatorConfirmation,
-    Position, ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation, WorkAxis,
-    WorkCoordinateSystem, WorkZeroOutcome, WorkZeroRequest,
+    OverrideAdjustment, Position, RapidOverrideTarget, ResetChallenge, StepJogReceipt,
+    StepJogRequest, TestJogPreparation, WorkAxis, WorkCoordinateSystem, WorkZeroOutcome,
+    WorkZeroRequest,
 };
 use millo_dry_run::{
     DryRunLineKind, DryRunPlan, DryRunPolicyError, ProgramRunPolicy, build_program_run_plan,
@@ -321,6 +322,30 @@ impl CommandArbiter {
 
     pub async fn feed_hold(&self) -> Result<ControllerSnapshot, ArbiterError> {
         self.send_realtime(RealtimeCommand::FeedHold).await
+    }
+
+    pub async fn adjust_feed_override(
+        &self,
+        adjustment: OverrideAdjustment,
+    ) -> Result<ControllerSnapshot, ArbiterError> {
+        self.send_realtime(RealtimeCommand::FeedOverride(adjustment))
+            .await
+    }
+
+    pub async fn set_rapid_override(
+        &self,
+        target: RapidOverrideTarget,
+    ) -> Result<ControllerSnapshot, ArbiterError> {
+        self.send_realtime(RealtimeCommand::RapidOverride(target))
+            .await
+    }
+
+    pub async fn adjust_spindle_override(
+        &self,
+        adjustment: OverrideAdjustment,
+    ) -> Result<ControllerSnapshot, ArbiterError> {
+        self.send_realtime(RealtimeCommand::SpindleOverride(adjustment))
+            .await
     }
 
     pub async fn request_soft_reset(&self) -> Result<ResetChallenge, ArbiterError> {
@@ -713,14 +738,26 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(result);
         }
         Request::RefreshStatus { response } => {
-            let result = controller
-                .refresh_status()
-                .await
-                .map_err(ArbiterError::from);
+            let interleaved = sender.has_in_flight();
+            let result = if interleaved {
+                controller
+                    .request_interleaved_status()
+                    .await
+                    .map(|()| controller.snapshot())
+                    .map_err(ArbiterError::from)
+            } else {
+                controller
+                    .refresh_status()
+                    .await
+                    .map_err(ArbiterError::from)
+            };
             safety.observe(&controller.snapshot(), Instant::now());
             first_cut.observe(&controller.snapshot(), Instant::now());
             match &result {
-                Ok(_) => reconcile_physical_sender(controller, sender, sender_snapshots).await,
+                Ok(_) if !interleaved => {
+                    reconcile_physical_sender(controller, sender, sender_snapshots).await
+                }
+                Ok(_) => {}
                 Err(error) => fail_active_sender(
                     sender,
                     format!("controller status failed during program run: {error}"),
@@ -852,10 +889,18 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             if command == RealtimeCommand::SoftReset {
                 cancel_active_sender(sender, sender_snapshots);
             }
-            let result = controller
-                .send_realtime(command)
-                .await
-                .map_err(ArbiterError::from);
+            let result = if command == RealtimeCommand::Status && sender.has_in_flight() {
+                controller
+                    .request_interleaved_status()
+                    .await
+                    .map(|()| controller.snapshot())
+                    .map_err(ArbiterError::from)
+            } else {
+                controller
+                    .send_realtime(command)
+                    .await
+                    .map_err(ArbiterError::from)
+            };
             if result.is_ok()
                 && command == RealtimeCommand::FeedHold
                 && matches!(
@@ -3123,6 +3168,45 @@ mod tests {
 
         assert_eq!(arbiter.sender_snapshot().state, SenderState::Paused);
         assert!(control.writes().contains(&b"!".to_vec()));
+        let challenge = arbiter.request_soft_reset().await.unwrap();
+        arbiter.confirm_soft_reset(challenge.id).await.unwrap();
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn realtime_overrides_preempt_sender_waiting_without_pausing_it() {
+        let source = "G21 G90 G94\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        control.queue_program_delay(20);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        tokio::time::sleep(Duration::from_millis(15)).await;
+
+        arbiter
+            .adjust_feed_override(OverrideAdjustment::IncreaseTen)
+            .await
+            .unwrap();
+        arbiter
+            .set_rapid_override(RapidOverrideTarget::Half)
+            .await
+            .unwrap();
+        arbiter
+            .adjust_spindle_override(OverrideAdjustment::DecreaseOne)
+            .await
+            .unwrap();
+        let acknowledged_before_refresh = arbiter.sender_snapshot().acknowledged_lines;
+        arbiter.refresh_status().await.unwrap();
+
+        assert_eq!(arbiter.sender_snapshot().state, SenderState::Running);
+        assert_eq!(
+            arbiter.sender_snapshot().acknowledged_lines,
+            acknowledged_before_refresh
+        );
+        let writes = control.writes();
+        assert!(writes.contains(&vec![0x91]));
+        assert!(writes.contains(&vec![0x96]));
+        assert!(writes.contains(&vec![0x9d]));
         let challenge = arbiter.request_soft_reset().await.unwrap();
         arbiter.confirm_soft_reset(challenge.id).await.unwrap();
         task.abort();

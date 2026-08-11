@@ -7,6 +7,8 @@ import type {
   JogPadStepOutcome,
   JogPadStepRequest,
   OperatorConfirmation,
+  OverrideAdjustment,
+  RapidOverrideTarget,
   ResetChallenge,
   StepJogReceipt,
   StepJogRequest,
@@ -69,6 +71,21 @@ export const acknowledgeReset = (): Promise<ControllerSnapshot> =>
 
 export const feedHold = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("feed_hold");
+
+export const adjustFeedOverride = (
+  adjustment: OverrideAdjustment,
+): Promise<ControllerSnapshot> =>
+  invoke<ControllerSnapshot>("adjust_feed_override", { adjustment });
+
+export const setRapidOverride = (
+  target: RapidOverrideTarget,
+): Promise<ControllerSnapshot> =>
+  invoke<ControllerSnapshot>("set_rapid_override", { target });
+
+export const adjustSpindleOverride = (
+  adjustment: OverrideAdjustment,
+): Promise<ControllerSnapshot> =>
+  invoke<ControllerSnapshot>("adjust_spindle_override", { adjustment });
 
 export const requestSoftReset = (): Promise<ResetChallenge> =>
   invoke<ResetChallenge>("request_soft_reset");
