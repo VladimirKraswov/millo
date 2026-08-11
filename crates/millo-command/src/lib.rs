@@ -2510,7 +2510,7 @@ mod tests {
 
     #[tokio::test]
     async fn production_air_run_executes_the_authorized_file_and_rejects_plain_cancel() {
-        let source = "G21 G90 G94\nG1 X2 F20";
+        let source = include_str!("../../../fixtures/programs/air-square-20mm.nc");
         let (arbiter, control, worker) = serial_preflight_arbiter();
         let task = tokio::spawn(worker);
         arbiter.connect().await.unwrap();
@@ -2533,6 +2533,11 @@ mod tests {
         control.set_status("<Idle|MPos:2.000,0.000,0.000|WPos:2.000,0.000,0.000|FS:0,0>");
         arbiter.refresh_status().await.unwrap();
         assert_eq!(arbiter.sender_snapshot().state, SenderState::Completed);
+        assert!(control.writes().iter().all(|write| {
+            String::from_utf8_lossy(write)
+                .split_whitespace()
+                .all(|word| word != "M3" && word != "M4" && !word.starts_with('S'))
+        }));
         task.abort();
     }
 

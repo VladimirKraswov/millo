@@ -128,6 +128,26 @@ reliably distinguish two identical controllers swapped onto the same port;
 Millo must ask the operator when matches are ambiguous. No ID is written into a
 GRBL startup block. The automated Mock fixture uses a synthetic fingerprint.
 
+## First file-based Air run
+
+The reviewed fixture is `fixtures/programs/air-square-20mm.nc`. It contains four
+linear moves at `100 mm/min`, covers X `0..20 mm` and Y `0..20 mm`, does not move
+Z, begins with `M5 M9`, contains no spindle-speed or spindle-start word, and
+returns to X0 Y0 before `M30`.
+
+Parser, policy, sender, and top/isometric preview checks report four motions,
+`80.0 mm` total path, `20.0 x 20.0 x 0.0 mm` bounds, and zero warnings. The
+production sender completed the same file against deterministic Mock GRBL and
+waited for a fresh final `Idle`.
+
+A read-only hardware preflight on 2026-08-11 passed with zero blockers and the
+three expected cautions for unverified envelope, manual spindle, and physical
+setup. It sent no program line. GRBL reported work position X `-9.400 mm`, Y
+`-0.500 mm`, Z `+0.500 mm`, so the confirmed-run harness refused to start. The
+operator must position the empty spindle at a safe origin, set XYZ work zero,
+and confirm at least 20 mm of positive X/Y clearance before the physical Air
+run can consume an authorization.
+
 At each connection Millo treats the controller's complete `$$` response as the
 truth and keeps a duplicate in
 `~/Library/Application Support/io.millo.desktop/machines/machine-0001.settings.json`.

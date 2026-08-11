@@ -172,6 +172,11 @@ The mock panel can inject reset, alarm, timeout, and link-drop scenarios. Alarm
 remains active until `Clear alarm`; two consecutive silent polls exercise the
 automatic recovery path.
 
+The first physical-program candidate is the ordinary file
+`fixtures/programs/air-square-20mm.nc`. Its repeatable read-only and confirmed
+hardware procedures are documented in [Testing](docs/TESTING.md); the confirmed
+path refuses to start unless the observed XYZ work position is at zero.
+
 To use hardware, choose a discovered serial device, select its baud rate
 (`115200` is the common GRBL 1.1 default), and connect. Refresh re-runs native
 port discovery. Port access is controlled by the operating system; close other

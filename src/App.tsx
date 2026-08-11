@@ -30,6 +30,7 @@ import {
 import { ReadinessPanel } from "./components/ReadinessPanel";
 import { SafetyControls } from "./components/SafetyControls";
 import { previewFixtureProgram } from "./features/program/previewFixtureProgram";
+import { previewFixtureAirSquareProgram } from "./features/program/previewFixtureAirSquare";
 import { previewFixturePreflightGateway } from "./features/program/previewFixturePreflight";
 import {
   previewFixtureFirstCutGateway,
@@ -85,14 +86,19 @@ const developmentFixture = import.meta.env.DEV
   ? new URLSearchParams(window.location.search).get("fixture")
   : undefined;
 const developmentPreviewFixture =
-  developmentFixture === "first-cut"
+  developmentFixture === "air-square"
+    ? previewFixtureAirSquareProgram
+    : developmentFixture === "first-cut"
     ? previewFixtureFirstCutProgram
     : developmentFixture === "program" || developmentFixture === "preflight"
       ? previewFixtureProgram
       : undefined;
 const developmentPreflightFixture =
-  developmentFixture === "preflight" || developmentFixture === "first-cut";
-const developmentFirstCutFixture = developmentFixture === "first-cut";
+  developmentFixture === "preflight" ||
+  developmentFixture === "first-cut" ||
+  developmentFixture === "air-square";
+const developmentFirstCutFixture =
+  developmentFixture === "first-cut" || developmentFixture === "air-square";
 const developmentProfileFixture: MachineProfileState = {
   profiles: [
     {

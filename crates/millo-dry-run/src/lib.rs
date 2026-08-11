@@ -442,6 +442,27 @@ mod tests {
     }
 
     #[test]
+    fn hardware_square_compiles_to_a_spindle_safe_air_run_plan() {
+        let plan = build_program_run_plan(
+            &parse(include_str!(
+                "../../../fixtures/programs/air-square-20mm.nc"
+            )),
+            ProgramRunPolicy::AirRun,
+        )
+        .unwrap();
+
+        assert_eq!(plan.source_name(), "fixture.nc");
+        assert_eq!(plan.lines()[0].command(), "M5");
+        assert_eq!(plan.lines()[1].command(), "M9");
+        assert!(plan.lines().iter().all(|line| {
+            line.command()
+                .split_whitespace()
+                .all(|word| word != "M3" && word != "M4" && !word.starts_with('S'))
+        }));
+        assert_eq!(plan.lines().last().unwrap().command(), "M30");
+    }
+
+    #[test]
     fn parser_safety_errors_cannot_be_bypassed_by_summary_flags() {
         let mut program = parse("M80\nG1 X1");
         program.summary.dry_run_eligible = true;

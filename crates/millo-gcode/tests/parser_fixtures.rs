@@ -56,6 +56,27 @@ fn accepts_percent_program_delimiters_as_non_executable_lines() {
 }
 
 #[test]
+fn parses_the_hardware_air_square_with_exact_bounds() {
+    let program = parse_fixture(
+        "air-square-20mm.nc",
+        include_str!("../../../fixtures/programs/air-square-20mm.nc"),
+    );
+
+    assert!(program.warnings.is_empty());
+    assert!(program.summary.preview_complete);
+    assert!(program.summary.dry_run_eligible);
+    assert_eq!(program.summary.motion_count, 4);
+    assert!(!program.features.has_spindle_activation);
+    assert!(!program.features.has_spindle_speed);
+    let bounds = program.summary.bounds.unwrap();
+    assert_eq!(bounds.min.x, 0.0);
+    assert_eq!(bounds.min.y, 0.0);
+    assert_eq!(bounds.max.x, 20.0);
+    assert_eq!(bounds.max.y, 20.0);
+    assert_eq!(bounds.size.z, 0.0);
+}
+
+#[test]
 fn converts_imperial_incremental_motion_to_millimeters() {
     let program = parse_fixture(
         "imperial-incremental.tap",

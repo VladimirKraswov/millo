@@ -57,18 +57,38 @@ const preparation: FirstCutPreparation = {
 };
 
 let fixtureIntent: "airRun" | "cutting" = "airRun";
+let fixtureSourceName = previewFixtureFirstCutProgram.sourceName;
+const fixtureIsAirSquare = () => fixtureSourceName === "air-square-20mm.nc";
 
 export const previewFixtureFirstCutGateway: RealRunPreflightGateway = {
-  preflight: async (_request, intent) => {
+  preflight: async (request, intent) => {
     fixtureIntent = intent;
-    return { ...previewFixtureFirstCutReport, intent };
-  },
-  authorizeFirstCut: async (_request, confirmation) => {
-    fixtureIntent = confirmation.intent;
+    fixtureSourceName = request.sourceName;
     return {
-      report: { ...preparation.report, intent: confirmation.intent },
+      ...previewFixtureFirstCutReport,
+      sourceName: fixtureSourceName,
+      intent,
+      bounds: fixtureIsAirSquare()
+        ? {
+            min: { x: 0, y: 0, z: 0 },
+            max: { x: 20, y: 20, z: 0 },
+            size: { x: 20, y: 20, z: 0 },
+          }
+        : previewFixtureFirstCutReport.bounds,
+    };
+  },
+  authorizeFirstCut: async (request, confirmation) => {
+    fixtureIntent = confirmation.intent;
+    fixtureSourceName = request.sourceName;
+    return {
+      report: {
+        ...preparation.report,
+        sourceName: fixtureSourceName,
+        intent: confirmation.intent,
+      },
       authorization: {
         ...preparation.authorization,
+        sourceName: fixtureSourceName,
         intent: confirmation.intent,
       },
     };
@@ -76,18 +96,18 @@ export const previewFixtureFirstCutGateway: RealRunPreflightGateway = {
   startProgram: async () => ({
     state: "running",
     mode: fixtureIntent === "airRun" ? "airRun" : "cutRun",
-    sourceName: previewFixtureFirstCutProgram.sourceName,
-    totalLines: 8,
+    sourceName: fixtureSourceName,
+    totalLines: fixtureIsAirSquare() ? 10 : 8,
     acknowledgedLines: 2,
-    currentSourceLine: 1,
+    currentSourceLine: fixtureIsAirSquare() ? 4 : 1,
     currentCommand: "G21 G90 G94 G17",
     progress: 0.25,
   }),
   resumeProgram: async () => ({
     state: "running",
     mode: fixtureIntent === "airRun" ? "airRun" : "cutRun",
-    sourceName: previewFixtureFirstCutProgram.sourceName,
-    totalLines: 8,
+    sourceName: fixtureSourceName,
+    totalLines: fixtureIsAirSquare() ? 10 : 8,
     acknowledgedLines: 4,
     currentSourceLine: 3,
     currentCommand: "G1 X20 F60",

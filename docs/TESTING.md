@@ -223,6 +223,31 @@ port names remain untouched.
 - No automated or manual test in this implementation slice sends a program line
   to the physical controller.
 
+### Hardware Air-run fixture
+
+Read-only preflight:
+
+```bash
+cargo run -p millo-desktop --example hardware_air_run -- \
+  /dev/cu.usbmodem11101 fixtures/programs/air-square-20mm.nc --inspect-only
+```
+
+The command parses and validates the exact `20 x 20 x 0 mm` fixture before it
+opens serial, then performs only status and Inspector reads. Confirmed execution
+requires all six flags; omission of any one fails before serial connection:
+
+```bash
+cargo run -p millo-desktop --example hardware_air_run -- \
+  /dev/cu.usbmodem11101 fixtures/programs/air-square-20mm.nc \
+  --confirm-tool-removed --confirm-spindle-off --confirm-xyz-zero \
+  --confirm-safe-z --confirm-path-clear --confirm-power-control
+```
+
+The harness additionally requires observed WPos XYZ within `+/-0.02 mm` of
+zero. It monitors the sender for two minutes, verifies final `Idle` and return to
+work zero, and handles `Ctrl-C` or timeout by requesting Feed Hold followed by
+challenge-confirmed Soft Reset.
+
 ## Current hardware readiness coverage
 
 - A representative unhomed XYZ fixture passes the guarded test-jog
