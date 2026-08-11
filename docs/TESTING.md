@@ -295,6 +295,18 @@ cargo run -p millo-desktop --example hardware_check_run -- \
   /dev/cu.usbmodem11101 fixtures/programs/grbl-cutting-check.nc
 ```
 
+- `grbl-path-control-check.nc` validates the exact-path command accepted by the
+  target GRBL 1.1 controller:
+
+```bash
+cargo run -p millo-desktop --example hardware_check_run -- \
+  /dev/cu.usbmodem11101 fixtures/programs/grbl-path-control-check.nc
+```
+
+The physical target accepted `G61` and rejected `G64` with `error:20` on
+2026-08-12. Parser regression coverage therefore rejects `G64` before a plan
+can reach the sender.
+
 - The React check-run read model requires a loaded program, typed gateway, and
   serial target and refuses to replace an active sender. Program workspace
   exposes the action only through `start_check_run`; Rust reparses the source.

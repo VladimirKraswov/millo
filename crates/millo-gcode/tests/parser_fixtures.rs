@@ -153,6 +153,22 @@ fn blocks_grbl_incompatible_arc_modes_and_modal_group_conflicts() {
 }
 
 #[test]
+fn accepts_grbl_exact_path_mode_and_rejects_linuxcnc_continuous_mode() {
+    let exact_path = parse_fixture("exact-path.nc", "G21 G90 G94\nG61\nG1 X1 F10");
+    assert!(exact_path.warnings.is_empty());
+    assert!(exact_path.summary.dry_run_eligible);
+
+    let continuous = parse_fixture("continuous-path.nc", "G21 G90 G94\nG64\nG1 X1 F10");
+    assert!(!continuous.summary.dry_run_eligible);
+    assert!(continuous.warnings.iter().any(|warning| {
+        warning.source_line == 2
+            && warning.code == ProgramWarningCode::UnsupportedGCode
+            && warning.severity == ProgramWarningSeverity::Error
+            && warning.message.contains("GRBL 1.1")
+    }));
+}
+
+#[test]
 fn accepts_common_program_headers_and_modal_cancels() {
     let program = parse_fixture(
         "common-header.ngc",

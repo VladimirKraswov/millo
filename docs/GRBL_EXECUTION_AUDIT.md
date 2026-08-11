@@ -10,7 +10,8 @@
 | G20/G21 | Yes, preview normalized to mm | Yes | Yes | Yes |
 | G40/G49/G80 | Yes | Yes | Yes | Yes |
 | G54-G59 | Recorded; local preview does not apply live offsets | Yes | Yes with warning | Yes with warning |
-| G61/G64 | Nominal geometry unchanged | Fixture pending physical support proof | Policy-capable | Policy-capable |
+| G61 | Nominal geometry unchanged | Accepted by parser and physical Check fixture | Policy-capable | Policy-capable |
+| G64 | Rejected before execution | Physical controller returns `error:20`; parser reports a blocking error | Blocked | Blocked |
 | G90/G91/G91.1 | Yes | Yes | Yes | Yes |
 | G93/G94 | Yes, with time estimates | Yes | Yes | Yes |
 | M0/M1 | Program barrier | Validated without operator pause | Sender pause state | Sender pause state |
@@ -49,6 +50,9 @@ On `/dev/cu.usbmodem11101`, GRBL `1.1f.20230316`:
 - `grbl-cutting-check.nc`: 26/26 accepted on 2026-08-12, including `N` words,
   metadata-only `O2026` omission, M3/M4/S syntax, all three arc planes,
   G90/G91, G93/G94, dwell, M0/M1, full circle, and M30; returned to Idle.
+- `grbl-path-control-check.nc`: 7/7 accepted on 2026-08-12 with `G61` exact
+  path mode. The same board rejected `G64` with `error:20`, so Millo blocks
+  that LinuxCNC-style command during parsing instead of failing mid-program.
 - `air-square-20mm.nc`: 10/10 physical Air run, planner drained, WPos returned
   to XYZ zero.
 - Realtime override smoke: observed `Ov:110,50,99`, then verified restore to

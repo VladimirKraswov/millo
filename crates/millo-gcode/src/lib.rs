@@ -813,8 +813,16 @@ impl Parser {
             // Common modal cancel commands leave nominal preview geometry unchanged.
         } else if code_is(value, 80.0) {
             *motion = MotionMode::None;
-        } else if code_is(value, 61.0) || code_is(value, 64.0) {
+        } else if code_is(value, 61.0) {
             // Path control affects execution, not nominal preview geometry.
+        } else if code_is(value, 64.0) {
+            *skip_motion = true;
+            self.warn(
+                source_line,
+                ProgramWarningSeverity::Error,
+                ProgramWarningCode::UnsupportedGCode,
+                "G64 is not supported by GRBL 1.1",
+            );
         } else if (54.0..=59.0).contains(&value) && value.fract().abs() < f64::EPSILON {
             self.warn(
                 source_line,
@@ -1081,7 +1089,7 @@ fn g_modal_group(value: f64) -> Option<u8> {
         Some(8)
     } else if (54.0..=59.0).contains(&value) && value.fract().abs() < f64::EPSILON {
         Some(12)
-    } else if code_is(value, 61.0) || code_is(value, 64.0) {
+    } else if code_is(value, 61.0) {
         Some(13)
     } else {
         None
