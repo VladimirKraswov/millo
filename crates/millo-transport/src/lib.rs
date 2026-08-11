@@ -7,6 +7,8 @@ pub enum TransportError {
     NotConnected,
     #[error("transport has no data available")]
     NoData,
+    #[error("transport line exceeds the {limit}-byte limit")]
+    LineTooLong { limit: usize },
     #[error("transport I/O failed: {0}")]
     Io(String),
 }

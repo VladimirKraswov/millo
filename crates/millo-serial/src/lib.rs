@@ -8,6 +8,7 @@ use tokio_serial::{SerialPortBuilderExt, SerialPortType, SerialStream};
 
 type SerialReader = BufReader<ReadHalf<SerialStream>>;
 type SerialWriter = WriteHalf<SerialStream>;
+const MAX_SERIAL_LINE_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerialConfig {
@@ -206,13 +207,28 @@ impl Transport for SerialTransport {
 async fn read_serial_line<R: AsyncBufRead + Unpin>(
     reader: &mut R,
 ) -> Result<String, TransportError> {
-    let mut bytes = Vec::new();
-    let count = reader
-        .read_until(b'\n', &mut bytes)
-        .await
-        .map_err(|error| TransportError::Io(error.to_string()))?;
-    if count == 0 {
-        return Err(TransportError::NotConnected);
+    let mut bytes = Vec::with_capacity(128);
+    loop {
+        let available = reader
+            .fill_buf()
+            .await
+            .map_err(|error| TransportError::Io(error.to_string()))?;
+        if available.is_empty() {
+            return Err(TransportError::NotConnected);
+        }
+        let newline = available.iter().position(|byte| *byte == b'\n');
+        let consumed = newline.map_or(available.len(), |index| index + 1);
+        if bytes.len().saturating_add(consumed) > MAX_SERIAL_LINE_BYTES {
+            reader.consume(consumed);
+            return Err(TransportError::LineTooLong {
+                limit: MAX_SERIAL_LINE_BYTES,
+            });
+        }
+        bytes.extend_from_slice(&available[..consumed]);
+        reader.consume(consumed);
+        if newline.is_some() {
+            break;
+        }
     }
 
     while matches!(bytes.last(), Some(b'\n' | b'\r')) {
@@ -265,6 +281,38 @@ mod tests {
     #[tokio::test]
     async fn treats_end_of_stream_as_a_disconnection() {
         let (device, host) = tokio::io::duplex(16);
+        drop(device);
+        let mut reader = BufReader::new(host);
+
+        assert_eq!(
+            read_serial_line(&mut reader).await.unwrap_err(),
+            TransportError::NotConnected
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_an_unbounded_device_line_before_it_can_grow_memory() {
+        let payload = vec![b'x'; MAX_SERIAL_LINE_BYTES + 1];
+        let (mut device, host) = tokio::io::duplex(payload.len() + 1);
+        let writer = tokio::spawn(async move {
+            device.write_all(&payload).await.unwrap();
+            device.write_all(b"\n").await.unwrap();
+        });
+        let mut reader = BufReader::new(host);
+
+        assert_eq!(
+            read_serial_line(&mut reader).await.unwrap_err(),
+            TransportError::LineTooLong {
+                limit: MAX_SERIAL_LINE_BYTES,
+            }
+        );
+        writer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rejects_an_incomplete_line_when_the_device_disconnects() {
+        let (mut device, host) = tokio::io::duplex(16);
+        device.write_all(b"partial").await.unwrap();
         drop(device);
         let mut reader = BufReader::new(host);
 

@@ -421,6 +421,10 @@ does not schedule or execute controller I/O.
   It is intentionally advisory and can be disabled to expose every port.
 - EOF and pre-connect I/O become `TransportError::NotConnected`; platform I/O
   failures preserve their message as `TransportError::Io`.
+- Native framing admits at most 4 KiB including the line terminator. A noisy
+  device that never emits newline returns typed `LineTooLong` instead of growing
+  process memory without bound; EOF with an incomplete frame is a disconnect,
+  never a parseable GRBL response.
 - Reconnection drops and reopens the native handle through the existing
   controller lifecycle.
 - Physical hardware is not required by the automated suite. Native enumeration

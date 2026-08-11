@@ -98,7 +98,9 @@ mobile sizes.
 - Boxed runtime transport preserves the common transport contract.
 - Empty port names and zero baud rates are rejected before OS I/O.
 - Fragmented serial input is assembled into one CR/LF-trimmed line.
-- End-of-stream and I/O before connect are reported as disconnection.
+- End-of-stream, an incomplete frame at EOF, and I/O before connect are reported
+  as disconnection. A line beyond the 4 KiB native framing bound returns typed
+  `LineTooLong` before allocation can grow with an untrusted USB stream.
 - Tauri serial IDs preserve native port names, including Unix device paths.
 - USB device metadata maps to a stable UI descriptor.
 - Likely-GRBL discovery accepts explicit controller metadata and common USB-UART
