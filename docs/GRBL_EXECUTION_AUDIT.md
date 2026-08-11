@@ -39,6 +39,9 @@
   feed/rapid/spindle overrides share the actor owner.
 - Terminal: every `ok` correlated; physical M2/M30 waits for fresh Idle; errors,
   alarm, timeout, reset, or disconnect fail closed.
+- Failure data: terminal snapshots retain a closed failure kind, optional GRBL
+  code, source line, and exact command after the FIFO is cleared. Text remains
+  display-only compatibility data.
 - Check: serial-only typed `$C`, one command in flight, automatic verified exit.
 
 ## Physical evidence

@@ -45,7 +45,11 @@ import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramLineTable } from "./ProgramLineTable";
 import { canStartCheckRun } from "./checkRunReadModel";
-import { dryRunControls, senderTiming } from "./dryRunReadModel";
+import {
+  dryRunControls,
+  senderFailureSummary,
+  senderTiming,
+} from "./dryRunReadModel";
 import { realRunPreflightControls } from "./realRunPreflightReadModel";
 import type { PreviewView } from "./ToolpathPreview";
 
@@ -255,6 +259,7 @@ export function ProgramWorkspace({
   };
   const senderForProgram = sender.sourceName === program?.sourceName;
   const displayedSender = senderForProgram ? sender : idleSenderSnapshot;
+  const displayedSenderFailure = senderFailureSummary(displayedSender);
   const controls = dryRunControls(displayedSender, {
     mockAvailable: dryRunAvailable,
     policyEligible: program?.summary.dryRunEligible ?? false,
@@ -552,7 +557,7 @@ export function ProgramWorkspace({
                       ? "Все строки приняты в $C; контроллер вернулся в Idle"
                       : "Все строки подтверждены; контроллер вернулся в Idle"
                     : displayedSender.state === "failed"
-                      ? displayedSender.lastError
+                      ? displayedSenderFailure
                       : checkRunVisible
                         ? "По одной строке · без движения и включения выходов"
                         : "Остановка: Feed Hold, затем подтверждаемый Soft Reset справа"}
@@ -723,8 +728,8 @@ export function ProgramWorkspace({
                 {!dryRunAvailable && (
                   <small>Подключите Mock GRBL в состоянии Idle</small>
                 )}
-                {displayedSender.lastError && (
-                  <small className="is-error">{displayedSender.lastError}</small>
+                {displayedSenderFailure && (
+                  <small className="is-error">{displayedSenderFailure}</small>
                 )}
               </div>
             )}

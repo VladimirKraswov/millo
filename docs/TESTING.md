@@ -183,6 +183,9 @@ port names remain untouched.
   accounting, FIFO response correlation, pause/resume/cancel transitions,
   exact failed source-line retention, terminal completion only after every
   `ok`, and line/plan bounds.
+- Sender and actor tests assert structured failure kind, GRBL code, source line,
+  and command for rejected responses and disconnects. UI tests format this
+  contract without parsing backend error text.
 - Plan timing tests sum feed motion and dwell to exact milliseconds, mark rapid
   duration as an incomplete lower bound, and attach estimates to source lines.
   Sender tests prove estimate advancement only on `ok`, Hold wall time exclusion,

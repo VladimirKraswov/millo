@@ -470,6 +470,9 @@ does not schedule or execute controller I/O.
   on Completed/Failed/Cancelled. Unknown rapid duration leaves the estimate
   explicitly incomplete. Actor ticks publish fresh timing snapshots even while
   one command response is delayed.
+- Sender failures are typed at the controller boundary. GRBL error/alarm/reset,
+  timeout, disconnect, transport, unsafe-state, and internal faults retain the
+  exact source line and command after buffered state is cleared.
 
 ### Extension host boundary
 

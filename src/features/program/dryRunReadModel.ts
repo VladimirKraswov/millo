@@ -21,6 +21,17 @@ export interface SenderTimingReadModel {
   readonly remaining: string;
 }
 
+const failureLabels: Record<NonNullable<SenderSnapshot["failure"]>["kind"], string> = {
+  grblError: "GRBL error",
+  alarm: "GRBL alarm",
+  reset: "Controller reset",
+  timeout: "Timeout",
+  disconnected: "Disconnected",
+  transport: "Transport error",
+  unsafeState: "Unsafe controller state",
+  internal: "Sender error",
+};
+
 const formatRuntime = (seconds: number): string => {
   const rounded = Math.max(0, Math.round(seconds));
   const hours = Math.floor(rounded / 3_600);
@@ -38,6 +49,16 @@ export const senderTiming = (
   estimateLabel: sender.timeEstimateComplete ? "ETA" : "ETA >=",
   remaining: formatRuntime(sender.estimatedRemainingSeconds),
 });
+
+export const senderFailureSummary = (
+  sender: SenderSnapshot,
+): string | undefined => {
+  const failure = sender.failure;
+  if (!failure) return sender.lastError;
+  const code = failure.grblCode === undefined ? "" : ` ${failure.grblCode}`;
+  const line = failure.sourceLine === undefined ? "" : ` · L${failure.sourceLine}`;
+  return `${failureLabels[failure.kind]}${code}${line}`;
+};
 
 export const dryRunControls = (
   sender: SenderSnapshot,

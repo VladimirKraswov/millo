@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { idleSenderSnapshot, type SenderSnapshot } from "../../shared/dryRun";
-import { dryRunControls, senderTiming } from "./dryRunReadModel";
+import {
+  dryRunControls,
+  senderFailureSummary,
+  senderTiming,
+} from "./dryRunReadModel";
 
 const context = {
   mockAvailable: true,
@@ -65,5 +69,25 @@ describe("dryRunControls", () => {
         sender({ estimatedRemainingSeconds: 9.6, timeEstimateComplete: true }),
       ).estimateLabel,
     ).toBe("ETA");
+  });
+
+  it("renders typed sender failures without parsing controller text", () => {
+    expect(
+      senderFailureSummary(
+        sender({
+          lastError: "legacy text that may change",
+          failure: {
+            kind: "grblError",
+            message: "program response failed: GRBL error 33",
+            grblCode: 33,
+            sourceLine: 12,
+            command: "G2 X1 Y1 I0 J1",
+          },
+        }),
+      ),
+    ).toBe("GRBL error 33 · L12");
+    expect(senderFailureSummary(sender({ lastError: "legacy" }))).toBe(
+      "legacy",
+    );
   });
 });

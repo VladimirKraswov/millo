@@ -62,6 +62,57 @@ pub enum SenderState {
     Cancelled,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SenderFailureKind {
+    GrblError,
+    Alarm,
+    Reset,
+    Timeout,
+    Disconnected,
+    Transport,
+    UnsafeState,
+    Internal,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SenderFailure {
+    pub kind: SenderFailureKind,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grbl_code: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+}
+
+impl SenderFailure {
+    pub fn new(kind: SenderFailureKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            grbl_code: None,
+            source_line: None,
+            command: None,
+        }
+    }
+
+    pub fn with_grbl_code(mut self, code: Option<u16>) -> Self {
+        self.grbl_code = code;
+        self
+    }
+
+    fn attach_line(mut self, line: Option<&DryRunLine>) -> Self {
+        if let Some(line) = line {
+            self.source_line = line.source_line();
+            self.command = Some(line.command().to_owned());
+        }
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SenderSnapshot {
@@ -78,6 +129,8 @@ pub struct SenderSnapshot {
     pub current_source_line: Option<usize>,
     pub current_command: Option<String>,
     pub last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<SenderFailure>,
     pub progress: f64,
     pub elapsed_seconds: f64,
     pub estimated_completed_seconds: f64,
@@ -101,6 +154,7 @@ impl Default for SenderSnapshot {
             current_source_line: None,
             current_command: None,
             last_error: None,
+            failure: None,
             progress: 0.0,
             elapsed_seconds: 0.0,
             estimated_completed_seconds: 0.0,
@@ -148,6 +202,7 @@ pub struct Sender {
     deferred_program_end: Option<DryRunLine>,
     last_line: Option<DryRunLine>,
     last_error: Option<String>,
+    failure: Option<SenderFailure>,
     paused_from: Option<SenderState>,
     estimated_completed_ms: u64,
     started_at: Option<Instant>,
@@ -176,6 +231,7 @@ impl Sender {
             deferred_program_end: None,
             last_line: None,
             last_error: None,
+            failure: None,
             paused_from: None,
             estimated_completed_ms: 0,
             started_at: None,
@@ -243,6 +299,7 @@ impl Sender {
         self.deferred_program_end = None;
         self.last_line = None;
         self.last_error = None;
+        self.failure = None;
         self.paused_from = None;
         self.estimated_completed_ms = 0;
         self.started_at = None;
@@ -309,6 +366,10 @@ impl Sender {
     }
 
     pub fn fail(&mut self, error: impl Into<String>) -> SenderSnapshot {
+        self.fail_with(SenderFailure::new(SenderFailureKind::Internal, error))
+    }
+
+    pub fn fail_with(&mut self, failure: SenderFailure) -> SenderSnapshot {
         self.freeze_clock();
         self.last_line = self
             .in_flight
@@ -317,7 +378,9 @@ impl Sender {
             .or_else(|| self.last_line.take());
         self.in_flight.clear();
         self.in_flight_bytes = 0;
-        self.last_error = Some(error.into());
+        let failure = failure.attach_line(self.last_line.as_ref());
+        self.last_error = Some(failure.message.clone());
+        self.failure = Some(failure);
         self.state = SenderState::Failed;
         self.paused_from = None;
         self.snapshot()
@@ -328,12 +391,25 @@ impl Sender {
         line: DryRunLine,
         error: impl Into<String>,
     ) -> SenderSnapshot {
+        self.fail_dispatched_line_with(
+            line,
+            SenderFailure::new(SenderFailureKind::Transport, error),
+        )
+    }
+
+    pub fn fail_dispatched_line_with(
+        &mut self,
+        line: DryRunLine,
+        failure: SenderFailure,
+    ) -> SenderSnapshot {
         self.freeze_clock();
         self.last_line = Some(line);
         self.in_flight.clear();
         self.in_flight_bytes = 0;
         self.deferred_program_end = None;
-        self.last_error = Some(error.into());
+        let failure = failure.attach_line(self.last_line.as_ref());
+        self.last_error = Some(failure.message.clone());
+        self.failure = Some(failure);
         self.state = SenderState::Failed;
         self.paused_from = None;
         self.snapshot()
@@ -464,6 +540,13 @@ impl Sender {
         &mut self,
         error: impl Into<String>,
     ) -> Result<SenderSnapshot, SenderError> {
+        self.acknowledge_failure(SenderFailure::new(SenderFailureKind::GrblError, error))
+    }
+
+    pub fn acknowledge_failure(
+        &mut self,
+        failure: SenderFailure,
+    ) -> Result<SenderSnapshot, SenderError> {
         let line = self
             .in_flight
             .pop_front()
@@ -474,7 +557,9 @@ impl Sender {
         self.in_flight.clear();
         self.in_flight_bytes = 0;
         self.deferred_program_end = None;
-        self.last_error = Some(error.into());
+        let failure = failure.attach_line(self.last_line.as_ref());
+        self.last_error = Some(failure.message.clone());
+        self.failure = Some(failure);
         self.state = SenderState::Failed;
         Ok(self.snapshot())
     }
@@ -500,6 +585,7 @@ impl Sender {
             current_source_line: current.and_then(DryRunLine::source_line),
             current_command: current.map(|line| line.command().to_owned()),
             last_error: self.last_error.clone(),
+            failure: self.failure.clone(),
             progress: if total_lines == 0 {
                 0.0
             } else {
@@ -688,11 +774,21 @@ mod tests {
         let line = sender.next_line().unwrap();
         assert_eq!(line.source_line(), Some(1));
 
-        let snapshot = sender.acknowledge_error("error:20").unwrap();
+        let snapshot = sender
+            .acknowledge_failure(
+                SenderFailure::new(SenderFailureKind::GrblError, "GRBL error 20")
+                    .with_grbl_code(Some(20)),
+            )
+            .unwrap();
 
         assert_eq!(snapshot.state, SenderState::Failed);
         assert_eq!(snapshot.current_source_line, Some(1));
         assert_eq!(snapshot.acknowledged_lines, 2);
+        let failure = snapshot.failure.unwrap();
+        assert_eq!(failure.kind, SenderFailureKind::GrblError);
+        assert_eq!(failure.grbl_code, Some(20));
+        assert_eq!(failure.source_line, Some(1));
+        assert_eq!(failure.command.as_deref(), Some("G21"));
         assert!(sender.next_line().is_none());
     }
 

@@ -8,11 +8,11 @@ use millo_controller::{
     UnhomedSetting,
 };
 use millo_domain::{
-    CommandResponse, ConnectionState, ControllerSnapshot, DeviceInspection, HardwareInspection,
-    HardwareProfile, JogPadStepOutcome, JogPadStepRequest, MachineMode, OperatorConfirmation,
-    OverrideAdjustment, Position, RapidOverrideTarget, ResetChallenge, StepJogReceipt,
-    StepJogRequest, TestJogPreparation, WorkAxis, WorkCoordinateSystem, WorkZeroOutcome,
-    WorkZeroRequest,
+    CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot, DeviceInspection,
+    HardwareInspection, HardwareProfile, JogPadStepOutcome, JogPadStepRequest, MachineMode,
+    OperatorConfirmation, OverrideAdjustment, Position, RapidOverrideTarget, ResetChallenge,
+    StepJogReceipt, StepJogRequest, TestJogPreparation, WorkAxis, WorkCoordinateSystem,
+    WorkZeroOutcome, WorkZeroRequest,
 };
 use millo_dry_run::{
     DryRunLineKind, DryRunPlan, DryRunPolicyError, ProgramRunPolicy, build_program_run_plan,
@@ -28,12 +28,15 @@ use millo_run::{
     ProgramRunIntent, RunPreflightReport, assess_real_run_preflight,
 };
 use millo_safety::{SafetyError, SafetyManager};
-use millo_sender::{Sender, SenderError, SenderSnapshot, SenderState, usable_rx_buffer_capacity};
+use millo_sender::{
+    Sender, SenderError, SenderFailure, SenderFailureKind, SenderSnapshot, SenderState,
+    usable_rx_buffer_capacity,
+};
 use millo_settings::{
     ControllerSettingEditRequest, SettingsError, VerifiedSettingUpdate, setting_values_equal,
     validate_setting_edit,
 };
-use millo_transport::BoxedTransport;
+use millo_transport::{BoxedTransport, TransportError};
 use thiserror::Error;
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -1206,13 +1209,19 @@ async fn reconcile_physical_sender(
         || snapshot.reset_notice.is_some()
         || snapshot.machine.mode == MachineMode::Alarm
     {
-        sender.fail("controller became unavailable while waiting for physical motion to finish");
+        sender.fail_with(SenderFailure::new(
+            SenderFailureKind::UnsafeState,
+            "controller became unavailable while waiting for physical motion to finish",
+        ));
     } else if sender.snapshot().mode == Some(millo_sender::SenderMode::CheckRun)
         && snapshot.machine.mode != MachineMode::Check
     {
-        sender.fail(format!(
-            "controller left GRBL Check mode during validation: {:?}",
-            snapshot.machine.mode
+        sender.fail_with(SenderFailure::new(
+            SenderFailureKind::UnsafeState,
+            format!(
+                "controller left GRBL Check mode during validation: {:?}",
+                snapshot.machine.mode
+            ),
         ));
     } else {
         match (sender_state, snapshot.machine.mode) {
@@ -1224,7 +1233,10 @@ async fn reconcile_physical_sender(
                     match sender.dispatch_deferred_program_end() {
                         Ok(line) => {
                             if let Err(error) = controller.write_program_line(&line).await {
-                                sender.fail_dispatched_line(line, error.to_string());
+                                sender.fail_dispatched_line_with(
+                                    line,
+                                    controller_sender_failure(&error, "program-end write failed"),
+                                );
                                 let _ = controller.abort_program_stream().await;
                             }
                         }
@@ -1260,6 +1272,50 @@ fn fail_active_sender(
     }
 }
 
+fn controller_sender_failure(error: &ControllerError, context: &str) -> SenderFailure {
+    let (kind, code, detail) = match error {
+        ControllerError::CommandRejected {
+            command,
+            completion,
+            code,
+        } => {
+            let (kind, label) = match completion {
+                CommandCompletion::Error => (SenderFailureKind::GrblError, "GRBL error"),
+                CommandCompletion::Alarm => (SenderFailureKind::Alarm, "GRBL alarm"),
+                CommandCompletion::Reset => (SenderFailureKind::Reset, "GRBL reset"),
+                CommandCompletion::Ok => (SenderFailureKind::Internal, "unexpected GRBL response"),
+            };
+            let code_text = code.map_or_else(String::new, |value| format!(" {value}"));
+            (
+                kind,
+                *code,
+                format!("{label}{code_text} while executing '{command}'"),
+            )
+        }
+        ControllerError::CommandTimeout { timeout_ms } => (
+            SenderFailureKind::Timeout,
+            None,
+            format!("controller command timed out after {timeout_ms} ms"),
+        ),
+        ControllerError::StatusTimeout { timeout_ms } => (
+            SenderFailureKind::Timeout,
+            None,
+            format!("controller status timed out after {timeout_ms} ms"),
+        ),
+        ControllerError::Transport(TransportError::NotConnected) => (
+            SenderFailureKind::Disconnected,
+            None,
+            "transport disconnected".to_owned(),
+        ),
+        ControllerError::Transport(transport) => {
+            (SenderFailureKind::Transport, None, transport.to_string())
+        }
+        ControllerError::NotReady(_) => (SenderFailureKind::UnsafeState, None, error.to_string()),
+        _ => (SenderFailureKind::Internal, None, error.to_string()),
+    };
+    SenderFailure::new(kind, format!("{context}: {detail}")).with_grbl_code(code)
+}
+
 async fn execute_sender_step(
     controller: &mut Controller<BoxedTransport>,
     sender: &mut Sender,
@@ -1267,7 +1323,10 @@ async fn execute_sender_step(
     sender_snapshots: &watch::Sender<SenderSnapshot>,
 ) {
     if let Err(error) = ensure_sender_dispatch_ready(sender, &controller.snapshot()) {
-        sender.fail(error.to_string());
+        sender.fail_with(SenderFailure::new(
+            SenderFailureKind::UnsafeState,
+            error.to_string(),
+        ));
         finish_check_mode_after_terminal(controller, sender).await;
         publish(snapshots, controller);
         publish_sender(sender_snapshots, sender);
@@ -1279,7 +1338,10 @@ async fn execute_sender_step(
                 sender.snapshot().mode,
                 Some(millo_sender::SenderMode::AirRun | millo_sender::SenderMode::CutRun)
             );
-            sender.fail_dispatched_line(line, error.to_string());
+            sender.fail_dispatched_line_with(
+                line,
+                controller_sender_failure(&error, "program write failed"),
+            );
             if physical_run {
                 let _ = controller.abort_program_stream().await;
             }
@@ -1316,7 +1378,8 @@ async fn execute_sender_step(
                     sender.snapshot().mode,
                     Some(millo_sender::SenderMode::AirRun | millo_sender::SenderMode::CutRun)
                 );
-                let _ = sender.acknowledge_error(error.to_string());
+                let failure = controller_sender_failure(&error, "program response failed");
+                let _ = sender.acknowledge_failure(failure);
                 if physical_run {
                     let _ = controller.abort_program_stream().await;
                 }
@@ -2957,12 +3020,11 @@ mod tests {
         let failed = wait_for_sender(&arbiter, SenderState::Failed).await;
 
         assert_eq!(failed.current_source_line, Some(1));
-        assert!(
-            failed
-                .last_error
-                .as_deref()
-                .is_some_and(|error| error.contains("Some(33)"))
-        );
+        let failure = failed.failure.unwrap();
+        assert_eq!(failure.kind, SenderFailureKind::GrblError);
+        assert_eq!(failure.grbl_code, Some(33));
+        assert_eq!(failure.source_line, Some(1));
+        assert_eq!(failure.command.as_deref(), Some("G21 G90 G94"));
         assert_eq!(arbiter.snapshot().machine.mode, MachineMode::Idle);
         let writes = control.writes();
         assert_eq!(
@@ -3131,12 +3193,10 @@ mod tests {
 
         assert_eq!(failed.current_source_line, Some(1));
         assert_eq!(failed.acknowledged_lines, 2);
-        assert!(
-            failed
-                .last_error
-                .as_deref()
-                .is_some_and(|value| value.contains("Some(20)"))
-        );
+        let failure = failed.failure.unwrap();
+        assert_eq!(failure.kind, SenderFailureKind::GrblError);
+        assert_eq!(failure.grbl_code, Some(20));
+        assert_eq!(failure.source_line, Some(1));
         let writes = control.writes();
         assert_eq!(
             writes[writes.len() - 2..],
@@ -3337,12 +3397,10 @@ mod tests {
         let failed = wait_for_sender(&arbiter, SenderState::Failed).await;
 
         assert_eq!(failed.current_source_line, Some(1));
-        assert!(
-            failed
-                .last_error
-                .as_deref()
-                .is_some_and(|value| value.contains("not connected"))
-        );
+        let failure = failed.failure.unwrap();
+        assert_eq!(failure.kind, SenderFailureKind::Disconnected);
+        assert_eq!(failure.source_line, Some(1));
+        assert_eq!(failure.command.as_deref(), Some("G21 G90 G94"));
         assert_eq!(arbiter.snapshot().consecutive_failures, 1);
         task.abort();
     }
@@ -3436,12 +3494,10 @@ mod tests {
 
         assert_eq!(failed.current_source_line, Some(1));
         assert_eq!(failed.acknowledged_lines, 2);
-        assert!(
-            failed
-                .last_error
-                .as_deref()
-                .is_some_and(|error| error.contains("code Some(20)"))
-        );
+        let failure = failed.failure.unwrap();
+        assert_eq!(failure.kind, SenderFailureKind::GrblError);
+        assert_eq!(failure.grbl_code, Some(20));
+        assert_eq!(failure.source_line, Some(1));
         assert_eq!(
             control.writes(),
             vec![

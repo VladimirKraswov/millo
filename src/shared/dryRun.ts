@@ -12,6 +12,24 @@ export type SenderState =
 
 export type SenderMode = "mockDryRun" | "checkRun" | "airRun" | "cutRun";
 
+export type SenderFailureKind =
+  | "grblError"
+  | "alarm"
+  | "reset"
+  | "timeout"
+  | "disconnected"
+  | "transport"
+  | "unsafeState"
+  | "internal";
+
+export interface SenderFailure {
+  readonly kind: SenderFailureKind;
+  readonly message: string;
+  readonly grblCode?: number;
+  readonly sourceLine?: number;
+  readonly command?: string;
+}
+
 export interface SenderSnapshot {
   readonly state: SenderState;
   readonly mode?: SenderMode;
@@ -25,6 +43,7 @@ export interface SenderSnapshot {
   readonly currentSourceLine?: number;
   readonly currentCommand?: string;
   readonly lastError?: string;
+  readonly failure?: SenderFailure;
   readonly progress: number;
   readonly elapsedSeconds: number;
   readonly estimatedCompletedSeconds: number;
