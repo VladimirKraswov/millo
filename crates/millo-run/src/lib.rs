@@ -4,7 +4,9 @@ use millo_domain::{
     ConnectionState, ControllerSnapshot, HardwareInspection, MachineMode, Position, ReadinessLevel,
     SpindleControl,
 };
-use millo_dry_run::{DryRunBlocker, DryRunBlockerKind, DryRunPolicyError, build_dry_run_plan};
+use millo_dry_run::{
+    DryRunBlocker, DryRunBlockerKind, DryRunPolicyError, ProgramRunPolicy, build_program_run_plan,
+};
 use millo_gcode::{GcodeProgram, ProgramBounds, ToolpathKind};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -16,12 +18,24 @@ pub const FIRST_CUT_AUTHORIZATION_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub enum ProgramRunIntent {
+    #[default]
+    AirRun,
+    Cutting,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FirstCutConfirmation {
+    pub intent: ProgramRunIntent,
     pub stock_secured: bool,
     pub tool_secured: bool,
+    pub tool_removed: bool,
     pub xyz_zero_verified: bool,
     pub safe_z_verified: bool,
     pub manual_spindle_running: bool,
+    pub manual_spindle_off: bool,
+    pub path_clear: bool,
     pub power_control_reachable: bool,
 }
 
@@ -31,17 +45,37 @@ impl FirstCutConfirmation {
     }
 
     pub fn missing(self) -> Vec<&'static str> {
-        [
-            (!self.stock_secured).then_some("stock secured"),
-            (!self.tool_secured).then_some("tool secured"),
+        let mut missing = [
             (!self.xyz_zero_verified).then_some("XYZ zero verified"),
             (!self.safe_z_verified).then_some("safe Z verified"),
-            (!self.manual_spindle_running).then_some("manual spindle running"),
+            (!self.path_clear).then_some("program envelope and fixture clearance verified"),
             (!self.power_control_reachable).then_some("power control reachable"),
         ]
         .into_iter()
         .flatten()
-        .collect()
+        .collect::<Vec<_>>();
+        match self.intent {
+            ProgramRunIntent::AirRun => {
+                if !self.tool_removed {
+                    missing.push("tool removed");
+                }
+                if !self.manual_spindle_off {
+                    missing.push("manual spindle off");
+                }
+            }
+            ProgramRunIntent::Cutting => {
+                if !self.stock_secured {
+                    missing.push("stock secured");
+                }
+                if !self.tool_secured {
+                    missing.push("tool secured");
+                }
+                if !self.manual_spindle_running {
+                    missing.push("manual spindle running");
+                }
+            }
+        }
+        missing
     }
 }
 
@@ -53,6 +87,7 @@ pub struct FirstCutAuthorization {
     pub source_name: String,
     pub program_fingerprint: String,
     pub poll_sequence: u64,
+    pub intent: ProgramRunIntent,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -126,6 +161,9 @@ impl FirstCutGate {
         if report.poll_sequence != snapshot.poll_sequence {
             return Err(FirstCutAuthorizationError::StalePreflightEvidence);
         }
+        if report.intent != confirmation.intent {
+            return Err(FirstCutAuthorizationError::StalePreflightEvidence);
+        }
         ensure_stable_idle(snapshot)?;
         if snapshot.machine.machine_position.is_none() && snapshot.machine.work_position.is_none() {
             return Err(FirstCutAuthorizationError::ControllerPositionUnavailable);
@@ -138,6 +176,7 @@ impl FirstCutGate {
             source_name: report.source_name.clone(),
             program_fingerprint: report.program_fingerprint.clone(),
             poll_sequence: report.poll_sequence,
+            intent: confirmation.intent,
         };
         self.lease = Some(FirstCutLease {
             authorization: authorization.clone(),
@@ -157,7 +196,7 @@ impl FirstCutGate {
         program_fingerprint: &str,
         snapshot: &ControllerSnapshot,
         now: Instant,
-    ) -> Result<(), FirstCutAuthorizationError> {
+    ) -> Result<ProgramRunIntent, FirstCutAuthorizationError> {
         let Some(lease) = self.lease.take() else {
             return Err(FirstCutAuthorizationError::AuthorizationMissing);
         };
@@ -185,7 +224,7 @@ impl FirstCutGate {
         if lease.authorization.program_fingerprint != program_fingerprint {
             return Err(FirstCutAuthorizationError::ProgramChanged);
         }
-        Ok(())
+        Ok(lease.authorization.intent)
     }
 
     pub fn observe(&mut self, snapshot: &ControllerSnapshot, now: Instant) {
@@ -245,6 +284,7 @@ pub struct RunProgramBlocker {
 pub struct RunPreflightReport {
     pub source_name: String,
     pub program_fingerprint: String,
+    pub intent: ProgramRunIntent,
     pub ready: bool,
     pub blocker_count: usize,
     pub caution_count: usize,
@@ -261,6 +301,7 @@ pub fn assess_real_run_preflight(
     program: &GcodeProgram,
     hardware: HardwareInspection,
     snapshot: &ControllerSnapshot,
+    intent: ProgramRunIntent,
 ) -> RunPreflightReport {
     let mut checks = Vec::new();
     let stable_idle = snapshot.connection == ConnectionState::Connected
@@ -311,7 +352,11 @@ pub fn assess_real_run_preflight(
         None,
     ));
 
-    let (policy_blockers, empty_program) = match build_dry_run_plan(program) {
+    let policy = match intent {
+        ProgramRunIntent::AirRun => ProgramRunPolicy::AirRun,
+        ProgramRunIntent::Cutting => ProgramRunPolicy::Cutting,
+    };
+    let (policy_blockers, empty_program) = match build_program_run_plan(program, policy) {
         Ok(_) => (Vec::new(), false),
         Err(DryRunPolicyError::Rejected(_, blockers)) => (blockers, false),
         Err(DryRunPolicyError::EmptyProgram) => (Vec::new(), true),
@@ -324,7 +369,10 @@ pub fn assess_real_run_preflight(
         } else {
             RunPreflightLevel::Blocker
         },
-        "Motion-only program policy",
+        match intent {
+            ProgramRunIntent::AirRun => "Air-run program policy",
+            ProgramRunIntent::Cutting => "Cutting program policy",
+        },
         if empty_program {
             "The program has no executable lines".to_owned()
         } else if let Some(blocker) = first_policy_blocker {
@@ -334,8 +382,10 @@ pub fn assess_real_run_preflight(
                 blocker.message
             )
         } else {
-            "No spindle activation, coolant, probing, tool change, coordinate mutation or machine-coordinate motion"
-                .to_owned()
+            match intent {
+                ProgramRunIntent::AirRun => "No spindle activation, coolant, probing, tool change, coordinate mutation or machine-coordinate motion".to_owned(),
+                ProgramRunIntent::Cutting => "Spindle words are allowed; coolant, probing, tool change, coordinate mutation and machine-coordinate motion remain guarded".to_owned(),
+            }
         },
         first_policy_blocker.and_then(|blocker| blocker.source_line),
     ));
@@ -453,6 +503,7 @@ pub fn assess_real_run_preflight(
     RunPreflightReport {
         source_name: program.source_name.clone(),
         program_fingerprint: program_fingerprint(program),
+        intent,
         ready: blocker_count == 0,
         blocker_count,
         caution_count,
@@ -715,11 +766,30 @@ mod tests {
 
     fn first_cut_confirmation() -> FirstCutConfirmation {
         FirstCutConfirmation {
+            intent: ProgramRunIntent::Cutting,
             stock_secured: true,
             tool_secured: true,
+            tool_removed: false,
             xyz_zero_verified: true,
             safe_z_verified: true,
             manual_spindle_running: true,
+            manual_spindle_off: false,
+            path_clear: true,
+            power_control_reachable: true,
+        }
+    }
+
+    fn air_run_confirmation() -> FirstCutConfirmation {
+        FirstCutConfirmation {
+            intent: ProgramRunIntent::AirRun,
+            stock_secured: false,
+            tool_secured: false,
+            tool_removed: true,
+            xyz_zero_verified: true,
+            safe_z_verified: true,
+            manual_spindle_running: false,
+            manual_spindle_off: true,
+            path_clear: true,
             power_control_reachable: true,
         }
     }
@@ -730,6 +800,7 @@ mod tests {
             &program,
             hardware(vec![readiness_check("axis-steps", ReadinessLevel::Pass)]),
             snapshot,
+            ProgramRunIntent::Cutting,
         );
         assert!(report.ready);
         (program, report)
@@ -741,6 +812,7 @@ mod tests {
             &program("G21 G90 G94\nG0 Z2\nG1 X5 Y2 F50\nM5"),
             hardware(vec![readiness_check("axis-steps", ReadinessLevel::Pass)]),
             &snapshot(MachineMode::Idle),
+            ProgramRunIntent::AirRun,
         );
 
         assert!(report.ready);
@@ -756,6 +828,7 @@ mod tests {
             &program("G21 G90 G94\nM3 S12000\nG1 X1 F50"),
             hardware(Vec::new()),
             &snapshot(MachineMode::Idle),
+            ProgramRunIntent::AirRun,
         );
 
         assert!(!report.ready);
@@ -769,6 +842,20 @@ mod tests {
     }
 
     #[test]
+    fn cutting_preflight_accepts_explicit_spindle_commands() {
+        let report = assess_real_run_preflight(
+            &program("G21 G90 G94\nM3 S12000\nG1 X1 F50\nM5"),
+            hardware(Vec::new()),
+            &snapshot(MachineMode::Idle),
+            ProgramRunIntent::Cutting,
+        );
+
+        assert!(report.ready);
+        assert_eq!(report.intent, ProgramRunIntent::Cutting);
+        assert_eq!(report.total_program_blockers, 0);
+    }
+
+    #[test]
     fn probe_only_readiness_does_not_block_a_program_without_probing() {
         let report = assess_real_run_preflight(
             &program("G21 G90 G94\nG1 X1 F10"),
@@ -777,6 +864,7 @@ mod tests {
                 ReadinessLevel::Blocker,
             )]),
             &snapshot(MachineMode::Idle),
+            ProgramRunIntent::AirRun,
         );
 
         assert!(report.ready);
@@ -792,6 +880,7 @@ mod tests {
                 ReadinessLevel::Blocker,
             )]),
             &snapshot(MachineMode::Run),
+            ProgramRunIntent::AirRun,
         );
 
         assert!(!report.ready);
@@ -810,6 +899,7 @@ mod tests {
             &program("G1 X1 F10"),
             hardware(Vec::new()),
             &snapshot(MachineMode::Idle),
+            ProgramRunIntent::AirRun,
         );
 
         let modal = report
@@ -823,7 +913,7 @@ mod tests {
     }
 
     #[test]
-    fn first_cut_gate_requires_all_six_confirmations_and_fresh_clear_preflight() {
+    fn program_run_gate_requires_intent_specific_confirmation_and_fresh_preflight() {
         let now = Instant::now();
         let snapshot = snapshot(MachineMode::Idle);
         let (_, report) = ready_first_cut(&snapshot);
@@ -861,6 +951,16 @@ mod tests {
             gate.authorize(first_cut_confirmation(), &report, &missing_position, now,),
             Err(FirstCutAuthorizationError::ControllerPositionUnavailable)
         );
+
+        let mut incomplete_air_run = air_run_confirmation();
+        incomplete_air_run.tool_removed = false;
+        incomplete_air_run.manual_spindle_off = false;
+        assert_eq!(
+            gate.authorize(incomplete_air_run, &report, &missing_position, now),
+            Err(FirstCutAuthorizationError::IncompleteConfirmation {
+                missing: vec!["tool removed", "manual spindle off"]
+            })
+        );
     }
 
     #[test]
@@ -878,6 +978,7 @@ mod tests {
             report.program_fingerprint
         );
         assert_eq!(authorization.expires_in_ms, 30_000);
+        assert_eq!(authorization.intent, ProgramRunIntent::Cutting);
         assert_eq!(
             gate.consume(
                 authorization.id,

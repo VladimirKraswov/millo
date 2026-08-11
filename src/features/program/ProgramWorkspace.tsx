@@ -36,6 +36,7 @@ import type { GcodeProgram, ProgramWarning } from "../../shared/program";
 import type {
   FirstCutConfirmation,
   FirstCutPreparation,
+  ProgramRunIntent,
   RealRunPreflightGateway,
   RunPreflightReport,
 } from "../../shared/realRun";
@@ -73,8 +74,9 @@ const warningTitle = (warning: ProgramWarning): string =>
 const senderLabels: Record<SenderState, string> = {
   idle: "Not started",
   ready: "Ready",
-  running: "Running on Mock",
+  running: "Running",
   paused: "Paused",
+  draining: "Physical motion",
   completed: "Completed",
   failed: "Stopped on error",
   cancelled: "Cancelled",
@@ -105,13 +107,15 @@ export function ProgramWorkspace({
   >("lines");
   const [selectedSourceLine, setSelectedSourceLine] = useState<number>();
   const [realRunReport, setRealRunReport] = useState<RunPreflightReport>();
+  const [programRunIntent, setProgramRunIntent] =
+    useState<ProgramRunIntent>("airRun");
   const [firstCutOpen, setFirstCutOpen] = useState(false);
   const [firstCutPreparation, setFirstCutPreparation] =
     useState<FirstCutPreparation>();
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [error, setError] = useState<string>();
   const program = loaded?.program;
-  const senderActive = sender.state === "running" || sender.state === "paused";
+  const senderActive = ["running", "paused", "draining"].includes(sender.state);
 
   useEffect(() => {
     if (!desktopRuntime || !dryRunGateway) return;
@@ -229,7 +233,9 @@ export function ProgramWorkspace({
   });
   const progressPercent = controls.progressPercent;
   const reportForProgram =
-    realRunReport?.sourceName === program?.sourceName
+    realRunReport &&
+    realRunReport.sourceName === program?.sourceName &&
+    realRunReport.intent === programRunIntent
       ? realRunReport
       : undefined;
   const preflightControls = realRunPreflightControls(reportForProgram, {
@@ -244,10 +250,13 @@ export function ProgramWorkspace({
     setRealRunReport(undefined);
     setFirstCutPreparation(undefined);
     try {
-      const report = await realRunGateway.preflight({
-        sourceName: loaded.program.sourceName,
-        source: loaded.source,
-      });
+      const report = await realRunGateway.preflight(
+        {
+          sourceName: loaded.program.sourceName,
+          source: loaded.source,
+        },
+        programRunIntent,
+      );
       setRealRunReport(report);
       onInspection?.(report.hardware);
       setDiagnosticView("preflight");
@@ -271,6 +280,28 @@ export function ProgramWorkspace({
       confirmation,
     );
   };
+  const startProgramRun = async (
+    preparation: FirstCutPreparation,
+  ): Promise<SenderSnapshot> => {
+    if (!loaded || !realRunGateway) {
+      throw new Error("Program-run gateway is unavailable");
+    }
+    return realRunGateway.startProgram(
+      {
+        sourceName: loaded.program.sourceName,
+        source: loaded.source,
+      },
+      preparation.authorization.id,
+    );
+  };
+  const programRunVisible =
+    senderForProgram && (sender.mode === "airRun" || sender.mode === "cutRun");
+
+  useEffect(() => {
+    if (programRunVisible && sender.currentSourceLine !== undefined) {
+      setSelectedSourceLine(sender.currentSourceLine);
+    }
+  }, [programRunVisible, sender.currentSourceLine]);
 
   return (
     <section className="program-workspace" aria-labelledby="program-title">
@@ -414,10 +445,92 @@ export function ProgramWorkspace({
                 </strong>
               </div>
             </div>
-            {realRunTarget ? (
+            {realRunTarget && programRunVisible ? (
+              <div className={`dry-run-card program-run-card is-${displayedSender.state}`}>
+                <div className="dry-run-heading">
+                  <div>
+                    <span>{sender.mode === "airRun" ? "Air run" : "Cut run"}</span>
+                    <strong>
+                      {displayedSender.state === "draining"
+                        ? "Waiting for GRBL Idle"
+                        : senderLabels[displayedSender.state]}
+                    </strong>
+                  </div>
+                  <code>{progressPercent}%</code>
+                </div>
+                <div
+                  aria-label="Program run progress"
+                  aria-valuemax={100}
+                  aria-valuemin={0}
+                  aria-valuenow={progressPercent}
+                  className="dry-run-progress"
+                  role="progressbar"
+                >
+                  <i style={{ width: `${progressPercent}%` }} />
+                </div>
+                <div className="dry-run-line">
+                  <span>
+                    {displayedSender.currentSourceLine !== undefined
+                      ? `L${displayedSender.currentSourceLine}`
+                      : "Guard"}
+                  </span>
+                  <code>{displayedSender.currentCommand ?? "M5 · M9 preamble"}</code>
+                </div>
+                <div className="dry-run-actions">
+                  {displayedSender.state === "paused" && realRunGateway && (
+                    <button
+                      onClick={() =>
+                        void runSenderAction(realRunGateway.resumeProgram)
+                      }
+                      type="button"
+                    >
+                      <Play aria-hidden="true" size={13} />
+                      Resume
+                    </button>
+                  )}
+                </div>
+                <small>
+                  {displayedSender.state === "completed"
+                    ? "Все строки подтверждены; контроллер вернулся в Idle"
+                    : displayedSender.state === "failed"
+                      ? displayedSender.lastError
+                      : "Остановка: Feed Hold, затем подтверждаемый Soft Reset справа"}
+                </small>
+              </div>
+            ) : realRunTarget ? (
               <div
                 className={`real-run-preflight is-${preflightControls.status}`}
               >
+                <div
+                  aria-label="Режим выполнения"
+                  className="program-run-intent"
+                  role="group"
+                >
+                  <button
+                    aria-pressed={programRunIntent === "airRun"}
+                    disabled={preflightLoading}
+                    onClick={() => {
+                      setProgramRunIntent("airRun");
+                      setRealRunReport(undefined);
+                      setFirstCutPreparation(undefined);
+                    }}
+                    type="button"
+                  >
+                    Air run
+                  </button>
+                  <button
+                    aria-pressed={programRunIntent === "cutting"}
+                    disabled={preflightLoading}
+                    onClick={() => {
+                      setProgramRunIntent("cutting");
+                      setRealRunReport(undefined);
+                      setFirstCutPreparation(undefined);
+                    }}
+                    type="button"
+                  >
+                    Обработка
+                  </button>
+                </div>
                 <div className="real-run-preflight-heading">
                   <div>
                     <span>Serial preflight</span>
@@ -448,17 +561,17 @@ export function ProgramWorkspace({
                     type="button"
                   >
                     <ShieldCheck aria-hidden="true" size={13} />
-                    {firstCutPreparation ? "Разрешение выпущено" : "Подтвердить первый рез"}
+                    {firstCutPreparation ? "Разрешение выпущено" : "Подтвердить запуск"}
                   </button>
                 )}
                 <small>
                   {firstCutPreparation
-                    ? `Lease #${firstCutPreparation.authorization.id} · максимум 30 секунд · sender закрыт`
+                    ? `Lease #${firstCutPreparation.authorization.id} · максимум 30 секунд · ожидает Start`
                     : reportForProgram?.ready
-                    ? `${reportForProgram.cautionCount} caution · Serial sender закрыт`
+                    ? `${reportForProgram.cautionCount} caution · готов к авторизации`
                     : reportForProgram
                       ? `${reportForProgram.blockerCount} blocker · ${reportForProgram.cautionCount} caution`
-                      : "Только чтение GRBL; движения и запуска здесь нет"}
+                      : "Проверка файла и свежего состояния GRBL"}
                 </small>
               </div>
             ) : (
@@ -713,6 +826,7 @@ export function ProgramWorkspace({
       )}
 
       <FirstCutAuthorizationDialog
+        intent={programRunIntent}
         onAuthorize={authorizeFirstCut}
         onAuthorized={(preparation) => {
           setFirstCutPreparation(preparation);
@@ -720,6 +834,11 @@ export function ProgramWorkspace({
           onInspection?.(preparation.report.hardware);
         }}
         onClose={() => setFirstCutOpen(false)}
+        onStart={startProgramRun}
+        onStarted={(snapshot) => {
+          setSender(snapshot);
+          setFirstCutPreparation(undefined);
+        }}
         open={firstCutOpen}
         report={reportForProgram}
       />

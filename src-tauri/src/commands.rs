@@ -15,7 +15,7 @@ use millo_profile::{
     MachineLocalSettingsUpdate, MachineProfile, MachineProfileDraft, MachineProfileState,
     MachineProfileStore,
 };
-use millo_run::{FirstCutConfirmation, FirstCutPreparation, RunPreflightReport};
+use millo_run::{FirstCutConfirmation, FirstCutPreparation, ProgramRunIntent, RunPreflightReport};
 use millo_sender::SenderSnapshot;
 use millo_serial::{
     SerialConfig, SerialPortDescriptor, SerialPortKind, SerialTransport,
@@ -1043,6 +1043,7 @@ pub async fn parse_gcode_program(request: ProgramParseRequest) -> Result<GcodePr
 #[tauri::command]
 pub async fn preflight_real_run(
     request: ProgramParseRequest,
+    intent: ProgramRunIntent,
     state: State<'_, AppState>,
 ) -> Result<RunPreflightReport, String> {
     let _transition = state.transition_lock.lock().await;
@@ -1056,7 +1057,7 @@ pub async fn preflight_real_run(
         .map_err(|error| error.to_string())?;
     state
         .arbiter
-        .preflight_real_run(program)
+        .preflight_real_run(program, intent)
         .await
         .map_err(|error| error.to_string())
 }
@@ -1079,6 +1080,42 @@ pub async fn authorize_first_cut(
     state
         .arbiter
         .authorize_first_cut(program, confirmation)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn start_program_run(
+    request: ProgramParseRequest,
+    authorization_id: u64,
+    state: State<'_, AppState>,
+) -> Result<SenderSnapshot, String> {
+    let _transition = state.transition_lock.lock().await;
+    ensure_machine_bound(&state).await?;
+    if state.active_transport.lock().await.kind != TransportKind::Serial {
+        return Err("program run requires an active serial transport".to_owned());
+    }
+    let program = tokio::task::spawn_blocking(move || parse_program(request))
+        .await
+        .map_err(|error| format!("program-run parser task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
+    state
+        .arbiter
+        .start_program_run(program, authorization_id)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn resume_program_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
+    let _transition = state.transition_lock.lock().await;
+    ensure_machine_bound(&state).await?;
+    if state.active_transport.lock().await.kind != TransportKind::Serial {
+        return Err("program resume requires an active serial transport".to_owned());
+    }
+    state
+        .arbiter
+        .resume_program_run()
         .await
         .map_err(|error| error.to_string())
 }

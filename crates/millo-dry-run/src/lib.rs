@@ -7,6 +7,13 @@ use thiserror::Error;
 pub const MAX_DRY_RUN_COMMAND_BYTES: usize = 255;
 const SAFETY_PREAMBLE: [&str; 2] = ["M5", "M9"];
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ProgramRunPolicy {
+    #[default]
+    AirRun,
+    Cutting,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum DryRunBlockerKind {
@@ -35,6 +42,8 @@ pub struct DryRunBlocker {
 pub enum DryRunLineKind {
     SafetyPreamble,
     Program,
+    ProgramPause,
+    ProgramEnd,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -99,6 +108,13 @@ impl DryRunPolicyError {
 }
 
 pub fn build_dry_run_plan(program: &GcodeProgram) -> Result<DryRunPlan, DryRunPolicyError> {
+    build_program_run_plan(program, ProgramRunPolicy::AirRun)
+}
+
+pub fn build_program_run_plan(
+    program: &GcodeProgram,
+    policy: ProgramRunPolicy,
+) -> Result<DryRunPlan, DryRunPolicyError> {
     let mut blockers = Vec::new();
     let mut seen = BTreeSet::new();
 
@@ -113,7 +129,13 @@ pub fn build_dry_run_plan(program: &GcodeProgram) -> Result<DryRunPlan, DryRunPo
     }
 
     for line in program.lines.iter().filter(|line| line.executable) {
-        inspect_normalized_line(line.source_line, &line.normalized, &mut blockers, &mut seen);
+        inspect_normalized_line(
+            line.source_line,
+            &line.normalized,
+            policy,
+            &mut blockers,
+            &mut seen,
+        );
         if line.normalized.len() > MAX_DRY_RUN_COMMAND_BYTES {
             add_blocker(
                 &mut blockers,
@@ -129,6 +151,9 @@ pub fn build_dry_run_plan(program: &GcodeProgram) -> Result<DryRunPlan, DryRunPo
 
     for warning in &program.warnings {
         if warning.severity == ProgramWarningSeverity::Warning {
+            continue;
+        }
+        if warning_allowed_by_policy(program, warning, policy) {
             continue;
         }
         let kind = match warning.code {
@@ -159,16 +184,22 @@ pub fn build_dry_run_plan(program: &GcodeProgram) -> Result<DryRunPlan, DryRunPo
         return Err(DryRunPolicyError::Rejected(blockers.len(), blockers));
     }
 
-    let program_lines = program
+    let mut program_lines = Vec::new();
+    for line in program
         .lines
         .iter()
         .filter(|line| line.executable && !line.normalized.is_empty())
-        .map(|line| DryRunLine {
+    {
+        let kind = classify_line(&line.normalized);
+        program_lines.push(DryRunLine {
             source_line: Some(line.source_line),
             command: line.normalized.clone(),
-            kind: DryRunLineKind::Program,
-        })
-        .collect::<Vec<_>>();
+            kind,
+        });
+        if kind == DryRunLineKind::ProgramEnd {
+            break;
+        }
+    }
     if program_lines.is_empty() {
         return Err(DryRunPolicyError::EmptyProgram);
     }
@@ -191,6 +222,7 @@ pub fn build_dry_run_plan(program: &GcodeProgram) -> Result<DryRunPlan, DryRunPo
 fn inspect_normalized_line(
     source_line: usize,
     normalized: &str,
+    policy: ProgramRunPolicy,
     blockers: &mut Vec<DryRunBlocker>,
     seen: &mut BTreeSet<(Option<usize>, DryRunBlockerKind)>,
 ) {
@@ -199,13 +231,17 @@ fn inspect_normalized_line(
             continue;
         };
         match letter {
-            'M' if code_is(value, 3.0) || code_is(value, 4.0) => add_blocker(
-                blockers,
-                seen,
-                Some(source_line),
-                DryRunBlockerKind::SpindleActivation,
-                "M3/M4 spindle activation is forbidden by dry-run policy",
-            ),
+            'M' if (code_is(value, 3.0) || code_is(value, 4.0))
+                && policy == ProgramRunPolicy::AirRun =>
+            {
+                add_blocker(
+                    blockers,
+                    seen,
+                    Some(source_line),
+                    DryRunBlockerKind::SpindleActivation,
+                    "M3/M4 spindle activation is forbidden by dry-run policy",
+                )
+            }
             'M' if code_is(value, 7.0) || code_is(value, 8.0) => add_blocker(
                 blockers,
                 seen,
@@ -220,7 +256,7 @@ fn inspect_normalized_line(
                 DryRunBlockerKind::ToolChange,
                 "M6 tool change is forbidden by dry-run policy",
             ),
-            'S' if value.abs() > f64::EPSILON => add_blocker(
+            'S' if value.abs() > f64::EPSILON && policy == ProgramRunPolicy::AirRun => add_blocker(
                 blockers,
                 seen,
                 Some(source_line),
@@ -252,6 +288,38 @@ fn inspect_normalized_line(
             ),
             _ => {}
         }
+    }
+}
+
+fn warning_allowed_by_policy(
+    _program: &GcodeProgram,
+    warning: &millo_gcode::ProgramWarning,
+    policy: ProgramRunPolicy,
+) -> bool {
+    policy == ProgramRunPolicy::Cutting
+        && matches!(
+            warning.code,
+            ProgramWarningCode::SpindleActivation | ProgramWarningCode::SpindleSpeed
+        )
+}
+
+fn classify_line(normalized: &str) -> DryRunLineKind {
+    let mut pause = false;
+    for word in normalized.split_whitespace() {
+        let Some(('M', value)) = split_word(word) else {
+            continue;
+        };
+        if code_is(value, 2.0) || code_is(value, 30.0) {
+            return DryRunLineKind::ProgramEnd;
+        }
+        if code_is(value, 0.0) || code_is(value, 1.0) {
+            pause = true;
+        }
+    }
+    if pause {
+        DryRunLineKind::ProgramPause
+    } else {
+        DryRunLineKind::Program
     }
 }
 
@@ -328,6 +396,49 @@ mod tests {
         assert!(kinds.contains(&DryRunBlockerKind::ToolChange));
         assert!(kinds.contains(&DryRunBlockerKind::MachineCoordinateMotion));
         assert!(kinds.contains(&DryRunBlockerKind::CoordinateMutation));
+    }
+
+    #[test]
+    fn cutting_policy_accepts_spindle_words_but_keeps_other_guards() {
+        let plan = build_program_run_plan(
+            &parse("G21 G90 G94\nS12000 M3\nG1 X1 F50\nM5"),
+            ProgramRunPolicy::Cutting,
+        )
+        .unwrap();
+        assert!(
+            plan.lines()
+                .iter()
+                .any(|line| line.command() == "S12000 M3")
+        );
+
+        let rejected = build_program_run_plan(
+            &parse("G21 G90 G94\nM8\nG1 X1 F50"),
+            ProgramRunPolicy::Cutting,
+        )
+        .unwrap_err();
+        assert!(
+            rejected
+                .blockers()
+                .iter()
+                .any(|blocker| blocker.kind == DryRunBlockerKind::CoolantActivation)
+        );
+    }
+
+    #[test]
+    fn classifies_program_pause_and_stops_the_plan_at_program_end() {
+        let plan = build_program_run_plan(
+            &parse("G21\nM0\nG1 X1\nM30\nG1 X99"),
+            ProgramRunPolicy::Cutting,
+        )
+        .unwrap();
+        assert_eq!(plan.lines()[3].kind(), DryRunLineKind::ProgramPause);
+        assert_eq!(plan.lines()[5].kind(), DryRunLineKind::ProgramEnd);
+        assert!(
+            !plan
+                .lines()
+                .iter()
+                .any(|line| line.command().contains("X99"))
+        );
     }
 
     #[test]

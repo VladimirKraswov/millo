@@ -9,19 +9,16 @@ use millo_domain::{
     Position, ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation, WorkAxis,
     WorkCoordinateSystem, WorkZeroOutcome, WorkZeroRequest,
 };
-#[cfg(test)]
-use millo_dry_run::build_dry_run_plan;
-use millo_dry_run::{DryRunPlan, DryRunPolicyError};
+use millo_dry_run::{DryRunPlan, DryRunPolicyError, ProgramRunPolicy, build_program_run_plan};
 use millo_gcode::GcodeProgram;
 use millo_grbl::{
     active_work_coordinate_system, build_device_inspection, work_coordinate_parameter,
 };
 use millo_readiness::assess;
-#[cfg(test)]
 use millo_run::program_fingerprint;
 use millo_run::{
     FirstCutAuthorizationError, FirstCutConfirmation, FirstCutGate, FirstCutPreparation,
-    RunPreflightReport, assess_real_run_preflight,
+    ProgramRunIntent, RunPreflightReport, assess_real_run_preflight,
 };
 use millo_safety::{SafetyError, SafetyManager};
 use millo_sender::{Sender, SenderError, SenderSnapshot, SenderState};
@@ -69,6 +66,10 @@ pub enum ArbiterError {
     DryRunTransportUnavailable,
     #[error("real-run preflight requires the serial transport target")]
     RealRunTransportUnavailable,
+    #[error("program run can resume only from GRBL Hold or Idle, current mode is {0:?}")]
+    ProgramRunResumeUnavailable(MachineMode),
+    #[error("a physical program run can be stopped only with Feed Hold followed by Soft Reset")]
+    ProgramRunStopRequiresReset,
     #[error(transparent)]
     FirstCut(#[from] FirstCutAuthorizationError),
     #[error(transparent)]
@@ -246,9 +247,14 @@ impl CommandArbiter {
     pub async fn preflight_real_run(
         &self,
         program: GcodeProgram,
+        intent: ProgramRunIntent,
     ) -> Result<RunPreflightReport, ArbiterError> {
-        self.call(|response| Request::PreflightRealRun { program, response })
-            .await
+        self.call(|response| Request::PreflightRealRun {
+            program,
+            intent,
+            response,
+        })
+        .await
     }
 
     pub async fn authorize_first_cut(
@@ -262,6 +268,25 @@ impl CommandArbiter {
             response,
         })
         .await
+    }
+
+    pub async fn start_program_run(
+        &self,
+        program: GcodeProgram,
+        authorization_id: u64,
+    ) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::StartProgramRun {
+            program,
+            authorization_id,
+            dispatch_immediately: true,
+            response,
+        })
+        .await
+    }
+
+    pub async fn resume_program_run(&self) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::ResumeProgramRun { response })
+            .await
     }
 
     pub async fn feed_hold(&self) -> Result<ControllerSnapshot, ArbiterError> {
@@ -352,7 +377,7 @@ impl CommandArbiter {
         authorization_id: u64,
         dispatch_immediately: bool,
     ) -> Result<SenderSnapshot, ArbiterError> {
-        self.call(|response| Request::StartSerialRunFixture {
+        self.call(|response| Request::StartProgramRun {
             program,
             authorization_id,
             dispatch_immediately,
@@ -425,12 +450,22 @@ enum Request {
     },
     PreflightRealRun {
         program: GcodeProgram,
+        intent: ProgramRunIntent,
         response: oneshot::Sender<Result<RunPreflightReport, ArbiterError>>,
     },
     AuthorizeFirstCut {
         program: GcodeProgram,
         confirmation: FirstCutConfirmation,
         response: oneshot::Sender<Result<FirstCutPreparation, ArbiterError>>,
+    },
+    StartProgramRun {
+        program: GcodeProgram,
+        authorization_id: u64,
+        dispatch_immediately: bool,
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
+    },
+    ResumeProgramRun {
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
     Realtime {
         command: RealtimeCommand,
@@ -479,13 +514,6 @@ enum Request {
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
     #[cfg(test)]
-    StartSerialRunFixture {
-        program: GcodeProgram,
-        authorization_id: u64,
-        dispatch_immediately: bool,
-        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
-    },
-    #[cfg(test)]
     ReleaseSerialRunFixture {
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
@@ -523,9 +551,21 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                     actor.controller.snapshot().connection,
                     ConnectionState::Connected | ConnectionState::Recovering
                 ) {
-                    let _ = actor.controller.lifecycle_tick().await;
+                    let lifecycle = actor.controller.lifecycle_tick().await;
                     actor.safety.observe(&actor.controller.snapshot(), Instant::now());
                     actor.first_cut.observe(&actor.controller.snapshot(), Instant::now());
+                    match lifecycle {
+                        Ok(_) => reconcile_physical_sender(
+                            &mut actor.sender,
+                            &actor.controller.snapshot(),
+                            &actor.sender_snapshots,
+                        ),
+                        Err(error) => fail_active_sender(
+                            &mut actor.sender,
+                            format!("controller polling failed during program run: {error}"),
+                            &actor.sender_snapshots,
+                        ),
+                    }
                     publish(&actor.snapshots, &actor.controller);
                 }
             }
@@ -618,6 +658,16 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 .map_err(ArbiterError::from);
             safety.observe(&controller.snapshot(), Instant::now());
             first_cut.observe(&controller.snapshot(), Instant::now());
+            match &result {
+                Ok(_) => {
+                    reconcile_physical_sender(sender, &controller.snapshot(), sender_snapshots)
+                }
+                Err(error) => fail_active_sender(
+                    sender,
+                    format!("controller status failed during program run: {error}"),
+                    sender_snapshots,
+                ),
+            }
             publish(snapshots, controller);
             let _ = response.send(result);
         }
@@ -639,12 +689,16 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             publish(snapshots, controller);
             let _ = response.send(result);
         }
-        Request::PreflightRealRun { program, response } => {
+        Request::PreflightRealRun {
+            program,
+            intent,
+            response,
+        } => {
             first_cut.invalidate();
             let result = if *execution_target != ExecutionTarget::Serial {
                 Err(ArbiterError::RealRunTransportUnavailable)
             } else {
-                execute_real_run_preflight(controller, hardware_profile, program).await
+                execute_real_run_preflight(controller, hardware_profile, program, intent).await
             };
             publish(snapshots, controller);
             let _ = response.send(result);
@@ -675,15 +729,42 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             publish(snapshots, controller);
             let _ = response.send(result);
         }
+        Request::StartProgramRun {
+            program,
+            authorization_id,
+            dispatch_immediately,
+            response,
+        } => {
+            let result = if *execution_target != ExecutionTarget::Serial {
+                Err(ArbiterError::RealRunTransportUnavailable)
+            } else {
+                execute_authorized_program_run_start(
+                    controller,
+                    first_cut,
+                    sender,
+                    program,
+                    authorization_id,
+                )
+                .await
+            };
+            *sender_dispatch_enabled = dispatch_immediately && result.is_ok();
+            publish(snapshots, controller);
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
+        Request::ResumeProgramRun { response } => {
+            let result = if *execution_target != ExecutionTarget::Serial {
+                Err(ArbiterError::RealRunTransportUnavailable)
+            } else {
+                execute_program_run_resume(controller, sender).await
+            };
+            publish(snapshots, controller);
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
         Request::Realtime { command, response } => {
             if command != RealtimeCommand::Status {
                 invalidate_authorizations(safety, first_cut);
-            }
-            if command == RealtimeCommand::FeedHold
-                && sender.snapshot().state == SenderState::Running
-            {
-                let _ = sender.pause();
-                publish_sender(sender_snapshots, sender);
             }
             if command == RealtimeCommand::SoftReset {
                 cancel_active_sender(sender, sender_snapshots);
@@ -692,6 +773,16 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 .send_realtime(command)
                 .await
                 .map_err(ArbiterError::from);
+            if result.is_ok()
+                && command == RealtimeCommand::FeedHold
+                && matches!(
+                    sender.snapshot().state,
+                    SenderState::Running | SenderState::Draining
+                )
+            {
+                let _ = sender.pause();
+                publish_sender(sender_snapshots, sender);
+            }
             publish(snapshots, controller);
             let _ = response.send(result);
         }
@@ -808,31 +899,14 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(result);
         }
         Request::CancelDryRun { response } => {
-            let result = sender.cancel().map_err(ArbiterError::from);
-            publish_sender(sender_snapshots, sender);
-            let _ = response.send(result);
-        }
-        #[cfg(test)]
-        Request::StartSerialRunFixture {
-            program,
-            authorization_id,
-            dispatch_immediately,
-            response,
-        } => {
-            let result = if *execution_target != ExecutionTarget::Serial {
-                Err(ArbiterError::RealRunTransportUnavailable)
+            let result = if matches!(
+                sender.snapshot().mode,
+                Some(millo_sender::SenderMode::AirRun | millo_sender::SenderMode::CutRun)
+            ) {
+                Err(ArbiterError::ProgramRunStopRequiresReset)
             } else {
-                execute_authorized_serial_sender_start(
-                    controller,
-                    first_cut,
-                    sender,
-                    program,
-                    authorization_id,
-                )
-                .await
+                sender.cancel().map_err(ArbiterError::from)
             };
-            *sender_dispatch_enabled = dispatch_immediately && result.is_ok();
-            publish(snapshots, controller);
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
         }
@@ -850,6 +924,7 @@ async fn execute_real_run_preflight(
     controller: &mut Controller<BoxedTransport>,
     hardware_profile: &HardwareProfile,
     program: GcodeProgram,
+    intent: ProgramRunIntent,
 ) -> Result<RunPreflightReport, ArbiterError> {
     controller.refresh_status().await?;
     ensure_stable_idle(&controller.snapshot())?;
@@ -857,7 +932,9 @@ async fn execute_real_run_preflight(
     let snapshot = controller.refresh_status().await?;
     let readiness = assess(hardware_profile, &device, &snapshot);
     let hardware = HardwareInspection { device, readiness };
-    Ok(assess_real_run_preflight(&program, hardware, &snapshot))
+    Ok(assess_real_run_preflight(
+        &program, hardware, &snapshot, intent,
+    ))
 }
 
 async fn execute_first_cut_authorization(
@@ -867,7 +944,9 @@ async fn execute_first_cut_authorization(
     program: GcodeProgram,
     confirmation: FirstCutConfirmation,
 ) -> Result<FirstCutPreparation, ArbiterError> {
-    let report = execute_real_run_preflight(controller, hardware_profile, program).await?;
+    let report =
+        execute_real_run_preflight(controller, hardware_profile, program, confirmation.intent)
+            .await?;
     let authorization = first_cut.authorize(
         confirmation,
         &report,
@@ -880,8 +959,7 @@ async fn execute_first_cut_authorization(
     })
 }
 
-#[cfg(test)]
-async fn execute_authorized_serial_sender_start(
+async fn execute_authorized_program_run_start(
     controller: &mut Controller<BoxedTransport>,
     first_cut: &mut FirstCutGate,
     sender: &mut Sender,
@@ -889,21 +967,94 @@ async fn execute_authorized_serial_sender_start(
     authorization_id: u64,
 ) -> Result<SenderSnapshot, ArbiterError> {
     let sender_state = sender.snapshot().state;
-    if matches!(sender_state, SenderState::Running | SenderState::Paused) {
+    if matches!(
+        sender_state,
+        SenderState::Running | SenderState::Paused | SenderState::Draining
+    ) {
         return Err(SenderError::Busy(sender_state).into());
     }
     let fingerprint = program_fingerprint(&program);
-    let plan = build_dry_run_plan(&program)?;
     let snapshot = controller.refresh_status().await?;
     ensure_stable_idle(&snapshot)?;
-    first_cut.consume(authorization_id, &fingerprint, &snapshot, Instant::now())?;
-    sender.load_first_cut(plan)?;
+    let intent = first_cut.consume(authorization_id, &fingerprint, &snapshot, Instant::now())?;
+    let policy = match intent {
+        ProgramRunIntent::AirRun => ProgramRunPolicy::AirRun,
+        ProgramRunIntent::Cutting => ProgramRunPolicy::Cutting,
+    };
+    let plan = build_program_run_plan(&program, policy)?;
+    match intent {
+        ProgramRunIntent::AirRun => sender.load_air_run(plan)?,
+        ProgramRunIntent::Cutting => sender.load_cut_run(plan)?,
+    };
     sender.start().map_err(ArbiterError::from)
+}
+
+async fn execute_program_run_resume(
+    controller: &mut Controller<BoxedTransport>,
+    sender: &mut Sender,
+) -> Result<SenderSnapshot, ArbiterError> {
+    let snapshot = controller.refresh_status().await?;
+    match snapshot.machine.mode {
+        MachineMode::Hold => {
+            controller
+                .send_realtime(RealtimeCommand::CycleStart)
+                .await?;
+        }
+        MachineMode::Idle => {}
+        mode => return Err(ArbiterError::ProgramRunResumeUnavailable(mode)),
+    }
+    sender.resume().map_err(ArbiterError::from)
 }
 
 fn invalidate_authorizations(safety: &mut SafetyManager, first_cut: &mut FirstCutGate) {
     safety.invalidate_test_jog();
     first_cut.invalidate();
+}
+
+fn reconcile_physical_sender(
+    sender: &mut Sender,
+    snapshot: &ControllerSnapshot,
+    sender_snapshots: &watch::Sender<SenderSnapshot>,
+) {
+    let sender_state = sender.snapshot().state;
+    if !matches!(
+        sender_state,
+        SenderState::Running | SenderState::Paused | SenderState::Draining
+    ) {
+        return;
+    }
+    if snapshot.connection != ConnectionState::Connected
+        || snapshot.alarm.is_some()
+        || snapshot.reset_notice.is_some()
+        || snapshot.machine.mode == MachineMode::Alarm
+    {
+        sender.fail("controller became unavailable while waiting for physical motion to finish");
+    } else {
+        match (sender_state, snapshot.machine.mode) {
+            (SenderState::Running, MachineMode::Hold | MachineMode::Door) => {
+                let _ = sender.pause();
+            }
+            (SenderState::Draining, MachineMode::Idle) => {
+                let _ = sender.complete_draining();
+            }
+            _ => {}
+        }
+    }
+    publish_sender(sender_snapshots, sender);
+}
+
+fn fail_active_sender(
+    sender: &mut Sender,
+    error: String,
+    sender_snapshots: &watch::Sender<SenderSnapshot>,
+) {
+    if matches!(
+        sender.snapshot().state,
+        SenderState::Running | SenderState::Paused | SenderState::Draining
+    ) {
+        sender.fail(error);
+        publish_sender(sender_snapshots, sender);
+    }
 }
 
 async fn execute_sender_step(
@@ -912,7 +1063,7 @@ async fn execute_sender_step(
     snapshots: &watch::Sender<ControllerSnapshot>,
     sender_snapshots: &watch::Sender<SenderSnapshot>,
 ) {
-    if let Err(error) = ensure_stable_idle(&controller.snapshot()) {
+    if let Err(error) = ensure_sender_dispatch_ready(sender, &controller.snapshot()) {
         sender.fail(error.to_string());
         publish_sender(sender_snapshots, sender);
         return;
@@ -923,7 +1074,7 @@ async fn execute_sender_step(
     };
     publish_sender(sender_snapshots, sender);
 
-    match controller.execute_dry_run_line(&line).await {
+    match controller.execute_program_line(&line).await {
         Ok(_) => {
             let _ = sender.acknowledge_ok();
         }
@@ -935,10 +1086,34 @@ async fn execute_sender_step(
     publish_sender(sender_snapshots, sender);
 }
 
+fn ensure_sender_dispatch_ready(
+    sender: &Sender,
+    snapshot: &ControllerSnapshot,
+) -> Result<(), ArbiterError> {
+    if snapshot.connection != ConnectionState::Connected
+        || snapshot.alarm.is_some()
+        || snapshot.reset_notice.is_some()
+    {
+        return Err(SafetyError::UnsafeControllerState.into());
+    }
+    let mode_ready = match sender.snapshot().mode {
+        Some(millo_sender::SenderMode::AirRun | millo_sender::SenderMode::CutRun) => matches!(
+            snapshot.machine.mode,
+            MachineMode::Idle | MachineMode::Run | MachineMode::Hold
+        ),
+        _ => snapshot.machine.mode == MachineMode::Idle,
+    };
+    if mode_ready {
+        Ok(())
+    } else {
+        Err(SafetyError::UnsafeControllerState.into())
+    }
+}
+
 fn cancel_active_sender(sender: &mut Sender, snapshots: &watch::Sender<SenderSnapshot>) {
     if matches!(
         sender.snapshot().state,
-        SenderState::Ready | SenderState::Running | SenderState::Paused
+        SenderState::Ready | SenderState::Running | SenderState::Paused | SenderState::Draining
     ) {
         let _ = sender.cancel();
         publish_sender(snapshots, sender);
@@ -1302,11 +1477,30 @@ mod tests {
 
     fn first_cut_confirmation() -> FirstCutConfirmation {
         FirstCutConfirmation {
+            intent: ProgramRunIntent::Cutting,
             stock_secured: true,
             tool_secured: true,
+            tool_removed: false,
             xyz_zero_verified: true,
             safe_z_verified: true,
             manual_spindle_running: true,
+            manual_spindle_off: false,
+            path_clear: true,
+            power_control_reachable: true,
+        }
+    }
+
+    fn air_run_confirmation() -> FirstCutConfirmation {
+        FirstCutConfirmation {
+            intent: ProgramRunIntent::AirRun,
+            stock_secured: false,
+            tool_secured: false,
+            tool_removed: true,
+            xyz_zero_verified: true,
+            safe_z_verified: true,
+            manual_spindle_running: false,
+            manual_spindle_off: true,
+            path_clear: true,
             power_control_reachable: true,
         }
     }
@@ -2139,7 +2333,10 @@ mod tests {
         arbiter.connect().await.unwrap();
 
         let report = arbiter
-            .preflight_real_run(parsed_program("G21 G90 G94\nG0 Z2\nG1 X2 F20\nM5"))
+            .preflight_real_run(
+                parsed_program("G21 G90 G94\nG0 Z2\nG1 X2 F20\nM5"),
+                ProgramRunIntent::AirRun,
+            )
             .await
             .unwrap();
 
@@ -2166,7 +2363,10 @@ mod tests {
         arbiter.connect().await.unwrap();
 
         let error = arbiter
-            .preflight_real_run(parsed_program("G21 G90\nG1 X1 F10"))
+            .preflight_real_run(
+                parsed_program("G21 G90\nG1 X1 F10"),
+                ProgramRunIntent::AirRun,
+            )
             .await
             .unwrap_err();
 
@@ -2182,12 +2382,38 @@ mod tests {
         arbiter.connect().await.unwrap();
 
         let report = arbiter
-            .preflight_real_run(parsed_program("G21 G90 G94\nM3 S1000\nG1 X1 F10"))
+            .preflight_real_run(
+                parsed_program("G21 G90 G94\nM3 S1000\nG1 X1 F10"),
+                ProgramRunIntent::AirRun,
+            )
             .await
             .unwrap();
 
         assert!(!report.ready);
         assert_eq!(report.program_blockers[0].source_line, Some(2));
+        assert!(control.writes().iter().all(|write| matches!(
+            write.as_slice(),
+            b"?" | b"$I\n" | b"$$\n" | b"$G\n" | b"$#\n"
+        )));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn cutting_preflight_accepts_spindle_words_without_dispatching_them() {
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let report = arbiter
+            .preflight_real_run(
+                parsed_program("G21 G90 G94\nM3 S1000\nG1 X1 F10\nM5"),
+                ProgramRunIntent::Cutting,
+            )
+            .await
+            .unwrap();
+
+        assert!(report.ready);
+        assert_eq!(report.intent, ProgramRunIntent::Cutting);
         assert!(control.writes().iter().all(|write| matches!(
             write.as_slice(),
             b"?" | b"$I\n" | b"$$\n" | b"$G\n" | b"$#\n"
@@ -2260,9 +2486,12 @@ mod tests {
 
         let (preparation, started) =
             authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        let draining = wait_for_sender(&arbiter, SenderState::Draining).await;
+        assert_eq!(draining.acknowledged_lines, draining.total_lines);
+        arbiter.refresh_status().await.unwrap();
         let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
 
-        assert_eq!(started.mode, Some(millo_sender::SenderMode::FirstCut));
+        assert_eq!(started.mode, Some(millo_sender::SenderMode::CutRun));
         assert_eq!(completed.acknowledged_lines, completed.total_lines);
         assert_eq!(completed.progress, 1.0);
         let writes_before_reuse = control.writes();
@@ -2276,6 +2505,73 @@ mod tests {
         ));
         assert_eq!(control.writes().len(), writes_before_reuse.len() + 1);
         assert_eq!(control.writes().last(), Some(&b"?".to_vec()));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn production_air_run_executes_the_authorized_file_and_rejects_plain_cancel() {
+        let source = "G21 G90 G94\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        let preparation = arbiter
+            .authorize_first_cut(parsed_program(source), air_run_confirmation())
+            .await
+            .unwrap();
+
+        let started = arbiter
+            .start_program_run(parsed_program(source), preparation.authorization.id)
+            .await
+            .unwrap();
+        assert_eq!(started.mode, Some(millo_sender::SenderMode::AirRun));
+        wait_for_sender(&arbiter, SenderState::Draining).await;
+        assert!(matches!(
+            arbiter.cancel_dry_run().await.unwrap_err(),
+            ArbiterError::ProgramRunStopRequiresReset
+        ));
+
+        control.set_status("<Idle|MPos:2.000,0.000,0.000|WPos:2.000,0.000,0.000|FS:0,0>");
+        arbiter.refresh_status().await.unwrap();
+        assert_eq!(arbiter.sender_snapshot().state, SenderState::Completed);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn program_run_fails_on_alarm_after_all_lines_were_accepted() {
+        let source = "G21 G90 G94\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        wait_for_sender(&arbiter, SenderState::Draining).await;
+
+        control.set_status("<Alarm|MPos:1.000,0.000,0.000|WPos:1.000,0.000,0.000|FS:0,0>");
+        arbiter.refresh_status().await.unwrap();
+
+        assert_eq!(arbiter.sender_snapshot().state, SenderState::Failed);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn program_run_fails_on_status_link_loss_while_draining() {
+        let source = "G21 G90 G94\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        wait_for_sender(&arbiter, SenderState::Draining).await;
+
+        control.queue_disconnect();
+        assert!(arbiter.refresh_status().await.is_err());
+
+        let failed = arbiter.sender_snapshot();
+        assert_eq!(failed.state, SenderState::Failed);
+        assert!(
+            failed
+                .last_error
+                .as_deref()
+                .is_some_and(|value| value.contains("status failed"))
+        );
         task.abort();
     }
 
@@ -2333,15 +2629,20 @@ mod tests {
         let (_, started) = authorize_and_start_serial_fixture(&arbiter, source, false).await;
 
         assert_eq!(started.state, SenderState::Running);
+        control.set_status("<Run|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:20,0>");
         let paused = arbiter.feed_hold().await.unwrap();
         assert_eq!(paused.connection, ConnectionState::Connected);
         assert_eq!(arbiter.sender_snapshot().state, SenderState::Paused);
         assert_eq!(control.writes().last(), Some(&b"!".to_vec()));
 
-        arbiter.resume_dry_run().await.unwrap();
+        arbiter.resume_program_run().await.unwrap();
+        assert_eq!(control.writes().last(), Some(&b"~".to_vec()));
         arbiter.release_serial_run_fixture().await.unwrap();
+        wait_for_sender(&arbiter, SenderState::Draining).await;
+        control.set_status("<Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:0,0>");
+        arbiter.refresh_status().await.unwrap();
         let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
-        assert_eq!(completed.mode, Some(millo_sender::SenderMode::FirstCut));
+        assert_eq!(completed.mode, Some(millo_sender::SenderMode::CutRun));
         task.abort();
     }
 

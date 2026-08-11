@@ -1,4 +1,4 @@
-use millo_dry_run::{DryRunLine, DryRunPlan, MAX_DRY_RUN_COMMAND_BYTES};
+use millo_dry_run::{DryRunLine, DryRunLineKind, DryRunPlan, MAX_DRY_RUN_COMMAND_BYTES};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -9,7 +9,8 @@ pub const MAX_SENDER_BYTES: usize = 2 * 1024 * 1024;
 #[serde(rename_all = "camelCase")]
 pub enum SenderMode {
     MockDryRun,
-    FirstCut,
+    AirRun,
+    CutRun,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +38,7 @@ pub enum SenderState {
     Ready,
     Running,
     Paused,
+    Draining,
     Completed,
     Failed,
     Cancelled,
@@ -101,6 +103,7 @@ pub struct Sender {
     in_flight: Option<DryRunLine>,
     last_line: Option<DryRunLine>,
     last_error: Option<String>,
+    paused_from: Option<SenderState>,
 }
 
 impl Default for Sender {
@@ -120,6 +123,7 @@ impl Sender {
             in_flight: None,
             last_line: None,
             last_error: None,
+            paused_from: None,
         }
     }
 
@@ -127,8 +131,12 @@ impl Sender {
         self.load_with_mode(plan, SenderMode::MockDryRun)
     }
 
-    pub fn load_first_cut(&mut self, plan: DryRunPlan) -> Result<SenderSnapshot, SenderError> {
-        self.load_with_mode(plan, SenderMode::FirstCut)
+    pub fn load_air_run(&mut self, plan: DryRunPlan) -> Result<SenderSnapshot, SenderError> {
+        self.load_with_mode(plan, SenderMode::AirRun)
+    }
+
+    pub fn load_cut_run(&mut self, plan: DryRunPlan) -> Result<SenderSnapshot, SenderError> {
+        self.load_with_mode(plan, SenderMode::CutRun)
     }
 
     fn load_with_mode(
@@ -136,7 +144,10 @@ impl Sender {
         plan: DryRunPlan,
         mode: SenderMode,
     ) -> Result<SenderSnapshot, SenderError> {
-        if matches!(self.state, SenderState::Running | SenderState::Paused) {
+        if matches!(
+            self.state,
+            SenderState::Running | SenderState::Paused | SenderState::Draining
+        ) {
             return Err(SenderError::Busy(self.state));
         }
         self.validate_plan(&plan)?;
@@ -147,6 +158,7 @@ impl Sender {
         self.in_flight = None;
         self.last_line = None;
         self.last_error = None;
+        self.paused_from = None;
         Ok(self.snapshot())
     }
 
@@ -162,12 +174,13 @@ impl Sender {
     }
 
     pub fn pause(&mut self) -> Result<SenderSnapshot, SenderError> {
-        if self.state != SenderState::Running {
+        if !matches!(self.state, SenderState::Running | SenderState::Draining) {
             return Err(SenderError::InvalidTransition {
                 action: "pause",
                 state: self.state,
             });
         }
+        self.paused_from = Some(self.state);
         self.state = SenderState::Paused;
         Ok(self.snapshot())
     }
@@ -179,14 +192,14 @@ impl Sender {
                 state: self.state,
             });
         }
-        self.state = SenderState::Running;
+        self.state = self.paused_from.take().unwrap_or(SenderState::Running);
         Ok(self.snapshot())
     }
 
     pub fn cancel(&mut self) -> Result<SenderSnapshot, SenderError> {
         if !matches!(
             self.state,
-            SenderState::Ready | SenderState::Running | SenderState::Paused
+            SenderState::Ready | SenderState::Running | SenderState::Paused | SenderState::Draining
         ) {
             return Err(SenderError::InvalidTransition {
                 action: "cancel",
@@ -195,6 +208,7 @@ impl Sender {
         }
         self.state = SenderState::Cancelled;
         self.in_flight = None;
+        self.paused_from = None;
         Ok(self.snapshot())
     }
 
@@ -202,6 +216,7 @@ impl Sender {
         self.last_line = self.in_flight.take().or_else(|| self.last_line.take());
         self.last_error = Some(error.into());
         self.state = SenderState::Failed;
+        self.paused_from = None;
         self.snapshot()
     }
 
@@ -215,7 +230,7 @@ impl Sender {
         }
         let plan = self.plan.as_ref()?;
         if self.acknowledged_lines >= plan.lines().len() {
-            self.state = SenderState::Completed;
+            self.state = self.finished_state();
             return None;
         }
         let line = plan.lines()[self.acknowledged_lines].clone();
@@ -228,15 +243,31 @@ impl Sender {
             .in_flight
             .take()
             .ok_or(SenderError::NoCommandInFlight)?;
+        let line_kind = line.kind();
         self.last_line = Some(line);
         self.acknowledged_lines = self.acknowledged_lines.saturating_add(1);
-        if self
-            .plan
-            .as_ref()
-            .is_some_and(|plan| self.acknowledged_lines == plan.lines().len())
+        if line_kind == DryRunLineKind::ProgramPause {
+            self.paused_from = Some(SenderState::Running);
+            self.state = SenderState::Paused;
+        } else if line_kind == DryRunLineKind::ProgramEnd
+            || self
+                .plan
+                .as_ref()
+                .is_some_and(|plan| self.acknowledged_lines == plan.lines().len())
         {
-            self.state = SenderState::Completed;
+            self.state = self.finished_state();
         }
+        Ok(self.snapshot())
+    }
+
+    pub fn complete_draining(&mut self) -> Result<SenderSnapshot, SenderError> {
+        if self.state != SenderState::Draining {
+            return Err(SenderError::InvalidTransition {
+                action: "complete draining",
+                state: self.state,
+            });
+        }
+        self.state = SenderState::Completed;
         Ok(self.snapshot())
     }
 
@@ -300,11 +331,19 @@ impl Sender {
         }
         Ok(())
     }
+
+    fn finished_state(&self) -> SenderState {
+        if matches!(self.mode, Some(SenderMode::AirRun | SenderMode::CutRun)) {
+            SenderState::Draining
+        } else {
+            SenderState::Completed
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use millo_dry_run::build_dry_run_plan;
+    use millo_dry_run::{ProgramRunPolicy, build_dry_run_plan, build_program_run_plan};
     use millo_gcode::{ProgramParseRequest, parse_program};
 
     use super::*;
@@ -316,6 +355,15 @@ mod tests {
         })
         .unwrap();
         build_dry_run_plan(&program).unwrap()
+    }
+
+    fn cutting_plan(source: &str) -> DryRunPlan {
+        let program = parse_program(ProgramParseRequest {
+            source_name: "sender.nc".to_owned(),
+            source: source.to_owned(),
+        })
+        .unwrap();
+        build_program_run_plan(&program, ProgramRunPolicy::Cutting).unwrap()
     }
 
     #[test]
@@ -364,6 +412,47 @@ mod tests {
     }
 
     #[test]
+    fn program_pause_is_an_acknowledged_barrier() {
+        let mut sender = Sender::default();
+        sender
+            .load_cut_run(cutting_plan("G21\nM0\nG1 X1 F10"))
+            .unwrap();
+        sender.start().unwrap();
+
+        loop {
+            let line = sender.next_line().unwrap();
+            if line.command() == "M0" {
+                break;
+            }
+            sender.acknowledge_ok().unwrap();
+        }
+        let paused = sender.acknowledge_ok().unwrap();
+        assert_eq!(paused.state, SenderState::Paused);
+        assert!(sender.next_line().is_none());
+
+        sender.resume().unwrap();
+        assert_eq!(sender.next_line().unwrap().command(), "G1 X1 F10");
+    }
+
+    #[test]
+    fn program_end_enters_physical_draining() {
+        let mut sender = Sender::default();
+        sender
+            .load_cut_run(cutting_plan("G21\nG1 X1 F10\nM30\nG1 X99"))
+            .unwrap();
+        sender.start().unwrap();
+        while sender.snapshot().state == SenderState::Running {
+            sender.next_line().unwrap();
+            sender.acknowledge_ok().unwrap();
+        }
+
+        let snapshot = sender.snapshot();
+        assert_eq!(snapshot.state, SenderState::Draining);
+        assert_eq!(snapshot.current_command.as_deref(), Some("M30"));
+        assert_eq!(snapshot.acknowledged_lines, snapshot.total_lines);
+    }
+
+    #[test]
     fn rejects_a_plan_outside_configured_bounds() {
         let mut sender = Sender::with_limits(SenderLimits {
             max_lines: 2,
@@ -394,5 +483,40 @@ mod tests {
         assert_eq!(snapshot.state, SenderState::Completed);
         assert_eq!(snapshot.acknowledged_lines, snapshot.total_lines);
         assert_eq!(snapshot.progress, 1.0);
+    }
+
+    #[test]
+    fn program_run_waits_for_a_fresh_idle_after_every_ack() {
+        let mut sender = Sender::default();
+        sender
+            .load_air_run(plan("G21 G90 G94\nG1 X20 F60"))
+            .unwrap();
+        sender.start().unwrap();
+        while sender.snapshot().state == SenderState::Running {
+            sender.next_line().unwrap();
+            sender.acknowledge_ok().unwrap();
+        }
+
+        assert_eq!(sender.snapshot().state, SenderState::Draining);
+        assert_eq!(
+            sender.complete_draining().unwrap().state,
+            SenderState::Completed
+        );
+    }
+
+    #[test]
+    fn hold_and_resume_preserve_the_dispatch_or_drain_phase() {
+        let mut dispatching = Sender::default();
+        dispatching.load_cut_run(plan("G0 X1")).unwrap();
+        dispatching.start().unwrap();
+        dispatching.pause().unwrap();
+        assert_eq!(dispatching.resume().unwrap().state, SenderState::Running);
+
+        while dispatching.snapshot().state == SenderState::Running {
+            dispatching.next_line().unwrap();
+            dispatching.acknowledge_ok().unwrap();
+        }
+        dispatching.pause().unwrap();
+        assert_eq!(dispatching.resume().unwrap().state, SenderState::Draining);
     }
 }

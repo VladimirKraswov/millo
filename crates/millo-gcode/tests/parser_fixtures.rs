@@ -46,6 +46,16 @@ fn accepts_common_program_headers_and_modal_cancels() {
 }
 
 #[test]
+fn accepts_percent_program_delimiters_as_non_executable_lines() {
+    let program = parse_fixture("delimited.nc", "%\nG21 G90 G94\nG1 X1 F10\nM30\n%");
+
+    assert!(program.warnings.is_empty());
+    assert!(!program.lines[0].executable);
+    assert!(!program.lines[4].executable);
+    assert_eq!(program.summary.executable_line_count, 3);
+}
+
+#[test]
 fn converts_imperial_incremental_motion_to_millimeters() {
     let program = parse_fixture(
         "imperial-incremental.tap",

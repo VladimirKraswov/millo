@@ -13,9 +13,8 @@ The current slices form this path:
 ```text
 Serial / Mock -> command arbiter -> GRBL lifecycle/parser -> typed Tauri IPC -> React
 File source -> millo-gcode parser -> immutable program DTO -> Three.js preview
-Safe source -> dry-run policy -> bounded sender -> Mock GRBL only
-Candidate source -> Rust preflight -> fresh serial Inspector -> read-only report
-Clear preflight + six confirmations -> fresh Inspector -> one-use first-cut lease
+File source -> intent-aware policy -> one-use authorization -> bounded GRBL sender
+Physical run -> one line in flight -> ok/error correlation -> fresh Idle completion
 ```
 
 The command arbiter now owns the active transport, periodic status polling, and
@@ -43,9 +42,9 @@ old baseline and makes the controller's newly observed state the next baseline.
 
 Device Inspector displays parsed firmware, settings, modal state, and coordinate
 parameters. A separate Rust readiness policy evaluates those values against the
-selected profile. No arbitrary line, general motion, or spindle command is
-exposed by the desktop API. Mock GRBL remains available for development and
-lifecycle tests without hardware.
+selected profile. The desktop API exposes typed operations and a policy-approved
+file sender, never an arbitrary raw-line endpoint. Mock GRBL remains available
+for development and lifecycle tests without hardware.
 
 The first safety controls are now available without opening a G-code endpoint.
 Feed Hold sends the GRBL realtime `!` byte when the controller reports active
@@ -82,15 +81,16 @@ heightmap motion remain unavailable.
 The Program workbench loads `.nc`, `.ngc`, `.gcode`, `.tap`, and `.cnc` files up
 to 2 MB through a separate `ProgramGateway`. Rust parses compact words,
 comments, metric/imperial and absolute/incremental modes, linear motion, and XY
-arcs into an immutable millimetre-based program model. Warnings retain source
+arcs into an immutable millimetre-based program model. Standalone `%` program
+delimiters are retained as non-executable source lines. Warnings retain source
 line numbers; spindle activation, tool change, probing, machine-coordinate
 motion, malformed geometry, and unsupported commands fail the dry-run gate. For
 parser-clean programs, Tauri reparses the original source and `millo-dry-run`
 builds an opaque plan with an `M5/M9` safety preamble. `millo-sender` permits
 only one in-flight line and advances only after its correlated `ok`; `error`,
-`ALARM`, disconnect, or invalid controller state stops the run. This execution
-path is locked to Mock GRBL in both the Tauri adapter and command actor. Serial
-hardware cannot start it. A lazily loaded Three.js adapter renders rapid and
+`ALARM`, disconnect, reset, timeout, or invalid controller state stops the run.
+The same state machine serves Mock dry runs and authorized serial runs. A lazily
+loaded Three.js adapter renders rapid and
 cutting geometry from a pure read model with top/isometric views. Loading and
 preview have no access to the command actor, serial transport, or machine
 capabilities; only the separate policy can mint sender lines.
@@ -103,28 +103,36 @@ selectable and explicitly report that they have no preview geometry. The table
 renders only a small overscanned window, so the 200,000-line parser limit does
 not become 200,000 DOM nodes.
 
-On an active serial target, Program also exposes a read-only real-run preflight.
+On an active serial target, Program exposes intent-aware real-run preflight.
 Tauri reparses the retained source, and the command actor performs a fresh
 `? -> $I/$$/$G/$# -> ?` transaction before `millo-run` combines the strict
-motion-only program policy with motion-critical hardware readiness. The report
+execution policy with motion-critical hardware readiness. `Air run` rejects
+spindle activation and speed words; `Cutting` permits standard `M3/M4/S` while
+the operator separately confirms the physical spindle workflow. Coolant,
+probing, M6, coordinate mutation, and machine/reference-coordinate motion remain
+blocked until their own hardware-aware workflows exist. The report
 links blockers to exact source lines and keeps unhomed travel, manual spindle,
 and physical setup visible as cautions. A clear report opens a separate
-first-cut checklist for secured stock, secured cutter, verified XYZ work zero,
-safe Z clearance, a running manually controlled spindle, and immediately
+mode-specific checklist. Air run requires a removed tool and stopped spindle;
+cutting requires secured stock and tool plus a running manually controlled
+spindle. Both require verified XYZ work zero, safe Z, clear path, and immediately
 reachable power control. Submission does not trust the displayed report: the
 actor repeats the complete serial preflight and then issues a 30-second,
-program-bound, position-bound, single-use lease. It still sends no program line
-and exposes no serial Start action. The first-cut contract also
+program-bound, position-bound, single-use lease. A separate Start action reparses
+the original file, refreshes status, and atomically consumes that lease before
+the first line can be dispatched. The run contract also
 requires explicit `G21`, `G90`, `G94`, and `G17` before the motions that depend
 on them, so preview cannot silently rely on ambient controller modes.
 
-The future serial sender transaction is now exercised behind a Rust test-only
-boundary. It refreshes status, atomically consumes the matching first-cut lease,
-rebuilds the strict opaque plan, and labels the sender `firstCut`. Deterministic
-Mock fixtures cover complete `ok`, correlated `error`, `ALARM`, Hold/resume,
-reset banner, and link-drop behavior. There is deliberately no Tauri command,
-UI Start action, plugin capability, or production serial entry point for this
-path yet.
+The production serial sender keeps exactly one line in flight and correlates
+every terminal response with its source line. `M0/M1` are acknowledged program
+barriers; `M2/M30` end dispatch. After the final `ok`, physical runs enter
+`Draining` and complete only after a fresh GRBL `Idle` status. Feed Hold uses
+realtime `!`, Resume uses `~` when GRBL reports Hold, and a physical run can be
+aborted only through Hold followed by challenge-confirmed Soft Reset. Polling
+failure, `error`, `ALARM`, reset banner, or disconnect fails closed. The sender
+is available only for an active, profile-bound serial target and has no plugin
+or raw-command entry point.
 
 UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
 first core contribution in the named `control.machine` slot; Work Zero occupies
@@ -195,9 +203,9 @@ successful GRBL status exchange.
 | `millo-dry-run` | Fail-closed program policy and opaque approved plans |
 | `millo-command` | Single-owner command actor, polling, and response arbitration |
 | `millo-readiness` | Hardware-profile policy and guarded test-jog readiness |
-| `millo-run` | Real-run preflight policy, operator checklist, and one-use first-cut lease |
+| `millo-run` | Intent-aware preflight, operator checklist, and one-use program-run lease |
 | `millo-safety` | Reset challenges and short-lived test-jog authorization |
-| `millo-sender` | Bounded one-line-in-flight sender with Mock dry-run and first-cut modes |
+| `millo-sender` | Bounded one-line-in-flight sender with Mock, air-run, and cutting modes |
 | `millo-desktop` | Thin Tauri command/event adapter |
 
 See [Architecture](docs/ARCHITECTURE.md), the decisions for the
@@ -225,6 +233,8 @@ the [controller settings and identity boundary](docs/decisions/0020-controller-s
 and the [first-cut authorization boundary](docs/decisions/0021-first-cut-authorization.md).
 The test-only sender promotion is recorded in
 [ADR 0022](docs/decisions/0022-serial-sender-fixtures.md).
+The production file sender is recorded in
+[ADR 0023](docs/decisions/0023-authorized-file-program-run.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

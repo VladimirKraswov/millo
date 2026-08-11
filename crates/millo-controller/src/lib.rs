@@ -303,7 +303,7 @@ impl<T: Transport> Controller<T> {
         self.execute_acknowledged_line(&command).await
     }
 
-    pub async fn execute_dry_run_line(
+    pub async fn execute_program_line(
         &mut self,
         line: &DryRunLine,
     ) -> Result<CommandResponse, ControllerError> {

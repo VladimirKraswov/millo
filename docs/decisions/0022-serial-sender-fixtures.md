@@ -4,6 +4,9 @@
 
 Accepted.
 
+The test-only production restriction in this decision is superseded by ADR
+0023; its sender invariants and fixtures remain active.
+
 ## Context
 
 The bounded sender already executes strict motion-only plans on Mock GRBL. The

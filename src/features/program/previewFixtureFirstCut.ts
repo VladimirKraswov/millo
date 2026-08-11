@@ -52,10 +52,45 @@ const preparation: FirstCutPreparation = {
     sourceName: previewFixtureFirstCutProgram.sourceName,
     programFingerprint: previewFixtureFirstCutReport.programFingerprint,
     pollSequence: 43,
+    intent: "airRun",
   },
 };
 
+let fixtureIntent: "airRun" | "cutting" = "airRun";
+
 export const previewFixtureFirstCutGateway: RealRunPreflightGateway = {
-  preflight: async () => previewFixtureFirstCutReport,
-  authorizeFirstCut: async () => preparation,
+  preflight: async (_request, intent) => {
+    fixtureIntent = intent;
+    return { ...previewFixtureFirstCutReport, intent };
+  },
+  authorizeFirstCut: async (_request, confirmation) => {
+    fixtureIntent = confirmation.intent;
+    return {
+      report: { ...preparation.report, intent: confirmation.intent },
+      authorization: {
+        ...preparation.authorization,
+        intent: confirmation.intent,
+      },
+    };
+  },
+  startProgram: async () => ({
+    state: "running",
+    mode: fixtureIntent === "airRun" ? "airRun" : "cutRun",
+    sourceName: previewFixtureFirstCutProgram.sourceName,
+    totalLines: 8,
+    acknowledgedLines: 2,
+    currentSourceLine: 1,
+    currentCommand: "G21 G90 G94 G17",
+    progress: 0.25,
+  }),
+  resumeProgram: async () => ({
+    state: "running",
+    mode: fixtureIntent === "airRun" ? "airRun" : "cutRun",
+    sourceName: previewFixtureFirstCutProgram.sourceName,
+    totalLines: 8,
+    acknowledgedLines: 4,
+    currentSourceLine: 3,
+    currentCommand: "G1 X20 F60",
+    progress: 0.5,
+  }),
 };

@@ -322,7 +322,11 @@ impl Parser {
     fn parse_line(&mut self, source_line: usize, source: &str) {
         let warning_start = self.warnings.len();
         let code = strip_comments(source, source_line, &mut self.warnings);
-        let words = tokenize(&code, source_line, &mut self.warnings);
+        let words = if code.trim() == "%" {
+            Vec::new()
+        } else {
+            tokenize(&code, source_line, &mut self.warnings)
+        };
         let normalized = words
             .iter()
             .map(|word| word.lexeme.as_str())

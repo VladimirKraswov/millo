@@ -5,11 +5,12 @@ export type SenderState =
   | "ready"
   | "running"
   | "paused"
+  | "draining"
   | "completed"
   | "failed"
   | "cancelled";
 
-export type SenderMode = "mockDryRun" | "firstCut";
+export type SenderMode = "mockDryRun" | "airRun" | "cutRun";
 
 export interface SenderSnapshot {
   readonly state: SenderState;

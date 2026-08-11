@@ -182,10 +182,13 @@ port names remain untouched.
 - No automated or manual test in this slice sends a program line to the physical
   controller.
 
-## Current real-run preflight coverage
+## Current real-run and sender coverage
 
-- `millo-run` tests clear a bounded motion-only program while retaining three
-  operator cautions, reject spindle control at the exact source line, keep a
+- Parser fixtures accept common standalone `%` file delimiters without turning
+  them into executable sender lines.
+- `millo-run` tests clear a bounded program while retaining operator cautions,
+  reject spindle control for Air run at the exact source line, accept it for
+  Cutting, keep a
   probe-only readiness failure from blocking non-probing motion, and independently
   detect empty geometry plus a non-idle controller. A separate test rejects a
   motion file that relies on ambient units, distance, or feed modes.
@@ -193,9 +196,9 @@ port names remain untouched.
   and assert the exact read-only sequence `?`, `$I`, `$$`, `$G`, `$#`, `?`.
 - An unsafe-program actor test proves every emitted byte belongs to that
   read-only allowlist and no normalized program line is dispatched.
-- TypeScript tests keep preflight and first-cut controls separate. The checklist
-  requires six independent confirmations; blocked, missing-gateway, and busy
-  states fail closed, and neither read model exposes a Start action.
+- TypeScript tests keep preflight and authorization controls separate. Air and
+  Cutting require different physical facts; blocked, missing-gateway, and busy
+  states fail closed.
 - The `/?fixture=preflight` browser fixture covers Blocked status, the dedicated
   Preflight diagnostics tab, internal scrolling, desktop/mobile layout, and the
   source-line jump from a policy blocker to selected `L8`.
@@ -206,17 +209,19 @@ port names remain untouched.
   A successful authorization repeats exactly `?`, `$I`, `$$`, `$G`, `$#`, `?`,
   leaves the sender Idle, and emits no program line. Incomplete confirmation
   fails before controller I/O.
-- `/?fixture=first-cut` provides the clear-preflight and six-confirmation dialog
-  for desktop/mobile visual regression. The issued fixture lease still has no
-  Start action.
-- Test-only serial-class actor fixtures then consume that lease atomically and
-  exercise the shared sender against Mock GRBL. Six scenarios cover all-`ok`
-  completion, correlated `error`, `ALARM`, Hold/resume before dispatch, a reset
-  banner during a line, and a transport disconnect during a line.
+- `/?fixture=first-cut` provides intent selection, clear preflight, the
+  mode-specific checklist, lease issuance, and Start for visual regression.
+- Serial-class actor fixtures consume the lease atomically and exercise the
+  production sender over deterministic Mock GRBL. They cover all-`ok` plus
+  fresh-Idle completion, correlated `error`, `ALARM`, Hold/resume, reset banner,
+  status failure, and transport disconnect. Sender tests additionally cover
+  `M0/M1` program barriers and `M2/M30` plan termination.
 - Reusing a consumed authorization fails after only the fresh status read. No
   second program line can be started from the same lease.
-- The fixture request and dispatch barrier are compiled only for Rust tests.
-  Tauri, React, plugins, and production serial targets have no Start endpoint.
+- Tauri and React expose production Start only for a profile-bound serial target
+  and matching one-use authorization. Plugins still have no run capability.
+- No automated or manual test in this implementation slice sends a program line
+  to the physical controller.
 
 ## Current hardware readiness coverage
 

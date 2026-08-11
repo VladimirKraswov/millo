@@ -54,13 +54,13 @@ Original source -> Rust reparse -> millo-dry-run -> opaque DryRunPlan
                                                     |
                                             command actor/sender
                                                     |
-                                            Controller -> Mock GRBL
+                                      Controller -> Mock or serial GRBL
 ```
 
 Neither an immutable preview DTO nor a React flag can become a sender plan.
 
-Serial real-run preparation has a read-only report followed by a separate
-one-use authorization gate:
+Serial execution has a read-only report followed by a separate one-use
+authorization and Start gate:
 
 ```text
 Original source -> Rust reparse -> command actor -> ? + Inspector + ?
@@ -68,11 +68,14 @@ Original source -> Rust reparse -> command actor -> ? + Inspector + ?
                                    serial-only         fresh snapshot
                                       +--------> millo-run report -> React
 
-Original source + six confirmations -> command actor -> fresh preflight
-                                                       -> first-cut lease
+Original source + intent confirmations -> command actor -> fresh preflight
+                                                           -> one-use lease
+Original source + lease ID -> command actor -> fresh status -> consume lease
+                                                        -> sender -> GRBL
 ```
 
-The lease is not a sender plan and this path still has no serial dispatch.
+The lease is not a sender plan. Only the actor can turn the original source and
+matching lease into serial dispatch.
 
 ## Rules
 
@@ -208,7 +211,7 @@ does not schedule or execute controller I/O.
   current source line, and terminal error. Plugins receive no sender or raw-line
   capability. `jobs.create` remains reserved.
 
-### Real-run preflight boundary
+### Real-run execution boundary
 
 - `millo-run` owns the first-run report. React displays its typed checks but
   does not decide whether a program or controller is ready.
@@ -219,10 +222,11 @@ does not schedule or execute controller I/O.
 - The actor performs one serialized `?`, `$I`, `$$`, `$G`, `$#`, `?`
   transaction. It requires stable `Idle` before Inspector and assesses the final
   status, so a stale UI snapshot cannot clear preflight.
-- The program must pass the existing fail-closed motion-only policy and contain
-  complete bounded preview motion. M3/M4/non-zero S, coolant, probing, M6,
-  machine/reference-coordinate motion, coordinate mutation, malformed geometry,
-  and unsupported safety behavior remain blockers.
+- The selected intent is part of preflight evidence. `AirRun` blocks
+  M3/M4/non-zero S; `Cutting` permits those spindle words after its physical
+  checklist. Coolant, probing, M6, machine/reference-coordinate motion,
+  coordinate mutation, malformed geometry, and unsupported safety behavior
+  remain blockers in both modes.
 - Before relevant motion, the file must explicitly establish `G21` units,
   `G90` distance mode, `G94` feed mode, and `G17` for XY arcs. Ambient GRBL
   modal state cannot fill parser defaults for a physical run.
@@ -234,9 +238,9 @@ does not schedule or execute controller I/O.
 - The Preflight diagnostics tab links a source-addressable blocker back to the
   immutable program-line selection. That selection still cannot alter policy or
   future execution order.
-- A clear report only reveals the first-cut checklist. All six physical facts
-  are mandatory: stock, cutter, XYZ work zero, safe Z, running manual spindle,
-  and reachable power control.
+- A clear report reveals the matching checklist. Air run requires removed tool
+  and stopped spindle; cutting requires secured stock/tool and running manual
+  spindle. XYZ work zero, safe Z, clear path, and reachable power are common.
 - The authorize request reparses the retained source and repeats the complete
   preflight inside the actor. React cannot submit its previous report as
   evidence.
@@ -244,15 +248,16 @@ does not schedule or execute controller I/O.
   reset/reconnect counters, and observed machine/work positions. It is removed
   by expiry, a non-Idle observation, position/session change, profile/settings
   mutation, jog, work-zero, reset, reconnect, or a failed consumption attempt.
-- A future serial sender must consume the matching lease once inside its start
-  transaction. The transaction now exists only under `cfg(test)`: it refreshes
-  status, rebuilds the strict plan, consumes the lease, and starts the shared
-  one-line-in-flight state machine atomically. No production request can reach
-  it, so authorization still emits no program command in the desktop app.
-- `SenderSnapshot.mode` distinguishes `mockDryRun` from `firstCut` without
-  creating a second sender implementation. Hold pauses and resume continues the
-  same retained plan; error, alarm, reset, or transport failure stops progress
-  at the correlated source line.
+- Production Start refreshes status, rebuilds the intent-specific plan, consumes
+  the matching lease, and starts the shared one-line-in-flight state machine in
+  one actor request. Authorization alone still emits no program command.
+- `SenderSnapshot.mode` distinguishes `mockDryRun`, `airRun`, and `cutRun`
+  without creating separate implementations. `M0/M1` pause after `ok`;
+  `M2/M30` terminate dispatch. Hold/Resume retain the same plan, and physical
+  completion waits in `Draining` for a fresh `Idle`. Error, alarm, reset,
+  timeout, polling failure, or transport loss fails at the correlated line.
+- Physical modes cannot use plain Cancel. Operator stop is Feed Hold followed by
+  challenge-confirmed Soft Reset.
 
 ### Lifecycle invariants
 
@@ -446,12 +451,12 @@ does not schedule or execute controller I/O.
 
 ## Near-term sequence
 
-1. Define a first-cut operator authorization covering stock, cutter, verified
-   XYZ work zero, safe Z, manual spindle state, and immediately reachable power.
-2. Generalize the opaque policy-approved plan without giving React raw command
-   authority, then exercise it against Mock with current-line following.
-3. Add a serial sender only after start/hold/cancel/error/reset behavior and
-   one-line-in-flight recovery are proven by fixtures; keep probing unavailable.
+1. Create and review a bounded `20 x 20 mm` square `.nc` fixture with explicit
+   `G21 G90 G94 G17`, conservative feed, and safe Z.
+2. Perform an operator-confirmed Air run from that file with no tool and manual
+   spindle power off; measure Hold response and verify final position plus Idle.
+3. Only after that evidence, prepare a shallow engraving file and complete a new
+   Cutting authorization. Keep probing unavailable until sensor hardware exists.
 
 Three.js is now isolated behind the program preview adapter and a lazy bundle.
 Ant Design remains absent until a workflow needs its component contracts rather

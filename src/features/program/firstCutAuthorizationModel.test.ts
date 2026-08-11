@@ -10,32 +10,36 @@ import {
 } from "./firstCutAuthorizationModel";
 
 const complete: FirstCutConfirmation = {
+  intent: "cutting",
   stockSecured: true,
   toolSecured: true,
+  toolRemoved: false,
   xyzZeroVerified: true,
   safeZVerified: true,
   manualSpindleRunning: true,
+  manualSpindleOff: false,
+  pathClear: true,
   powerControlReachable: true,
 };
 
 const clearReport = { ready: true } as RunPreflightReport;
 
 describe("firstCutAuthorizationControls", () => {
-  it("requires all six independent physical confirmations", () => {
+  it("requires the physical confirmations for the selected intent", () => {
     expect(
       firstCutAuthorizationControls(emptyFirstCutConfirmation, {
         report: clearReport,
         gatewayAvailable: true,
         busy: false,
       }),
-    ).toEqual({ completedCount: 0, complete: false, canAuthorize: false });
+    ).toEqual({ completedCount: 0, totalCount: 6, complete: false, canAuthorize: false });
 
     expect(
       firstCutAuthorizationControls(
         { ...complete, powerControlReachable: false },
         { report: clearReport, gatewayAvailable: true, busy: false },
       ),
-    ).toEqual({ completedCount: 5, complete: false, canAuthorize: false });
+    ).toEqual({ completedCount: 6, totalCount: 7, complete: false, canAuthorize: false });
   });
 
   it("fails closed for stale, blocked, missing-gateway and busy states", () => {
@@ -69,6 +73,27 @@ describe("firstCutAuthorizationControls", () => {
         gatewayAvailable: true,
         busy: false,
       }),
-    ).toEqual({ completedCount: 6, complete: true, canAuthorize: true });
+    ).toEqual({ completedCount: 7, totalCount: 7, complete: true, canAuthorize: true });
+  });
+
+  it("uses tool-removed and spindle-off checks for an air run", () => {
+    const airRun: FirstCutConfirmation = {
+      ...emptyFirstCutConfirmation,
+      intent: "airRun",
+      toolRemoved: true,
+      manualSpindleOff: true,
+      xyzZeroVerified: true,
+      safeZVerified: true,
+      pathClear: true,
+      powerControlReachable: true,
+    };
+
+    expect(
+      firstCutAuthorizationControls(airRun, {
+        report: clearReport,
+        gatewayAvailable: true,
+        busy: false,
+      }),
+    ).toEqual({ completedCount: 6, totalCount: 6, complete: true, canAuthorize: true });
   });
 });

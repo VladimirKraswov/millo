@@ -1,6 +1,8 @@
 import type { HardwareInspection } from "./machine";
 import type { ProgramBounds, ProgramParseRequest } from "./program";
 
+export type ProgramRunIntent = "airRun" | "cutting";
+
 export type RunPreflightLevel = "pass" | "caution" | "blocker";
 
 export interface RunPreflightCheck {
@@ -19,6 +21,7 @@ export interface RunProgramBlocker {
 export interface RunPreflightReport {
   readonly sourceName: string;
   readonly programFingerprint: string;
+  readonly intent: ProgramRunIntent;
   readonly ready: boolean;
   readonly blockerCount: number;
   readonly cautionCount: number;
@@ -31,11 +34,15 @@ export interface RunPreflightReport {
 }
 
 export interface FirstCutConfirmation {
+  readonly intent: ProgramRunIntent;
   readonly stockSecured: boolean;
   readonly toolSecured: boolean;
+  readonly toolRemoved: boolean;
   readonly xyzZeroVerified: boolean;
   readonly safeZVerified: boolean;
   readonly manualSpindleRunning: boolean;
+  readonly manualSpindleOff: boolean;
+  readonly pathClear: boolean;
   readonly powerControlReachable: boolean;
 }
 
@@ -45,6 +52,7 @@ export interface FirstCutAuthorization {
   readonly sourceName: string;
   readonly programFingerprint: string;
   readonly pollSequence: number;
+  readonly intent: ProgramRunIntent;
 }
 
 export interface FirstCutPreparation {
@@ -53,9 +61,17 @@ export interface FirstCutPreparation {
 }
 
 export interface RealRunPreflightGateway {
-  preflight(request: ProgramParseRequest): Promise<RunPreflightReport>;
+  preflight(
+    request: ProgramParseRequest,
+    intent: ProgramRunIntent,
+  ): Promise<RunPreflightReport>;
   authorizeFirstCut(
     request: ProgramParseRequest,
     confirmation: FirstCutConfirmation,
   ): Promise<FirstCutPreparation>;
+  startProgram(
+    request: ProgramParseRequest,
+    authorizationId: number,
+  ): Promise<import("./dryRun").SenderSnapshot>;
+  resumeProgram(): Promise<import("./dryRun").SenderSnapshot>;
 }

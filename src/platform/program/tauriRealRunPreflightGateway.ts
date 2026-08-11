@@ -6,13 +6,17 @@ import type {
   RealRunPreflightGateway,
   RunPreflightReport,
 } from "../../shared/realRun";
+import type { SenderSnapshot } from "../../shared/dryRun";
 
 export const tauriRealRunPreflightGateway: RealRunPreflightGateway = {
-  preflight: (request) =>
-    invoke<RunPreflightReport>("preflight_real_run", { request }),
+  preflight: (request, intent) =>
+    invoke<RunPreflightReport>("preflight_real_run", { request, intent }),
   authorizeFirstCut: (request, confirmation: FirstCutConfirmation) =>
     invoke<FirstCutPreparation>("authorize_first_cut", {
       request,
       confirmation,
     }),
+  startProgram: (request, authorizationId) =>
+    invoke<SenderSnapshot>("start_program_run", { request, authorizationId }),
+  resumeProgram: () => invoke<SenderSnapshot>("resume_program_run"),
 };

@@ -230,6 +230,10 @@ impl Transport for MockTransport {
                     .replacen("<Jog", "<Hold:0", 1);
                 state.jog_polls_remaining = 0;
             }
+        } else if data == b"~" {
+            if state.status_line.starts_with("<Hold") {
+                state.status_line = state.status_line.replacen("<Hold:0", "<Run", 1);
+            }
         } else if data == b"\x18" {
             state.status_line = DEFAULT_STATUS.to_owned();
             state.jog_polls_remaining = 0;

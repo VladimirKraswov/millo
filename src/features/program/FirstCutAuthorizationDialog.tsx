@@ -10,8 +10,10 @@ import { useEffect, useState } from "react";
 import type {
   FirstCutConfirmation,
   FirstCutPreparation,
+  ProgramRunIntent,
   RunPreflightReport,
 } from "../../shared/realRun";
+import type { SenderSnapshot } from "../../shared/dryRun";
 import {
   emptyFirstCutConfirmation,
   firstCutAuthorizationControls,
@@ -20,16 +22,48 @@ import {
 
 interface FirstCutAuthorizationDialogProps {
   readonly open: boolean;
+  readonly intent: ProgramRunIntent;
   readonly report?: RunPreflightReport;
   readonly onAuthorize: (
     confirmation: FirstCutConfirmation,
   ) => Promise<FirstCutPreparation>;
   readonly onAuthorized: (preparation: FirstCutPreparation) => void;
+  readonly onStart: (preparation: FirstCutPreparation) => Promise<SenderSnapshot>;
+  readonly onStarted: (snapshot: SenderSnapshot) => void;
   readonly onClose: () => void;
 }
 
-const checklist: ReadonlyArray<{
-  key: keyof FirstCutConfirmation;
+type ConfirmationKey = Exclude<keyof FirstCutConfirmation, "intent">;
+
+const commonChecklist: ReadonlyArray<{
+  key: ConfirmationKey;
+  title: string;
+  detail: string;
+}> = [
+  {
+    key: "xyzZeroVerified",
+    title: "Ноль XYZ проверен",
+    detail: "Рабочий ноль активной G54-G59 совпадает с нулём программы.",
+  },
+  {
+    key: "safeZVerified",
+    title: "Safe Z свободен",
+    detail: "Все перемещения Z проходят выше заготовки, крепежа и оснастки.",
+  },
+  {
+    key: "pathClear",
+    title: "Габарит траектории свободен",
+    detail: "Preview проверен; движения XYZ не пересекают упоры, прижимы и раму.",
+  },
+  {
+    key: "powerControlReachable",
+    title: "Питание доступно",
+    detail: "Можно немедленно обесточить шпиндель и станок рукой.",
+  },
+];
+
+const cuttingChecklist: ReadonlyArray<{
+  key: ConfirmationKey;
   title: string;
   detail: string;
 }> = [
@@ -44,32 +78,37 @@ const checklist: ReadonlyArray<{
     detail: "Фреза соответствует программе и надёжно зажата в цанге.",
   },
   {
-    key: "xyzZeroVerified",
-    title: "Ноль XYZ проверен",
-    detail: "Рабочий ноль активной G54-G59 совпадает с нулём программы.",
-  },
-  {
-    key: "safeZVerified",
-    title: "Safe Z свободен",
-    detail: "Подъём Z проходит выше заготовки, крепежа и оснастки.",
-  },
-  {
     key: "manualSpindleRunning",
     title: "Ручной шпиндель запущен",
     detail: "Вращение включено вручную, направление и звук проверены.",
   },
+];
+
+const airRunChecklist: ReadonlyArray<{
+  key: ConfirmationKey;
+  title: string;
+  detail: string;
+}> = [
   {
-    key: "powerControlReachable",
-    title: "Питание доступно",
-    detail: "Можно немедленно обесточить шпиндель и станок рукой.",
+    key: "toolRemoved",
+    title: "Инструмент снят",
+    detail: "В цанге нет фрезы; случайное касание заготовки исключено.",
+  },
+  {
+    key: "manualSpindleOff",
+    title: "Шпиндель выключен",
+    detail: "Ручное питание шпинделя отключено; sender дополнительно начинает с M5/M9.",
   },
 ];
 
 export function FirstCutAuthorizationDialog({
   open,
+  intent,
   report,
   onAuthorize,
   onAuthorized,
+  onStart,
+  onStarted,
   onClose,
 }: FirstCutAuthorizationDialogProps) {
   const [confirmation, setConfirmation] = useState<FirstCutConfirmation>(
@@ -81,11 +120,11 @@ export function FirstCutAuthorizationDialog({
 
   useEffect(() => {
     if (!open) return;
-    setConfirmation(emptyFirstCutConfirmation);
+    setConfirmation({ ...emptyFirstCutConfirmation, intent });
     setBusy(false);
     setError(undefined);
     setPreparation(undefined);
-  }, [open, report?.programFingerprint]);
+  }, [open, intent, report?.programFingerprint]);
 
   if (!open) return null;
 
@@ -109,6 +148,26 @@ export function FirstCutAuthorizationDialog({
     }
   };
 
+  const start = async () => {
+    if (!preparation || busy) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      onStarted(await onStart(preparation));
+      onClose();
+    } catch (reason) {
+      setPreparation(undefined);
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const checklist = [
+    ...(confirmation.intent === "airRun" ? airRunChecklist : cuttingChecklist),
+    ...commonChecklist,
+  ];
+
   return (
     <div className="machine-dialog-backdrop first-cut-backdrop" role="presentation">
       <section
@@ -120,7 +179,7 @@ export function FirstCutAuthorizationDialog({
         <header>
           <div>
             <span>One-time safety gate</span>
-            <h2 id="first-cut-title">Первый рез</h2>
+            <h2 id="first-cut-title">Запуск программы</h2>
           </div>
           <button
             aria-label="Закрыть"
@@ -145,7 +204,20 @@ export function FirstCutAuthorizationDialog({
               Оно привязано к этой программе и текущей позиции. Любое движение,
               reset, reconnect или истечение времени отменит его.
             </p>
-            <small>G-code не отправлялся. Serial sender пока закрыт.</small>
+            <small>G-code ещё не отправлялся. Следующее нажатие атомарно потребит разрешение.</small>
+            <button
+              className="program-run-start"
+              disabled={busy}
+              onClick={() => void start()}
+              type="button"
+            >
+              <Power aria-hidden="true" size={15} />
+              {busy
+                ? "Запуск..."
+                : preparation.authorization.intent === "airRun"
+                  ? "Начать Air run"
+                  : "Начать обработку"}
+            </button>
           </div>
         ) : (
           <>
@@ -157,7 +229,11 @@ export function FirstCutAuthorizationDialog({
                   После подтверждения backend повторит полный serial preflight.
                 </span>
               </div>
-              <code>{controls.completedCount}/6</code>
+              <code>{controls.completedCount}/{controls.totalCount}</code>
+            </div>
+            <div className="program-run-mode-summary">
+              <span>Режим</span>
+              <strong>{intent === "airRun" ? "Air run" : "Обработка с инструментом"}</strong>
             </div>
             <div className="first-cut-checklist">
               {checklist.map((item) => (
@@ -195,7 +271,7 @@ export function FirstCutAuthorizationDialog({
                 type="button"
               >
                 <Power aria-hidden="true" size={15} />
-                {busy ? "Повторная проверка..." : "Авторизовать первый рез"}
+                {busy ? "Повторная проверка..." : "Авторизовать запуск"}
               </button>
             </footer>
           </>
