@@ -260,6 +260,7 @@ impl RunJournal {
 }
 
 fn load_file_with_backup(path: &Path) -> Result<Option<Vec<RunJournalEntry>>, RunJournalError> {
+    let mut parse_error = None;
     for candidate in [path.to_path_buf(), backup_path(path)] {
         if !candidate.exists() {
             continue;
@@ -267,12 +268,18 @@ fn load_file_with_backup(path: &Path) -> Result<Option<Vec<RunJournalEntry>>, Ru
         let bytes = fs::read(candidate)?;
         let file: JournalFile = match serde_json::from_slice(&bytes) {
             Ok(file) => file,
-            Err(_) => continue,
+            Err(error) => {
+                parse_error = Some(error);
+                continue;
+            }
         };
         if file.schema_version != JOURNAL_SCHEMA_VERSION {
             return Err(RunJournalError::UnsupportedSchema(file.schema_version));
         }
         return Ok(Some(file.entries));
+    }
+    if let Some(error) = parse_error {
+        return Err(error.into());
     }
     Ok(None)
 }
@@ -454,5 +461,25 @@ mod tests {
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(backup_path(&path));
         let _ = fs::remove_file(temporary_path(&path));
+    }
+
+    #[test]
+    fn corrupt_primary_and_backup_do_not_silently_erase_history() {
+        let unique = format!(
+            "millo-corrupt-run-journal-{}-{}.json",
+            std::process::id(),
+            unix_micros(SystemTime::now())
+        );
+        let path = std::env::temp_dir().join(unique);
+        fs::write(&path, b"corrupt primary").unwrap();
+        fs::write(backup_path(&path), b"corrupt backup").unwrap();
+
+        assert!(matches!(
+            RunJournal::load(&path),
+            Err(RunJournalError::Json(_))
+        ));
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
     }
 }

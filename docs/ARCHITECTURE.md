@@ -248,10 +248,14 @@ does not schedule or execute controller I/O.
 - React receives a separate `dry-run-state` event with bounded progress,
   current source line, and terminal error. Plugins receive no sender or raw-line
   capability. `jobs.create` remains reserved.
-- The same event bridge passes snapshots to `millo-journal`. It updates one
+- The same event bridge passes snapshots through a bounded queue to a dedicated
+  journal worker thread. JSON serialization, `write`, and `fsync` therefore
+  cannot block the Tokio controller/sender runtime. The worker updates one
   bounded record per run at start, state changes, every 250 acknowledgements or
-  two seconds, and terminal state. The adapter owns the config path; the journal
-  crate owns schema, throttling, backup replacement, and recovery labels.
+  two seconds, and terminal state. Backpressure may delay journal/UI forwarding,
+  but it never delays controller I/O or drops a terminal checkpoint. The adapter
+  owns the config path; the journal crate owns schema, throttling, backup
+  replacement, corruption reporting, and recovery labels.
 
 ### GRBL Check-run boundary
 
@@ -409,6 +413,9 @@ does not schedule or execute controller I/O.
   or implausibly large reports fall back to or are capped by sender policy.
 - `ok`, `error:n`, `ALARM:n`, and reset terminate and classify the active line
   request; asynchronous status/reset information still updates the snapshot.
+- A missing or mismatched internal program-response context is returned as a
+  typed controller error. Protocol/state desynchronization cannot panic the
+  desktop process.
 - Rust parses firmware, settings, modal state, and coordinate parameters. The UI
   never receives a responsibility to interpret wire lines.
 - Tauri exposes no raw command, general G-code, or spindle-control endpoint. Its

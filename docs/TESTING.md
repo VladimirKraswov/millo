@@ -189,6 +189,13 @@ port names remain untouched.
   work. The test exposed and fixed an initial quadratic shutdown-counter scan.
 - Sender snapshots carry a monotonic `runSequence` for journal correlation in
   addition to the acknowledgement sequence used by the live heartbeat.
+- Journal tests cover checkpoint throttling, mandatory terminal persistence,
+  bounded history, backup recovery, and explicit failure when both primary and
+  backup are corrupt. A Tauri adapter test proves the dedicated worker consumes
+  snapshots without performing persistence on the async event task.
+- Controller regression coverage calls the terminal-response boundary without
+  a pending command and requires a typed `ProgramResponseState` error rather
+  than a panic.
 - Heartbeat tests verify that each `ok` resets acknowledgement age, updates the
   exact line/command and sequence, and freezes evidence on terminal state.
 - Sender and actor tests assert structured failure kind, GRBL code, source line,

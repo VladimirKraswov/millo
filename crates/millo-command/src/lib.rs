@@ -112,6 +112,8 @@ pub enum ArbiterError {
         requested: String,
         stored: String,
     },
+    #[error("validated controller setting {0} disappeared from the inspection snapshot")]
+    SettingSourceMissing(String),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -1961,7 +1963,7 @@ async fn execute_controller_setting_update(
     let before_value = before
         .settings
         .get(setting.key())
-        .expect("validated setting must exist")
+        .ok_or_else(|| ArbiterError::SettingSourceMissing(setting.key().to_owned()))?
         .clone();
     ensure_stable_idle(&controller.snapshot())?;
     let write = controller.write_setting(&setting).await?;

@@ -1,7 +1,7 @@
 use std::{
     collections::BTreeMap,
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex as StdMutex},
     time::{Instant, SystemTime},
 };
 
@@ -41,7 +41,10 @@ use millo_settings::{
 use millo_transport::BoxedTransport;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
-use tokio::{sync::Mutex, task::JoinHandle};
+use tokio::{
+    sync::{Mutex, mpsc},
+    task::JoinHandle,
+};
 
 const MOCK_TRANSPORT_ID: &str = "mock";
 const SERIAL_TRANSPORT_PREFIX: &str = "serial:";
@@ -129,7 +132,7 @@ pub struct AppState {
     event_task: Mutex<Option<JoinHandle<()>>>,
     settings_root: Option<PathBuf>,
     settings_session: Mutex<Option<ActiveControllerSettings>>,
-    run_journal: Arc<Mutex<RunJournal>>,
+    run_journal: Arc<StdMutex<RunJournal>>,
 }
 
 impl Default for AppState {
@@ -189,7 +192,7 @@ impl AppState {
             event_task: Mutex::new(None),
             settings_root,
             settings_session: Mutex::new(None),
-            run_journal: Arc::new(Mutex::new(run_journal)),
+            run_journal: Arc::new(StdMutex::new(run_journal)),
         }
     }
 
@@ -201,7 +204,7 @@ impl AppState {
 
         let mut snapshots = self.arbiter.subscribe();
         let mut sender_snapshots = self.arbiter.subscribe_sender();
-        let run_journal = Arc::clone(&self.run_journal);
+        let journal_sender = start_run_journal_worker(Arc::clone(&self.run_journal));
         *event_task = Some(tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -210,21 +213,23 @@ impl AppState {
                             break;
                         }
                         let snapshot = snapshots.borrow_and_update().clone();
-                        let _ = app.emit("machine-state", snapshot);
+                        if let Err(error) = app.emit("machine-state", snapshot) {
+                            eprintln!("machine-state event emission failed: {error}");
+                        }
                     }
                     changed = sender_snapshots.changed() => {
                         if changed.is_err() {
                             break;
                         }
                         let snapshot = sender_snapshots.borrow_and_update().clone();
-                        if let Err(error) = run_journal.lock().await.observe(
-                            &snapshot,
-                            SystemTime::now(),
-                            Instant::now(),
-                        ) {
-                            eprintln!("sender journal checkpoint failed: {error}");
+                        if let Err(error) = app.emit("dry-run-state", snapshot.clone()) {
+                            eprintln!("dry-run-state event emission failed: {error}");
                         }
-                        let _ = app.emit("dry-run-state", snapshot);
+                        if let Some(sender) = journal_sender.as_ref()
+                            && sender.send(snapshot).await.is_err()
+                        {
+                            eprintln!("sender journal worker stopped unexpectedly");
+                        }
                     }
                 }
             }
@@ -232,11 +237,48 @@ impl AppState {
     }
 }
 
+fn start_run_journal_worker(
+    journal: Arc<StdMutex<RunJournal>>,
+) -> Option<mpsc::Sender<SenderSnapshot>> {
+    let (sender, mut snapshots) = mpsc::channel::<SenderSnapshot>(128);
+    let worker = std::thread::Builder::new()
+        .name("millo-run-journal".to_owned())
+        .spawn(move || {
+            while let Some(snapshot) = snapshots.blocking_recv() {
+                let mut journal = match journal.lock() {
+                    Ok(journal) => journal,
+                    Err(error) => {
+                        eprintln!("sender journal lock poisoned: {error}");
+                        break;
+                    }
+                };
+                if let Err(error) = journal.observe(&snapshot, SystemTime::now(), Instant::now()) {
+                    eprintln!("sender journal checkpoint failed: {error}");
+                }
+            }
+        });
+    match worker {
+        Ok(_) => Some(sender),
+        Err(error) => {
+            eprintln!("sender journal worker could not start: {error}");
+            None
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn sender_run_history(
     state: State<'_, AppState>,
 ) -> Result<Vec<RunJournalEntry>, String> {
-    Ok(state.run_journal.lock().await.entries().to_vec())
+    let journal = Arc::clone(&state.run_journal);
+    tokio::task::spawn_blocking(move || {
+        journal
+            .lock()
+            .map(|journal| journal.entries().to_vec())
+            .map_err(|error| format!("sender journal lock poisoned: {error}"))
+    })
+    .await
+    .map_err(|error| format!("sender journal history task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -279,7 +321,7 @@ pub async fn create_machine_profile(
         .map_err(|error| error.to_string())?;
     let profile = next
         .selected()
-        .expect("create_and_select must produce a selected profile")
+        .ok_or_else(|| "profile store did not select the newly created profile".to_owned())?
         .hardware_profile();
     if connected {
         state
@@ -289,7 +331,7 @@ pub async fn create_machine_profile(
             .map_err(|error| error.to_string())?;
         let selected = next
             .selected()
-            .expect("created profile must remain selected");
+            .ok_or_else(|| "newly created profile lost its selection".to_owned())?;
         let mut session = state.settings_session.lock().await;
         let active = session
             .as_mut()
@@ -337,7 +379,7 @@ pub async fn update_machine_local_settings(
         .profiles
         .iter()
         .find(|profile| profile.id == profile_id)
-        .expect("updated profile must exist")
+        .ok_or_else(|| "updated profile disappeared from the profile store".to_owned())?
         .hardware_profile();
     if connected {
         state
@@ -370,7 +412,7 @@ pub async fn select_machine_profile(
         .map_err(|error| error.to_string())?;
     let profile = next
         .selected()
-        .expect("select must preserve a selected profile")
+        .ok_or_else(|| "profile store did not retain the requested selection".to_owned())?
         .hardware_profile();
     state
         .arbiter
@@ -543,7 +585,7 @@ pub async fn connect_transport(
             .profiles
             .iter()
             .find(|candidate| candidate.id == profile.id)
-            .expect("observed profile must exist");
+            .ok_or_else(|| "observed profile disappeared from the profile store".to_owned())?;
         let temporary_session = ActiveControllerSettings {
             inspection: initial_inspection.device.clone(),
             fingerprint: fingerprint.clone(),
@@ -1544,6 +1586,32 @@ fn serial_port_name(transport_id: &str) -> Result<&str, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn run_journal_worker_processes_snapshots_off_the_async_task() {
+        let journal = Arc::new(StdMutex::new(RunJournal::in_memory()));
+        let sender = start_run_journal_worker(Arc::clone(&journal)).unwrap();
+        let snapshot = SenderSnapshot {
+            run_sequence: 1,
+            source_name: Some("worker.nc".to_owned()),
+            mode: Some(millo_sender::SenderMode::CutRun),
+            state: millo_sender::SenderState::Running,
+            total_lines: 1,
+            ..SenderSnapshot::default()
+        };
+
+        sender.send(snapshot).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if journal.lock().unwrap().entries().len() == 1 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
 
     #[tokio::test]
     async fn tauri_parser_adapter_returns_a_typed_preview_without_machine_state() {

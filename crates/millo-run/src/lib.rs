@@ -641,8 +641,7 @@ pub fn assess_real_run_preflight_with_options(
             RunPreflightLevel::Blocker
         },
         "Program geometry",
-        if geometry_ready {
-            let bounds = program.summary.bounds.expect("checked bounds");
+        if let Some(bounds) = program.summary.bounds.filter(|_| geometry_ready) {
             format!(
                 "{} motion(s) · {:.3} × {:.3} × {:.3} mm",
                 program.summary.motion_count, bounds.size.x, bounds.size.y, bounds.size.z

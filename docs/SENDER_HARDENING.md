@@ -50,6 +50,13 @@ than attempting to reproduce issue-specific workarounds.
   `millo-journal` store records start, state transitions, checkpoints at most
   every 250 acknowledgements or two seconds, and every terminal state. Atomic
   temp/backup replacement keeps the preceding valid JSON checkpoint available.
+- Journal persistence runs on a dedicated bounded worker outside Tokio. Slow
+  storage and `fsync` cannot stall the controller actor; a corrupt primary is
+  recovered from its backup, while two corrupt copies produce an explicit load
+  error instead of silently presenting an empty history.
+- Controller, profile, and validated-setting invariants fail as typed errors at
+  their boundary. Unexpected internal state is diagnosable without terminating
+  an active desktop process through `expect`.
 - Journal checkpoints are diagnostic evidence, never executable continuation
   leases. A failed or cancelled run explicitly records `RestartBlocked`.
 

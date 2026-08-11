@@ -71,6 +71,8 @@ pub enum ControllerError {
     },
     #[error("program response for '{pending}' cannot be correlated with '{requested}'")]
     ProgramResponseMismatch { pending: String, requested: String },
+    #[error("controller program-response state is inconsistent: {0}")]
+    ProgramResponseState(&'static str),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -469,7 +471,9 @@ impl<T: Transport> Controller<T> {
         let elapsed = self
             .pending_program_response
             .as_ref()
-            .expect("pending response was initialized")
+            .ok_or(ControllerError::ProgramResponseState(
+                "pending response disappeared before polling",
+            ))?
             .started_at
             .elapsed();
         let Some(remaining) = self.config.command_timeout.checked_sub(elapsed) else {
@@ -508,7 +512,9 @@ impl<T: Transport> Controller<T> {
                 if !message.is_empty() {
                     self.pending_program_response
                         .as_mut()
-                        .expect("pending response exists")
+                        .ok_or(ControllerError::ProgramResponseState(
+                            "pending response disappeared while collecting output",
+                        ))?
                         .lines
                         .push(message);
                 }
@@ -594,10 +600,12 @@ impl<T: Transport> Controller<T> {
         terminal_line: Option<String>,
         code: Option<u16>,
     ) -> Result<ProgramResponsePoll, ControllerError> {
-        let mut pending = self
-            .pending_program_response
-            .take()
-            .expect("program response must be pending");
+        let mut pending =
+            self.pending_program_response
+                .take()
+                .ok_or(ControllerError::ProgramResponseState(
+                    "terminal response arrived without a pending command",
+                ))?;
         if let Some(line) = terminal_line {
             pending.lines.push(line);
         }
@@ -902,6 +910,22 @@ mod tests {
             controller.snapshot().connection,
             ConnectionState::Disconnected
         );
+    }
+
+    #[test]
+    fn terminal_response_without_a_pending_command_is_a_typed_error() {
+        let (mut controller, _) = test_controller();
+
+        let error = controller
+            .finish_program_response(CommandCompletion::Ok, None, None)
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ControllerError::ProgramResponseState(
+                "terminal response arrived without a pending command"
+            )
+        ));
     }
 
     #[tokio::test]
