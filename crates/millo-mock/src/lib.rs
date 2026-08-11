@@ -113,6 +113,20 @@ impl MockControl {
             .push_back(VecDeque::from([MockRead::Line(format!("ALARM:{code}"))]));
     }
 
+    pub fn queue_program_reset(&self, version: &str) {
+        self.lock()
+            .planned_program
+            .push_back(VecDeque::from([MockRead::Line(format!(
+                "Grbl {version} ['$' for help]"
+            ))]));
+    }
+
+    pub fn queue_program_disconnect(&self) {
+        self.lock()
+            .planned_program
+            .push_back(VecDeque::from([MockRead::Disconnect]));
+    }
+
     pub fn writes(&self) -> Vec<Vec<u8>> {
         self.lock().writes.clone()
     }

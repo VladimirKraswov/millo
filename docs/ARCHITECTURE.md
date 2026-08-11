@@ -245,8 +245,14 @@ does not schedule or execute controller I/O.
   by expiry, a non-Idle observation, position/session change, profile/settings
   mutation, jog, work-zero, reset, reconnect, or a failed consumption attempt.
 - A future serial sender must consume the matching lease once inside its start
-  transaction. There is currently no serial sender, safety preamble, or Start
-  control, so authorization still emits no program command.
+  transaction. The transaction now exists only under `cfg(test)`: it refreshes
+  status, rebuilds the strict plan, consumes the lease, and starts the shared
+  one-line-in-flight state machine atomically. No production request can reach
+  it, so authorization still emits no program command in the desktop app.
+- `SenderSnapshot.mode` distinguishes `mockDryRun` from `firstCut` without
+  creating a second sender implementation. Hold pauses and resume continues the
+  same retained plan; error, alarm, reset, or transport failure stops progress
+  at the correlated source line.
 
 ### Lifecycle invariants
 

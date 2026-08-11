@@ -9,12 +9,16 @@ use millo_domain::{
     Position, ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation, WorkAxis,
     WorkCoordinateSystem, WorkZeroOutcome, WorkZeroRequest,
 };
-use millo_dry_run::DryRunPlan;
+#[cfg(test)]
+use millo_dry_run::build_dry_run_plan;
+use millo_dry_run::{DryRunPlan, DryRunPolicyError};
 use millo_gcode::GcodeProgram;
 use millo_grbl::{
     active_work_coordinate_system, build_device_inspection, work_coordinate_parameter,
 };
 use millo_readiness::assess;
+#[cfg(test)]
+use millo_run::program_fingerprint;
 use millo_run::{
     FirstCutAuthorizationError, FirstCutConfirmation, FirstCutGate, FirstCutPreparation,
     RunPreflightReport, assess_real_run_preflight,
@@ -67,6 +71,8 @@ pub enum ArbiterError {
     RealRunTransportUnavailable,
     #[error(transparent)]
     FirstCut(#[from] FirstCutAuthorizationError),
+    #[error(transparent)]
+    RunPolicy(#[from] DryRunPolicyError),
     #[error("machine profile can be changed only while disconnected, current state is {0:?}")]
     ProfileChangeUnavailable(ConnectionState),
     #[error(transparent)]
@@ -135,6 +141,7 @@ impl CommandArbiter {
             hardware_profile,
             execution_target,
             sender,
+            sender_dispatch_enabled: true,
             safety: SafetyManager::default(),
             first_cut: FirstCutGate::default(),
             snapshots: snapshot_tx,
@@ -338,6 +345,28 @@ impl CommandArbiter {
             .await
     }
 
+    #[cfg(test)]
+    async fn start_serial_run_fixture(
+        &self,
+        program: GcodeProgram,
+        authorization_id: u64,
+        dispatch_immediately: bool,
+    ) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::StartSerialRunFixture {
+            program,
+            authorization_id,
+            dispatch_immediately,
+            response,
+        })
+        .await
+    }
+
+    #[cfg(test)]
+    async fn release_serial_run_fixture(&self) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::ReleaseSerialRunFixture { response })
+            .await
+    }
+
     pub async fn send_realtime(
         &self,
         command: RealtimeCommand,
@@ -449,6 +478,17 @@ enum Request {
     CancelDryRun {
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
+    #[cfg(test)]
+    StartSerialRunFixture {
+        program: GcodeProgram,
+        authorization_id: u64,
+        dispatch_immediately: bool,
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
+    },
+    #[cfg(test)]
+    ReleaseSerialRunFixture {
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
+    },
 }
 
 struct ActorState {
@@ -457,6 +497,7 @@ struct ActorState {
     hardware_profile: HardwareProfile,
     execution_target: ExecutionTarget,
     sender: Sender,
+    sender_dispatch_enabled: bool,
     safety: SafetyManager,
     first_cut: FirstCutGate,
     snapshots: watch::Sender<ControllerSnapshot>,
@@ -488,7 +529,7 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                     publish(&actor.snapshots, &actor.controller);
                 }
             }
-            _ = tokio::task::yield_now(), if actor.sender.is_dispatchable() => {
+            _ = tokio::task::yield_now(), if actor.sender_dispatch_enabled && actor.sender.is_dispatchable() => {
                 execute_sender_step(
                     &mut actor.controller,
                     &mut actor.sender,
@@ -508,6 +549,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         hardware_profile,
         execution_target,
         sender,
+        sender_dispatch_enabled,
         safety,
         first_cut,
         snapshots,
@@ -522,6 +564,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = controller.disconnect().await;
             invalidate_authorizations(safety, first_cut);
             cancel_active_sender(sender, sender_snapshots);
+            *sender_dispatch_enabled = true;
             *controller = Controller::with_config(transport, *config);
             *execution_target = replacement_target;
             publish(snapshots, controller);
@@ -530,6 +573,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         Request::Connect { response } => {
             invalidate_authorizations(safety, first_cut);
             cancel_active_sender(sender, sender_snapshots);
+            *sender_dispatch_enabled = true;
             let result = controller.connect().await.map_err(ArbiterError::from);
             publish(snapshots, controller);
             let _ = response.send(result);
@@ -562,6 +606,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         Request::Disconnect { response } => {
             invalidate_authorizations(safety, first_cut);
             cancel_active_sender(sender, sender_snapshots);
+            *sender_dispatch_enabled = true;
             let result = controller.disconnect().await.map_err(ArbiterError::from);
             publish(snapshots, controller);
             let _ = response.send(result);
@@ -739,6 +784,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(result);
         }
         Request::StartDryRun { plan, response } => {
+            *sender_dispatch_enabled = true;
             let result = if *execution_target != ExecutionTarget::Mock {
                 Err(ArbiterError::DryRunTransportUnavailable)
             } else {
@@ -763,6 +809,37 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         }
         Request::CancelDryRun { response } => {
             let result = sender.cancel().map_err(ArbiterError::from);
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
+        #[cfg(test)]
+        Request::StartSerialRunFixture {
+            program,
+            authorization_id,
+            dispatch_immediately,
+            response,
+        } => {
+            let result = if *execution_target != ExecutionTarget::Serial {
+                Err(ArbiterError::RealRunTransportUnavailable)
+            } else {
+                execute_authorized_serial_sender_start(
+                    controller,
+                    first_cut,
+                    sender,
+                    program,
+                    authorization_id,
+                )
+                .await
+            };
+            *sender_dispatch_enabled = dispatch_immediately && result.is_ok();
+            publish(snapshots, controller);
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
+        #[cfg(test)]
+        Request::ReleaseSerialRunFixture { response } => {
+            *sender_dispatch_enabled = true;
+            let result = Ok(sender.snapshot());
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
         }
@@ -801,6 +878,27 @@ async fn execute_first_cut_authorization(
         report,
         authorization,
     })
+}
+
+#[cfg(test)]
+async fn execute_authorized_serial_sender_start(
+    controller: &mut Controller<BoxedTransport>,
+    first_cut: &mut FirstCutGate,
+    sender: &mut Sender,
+    program: GcodeProgram,
+    authorization_id: u64,
+) -> Result<SenderSnapshot, ArbiterError> {
+    let sender_state = sender.snapshot().state;
+    if matches!(sender_state, SenderState::Running | SenderState::Paused) {
+        return Err(SenderError::Busy(sender_state).into());
+    }
+    let fingerprint = program_fingerprint(&program);
+    let plan = build_dry_run_plan(&program)?;
+    let snapshot = controller.refresh_status().await?;
+    ensure_stable_idle(&snapshot)?;
+    first_cut.consume(authorization_id, &fingerprint, &snapshot, Instant::now())?;
+    sender.load_first_cut(plan)?;
+    sender.start().map_err(ArbiterError::from)
 }
 
 fn invalidate_authorizations(safety: &mut SafetyManager, first_cut: &mut FirstCutGate) {
@@ -1223,6 +1321,26 @@ mod tests {
     fn dry_run_plan(source: &str) -> DryRunPlan {
         let program = parsed_program(source);
         build_dry_run_plan(&program).unwrap()
+    }
+
+    async fn authorize_and_start_serial_fixture(
+        arbiter: &CommandArbiter,
+        source: &str,
+        dispatch_immediately: bool,
+    ) -> (FirstCutPreparation, SenderSnapshot) {
+        let preparation = arbiter
+            .authorize_first_cut(parsed_program(source), first_cut_confirmation())
+            .await
+            .unwrap();
+        let started = arbiter
+            .start_serial_run_fixture(
+                parsed_program(source),
+                preparation.authorization.id,
+                dispatch_immediately,
+            )
+            .await
+            .unwrap();
+        (preparation, started)
     }
 
     fn parsed_program(source: &str) -> GcodeProgram {
@@ -2130,6 +2248,143 @@ mod tests {
             ArbiterError::FirstCut(FirstCutAuthorizationError::IncompleteConfirmation { .. })
         ));
         assert!(control.writes().is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn serial_fixture_consumes_one_lease_and_completes_only_after_every_ok() {
+        let source = "G21 G90 G94\nG0 Z2\nG1 X2 F20\nM5";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let (preparation, started) =
+            authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
+
+        assert_eq!(started.mode, Some(millo_sender::SenderMode::FirstCut));
+        assert_eq!(completed.acknowledged_lines, completed.total_lines);
+        assert_eq!(completed.progress, 1.0);
+        let writes_before_reuse = control.writes();
+        let reuse = arbiter
+            .start_serial_run_fixture(parsed_program(source), preparation.authorization.id, true)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            reuse,
+            ArbiterError::FirstCut(FirstCutAuthorizationError::AuthorizationMissing)
+        ));
+        assert_eq!(control.writes().len(), writes_before_reuse.len() + 1);
+        assert_eq!(control.writes().last(), Some(&b"?".to_vec()));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn serial_fixture_stops_on_correlated_error() {
+        let source = "G21 G90 G94\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        control.queue_program_ok();
+        control.queue_program_ok();
+        control.queue_program_error(20);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        let failed = wait_for_sender(&arbiter, SenderState::Failed).await;
+
+        assert_eq!(failed.current_source_line, Some(1));
+        assert_eq!(failed.acknowledged_lines, 2);
+        assert!(
+            failed
+                .last_error
+                .as_deref()
+                .is_some_and(|value| value.contains("Some(20)"))
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn serial_fixture_stops_on_alarm_and_keeps_alarm_state() {
+        let source = "G21 G90 G94\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        control.queue_program_ok();
+        control.queue_program_ok();
+        control.queue_program_alarm(2);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        let failed = wait_for_sender(&arbiter, SenderState::Failed).await;
+
+        assert_eq!(failed.current_source_line, Some(1));
+        assert_eq!(
+            arbiter.snapshot().alarm.and_then(|alarm| alarm.code),
+            Some(2)
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn serial_fixture_hold_pauses_and_resume_continues_the_same_plan() {
+        let source = "G21 G90 G94\nG0 Z2\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        let (_, started) = authorize_and_start_serial_fixture(&arbiter, source, false).await;
+
+        assert_eq!(started.state, SenderState::Running);
+        let paused = arbiter.feed_hold().await.unwrap();
+        assert_eq!(paused.connection, ConnectionState::Connected);
+        assert_eq!(arbiter.sender_snapshot().state, SenderState::Paused);
+        assert_eq!(control.writes().last(), Some(&b"!".to_vec()));
+
+        arbiter.resume_dry_run().await.unwrap();
+        arbiter.release_serial_run_fixture().await.unwrap();
+        let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
+        assert_eq!(completed.mode, Some(millo_sender::SenderMode::FirstCut));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn serial_fixture_stops_when_controller_resets_during_a_program_line() {
+        let source = "G21 G90 G94\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        control.queue_program_ok();
+        control.queue_program_ok();
+        control.queue_program_reset("1.1h");
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        let failed = wait_for_sender(&arbiter, SenderState::Failed).await;
+
+        assert_eq!(failed.current_source_line, Some(1));
+        assert_eq!(
+            arbiter.snapshot().reset_notice.unwrap().version.as_deref(),
+            Some("1.1h")
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn serial_fixture_fails_closed_on_link_drop_during_a_program_line() {
+        let source = "G21 G90 G94\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        control.queue_program_ok();
+        control.queue_program_ok();
+        control.queue_program_disconnect();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        let failed = wait_for_sender(&arbiter, SenderState::Failed).await;
+
+        assert_eq!(failed.current_source_line, Some(1));
+        assert!(
+            failed
+                .last_error
+                .as_deref()
+                .is_some_and(|value| value.contains("not connected"))
+        );
+        assert_eq!(arbiter.snapshot().consecutive_failures, 1);
         task.abort();
     }
 

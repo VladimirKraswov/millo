@@ -9,8 +9,11 @@ export type SenderState =
   | "failed"
   | "cancelled";
 
+export type SenderMode = "mockDryRun" | "firstCut";
+
 export interface SenderSnapshot {
   readonly state: SenderState;
+  readonly mode?: SenderMode;
   readonly sourceName?: string;
   readonly totalLines: number;
   readonly acknowledgedLines: number;
@@ -35,4 +38,3 @@ export const idleSenderSnapshot: SenderSnapshot = {
   acknowledgedLines: 0,
   progress: 0,
 };
-

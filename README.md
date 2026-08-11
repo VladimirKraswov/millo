@@ -118,6 +118,14 @@ and exposes no serial Start action. The first-cut contract also
 requires explicit `G21`, `G90`, `G94`, and `G17` before the motions that depend
 on them, so preview cannot silently rely on ambient controller modes.
 
+The future serial sender transaction is now exercised behind a Rust test-only
+boundary. It refreshes status, atomically consumes the matching first-cut lease,
+rebuilds the strict opaque plan, and labels the sender `firstCut`. Deterministic
+Mock fixtures cover complete `ok`, correlated `error`, `ALARM`, Hold/resume,
+reset banner, and link-drop behavior. There is deliberately no Tauri command,
+UI Start action, plugin capability, or production serial entry point for this
+path yet.
+
 UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
 first core contribution in the named `control.machine` slot; Work Zero occupies
 the separate `control.coordinates` slot. Contributions have stable IDs, owners,
@@ -189,7 +197,7 @@ successful GRBL status exchange.
 | `millo-readiness` | Hardware-profile policy and guarded test-jog readiness |
 | `millo-run` | Real-run preflight policy, operator checklist, and one-use first-cut lease |
 | `millo-safety` | Reset challenges and short-lived test-jog authorization |
-| `millo-sender` | Bounded one-line-in-flight sender state machine |
+| `millo-sender` | Bounded one-line-in-flight sender with Mock dry-run and first-cut modes |
 | `millo-desktop` | Thin Tauri command/event adapter |
 
 See [Architecture](docs/ARCHITECTURE.md), the decisions for the
@@ -215,6 +223,8 @@ the [serial real-run preflight](docs/decisions/0018-real-run-preflight.md), and
 the [persistent machine-profile boundary](docs/decisions/0019-machine-profiles.md),
 the [controller settings and identity boundary](docs/decisions/0020-controller-settings-sync.md),
 and the [first-cut authorization boundary](docs/decisions/0021-first-cut-authorization.md).
+The test-only sender promotion is recorded in
+[ADR 0022](docs/decisions/0022-serial-sender-fixtures.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

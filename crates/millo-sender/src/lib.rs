@@ -5,6 +5,13 @@ use thiserror::Error;
 pub const MAX_SENDER_LINES: usize = 200_002;
 pub const MAX_SENDER_BYTES: usize = 2 * 1024 * 1024;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SenderMode {
+    MockDryRun,
+    FirstCut,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SenderLimits {
     pub max_lines: usize,
@@ -39,6 +46,8 @@ pub enum SenderState {
 #[serde(rename_all = "camelCase")]
 pub struct SenderSnapshot {
     pub state: SenderState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<SenderMode>,
     pub source_name: Option<String>,
     pub total_lines: usize,
     pub acknowledged_lines: usize,
@@ -52,6 +61,7 @@ impl Default for SenderSnapshot {
     fn default() -> Self {
         Self {
             state: SenderState::Idle,
+            mode: None,
             source_name: None,
             total_lines: 0,
             acknowledged_lines: 0,
@@ -86,6 +96,7 @@ pub struct Sender {
     limits: SenderLimits,
     plan: Option<DryRunPlan>,
     state: SenderState,
+    mode: Option<SenderMode>,
     acknowledged_lines: usize,
     in_flight: Option<DryRunLine>,
     last_line: Option<DryRunLine>,
@@ -104,6 +115,7 @@ impl Sender {
             limits,
             plan: None,
             state: SenderState::Idle,
+            mode: None,
             acknowledged_lines: 0,
             in_flight: None,
             last_line: None,
@@ -112,12 +124,25 @@ impl Sender {
     }
 
     pub fn load(&mut self, plan: DryRunPlan) -> Result<SenderSnapshot, SenderError> {
+        self.load_with_mode(plan, SenderMode::MockDryRun)
+    }
+
+    pub fn load_first_cut(&mut self, plan: DryRunPlan) -> Result<SenderSnapshot, SenderError> {
+        self.load_with_mode(plan, SenderMode::FirstCut)
+    }
+
+    fn load_with_mode(
+        &mut self,
+        plan: DryRunPlan,
+        mode: SenderMode,
+    ) -> Result<SenderSnapshot, SenderError> {
         if matches!(self.state, SenderState::Running | SenderState::Paused) {
             return Err(SenderError::Busy(self.state));
         }
         self.validate_plan(&plan)?;
         self.plan = Some(plan);
         self.state = SenderState::Ready;
+        self.mode = Some(mode);
         self.acknowledged_lines = 0;
         self.in_flight = None;
         self.last_line = None;
@@ -234,6 +259,7 @@ impl Sender {
         let current = self.in_flight.as_ref().or(self.last_line.as_ref());
         SenderSnapshot {
             state: self.state,
+            mode: self.mode,
             source_name: self.plan.as_ref().map(|plan| plan.source_name().to_owned()),
             total_lines,
             acknowledged_lines: self.acknowledged_lines,
@@ -295,7 +321,8 @@ mod tests {
     #[test]
     fn never_dispatches_a_second_line_before_acknowledgement() {
         let mut sender = Sender::default();
-        sender.load(plan("G21\nG0 X1")).unwrap();
+        let loaded = sender.load(plan("G21\nG0 X1")).unwrap();
+        assert_eq!(loaded.mode, Some(SenderMode::MockDryRun));
         sender.start().unwrap();
 
         assert_eq!(sender.next_line().unwrap().command(), "M5");

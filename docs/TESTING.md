@@ -209,6 +209,14 @@ port names remain untouched.
 - `/?fixture=first-cut` provides the clear-preflight and six-confirmation dialog
   for desktop/mobile visual regression. The issued fixture lease still has no
   Start action.
+- Test-only serial-class actor fixtures then consume that lease atomically and
+  exercise the shared sender against Mock GRBL. Six scenarios cover all-`ok`
+  completion, correlated `error`, `ALARM`, Hold/resume before dispatch, a reset
+  banner during a line, and a transport disconnect during a line.
+- Reusing a consumed authorization fails after only the fresh status read. No
+  second program line can be started from the same lease.
+- The fixture request and dispatch barrier are compiled only for Rust tests.
+  Tauri, React, plugins, and production serial targets have no Start endpoint.
 
 ## Current hardware readiness coverage
 

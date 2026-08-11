@@ -29,6 +29,9 @@ until they are read from the controller or measured before cutting.
   confirmations. There is no arbitrary motion or spindle command endpoint. The
   program sender is hard-disabled for serial targets and runs only against the
   deterministic Mock GRBL transport.
+- A test-only serial-class sender fixture now consumes first-cut leases and
+  covers terminal responses, Hold/resume, reset, and link loss. It adds no
+  production endpoint and does not change the approved hardware interactions.
 - Step jog is deliberately limited to `0.01..1.00 mm` at `10..100 mm/min`, with
   one fresh preflight lease required for every attempt and the operator present
   at the machine power control.
