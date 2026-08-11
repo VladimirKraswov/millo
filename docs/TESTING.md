@@ -280,14 +280,22 @@ cargo run -p millo-desktop --example hardware_check_run -- \
   introduced. All 25 lines were again correlated and GRBL returned to `Idle`,
   validating the real serial demultiplexer rather than only Mock ordering.
 - `grbl-cutting-check.nc` adds metadata-only O headers, N words, M3/M4/S, all
-  three arc planes, distance/feed mode transitions, dwell, and an explicit-
-  endpoint full circle. The physical controller accepted 24/24 lines on
+  three arc planes, distance/feed mode transitions, dwell, M0/M1, and an
+  explicit-endpoint full circle. Check validates M0/M1 without entering the
+  physical-run operator pause state. The physical controller accepted 26/26 lines on
   2026-08-12 and returned to `Idle`:
 
 ```bash
 cargo run -p millo-desktop --example hardware_check_run -- \
   /dev/cu.usbmodem11101 fixtures/programs/grbl-cutting-check.nc
 ```
+
+- The React check-run read model requires a loaded program, typed gateway, and
+  serial target and refuses to replace an active sender. Program workspace
+  exposes the action only through `start_check_run`; Rust reparses the source.
+- Browser inspection at 1440 x 900 and 390 x 844 verifies the additional action
+  in the preflight panel. The mobile page remains exactly 390 px wide; the
+  340 px Check button stays inside its 25..365 px content bounds.
 
 ### Hardware Air-run fixture
 

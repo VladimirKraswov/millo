@@ -13,7 +13,7 @@
 | G61/G64 | Nominal geometry unchanged | Fixture pending physical support proof | Policy-capable | Policy-capable |
 | G90/G91/G91.1 | Yes | Yes | Yes | Yes |
 | G93/G94 | Yes, with time estimates | Yes | Yes | Yes |
-| M0/M1 | Program barrier | Sender pause state | Sender pause state | Sender pause state |
+| M0/M1 | Program barrier | Validated without operator pause | Sender pause state | Sender pause state |
 | M2/M30 | Program end barrier | Yes | Deferred until fresh Idle | Deferred until fresh Idle |
 | M3/M4/S/M5 | Parsed and marked | Yes under Cutting grammar | Start/speed blocked; M5 allowed | Yes after Cutting authorization |
 | M9 | Yes | Yes | Yes | Yes |
@@ -43,9 +43,9 @@ On `/dev/cu.usbmodem11101`, GRBL `1.1f.20230316`:
 
 - `grbl-complex-check.nc`: 25/25 accepted after parser correction for full-circle
   endpoint requirements; repeated after response demultiplexing changes.
-- `grbl-cutting-check.nc`: 24/24 accepted on 2026-08-12, including `N` words,
+- `grbl-cutting-check.nc`: 26/26 accepted on 2026-08-12, including `N` words,
   metadata-only `O2026` omission, M3/M4/S syntax, all three arc planes,
-  G90/G91, G93/G94, dwell, full circle, and M30; returned to Idle.
+  G90/G91, G93/G94, dwell, M0/M1, full circle, and M30; returned to Idle.
 - `air-square-20mm.nc`: 10/10 physical Air run, planner drained, WPos returned
   to XYZ zero.
 - Realtime override smoke: observed `Ov:110,50,99`, then verified restore to

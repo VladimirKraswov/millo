@@ -166,7 +166,9 @@ The complex multi-plane fixture has passed 25/25 lines on the physical GRBL
 requirement for an explicit axis target on a full-circle arc.
 Check uses Cutting grammar, so production `M3/M4/S` syntax can be firmware-
 validated while Air policy continues to reject it. A second physical fixture
-passed 24/24 lines and returned to Idle. Unsupported optional-block and checksum
+passed 26/26 lines, including validation-only M0/M1, and returned to Idle.
+Program workspace exposes this lifecycle through typed `GRBL Check`; Tauri
+reparses the retained source before the actor enters `$C`. Unsupported optional-block and checksum
 syntax now fails closed instead of being stripped into a different command;
 metadata-only `O` program headers are retained but never sent.
 

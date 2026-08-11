@@ -6,6 +6,7 @@ import {
   Pause,
   Play,
   RefreshCw,
+  ScanSearch,
   ShieldAlert,
   ShieldCheck,
   Square,
@@ -43,6 +44,7 @@ import type {
 import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramLineTable } from "./ProgramLineTable";
+import { canStartCheckRun } from "./checkRunReadModel";
 import { dryRunControls } from "./dryRunReadModel";
 import { realRunPreflightControls } from "./realRunPreflightReadModel";
 import type { PreviewView } from "./ToolpathPreview";
@@ -307,14 +309,30 @@ export function ProgramWorkspace({
       preparation.authorization.id,
     );
   };
+  const startCheckRun = () => {
+    if (!loaded || !realRunGateway) return;
+    void runSenderAction(() =>
+      realRunGateway.startCheck({
+        sourceName: loaded.program.sourceName,
+        source: loaded.source,
+      }),
+    );
+  };
   const programRunVisible =
     senderForProgram && (sender.mode === "airRun" || sender.mode === "cutRun");
+  const checkRunVisible = senderForProgram && sender.mode === "checkRun";
+  const checkRunAvailable = canStartCheckRun(displayedSender, {
+    gatewayAvailable: realRunGateway !== undefined,
+    loading,
+    programLoaded: loaded !== undefined,
+    serialAvailable: realRunAvailable,
+  });
 
   useEffect(() => {
-    if (programRunVisible && sender.currentSourceLine !== undefined) {
+    if ((programRunVisible || checkRunVisible) && sender.currentSourceLine !== undefined) {
       setSelectedSourceLine(sender.currentSourceLine);
     }
-  }, [programRunVisible, sender.currentSourceLine]);
+  }, [checkRunVisible, programRunVisible, sender.currentSourceLine]);
 
   return (
     <section className="program-workspace" aria-labelledby="program-title">
@@ -463,11 +481,17 @@ export function ProgramWorkspace({
                 </strong>
               </div>
             </div>
-            {realRunTarget && programRunVisible ? (
+            {realRunTarget && (programRunVisible || checkRunVisible) ? (
               <div className={`dry-run-card program-run-card is-${displayedSender.state}`}>
                 <div className="dry-run-heading">
                   <div>
-                    <span>{sender.mode === "airRun" ? "Air run" : "Cut run"}</span>
+                    <span>
+                      {checkRunVisible
+                        ? "GRBL Check"
+                        : sender.mode === "airRun"
+                          ? "Air run"
+                          : "Cut run"}
+                    </span>
                     <strong>
                       {displayedSender.state === "draining"
                         ? "Waiting for GRBL Idle"
@@ -509,10 +533,14 @@ export function ProgramWorkspace({
                 </div>
                 <small>
                   {displayedSender.state === "completed"
-                    ? "Все строки подтверждены; контроллер вернулся в Idle"
+                    ? checkRunVisible
+                      ? "Все строки приняты в $C; контроллер вернулся в Idle"
+                      : "Все строки подтверждены; контроллер вернулся в Idle"
                     : displayedSender.state === "failed"
                       ? displayedSender.lastError
-                      : "Остановка: Feed Hold, затем подтверждаемый Soft Reset справа"}
+                      : checkRunVisible
+                        ? "По одной строке · без движения и включения выходов"
+                        : "Остановка: Feed Hold, затем подтверждаемый Soft Reset справа"}
                 </small>
               </div>
             ) : realRunTarget ? (
@@ -571,6 +599,15 @@ export function ProgramWorkspace({
                     size={13}
                   />
                   {reportForProgram ? "Проверить снова" : "Проверить готовность"}
+                </button>
+                <button
+                  disabled={!checkRunAvailable}
+                  onClick={startCheckRun}
+                  title="Проверить файл встроенным режимом GRBL $C без движения"
+                  type="button"
+                >
+                  <ScanSearch aria-hidden="true" size={13} />
+                  GRBL Check
                 </button>
                 {reportForProgram?.ready && (
                   <button

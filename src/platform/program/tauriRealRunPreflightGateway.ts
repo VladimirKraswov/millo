@@ -18,5 +18,7 @@ export const tauriRealRunPreflightGateway: RealRunPreflightGateway = {
     }),
   startProgram: (request, authorizationId) =>
     invoke<SenderSnapshot>("start_program_run", { request, authorizationId }),
+  startCheck: (request) =>
+    invoke<SenderSnapshot>("start_check_run", { request }),
   resumeProgram: () => invoke<SenderSnapshot>("resume_program_run"),
 };

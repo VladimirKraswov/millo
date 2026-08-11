@@ -18,7 +18,11 @@ which could produce an executable command with different semantics.
   retaining policy blocks for M6, coolant, probing, machine/reference movement,
   and coordinate mutation.
 - `$C` remains serial-only, starts from stable Idle, runs one outstanding line,
-  and must return to verified Idle. It grants no motion authorization.
+  and must return to verified Idle. M0/M1 are validated without entering the
+  physical-run pause state. It grants no motion authorization.
+- Program workspace calls one typed Tauri command with the retained source.
+  Tauri reparses it in Rust; callers cannot submit a prebuilt plan or toggle
+  Check mode directly.
 - A metadata-only `O` program-number line is retained in the parser DTO but is
   non-executable. An O word mixed with executable words is rejected.
 - Optional-block and checksum syntax is a parser error until Millo implements a
@@ -31,4 +35,4 @@ which could produce an executable command with different semantics.
 - Sender normalization cannot turn optional or integrity-tagged input into a
   different unconditional program.
 - Mock fixtures and the physical `grbl-cutting-check.nc` run verify the boundary;
-  the physical controller accepted all 24 planned lines and returned to Idle.
+  the physical controller accepted all 26 planned lines and returned to Idle.

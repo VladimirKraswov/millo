@@ -77,6 +77,17 @@ Original source + lease ID -> command actor -> fresh status -> consume lease
 The lease is not a sender plan. Only the actor can turn the original source and
 matching lease into serial dispatch.
 
+GRBL Check is a sibling validation path, not a weaker run authorization:
+
+```text
+Original source -> typed Tauri command -> Rust reparse -> Cutting policy
+                                                   -> actor -> $C -> one-line FIFO
+                                                   -> verified $C exit -> Idle
+```
+
+The UI cannot pass a prepared plan or toggle `$C`. M0/M1 are syntax-validation
+lines in this mode and do not enter the physical-run operator pause state.
+
 ## Rules
 
 1. CNC behavior belongs in Rust and must be testable without Tauri.

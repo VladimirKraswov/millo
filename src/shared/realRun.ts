@@ -73,5 +73,8 @@ export interface RealRunPreflightGateway {
     request: ProgramParseRequest,
     authorizationId: number,
   ): Promise<import("./dryRun").SenderSnapshot>;
+  startCheck(
+    request: ProgramParseRequest,
+  ): Promise<import("./dryRun").SenderSnapshot>;
   resumeProgram(): Promise<import("./dryRun").SenderSnapshot>;
 }

@@ -9,8 +9,8 @@ use commands::{
     mock_trigger_reset, mock_trigger_timeout, parse_gcode_program, pause_dry_run,
     preflight_real_run, prepare_test_jog, refresh_status, request_soft_reset, resume_dry_run,
     resume_program_run, rollback_controller_setting, select_machine_profile, sender_snapshot,
-    set_rapid_override, set_work_zero, start_mock_dry_run, start_program_run, step_jog,
-    update_controller_setting, update_machine_local_settings,
+    set_rapid_override, set_work_zero, start_check_run, start_mock_dry_run, start_program_run,
+    step_jog, update_controller_setting, update_machine_local_settings,
 };
 use tauri::Manager;
 
@@ -51,6 +51,7 @@ pub fn run() {
             preflight_real_run,
             authorize_first_cut,
             start_program_run,
+            start_check_run,
             resume_program_run,
             sender_snapshot,
             start_mock_dry_run,

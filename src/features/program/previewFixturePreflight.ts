@@ -117,6 +117,9 @@ export const previewFixturePreflightGateway: RealRunPreflightGateway = {
   startProgram: async () => {
     throw new Error("Blocked fixture cannot start");
   },
+  startCheck: async () => {
+    throw new Error("Blocked fixture cannot enter GRBL Check");
+  },
   resumeProgram: async () => {
     throw new Error("Blocked fixture cannot resume");
   },

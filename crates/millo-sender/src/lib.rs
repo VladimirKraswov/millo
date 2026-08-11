@@ -371,7 +371,7 @@ impl Sender {
         let line_kind = line.kind();
         self.last_line = Some(line);
         self.acknowledged_lines = self.acknowledged_lines.saturating_add(1);
-        if line_kind == DryRunLineKind::ProgramPause {
+        if line_kind == DryRunLineKind::ProgramPause && self.mode != Some(SenderMode::CheckRun) {
             self.paused_from = Some(SenderState::Running);
             self.state = SenderState::Paused;
         } else if line_kind == DryRunLineKind::ProgramEnd
@@ -664,14 +664,19 @@ mod tests {
     fn check_run_acknowledges_program_end_without_motion_draining() {
         let mut sender = Sender::default();
         sender
-            .load_check_run(plan("G21 G90 G94\nG1 X1 F10\nM30"))
+            .load_check_run(plan("G21 G90 G94\nM0\nG1 X1 F10\nM1\nM30"))
             .unwrap();
         sender.start().unwrap();
 
+        let mut checked_pauses = 0;
         while sender.snapshot().state == SenderState::Running {
             let line = sender.next_line().unwrap();
             assert!(sender.next_line().is_none());
             sender.acknowledge_ok().unwrap();
+            if line.kind() == DryRunLineKind::ProgramPause {
+                checked_pauses += 1;
+                assert_eq!(sender.snapshot().state, SenderState::Running);
+            }
             if line.kind() == DryRunLineKind::ProgramEnd {
                 break;
             }
@@ -681,6 +686,7 @@ mod tests {
         assert_eq!(completed.mode, Some(SenderMode::CheckRun));
         assert_eq!(completed.state, SenderState::Completed);
         assert_eq!(completed.acknowledged_lines, completed.total_lines);
+        assert_eq!(checked_pauses, 2);
         assert!(sender.deferred_program_end().is_none());
     }
 
