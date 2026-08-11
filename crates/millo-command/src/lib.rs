@@ -1138,7 +1138,7 @@ async fn execute_check_run_start(
         return Err(SenderError::Busy(sender_state).into());
     }
 
-    let plan = millo_dry_run::build_dry_run_plan(&program)?;
+    let plan = build_program_run_plan(&program, ProgramRunPolicy::Cutting)?;
     let initial = controller.refresh_status().await?;
     ensure_stable_idle(&initial)?;
     let inspection = controller.inspect_device().await?;
@@ -2857,7 +2857,7 @@ mod tests {
     async fn serial_check_run_validates_complex_geometry_and_returns_to_idle() {
         let source = include_str!("../../../fixtures/programs/grbl-complex-check.nc");
         let program = parsed_program(source);
-        let plan = build_dry_run_plan(&program).unwrap();
+        let plan = build_program_run_plan(&program, ProgramRunPolicy::Cutting).unwrap();
         let expected_commands = plan
             .lines()
             .iter()
@@ -2893,6 +2893,50 @@ mod tests {
         assert_eq!(actual_commands, expected_commands);
         assert!(!writes.contains(&b"!".to_vec()));
         assert!(!writes.contains(&b"\x18".to_vec()));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn serial_check_run_accepts_cutting_spindle_syntax_without_motion_authorization() {
+        let source = include_str!("../../../fixtures/programs/grbl-cutting-check.nc");
+        let program = parsed_program(source);
+        assert!(program.features.has_spindle_activation);
+        assert!(build_dry_run_plan(&program).is_err());
+        let expected = build_program_run_plan(&program, ProgramRunPolicy::Cutting)
+            .unwrap()
+            .lines()
+            .iter()
+            .map(|line| format!("{}\n", line.command()).into_bytes())
+            .collect::<Vec<_>>();
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        arbiter.start_check_run(program).await.unwrap();
+        let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
+
+        assert_eq!(completed.acknowledged_lines, expected.len());
+        assert_eq!(arbiter.snapshot().machine.mode, MachineMode::Idle);
+        let actual = control
+            .writes()
+            .into_iter()
+            .filter(|write| {
+                write.ends_with(b"\n") && !write.starts_with(b"$") && write.as_slice() != b"$C\n"
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+        assert!(actual.iter().any(|line| {
+            String::from_utf8_lossy(line)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .ends_with(&["S12000", "M3"])
+        }));
+        assert!(actual.iter().any(|line| {
+            String::from_utf8_lossy(line)
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .ends_with(&["S6000", "M4"])
+        }));
         task.abort();
     }
 

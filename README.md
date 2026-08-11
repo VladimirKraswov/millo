@@ -164,6 +164,17 @@ toggles back to verified `Idle` after completion, parser error, or cancellation.
 The complex multi-plane fixture has passed 25/25 lines on the physical GRBL
 1.1f controller. Its first attempt exposed and then regression-locked GRBL's
 requirement for an explicit axis target on a full-circle arc.
+Check uses Cutting grammar, so production `M3/M4/S` syntax can be firmware-
+validated while Air policy continues to reject it. A second physical fixture
+passed 24/24 lines and returned to Idle. Unsupported optional-block and checksum
+syntax now fails closed instead of being stripped into a different command;
+metadata-only `O` program headers are retained but never sent.
+
+The execution-core differences from the Candle reference, the problem each one
+solves, and the remaining deliberate capability gates are maintained in
+[Millo sender compared with Candle](docs/CANDLE_SENDER_COMPARISON.md). The
+current command matrix and physical evidence are in
+[GRBL execution audit](docs/GRBL_EXECUTION_AUDIT.md).
 
 UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
 first core contribution in the named `control.machine` slot; Work Zero occupies

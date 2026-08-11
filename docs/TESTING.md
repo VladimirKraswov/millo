@@ -260,6 +260,9 @@ port names remain untouched.
   returns to `Idle` after the second toggle.
 - Check sender mode keeps one line in flight, preserves exact source-line errors,
   acknowledges `M30` without physical draining, and never emits Hold or Reset.
+- Check plans use Cutting grammar: M3/M4/S are accepted for firmware validation,
+  while the same source remains forbidden by Air policy. M6, coolant, probing,
+  coordinate mutation, and reference/machine movement remain blocked.
 - Actor tests reject non-serial targets before I/O, run the complete multi-plane
   fixture, verify every approved line exactly once, cover correlated error, and
   require automatic cleanup to `Idle`.
@@ -276,6 +279,15 @@ cargo run -p millo-desktop --example hardware_check_run -- \
 - The same physical fixture was repeated after incremental response polling was
   introduced. All 25 lines were again correlated and GRBL returned to `Idle`,
   validating the real serial demultiplexer rather than only Mock ordering.
+- `grbl-cutting-check.nc` adds metadata-only O headers, N words, M3/M4/S, all
+  three arc planes, distance/feed mode transitions, dwell, and an explicit-
+  endpoint full circle. The physical controller accepted 24/24 lines on
+  2026-08-12 and returned to `Idle`:
+
+```bash
+cargo run -p millo-desktop --example hardware_check_run -- \
+  /dev/cu.usbmodem11101 fixtures/programs/grbl-cutting-check.nc
+```
 
 ### Hardware Air-run fixture
 

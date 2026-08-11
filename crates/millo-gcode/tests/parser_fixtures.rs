@@ -163,6 +163,42 @@ fn accepts_common_program_headers_and_modal_cancels() {
     assert!(program.summary.preview_complete);
     assert!(program.summary.dry_run_eligible);
     assert_eq!(program.summary.motion_count, 2);
+    assert!(!program.lines[1].executable);
+    assert_eq!(program.lines[1].normalized, "O1001");
+}
+
+#[test]
+fn fails_closed_instead_of_rewriting_stream_control_syntax() {
+    for (name, source, expected) in [
+        (
+            "optional-block.nc",
+            "G21 G90 G94\n/G1 X1 F10",
+            ProgramWarningCode::OptionalBlockUnsupported,
+        ),
+        (
+            "checksummed.nc",
+            "G21 G90 G94\nN2 G1 X1 F10*42",
+            ProgramWarningCode::ChecksumUnsupported,
+        ),
+    ] {
+        let program = parse_fixture(name, source);
+        assert!(!program.summary.dry_run_eligible, "{name}");
+        assert!(program.warnings.iter().any(|warning| {
+            warning.code == expected && warning.severity == ProgramWarningSeverity::Error
+        }));
+    }
+}
+
+#[test]
+fn rejects_program_numbers_mixed_with_executable_words() {
+    let program = parse_fixture("mixed-program-number.nc", "O1001 G21\nG1 X1 F10");
+
+    assert!(!program.summary.dry_run_eligible);
+    assert!(program.warnings.iter().any(|warning| {
+        warning.source_line == 1
+            && warning.code == ProgramWarningCode::UnsupportedWord
+            && warning.message.contains("metadata-only")
+    }));
 }
 
 #[test]

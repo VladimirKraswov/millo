@@ -72,8 +72,8 @@ pub enum ProgramWarningCode {
     UnexpectedCommentClose,
     InvalidToken,
     DuplicateWord,
-    OptionalBlockDelete,
-    ChecksumIgnored,
+    OptionalBlockUnsupported,
+    ChecksumUnsupported,
     UnsupportedGCode,
     UnsupportedMCode,
     UnsupportedWord,
@@ -373,7 +373,18 @@ impl Parser {
             .map(|word| word.lexeme.as_str())
             .collect::<Vec<_>>()
             .join(" ");
-        let executable = words.iter().any(|word| word.letter != 'N');
+        let has_program_number = words.iter().any(|word| word.letter == 'O');
+        let executable = words.iter().any(|word| !matches!(word.letter, 'N' | 'O'));
+
+        if has_program_number && executable {
+            self.preview_complete = false;
+            self.warn(
+                source_line,
+                ProgramWarningSeverity::Error,
+                ProgramWarningCode::UnsupportedWord,
+                "O program numbers must be on a metadata-only line",
+            );
+        }
 
         if executable {
             self.apply_block(source_line, &words);
@@ -946,9 +957,10 @@ fn tokenize(code: &str, source_line: usize, warnings: &mut Vec<ProgramWarning>) 
         if character == '/' {
             warnings.push(ProgramWarning {
                 source_line,
-                severity: ProgramWarningSeverity::Warning,
-                code: ProgramWarningCode::OptionalBlockDelete,
-                message: "optional block-delete marker is ignored".to_owned(),
+                severity: ProgramWarningSeverity::Error,
+                code: ProgramWarningCode::OptionalBlockUnsupported,
+                message: "optional block-delete semantics are not supported; execution is blocked"
+                    .to_owned(),
             });
             index += 1;
             continue;
@@ -956,9 +968,10 @@ fn tokenize(code: &str, source_line: usize, warnings: &mut Vec<ProgramWarning>) 
         if character == '*' {
             warnings.push(ProgramWarning {
                 source_line,
-                severity: ProgramWarningSeverity::Warning,
-                code: ProgramWarningCode::ChecksumIgnored,
-                message: "line checksum is ignored".to_owned(),
+                severity: ProgramWarningSeverity::Error,
+                code: ProgramWarningCode::ChecksumUnsupported,
+                message: "checksummed input cannot be normalized safely; execution is blocked"
+                    .to_owned(),
             });
             break;
         }

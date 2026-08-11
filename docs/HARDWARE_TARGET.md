@@ -215,6 +215,13 @@ reported feed/rapid/spindle `Ov:110,50,99`, after which Millo reset and verified
 `Ov:100,100,100` before disconnecting. Runtime spindle override changes firmware
 scaling only; it does not activate the manually controlled spindle.
 
+On 2026-08-12, `grbl-cutting-check.nc` exercised the production Cutting grammar
+inside typed `$C`. Millo omitted the metadata-only `O2026` line and sent 24
+approved commands containing N words, M3/M4/S syntax, G17/G18/G19 arcs,
+G90/G91, G93/G94, dwell, and M30. The physical controller accepted 24/24 and
+the actor verified the automatic return from `Check` to `Idle`. Check mode did
+not grant a run lease or execute machine motion.
+
 At each connection Millo treats the controller's complete `$$` response as the
 truth and keeps a duplicate in
 `~/Library/Application Support/io.millo.desktop/machines/machine-0001.settings.json`.
