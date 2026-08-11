@@ -102,6 +102,10 @@ pub enum ArbiterError {
     RunPolicy(#[from] DryRunPolicyError),
     #[error("machine profile can be changed only while disconnected, current state is {0:?}")]
     ProfileChangeUnavailable(ConnectionState),
+    #[error("transport can be replaced only while disconnected, current state is {0:?}")]
+    TransportReplacementUnavailable(ConnectionState),
+    #[error("connect requires a disconnected controller, current state is {0:?}")]
+    ConnectUnavailable(ConnectionState),
     #[error(transparent)]
     Settings(#[from] SettingsError),
     #[error(
@@ -516,7 +520,7 @@ impl CommandArbiter {
             .await
     }
 
-    pub async fn send_realtime(
+    async fn send_realtime(
         &self,
         command: RealtimeCommand,
     ) -> Result<ControllerSnapshot, ArbiterError> {
@@ -771,6 +775,13 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             execution_target: replacement_target,
             response,
         } => {
+            let connection = controller.snapshot().connection;
+            if connection != ConnectionState::Disconnected {
+                let _ = response.send(Err(ArbiterError::TransportReplacementUnavailable(
+                    connection,
+                )));
+                return;
+            }
             cancel_check_run(
                 controller,
                 sender,
@@ -779,7 +790,6 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 sender_snapshots,
             )
             .await;
-            let _ = controller.disconnect().await;
             invalidate_authorizations(safety, first_cut);
             program_check.invalidate();
             *pending_program_check = None;
@@ -791,12 +801,17 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(Ok(controller.snapshot()));
         }
         Request::Connect { response } => {
-            invalidate_authorizations(safety, first_cut);
-            program_check.invalidate();
-            *pending_program_check = None;
-            cancel_active_sender(sender, sender_snapshots);
-            *sender_dispatch_enabled = true;
-            let result = controller.connect().await.map_err(ArbiterError::from);
+            let connection = controller.snapshot().connection;
+            let result = if connection == ConnectionState::Disconnected {
+                invalidate_authorizations(safety, first_cut);
+                program_check.invalidate();
+                *pending_program_check = None;
+                cancel_active_sender(sender, sender_snapshots);
+                *sender_dispatch_enabled = true;
+                controller.connect().await.map_err(ArbiterError::from)
+            } else {
+                Err(ArbiterError::ConnectUnavailable(connection))
+            };
             publish(snapshots, controller);
             let _ = response.send(result);
         }
@@ -1074,18 +1089,28 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             challenge_id,
             response,
         } => {
-            first_cut.invalidate();
-            program_check.invalidate();
-            *pending_program_check = None;
-            cancel_active_sender(sender, sender_snapshots);
-            let result = safety
+            let result = match safety
                 .confirm_soft_reset(challenge_id, Instant::now())
-                .map_err(ArbiterError::from);
-            let result = match result {
-                Ok(()) => controller
-                    .send_realtime(RealtimeCommand::SoftReset)
-                    .await
-                    .map_err(ArbiterError::from),
+                .map_err(ArbiterError::from)
+            {
+                Ok(()) => {
+                    first_cut.invalidate();
+                    program_check.invalidate();
+                    *pending_program_check = None;
+                    let result = controller
+                        .send_realtime(RealtimeCommand::SoftReset)
+                        .await
+                        .map_err(ArbiterError::from);
+                    match &result {
+                        Ok(_) => cancel_active_sender(sender, sender_snapshots),
+                        Err(error) => fail_active_sender(
+                            sender,
+                            format!("soft reset could not be delivered: {error}"),
+                            sender_snapshots,
+                        ),
+                    }
+                    result
+                }
                 Err(error) => Err(error),
             };
             publish(snapshots, controller);
@@ -2548,6 +2573,49 @@ mod tests {
             ArbiterError::Safety(SafetyError::ResetChallengeMissing)
         ));
         assert_eq!(control.writes(), vec![b"\x18".to_vec()]);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn invalid_soft_reset_confirmation_cannot_cancel_an_active_sender() {
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        authorize_and_start_serial_fixture(&arbiter, "G21 G90 G94\nG1 X2 F20", false).await;
+
+        let error = arbiter.confirm_soft_reset(u64::MAX).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArbiterError::Safety(SafetyError::ResetChallengeMissing)
+        ));
+        assert_eq!(arbiter.sender_snapshot().state, SenderState::Running);
+        assert!(!control.writes().iter().any(|write| write == b"\x18"));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn connected_actor_rejects_reconnect_and_transport_replacement() {
+        let (arbiter, _, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        authorize_and_start_serial_fixture(&arbiter, "G21 G90 G94\nG1 X2 F20", false).await;
+
+        let reconnect = arbiter.connect().await.unwrap_err();
+        let replacement = arbiter
+            .replace_transport(Box::new(MockTransport::default()))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            reconnect,
+            ArbiterError::ConnectUnavailable(ConnectionState::Connected)
+        ));
+        assert!(matches!(
+            replacement,
+            ArbiterError::TransportReplacementUnavailable(ConnectionState::Connected)
+        ));
+        assert_eq!(arbiter.sender_snapshot().state, SenderState::Running);
         task.abort();
     }
 

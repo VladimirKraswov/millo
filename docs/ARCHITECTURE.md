@@ -391,6 +391,11 @@ does not schedule or execute controller I/O.
   successful only after another status read reports `Idle` without alarm.
 - Disconnect changes actor lifecycle state, closes the transport, and clears
   session telemetry; the dormant ticker performs no I/O while disconnected.
+- Connect and transport replacement are accepted only from `Disconnected`.
+  Reconnect/replacement requests cannot silently cancel an active sender or
+  abandon buffered physical motion. If Tauri fails during status, Inspector, or
+  profile synchronization after opening a port, it closes the controller and
+  clears the incomplete settings session before returning the error.
 
 ### Native serial boundary
 
@@ -479,6 +484,10 @@ does not schedule or execute controller I/O.
 - Soft Reset requires an actor-issued challenge that expires after 10 seconds.
   Confirmation consumes the challenge before `Ctrl-X` is written, so retrying
   the same confirmation cannot reset the controller twice.
+- Invalid or reused reset confirmation has no sender side effect. The actor
+  cancels the active sender only after `Ctrl-X` is delivered; a transport error
+  marks the sender failed so it cannot continue dispatching under a false local
+  `Cancelled` state.
 - Test-jog preflight requires explicit confirmation that the spindle is off,
   the tool is clear, and machine power is within operator reach. The actor then
   re-runs all four Inspector queries and assesses the resulting live snapshot.

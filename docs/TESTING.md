@@ -196,6 +196,9 @@ port names remain untouched.
 - Controller regression coverage calls the terminal-response boundary without
   a pending command and requires a typed `ProgramResponseState` error rather
   than a panic.
+- Actor safety tests keep a physical-class sender active while submitting an
+  invalid Reset confirmation and while attempting reconnect/transport replace.
+  Both operations must fail without changing sender state or writing `Ctrl-X`.
 - Heartbeat tests verify that each `ok` resets acknowledgement age, updates the
   exact line/command and sequence, and freezes evidence on terminal state.
 - Sender and actor tests assert structured failure kind, GRBL code, source line,

@@ -508,7 +508,6 @@ pub async fn connect_transport(
     state.start_event_bridge(app).await;
     let replacement = resolve_transport(&transport_id, baud_rate).await?;
     let descriptor = replacement.descriptor.clone();
-    *state.settings_session.lock().await = None;
 
     state
         .arbiter
@@ -518,129 +517,148 @@ pub async fn connect_transport(
         )
         .await
         .map_err(|error| error.to_string())?;
+    *state.settings_session.lock().await = None;
     *state.active_transport.lock().await = descriptor.clone();
     *state.mock.lock().await = replacement.mock;
 
-    state
-        .arbiter
-        .connect()
-        .await
-        .map_err(|error| error.to_string())?;
-    let snapshot = state
-        .arbiter
-        .refresh_status()
-        .await
-        .map_err(|error| error.to_string())?;
-    state
-        .arbiter
-        .bind_hardware_profile(HardwareProfile::first_machine())
-        .await
-        .map_err(|error| error.to_string())?;
-    let initial_inspection = state
-        .arbiter
-        .inspect_device()
-        .await
-        .map_err(|error| error.to_string())?;
-    let fingerprint = machine_fingerprint(&descriptor, &initial_inspection.device);
-    let connection = MachineConnectionPreset {
-        transport_id: descriptor.id.clone(),
-        baud_rate,
-        fingerprint: Some(fingerprint.clone()),
-    };
-    let profile_match = if descriptor.kind == TransportKind::Serial {
-        let profiles = state.profiles.lock().await.state();
-        match_machine_profile(
-            &profiles,
-            &fingerprint,
-            &descriptor.id,
-            &initial_inspection.device,
-        )?
-    } else {
-        None
-    };
-
-    let mut profile_id = None;
-    let mut archive = None;
-    if let Some(profile) = profile_match.as_ref() {
+    let result = async {
         state
             .arbiter
-            .bind_hardware_profile(profile.hardware_profile())
+            .connect()
             .await
             .map_err(|error| error.to_string())?;
-        let travel = build_settings_snapshot(&initial_inspection.device, 1)
-            .travel_mm()
-            .ok_or_else(|| "controller did not report valid $130/$131/$132 travel".to_owned())?;
-        let profiles = state
-            .profiles
-            .lock()
+        let snapshot = state
+            .arbiter
+            .refresh_status()
             .await
-            .record_controller_observation(
-                &profile.id,
-                travel,
-                connection.clone(),
-                detected_controller(&initial_inspection.device),
-            )
             .map_err(|error| error.to_string())?;
-        let refreshed_profile = profiles
-            .profiles
-            .iter()
-            .find(|candidate| candidate.id == profile.id)
-            .ok_or_else(|| "observed profile disappeared from the profile store".to_owned())?;
-        let temporary_session = ActiveControllerSettings {
-            inspection: initial_inspection.device.clone(),
-            fingerprint: fingerprint.clone(),
-            connection: connection.clone(),
-            profile_id: Some(profile.id.clone()),
-            archive: None,
-            revision: 1,
-        };
-        archive = begin_settings_archive(&state, refreshed_profile, &temporary_session)?;
-        profile_id = Some(profile.id.clone());
-    }
-
-    let inspection = if profile_id.is_some() {
         state
+            .arbiter
+            .bind_hardware_profile(HardwareProfile::first_machine())
+            .await
+            .map_err(|error| error.to_string())?;
+        let initial_inspection = state
             .arbiter
             .inspect_device()
             .await
-            .map_err(|error| error.to_string())?
-    } else {
-        initial_inspection
-    };
-    let onboarding_draft = if descriptor.kind == TransportKind::Serial && profile_id.is_none() {
-        Some(
-            MachineProfileDraft::from_grbl_inspection(
-                suggested_machine_name(&descriptor, &inspection.device),
-                &inspection.device,
-                connection.clone(),
-            )
-            .map_err(|error| error.to_string())?,
-        )
-    } else {
-        None
-    };
-    if let Some(settings_archive) = archive.as_mut() {
-        settings_archive
-            .record_observation(&inspection.device)
             .map_err(|error| error.to_string())?;
+        let fingerprint = machine_fingerprint(&descriptor, &initial_inspection.device);
+        let connection = MachineConnectionPreset {
+            transport_id: descriptor.id.clone(),
+            baud_rate,
+            fingerprint: Some(fingerprint.clone()),
+        };
+        let profile_match = if descriptor.kind == TransportKind::Serial {
+            let profiles = state.profiles.lock().await.state();
+            match_machine_profile(
+                &profiles,
+                &fingerprint,
+                &descriptor.id,
+                &initial_inspection.device,
+            )?
+        } else {
+            None
+        };
+
+        let mut profile_id = None;
+        let mut archive = None;
+        if let Some(profile) = profile_match.as_ref() {
+            state
+                .arbiter
+                .bind_hardware_profile(profile.hardware_profile())
+                .await
+                .map_err(|error| error.to_string())?;
+            let travel = build_settings_snapshot(&initial_inspection.device, 1)
+                .travel_mm()
+                .ok_or_else(|| {
+                    "controller did not report valid $130/$131/$132 travel".to_owned()
+                })?;
+            let profiles = state
+                .profiles
+                .lock()
+                .await
+                .record_controller_observation(
+                    &profile.id,
+                    travel,
+                    connection.clone(),
+                    detected_controller(&initial_inspection.device),
+                )
+                .map_err(|error| error.to_string())?;
+            let refreshed_profile = profiles
+                .profiles
+                .iter()
+                .find(|candidate| candidate.id == profile.id)
+                .ok_or_else(|| "observed profile disappeared from the profile store".to_owned())?;
+            let temporary_session = ActiveControllerSettings {
+                inspection: initial_inspection.device.clone(),
+                fingerprint: fingerprint.clone(),
+                connection: connection.clone(),
+                profile_id: Some(profile.id.clone()),
+                archive: None,
+                revision: 1,
+            };
+            archive = begin_settings_archive(&state, refreshed_profile, &temporary_session)?;
+            profile_id = Some(profile.id.clone());
+        }
+
+        let inspection = if profile_id.is_some() {
+            state
+                .arbiter
+                .inspect_device()
+                .await
+                .map_err(|error| error.to_string())?
+        } else {
+            initial_inspection
+        };
+        let onboarding_draft = if descriptor.kind == TransportKind::Serial && profile_id.is_none() {
+            Some(
+                MachineProfileDraft::from_grbl_inspection(
+                    suggested_machine_name(&descriptor, &inspection.device),
+                    &inspection.device,
+                    connection.clone(),
+                )
+                .map_err(|error| error.to_string())?,
+            )
+        } else {
+            None
+        };
+        if let Some(settings_archive) = archive.as_mut() {
+            settings_archive
+                .record_observation(&inspection.device)
+                .map_err(|error| error.to_string())?;
+        }
+        let active = ActiveControllerSettings {
+            inspection: inspection.device.clone(),
+            fingerprint,
+            connection,
+            profile_id,
+            archive,
+            revision: 1,
+        };
+        let settings = settings_state(&active);
+        *state.settings_session.lock().await = Some(active);
+        Ok(ConnectOutcome {
+            snapshot,
+            inspection,
+            settings,
+            profiles: state.profiles.lock().await.state(),
+            onboarding_draft,
+        })
     }
-    let active = ActiveControllerSettings {
-        inspection: inspection.device.clone(),
-        fingerprint,
-        connection,
-        profile_id,
-        archive,
-        revision: 1,
-    };
-    let settings = settings_state(&active);
-    *state.settings_session.lock().await = Some(active);
-    Ok(ConnectOutcome {
-        snapshot,
-        inspection,
-        settings,
-        profiles: state.profiles.lock().await.state(),
-        onboarding_draft,
-    })
+    .await;
+
+    match result {
+        Ok(outcome) => Ok(outcome),
+        Err(connection_error) => {
+            *state.settings_session.lock().await = None;
+            match state.arbiter.disconnect().await {
+                Ok(_) => Err(connection_error),
+                Err(cleanup_error) => Err(format!(
+                    "{connection_error}; connection cleanup also failed: {cleanup_error}"
+                )),
+            }
+        }
+    }
 }
 
 fn ensure_profile_change_available(state: &AppState) -> Result<(), String> {
@@ -1020,13 +1038,13 @@ pub async fn rollback_controller_setting(
 #[tauri::command]
 pub async fn disconnect(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
     let _transition = state.transition_lock.lock().await;
-    let snapshot = state
+    let result = state
         .arbiter
         .disconnect()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string());
     *state.settings_session.lock().await = None;
-    Ok(snapshot)
+    result
 }
 
 #[tauri::command]

@@ -39,6 +39,10 @@ than attempting to reproduce issue-specific workarounds.
 - Physical error, alarm, timeout, reset, invalid state, or disconnect stops at
   the exact source line and requests Hold then Soft Reset; there is no Ignore
   Errors switch.
+- Operator Soft Reset validates and atomically consumes its short-lived
+  challenge before changing sender state. A stale confirmation cannot cancel
+  only the host side while GRBL keeps running, and transport replacement is
+  rejected until the controller is disconnected.
 - M0, optional M1, M6, and M2/M30 are first-class host barriers rather than UI
   side effects.
 - M5/M9 is both a typed preamble and typed shutdown epilogue. Completion requires
