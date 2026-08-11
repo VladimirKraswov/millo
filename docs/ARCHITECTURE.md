@@ -103,6 +103,19 @@ does not schedule or execute controller I/O.
 - `toolpathReadModel` is a pure TypeScript adapter that separates rapid and cut
   line pairs and derives a stable scene frame. Three.js is lazy-loaded only when
   a parsed program exists.
+- Program line selection is component-local read state keyed by the parser's
+  one-based `sourceLine`. It never edits `ProgramLine`, normalized source, or
+  sender plans.
+- `programLineTableModel` computes a fixed-height overscanned window, and the
+  React table mounts only that slice. The full line count is represented by a
+  spacer inside a bounded desktop/mobile viewport.
+- `buildToolpathHighlightReadModel` extracts only segments whose `sourceLine`
+  matches the selection and uses the same scene center as the base model.
+- Three.js keeps a persistent selection line/point layer. Selection changes
+  replace only those two geometries and adjust base material opacity; they do
+  not recreate the renderer, camera, controls, grid, or full path buffers.
+- Lines without preview motion produce an empty overlay and a visible
+  `No preview motion` state rather than borrowing adjacent geometry.
 - The scene contains one XY grid, functional rapid/cut colors, top and
   isometric views, bounded zoom/pan, and no machine-state mutation.
 - `Program` and `Controller` are separate retained workbench views. Program
@@ -321,10 +334,10 @@ does not schedule or execute controller I/O.
 
 ## Near-term sequence
 
-1. Program-line table and selection linked to preview geometry without editing
-   the immutable loaded source in place.
-2. Mock sender timing and richer simulated position updates without widening
+1. Mock sender timing and richer simulated position updates without widening
    the hardware execution gate.
+2. Sender current-line tracking linked to the existing read-only selection
+   model, without allowing selection to change execution order.
 3. Probe input validation and guarded Z probing only after a physical sensor is
    installed and connected.
 

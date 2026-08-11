@@ -79,6 +79,14 @@ cutting geometry from a pure read model with top/isometric views. Loading and
 preview have no access to the command actor, serial transport, or machine
 capabilities; only the separate policy can mint sender lines.
 
+The diagnostics rail now exposes virtualized Program Lines and Warnings tabs.
+Selecting a source line keeps the immutable parser DTO unchanged and updates a
+dedicated Three.js overlay: matching motion is isolated in a bright layer while
+the rest of the toolpath is dimmed. Non-motion and warning lines remain
+selectable and explicitly report that they have no preview geometry. The table
+renders only a small overscanned window, so the 200,000-line parser limit does
+not become 200,000 DOM nodes.
+
 UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
 first core contribution in the named `control.machine` slot; Work Zero occupies
 the separate `control.coordinates` slot. Contributions have stable IDs, owners,
@@ -167,7 +175,8 @@ followed by the
 and [PluginHost bootstrap](docs/decisions/0013-plugin-host-bootstrap.md), then the
 [guarded work-zero transaction](docs/decisions/0014-guarded-work-zero.md) and
 [G-code program boundary](docs/decisions/0015-gcode-program-boundary.md), then
-the [Mock-only bounded sender](docs/decisions/0016-mock-dry-run-sender.md).
+the [Mock-only bounded sender](docs/decisions/0016-mock-dry-run-sender.md) and
+[immutable line selection](docs/decisions/0017-program-line-selection.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

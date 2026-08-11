@@ -10,6 +10,12 @@ export interface ToolpathReadModel {
   readonly pointCount: number;
 }
 
+export interface ToolpathHighlightReadModel {
+  readonly positions: Float32Array;
+  readonly segmentCount: number;
+  readonly pointCount: number;
+}
+
 export function buildToolpathReadModel(program: GcodeProgram): ToolpathReadModel {
   const bounds = program.summary.bounds;
   const center: ProgramPoint = bounds
@@ -51,6 +57,47 @@ export function buildToolpathReadModel(program: GcodeProgram): ToolpathReadModel
     gridSize,
     gridZ: (bounds?.min.z ?? 0) - center.z,
     frameRadius: Math.max(span * 0.72, 7),
+    pointCount,
+  };
+}
+
+export function buildToolpathHighlightReadModel(
+  program: GcodeProgram,
+  sourceLine: number | undefined,
+  center: ProgramPoint,
+): ToolpathHighlightReadModel {
+  if (sourceLine === undefined) {
+    return {
+      positions: new Float32Array(),
+      segmentCount: 0,
+      pointCount: 0,
+    };
+  }
+
+  const positions: number[] = [];
+  let segmentCount = 0;
+  let pointCount = 0;
+  for (const segment of program.toolpath) {
+    if (segment.sourceLine !== sourceLine) continue;
+    segmentCount += 1;
+    for (let index = 1; index < segment.points.length; index += 1) {
+      const start = segment.points[index - 1];
+      const end = segment.points[index];
+      positions.push(
+        start.x - center.x,
+        start.y - center.y,
+        start.z - center.z,
+        end.x - center.x,
+        end.y - center.y,
+        end.z - center.z,
+      );
+      pointCount += 2;
+    }
+  }
+
+  return {
+    positions: new Float32Array(positions),
+    segmentCount,
     pointCount,
   };
 }

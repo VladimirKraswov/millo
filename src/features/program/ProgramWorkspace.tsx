@@ -29,6 +29,7 @@ import {
 } from "../../shared/dryRun";
 import type { GcodeProgram, ProgramWarning } from "../../shared/program";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
+import { ProgramLineTable } from "./ProgramLineTable";
 import { dryRunControls } from "./dryRunReadModel";
 import type { PreviewView } from "./ToolpathPreview";
 
@@ -78,6 +79,10 @@ export function ProgramWorkspace({
   const [view, setView] = useState<PreviewView>("iso");
   const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [diagnosticView, setDiagnosticView] = useState<"lines" | "warnings">(
+    "lines",
+  );
+  const [selectedSourceLine, setSelectedSourceLine] = useState<number>();
   const [error, setError] = useState<string>();
   const program = loaded?.program;
   const senderActive = sender.state === "running" || sender.state === "paused";
@@ -118,6 +123,8 @@ export function ProgramWorkspace({
     try {
       setLoaded(await loader.load(file));
       setSender(idleSenderSnapshot);
+      setSelectedSourceLine(undefined);
+      setDiagnosticView("lines");
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -141,6 +148,24 @@ export function ProgramWorkspace({
   const pathDistance = program
     ? program.summary.rapidDistanceMm + program.summary.cuttingDistanceMm
     : 0;
+  const motionSourceLines = useMemo(
+    () => new Set(program?.toolpath.map((segment) => segment.sourceLine) ?? []),
+    [program],
+  );
+  const selectedProgramLine = useMemo(
+    () =>
+      program?.lines.find((line) => line.sourceLine === selectedSourceLine),
+    [program, selectedSourceLine],
+  );
+  const selectedMotionCount = useMemo(
+    () =>
+      selectedSourceLine === undefined
+        ? 0
+        : (program?.toolpath.filter(
+            (segment) => segment.sourceLine === selectedSourceLine,
+          ).length ?? 0),
+    [program, selectedSourceLine],
+  );
   const runSenderAction = async (action: () => Promise<SenderSnapshot>) => {
     setError(undefined);
     try {
@@ -205,6 +230,7 @@ export function ProgramWorkspace({
               onClick={() => {
                 setLoaded(undefined);
                 setSender(idleSenderSnapshot);
+                setSelectedSourceLine(undefined);
                 setError(undefined);
               }}
               title="Закрыть программу"
@@ -232,12 +258,37 @@ export function ProgramWorkspace({
             <Suspense
               fallback={<div className="toolpath-preview is-loading">Preview...</div>}
             >
-              <ToolpathPreview program={program} view={view} />
+              <ToolpathPreview
+                program={program}
+                selectedSourceLine={selectedSourceLine}
+                view={view}
+              />
             </Suspense>
             <div className="preview-legend" aria-label="Toolpath legend">
               <span className="is-cut">Cut</span>
               <span className="is-rapid">Rapid</span>
             </div>
+            {selectedProgramLine && (
+              <div className="preview-selection" role="status">
+                <span>L{selectedProgramLine.sourceLine}</span>
+                <code title={selectedProgramLine.source}>
+                  {selectedProgramLine.source || "Empty line"}
+                </code>
+                <small>
+                  {selectedMotionCount > 0
+                    ? `${selectedMotionCount} preview segment${selectedMotionCount === 1 ? "" : "s"}`
+                    : "No preview motion"}
+                </small>
+                <button
+                  aria-label="Очистить выбор строки"
+                  onClick={() => setSelectedSourceLine(undefined)}
+                  title="Очистить выбор строки"
+                  type="button"
+                >
+                  <X aria-hidden="true" size={12} />
+                </button>
+              </div>
+            )}
             <dl className="program-metrics">
               <div>
                 <dt>Lines</dt>
@@ -311,6 +362,11 @@ export function ProgramWorkspace({
                   <button
                     disabled={!dryRunGateway || !controls.canStart}
                     onClick={startDryRun}
+                    title={
+                      dryRunAvailable
+                        ? "Запустить на Mock GRBL"
+                        : "Подключите Mock GRBL в состоянии Idle"
+                    }
                     type="button"
                   >
                     <Play aria-hidden="true" size={13} />
@@ -354,18 +410,67 @@ export function ProgramWorkspace({
                 <small className="is-error">{displayedSender.lastError}</small>
               )}
             </div>
-            <div className="warning-heading">
-              <span>Warnings</span>
-              <strong>{program.warnings.length}</strong>
+            <div
+              aria-label="Program diagnostics view"
+              className="program-diagnostic-tabs"
+              role="tablist"
+            >
+              <button
+                aria-controls="program-lines-panel"
+                aria-selected={diagnosticView === "lines"}
+                id="program-lines-tab"
+                onClick={() => setDiagnosticView("lines")}
+                role="tab"
+                type="button"
+              >
+                Lines <strong>{program.lines.length}</strong>
+              </button>
+              <button
+                aria-controls="program-warnings-panel"
+                aria-selected={diagnosticView === "warnings"}
+                id="program-warnings-tab"
+                onClick={() => setDiagnosticView("warnings")}
+                role="tab"
+                type="button"
+              >
+                Warnings <strong>{program.warnings.length}</strong>
+              </button>
             </div>
-            <div className="program-warnings">
+            <div
+              aria-labelledby="program-lines-tab"
+              className="program-lines-panel"
+              hidden={diagnosticView !== "lines"}
+              id="program-lines-panel"
+              role="tabpanel"
+            >
+              <ProgramLineTable
+                lines={program.lines}
+                motionSourceLines={motionSourceLines}
+                onSelect={(sourceLine) =>
+                  setSelectedSourceLine((current) =>
+                    current === sourceLine ? undefined : sourceLine,
+                  )
+                }
+                selectedSourceLine={selectedSourceLine}
+              />
+            </div>
+            <div
+              aria-labelledby="program-warnings-tab"
+              className="program-warnings"
+              hidden={diagnosticView !== "warnings"}
+              id="program-warnings-panel"
+              role="tabpanel"
+            >
               {program.warnings.length === 0 ? (
                 <div className="warnings-empty">Parser warnings отсутствуют</div>
               ) : (
                 program.warnings.map((warning, index) => (
-                  <div
+                  <button
+                    aria-pressed={selectedSourceLine === warning.sourceLine}
                     className={`program-warning is-${warning.severity}`}
                     key={`${warning.sourceLine}-${warning.code}-${index}`}
+                    onClick={() => setSelectedSourceLine(warning.sourceLine)}
+                    type="button"
                   >
                     <span className="warning-line">L{warning.sourceLine}</span>
                     {warning.severity === "safety" ? (
@@ -377,7 +482,7 @@ export function ProgramWorkspace({
                       <strong>{warningTitle(warning)}</strong>
                       <span>{warning.message}</span>
                     </div>
-                  </div>
+                  </button>
                 ))
               )}
             </div>

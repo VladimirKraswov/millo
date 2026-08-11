@@ -24,7 +24,9 @@ and assert both the exact typed parse request and retained original source.
 Dry-run read-model tests prove that Mock availability and policy eligibility are
 both required, expose only state-valid controls, and clamp untrusted display
 progress. Toolpath read-model tests verify rapid and cutting buffers, centering,
-framing, and grid placement independently from WebGL.
+framing, grid placement, and exact selected-line geometry independently from
+WebGL. Program-line window tests prove that a large source mounts only a small
+overscanned slice and that source-line lookup remains stable.
 
 Extension-registry tests cover deterministic slot ordering, duplicate and
 self-replacement rejection, add/replace/dispose behavior, one-revision owner
@@ -134,11 +136,18 @@ port names remain untouched.
   `AppState`, controller, transport, or command actor dependency.
 - Vitest checks the platform-neutral loader, dry-run controls, and pure toolpath
   read model. No browser test can bypass the Rust execution policy.
+- Selection tests isolate one linear segment, return an empty overlay for a
+  non-motion line, and keep base geometry centered identically.
+- Virtual-table tests cover mid-file, invalid, and bottom-edge scroll windows
+  plus binary source-line lookup. The UI therefore remains bounded at the
+  parser's 200,000-line limit.
 - Manual browser fixtures use `/?fixture=program` for desktop and
   `/tests/visual/program-mobile.html` for a 390 x 844 responsive viewport.
-  Playwright screenshots verify layout and top/isometric switching. Canvas crops
-  are checked for non-uniform luminance and color: the accepted desktop fixture
-  measured Y `0..197`, and mobile measured Y `0..206`.
+  Browser screenshots verify layout, internal table scrolling, warning/line
+  tabs, selected-row retention, motion highlighting, no-motion selection, and
+  top/isometric switching. Canvas crops are checked for non-uniform luminance
+  and color: the accepted desktop fixture measured Y `0..197`, and mobile
+  measured Y `0..206` before this slice.
 
 ## Current dry-run sender coverage
 

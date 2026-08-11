@@ -2,7 +2,71 @@ import type { GcodeProgram } from "../../shared/program";
 
 export const previewFixtureProgram: GcodeProgram = {
   sourceName: "preview-fixture.nc",
-  lines: [],
+  lines: [
+    {
+      sourceLine: 1,
+      source: "(visual regression fixture)",
+      normalized: "",
+      executable: false,
+      warningCount: 0,
+    },
+    {
+      sourceLine: 2,
+      source: "G21 G90",
+      normalized: "G21 G90",
+      executable: true,
+      warningCount: 0,
+    },
+    {
+      sourceLine: 3,
+      source: "G0 X0 Y0 Z0",
+      normalized: "G0 X0 Y0 Z0",
+      executable: true,
+      warningCount: 0,
+    },
+    {
+      sourceLine: 4,
+      source: "G1 X20 F120",
+      normalized: "G1 X20 F120",
+      executable: true,
+      warningCount: 0,
+    },
+    {
+      sourceLine: 5,
+      source: "G1 Y15",
+      normalized: "G1 Y15",
+      executable: true,
+      warningCount: 0,
+    },
+    {
+      sourceLine: 6,
+      source: "G1 X0",
+      normalized: "G1 X0",
+      executable: true,
+      warningCount: 0,
+    },
+    {
+      sourceLine: 7,
+      source: "G2 X0 Y0 I6 J-7.5",
+      normalized: "G2 X0 Y0 I6 J-7.5",
+      executable: true,
+      warningCount: 0,
+    },
+    {
+      sourceLine: 8,
+      source: "M3",
+      normalized: "M3",
+      executable: true,
+      warningCount: 1,
+    },
+    {
+      sourceLine: 9,
+      source: "M5",
+      normalized: "M5",
+      executable: true,
+      warningCount: 0,
+    },
+  ],
   warnings: [
     {
       sourceLine: 8,
