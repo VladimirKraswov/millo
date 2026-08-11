@@ -45,7 +45,7 @@ import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramLineTable } from "./ProgramLineTable";
 import { canStartCheckRun } from "./checkRunReadModel";
-import { dryRunControls } from "./dryRunReadModel";
+import { dryRunControls, senderTiming } from "./dryRunReadModel";
 import { realRunPreflightControls } from "./realRunPreflightReadModel";
 import type { PreviewView } from "./ToolpathPreview";
 
@@ -82,6 +82,20 @@ const formatDuration = (seconds: number, complete: boolean): string => {
       : `${remainder}s`;
   return `${complete ? "~" : ">="}${value}`;
 };
+
+function SenderTiming({ sender }: { readonly sender: SenderSnapshot }) {
+  const timing = senderTiming(sender);
+  return (
+    <div className="sender-timing" aria-label="Run timing">
+      <span>
+        Elapsed <code>{timing.elapsed}</code>
+      </span>
+      <span>
+        {timing.estimateLabel} <code>{timing.remaining}</code>
+      </span>
+    </div>
+  );
+}
 
 const warningTitle = (warning: ProgramWarning): string =>
   warning.code.replaceAll("-", " ");
@@ -518,6 +532,7 @@ export function ProgramWorkspace({
                   </span>
                   <code>{displayedSender.currentCommand ?? "M5 · M9 preamble"}</code>
                 </div>
+                <SenderTiming sender={displayedSender} />
                 <div className="dry-run-actions">
                   {displayedSender.state === "paused" && realRunGateway && (
                     <button
@@ -658,6 +673,7 @@ export function ProgramWorkspace({
                     {displayedSender.currentCommand ?? "M5 · M9 preamble"}
                   </code>
                 </div>
+                <SenderTiming sender={displayedSender} />
                 <div className="dry-run-actions">
                   {!senderActive && displayedSender.state !== "running" && (
                     <button

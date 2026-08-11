@@ -139,6 +139,11 @@ The production serial sender derives its usable window as `reported RX - 1`
 from the authorization's fresh `[OPT]` inspection, falls back to 127 bytes,
 accounts for each newline, and correlates every FIFO terminal response with its
 source line.
+Each immutable plan also carries per-line timing in integer milliseconds.
+Sender snapshots publish active elapsed time plus completed/remaining/total
+estimates. Hold time is excluded and terminal snapshots are frozen. Rapid moves
+and other unknown timing keep a visible lower-bound flag instead of presenting
+false precision.
 Program-response reads are sliced into short bounded waits, so actor requests
 such as Feed Hold and Soft Reset preempt a delayed `ok`. Periodic realtime `?`
 continues during an active FIFO; interleaved status frames update position,

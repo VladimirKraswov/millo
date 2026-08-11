@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { idleSenderSnapshot, type SenderSnapshot } from "../../shared/dryRun";
-import { dryRunControls } from "./dryRunReadModel";
+import { dryRunControls, senderTiming } from "./dryRunReadModel";
 
 const context = {
   mockAvailable: true,
@@ -48,5 +48,22 @@ describe("dryRunControls", () => {
     expect(
       dryRunControls(sender({ progress: -0.2 }), context).progressPercent,
     ).toBe(0);
+  });
+
+  it("formats active time and distinguishes a lower-bound estimate", () => {
+    expect(
+      senderTiming(
+        sender({
+          elapsedSeconds: 65.4,
+          estimatedRemainingSeconds: 3_661,
+          timeEstimateComplete: false,
+        }),
+      ),
+    ).toEqual({ elapsed: "1:05", estimateLabel: "ETA >=", remaining: "1:01:01" });
+    expect(
+      senderTiming(
+        sender({ estimatedRemainingSeconds: 9.6, timeEstimateComplete: true }),
+      ).estimateLabel,
+    ).toBe("ETA");
   });
 });

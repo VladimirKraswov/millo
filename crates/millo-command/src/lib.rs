@@ -642,6 +642,7 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                         }
                     }
                     publish(&actor.snapshots, &actor.controller);
+                    publish_sender(&actor.sender_snapshots, &actor.sender);
                 }
             }
             _ = tokio::task::yield_now(), if actor.sender_dispatch_enabled && actor.sender.has_in_flight() => {

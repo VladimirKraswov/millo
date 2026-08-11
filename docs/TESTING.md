@@ -183,6 +183,11 @@ port names remain untouched.
   accounting, FIFO response correlation, pause/resume/cancel transitions,
   exact failed source-line retention, terminal completion only after every
   `ok`, and line/plan bounds.
+- Plan timing tests sum feed motion and dwell to exact milliseconds, mark rapid
+  duration as an incomplete lower bound, and attach estimates to source lines.
+  Sender tests prove estimate advancement only on `ok`, Hold wall time exclusion,
+  resumed elapsed growth, and a frozen terminal elapsed value. UI read-model
+  tests distinguish `ETA` from `ETA >=` and format minute/hour durations.
 - Mock transport can acknowledge ordinary program lines or inject a correlated
   `error:n`/`ALARM:n` without changing serial hardware.
 - Actor integration tests assert multi-line prefill without exceeding the active

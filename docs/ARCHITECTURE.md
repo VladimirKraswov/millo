@@ -464,6 +464,12 @@ does not schedule or execute controller I/O.
   realtime bytes and status parsing publishes the resulting `Ov:` telemetry.
   Override requests may preempt an in-flight sender read without pausing or
   acknowledging its FIFO line. They do not expose spindle start/stop.
+- Plan timing is calculated before dispatch and stored as integer milliseconds
+  per source line. The sender accumulates estimate only after correlated `ok`,
+  uses a monotonic active timer, excludes Paused intervals, and freezes elapsed
+  on Completed/Failed/Cancelled. Unknown rapid duration leaves the estimate
+  explicitly incomplete. Actor ticks publish fresh timing snapshots even while
+  one command response is delayed.
 
 ### Extension host boundary
 

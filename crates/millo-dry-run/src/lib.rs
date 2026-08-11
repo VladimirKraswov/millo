@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use millo_gcode::{GcodeProgram, ProgramWarningCode, ProgramWarningSeverity};
 use serde::Serialize;
@@ -52,6 +52,7 @@ pub struct DryRunLine {
     source_line: Option<usize>,
     command: String,
     kind: DryRunLineKind,
+    estimated_duration_ms: Option<u64>,
 }
 
 impl DryRunLine {
@@ -66,6 +67,10 @@ impl DryRunLine {
     pub fn kind(&self) -> DryRunLineKind {
         self.kind
     }
+
+    pub fn estimated_duration_ms(&self) -> Option<u64> {
+        self.estimated_duration_ms
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -74,6 +79,8 @@ pub struct DryRunPlan {
     source_name: String,
     source_line_count: usize,
     lines: Vec<DryRunLine>,
+    estimated_total_ms: u64,
+    time_estimate_complete: bool,
 }
 
 impl DryRunPlan {
@@ -87,6 +94,14 @@ impl DryRunPlan {
 
     pub fn lines(&self) -> &[DryRunLine] {
         &self.lines
+    }
+
+    pub fn estimated_total_ms(&self) -> u64 {
+        self.estimated_total_ms
+    }
+
+    pub fn time_estimate_complete(&self) -> bool {
+        self.time_estimate_complete
     }
 }
 
@@ -184,6 +199,7 @@ pub fn build_program_run_plan(
         return Err(DryRunPolicyError::Rejected(blockers.len(), blockers));
     }
 
+    let line_timings = line_timings(program);
     let mut program_lines = Vec::new();
     for line in program
         .lines
@@ -195,6 +211,7 @@ pub fn build_program_run_plan(
             source_line: Some(line.source_line),
             command: line.normalized.clone(),
             kind,
+            estimated_duration_ms: line_timings.get(&line.source_line).copied().flatten(),
         });
         if kind == DryRunLineKind::ProgramEnd {
             break;
@@ -209,14 +226,79 @@ pub fn build_program_run_plan(
         source_line: None,
         command: command.to_owned(),
         kind: DryRunLineKind::SafetyPreamble,
+        estimated_duration_ms: Some(0),
     }));
     lines.extend(program_lines);
+
+    let estimated_total_ms = lines
+        .iter()
+        .filter_map(DryRunLine::estimated_duration_ms)
+        .fold(0u64, u64::saturating_add);
+    let time_estimate_complete = program.summary.time_estimate_complete
+        && lines
+            .iter()
+            .all(|line| line.estimated_duration_ms().is_some());
 
     Ok(DryRunPlan {
         source_name: program.source_name.clone(),
         source_line_count: program.summary.line_count,
         lines,
+        estimated_total_ms,
+        time_estimate_complete,
     })
+}
+
+fn line_timings(program: &GcodeProgram) -> BTreeMap<usize, Option<u64>> {
+    let mut timings = program
+        .lines
+        .iter()
+        .filter(|line| line.executable)
+        .map(|line| (line.source_line, Some(0u64)))
+        .collect::<BTreeMap<_, _>>();
+
+    for segment in &program.toolpath {
+        let entry = timings.entry(segment.source_line).or_insert(Some(0));
+        match (entry.as_mut(), segment.estimated_duration_seconds) {
+            (Some(total), Some(seconds)) => {
+                *total = total.saturating_add(seconds_to_millis(seconds));
+            }
+            _ => *entry = None,
+        }
+    }
+    for line in &program.lines {
+        if let Some(seconds) = dwell_seconds(&line.normalized)
+            && let Some(Some(total)) = timings.get_mut(&line.source_line)
+        {
+            *total = total.saturating_add(seconds_to_millis(seconds));
+        }
+    }
+    timings
+}
+
+fn dwell_seconds(normalized: &str) -> Option<f64> {
+    let words = normalized
+        .split_whitespace()
+        .filter_map(split_word)
+        .collect::<Vec<_>>();
+    words
+        .iter()
+        .any(|(letter, value)| *letter == 'G' && code_is(*value, 4.0))
+        .then(|| {
+            words
+                .iter()
+                .rev()
+                .find(|(letter, _)| *letter == 'P')
+                .map(|(_, value)| *value)
+        })
+        .flatten()
+}
+
+fn seconds_to_millis(seconds: f64) -> u64 {
+    if !seconds.is_finite() || seconds <= 0.0 {
+        0
+    } else {
+        (seconds * 1_000.0).round().min(u64::MAX as f64) as u64
+    }
 }
 
 fn inspect_normalized_line(
@@ -377,6 +459,44 @@ mod tests {
         );
         assert_eq!(plan.lines()[0].kind(), DryRunLineKind::SafetyPreamble);
         assert_eq!(plan.lines()[2].source_line(), Some(1));
+    }
+
+    #[test]
+    fn carries_deterministic_per_line_timing_and_marks_rapid_as_a_lower_bound() {
+        let timed = build_dry_run_plan(&parse(
+            "G21 G90 G94\nG1 X60 F60\nG4 P0.250\nG1 X90 F30\nM30",
+        ))
+        .unwrap();
+        assert_eq!(timed.estimated_total_ms(), 120_250);
+        assert!(timed.time_estimate_complete());
+        assert_eq!(
+            timed
+                .lines()
+                .iter()
+                .find(|line| line.source_line() == Some(2))
+                .and_then(DryRunLine::estimated_duration_ms),
+            Some(60_000)
+        );
+        assert_eq!(
+            timed
+                .lines()
+                .iter()
+                .find(|line| line.source_line() == Some(3))
+                .and_then(DryRunLine::estimated_duration_ms),
+            Some(250)
+        );
+
+        let rapid = build_dry_run_plan(&parse("G21 G90 G94\nG0 X10\nG1 X20 F60\nM30")).unwrap();
+        assert_eq!(rapid.estimated_total_ms(), 10_000);
+        assert!(!rapid.time_estimate_complete());
+        assert_eq!(
+            rapid
+                .lines()
+                .iter()
+                .find(|line| line.source_line() == Some(2))
+                .and_then(DryRunLine::estimated_duration_ms),
+            None
+        );
     }
 
     #[test]

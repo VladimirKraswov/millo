@@ -1,4 +1,7 @@
-use std::collections::VecDeque;
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 use millo_dry_run::{DryRunLine, DryRunLineKind, DryRunPlan, MAX_DRY_RUN_COMMAND_BYTES};
 use serde::Serialize;
@@ -76,6 +79,11 @@ pub struct SenderSnapshot {
     pub current_command: Option<String>,
     pub last_error: Option<String>,
     pub progress: f64,
+    pub elapsed_seconds: f64,
+    pub estimated_completed_seconds: f64,
+    pub estimated_remaining_seconds: f64,
+    pub estimated_total_seconds: f64,
+    pub time_estimate_complete: bool,
 }
 
 impl Default for SenderSnapshot {
@@ -94,6 +102,11 @@ impl Default for SenderSnapshot {
             current_command: None,
             last_error: None,
             progress: 0.0,
+            elapsed_seconds: 0.0,
+            estimated_completed_seconds: 0.0,
+            estimated_remaining_seconds: 0.0,
+            estimated_total_seconds: 0.0,
+            time_estimate_complete: false,
         }
     }
 }
@@ -136,6 +149,11 @@ pub struct Sender {
     last_line: Option<DryRunLine>,
     last_error: Option<String>,
     paused_from: Option<SenderState>,
+    estimated_completed_ms: u64,
+    started_at: Option<Instant>,
+    paused_at: Option<Instant>,
+    paused_duration: Duration,
+    finished_elapsed: Option<Duration>,
 }
 
 impl Default for Sender {
@@ -159,6 +177,11 @@ impl Sender {
             last_line: None,
             last_error: None,
             paused_from: None,
+            estimated_completed_ms: 0,
+            started_at: None,
+            paused_at: None,
+            paused_duration: Duration::ZERO,
+            finished_elapsed: None,
         }
     }
 
@@ -221,6 +244,11 @@ impl Sender {
         self.last_line = None;
         self.last_error = None;
         self.paused_from = None;
+        self.estimated_completed_ms = 0;
+        self.started_at = None;
+        self.paused_at = None;
+        self.paused_duration = Duration::ZERO;
+        self.finished_elapsed = None;
         Ok(self.snapshot())
     }
 
@@ -232,6 +260,7 @@ impl Sender {
             });
         }
         self.state = SenderState::Running;
+        self.started_at = Some(Instant::now());
         Ok(self.snapshot())
     }
 
@@ -244,6 +273,7 @@ impl Sender {
         }
         self.paused_from = Some(self.state);
         self.state = SenderState::Paused;
+        self.pause_clock();
         Ok(self.snapshot())
     }
 
@@ -255,6 +285,7 @@ impl Sender {
             });
         }
         self.state = self.paused_from.take().unwrap_or(SenderState::Running);
+        self.resume_clock();
         Ok(self.snapshot())
     }
 
@@ -268,6 +299,7 @@ impl Sender {
                 state: self.state,
             });
         }
+        self.freeze_clock();
         self.state = SenderState::Cancelled;
         self.in_flight.clear();
         self.in_flight_bytes = 0;
@@ -277,6 +309,7 @@ impl Sender {
     }
 
     pub fn fail(&mut self, error: impl Into<String>) -> SenderSnapshot {
+        self.freeze_clock();
         self.last_line = self
             .in_flight
             .pop_front()
@@ -295,6 +328,7 @@ impl Sender {
         line: DryRunLine,
         error: impl Into<String>,
     ) -> SenderSnapshot {
+        self.freeze_clock();
         self.last_line = Some(line);
         self.in_flight.clear();
         self.in_flight_bytes = 0;
@@ -369,17 +403,24 @@ impl Sender {
             .ok_or(SenderError::NoCommandInFlight)?;
         self.in_flight_bytes = self.in_flight_bytes.saturating_sub(command_rx_bytes(&line));
         let line_kind = line.kind();
+        if let Some(duration_ms) = line.estimated_duration_ms() {
+            self.estimated_completed_ms = self.estimated_completed_ms.saturating_add(duration_ms);
+        }
         self.last_line = Some(line);
         self.acknowledged_lines = self.acknowledged_lines.saturating_add(1);
         if line_kind == DryRunLineKind::ProgramPause && self.mode != Some(SenderMode::CheckRun) {
             self.paused_from = Some(SenderState::Running);
             self.state = SenderState::Paused;
+            self.pause_clock();
         } else if line_kind == DryRunLineKind::ProgramEnd
             || self.plan.as_ref().is_some_and(|plan| {
                 self.acknowledged_lines == plan.lines().len() && self.in_flight.is_empty()
             })
         {
             self.state = self.finished_state();
+            if self.state == SenderState::Completed {
+                self.freeze_clock();
+            }
         }
         Ok(self.snapshot())
     }
@@ -414,6 +455,7 @@ impl Sender {
         if !self.in_flight.is_empty() || self.deferred_program_end.is_some() {
             return Err(SenderError::CommandInFlight);
         }
+        self.freeze_clock();
         self.state = SenderState::Completed;
         Ok(self.snapshot())
     }
@@ -426,6 +468,7 @@ impl Sender {
             .in_flight
             .pop_front()
             .ok_or(SenderError::NoCommandInFlight)?;
+        self.freeze_clock();
         self.in_flight_bytes = self.in_flight_bytes.saturating_sub(command_rx_bytes(&line));
         self.last_line = Some(line);
         self.in_flight.clear();
@@ -443,6 +486,7 @@ impl Sender {
             .front()
             .or(self.deferred_program_end.as_ref())
             .or(self.last_line.as_ref());
+        let estimated_total_ms = self.plan.as_ref().map_or(0, DryRunPlan::estimated_total_ms);
         SenderSnapshot {
             state: self.state,
             mode: self.mode,
@@ -461,7 +505,53 @@ impl Sender {
             } else {
                 self.acknowledged_lines as f64 / total_lines as f64
             },
+            elapsed_seconds: self.elapsed_at(Instant::now()).as_secs_f64(),
+            estimated_completed_seconds: self.estimated_completed_ms as f64 / 1_000.0,
+            estimated_remaining_seconds: estimated_total_ms
+                .saturating_sub(self.estimated_completed_ms)
+                as f64
+                / 1_000.0,
+            estimated_total_seconds: estimated_total_ms as f64 / 1_000.0,
+            time_estimate_complete: self
+                .plan
+                .as_ref()
+                .is_some_and(DryRunPlan::time_estimate_complete),
         }
+    }
+
+    fn pause_clock(&mut self) {
+        if self.started_at.is_some() && self.paused_at.is_none() && self.finished_elapsed.is_none()
+        {
+            self.paused_at = Some(Instant::now());
+        }
+    }
+
+    fn resume_clock(&mut self) {
+        if let Some(paused_at) = self.paused_at.take() {
+            self.paused_duration = self
+                .paused_duration
+                .saturating_add(Instant::now().saturating_duration_since(paused_at));
+        }
+    }
+
+    fn freeze_clock(&mut self) {
+        if self.finished_elapsed.is_none() {
+            self.finished_elapsed = Some(self.elapsed_at(Instant::now()));
+            self.paused_at = None;
+        }
+    }
+
+    fn elapsed_at(&self, now: Instant) -> Duration {
+        if let Some(elapsed) = self.finished_elapsed {
+            return elapsed;
+        }
+        let Some(started_at) = self.started_at else {
+            return Duration::ZERO;
+        };
+        self.paused_at
+            .unwrap_or(now)
+            .saturating_duration_since(started_at)
+            .saturating_sub(self.paused_duration)
     }
 
     fn validate_plan(&self, plan: &DryRunPlan) -> Result<(), SenderError> {
@@ -639,6 +729,41 @@ mod tests {
 
         sender.resume().unwrap();
         assert_eq!(sender.next_line().unwrap().command(), "G1 X1 F10");
+    }
+
+    #[test]
+    fn snapshot_tracks_plan_timing_and_excludes_paused_wall_time() {
+        let mut sender = Sender::default();
+        let loaded = sender
+            .load(plan("G21 G90 G94\nG1 X60 F60\nG4 P0.250\nG1 X90 F30\nM30"))
+            .unwrap();
+        assert_eq!(loaded.estimated_total_seconds, 120.25);
+        assert_eq!(loaded.estimated_remaining_seconds, 120.25);
+        assert!(loaded.time_estimate_complete);
+
+        sender.start().unwrap();
+        std::thread::sleep(Duration::from_millis(8));
+        let paused = sender.pause().unwrap();
+        std::thread::sleep(Duration::from_millis(12));
+        let still_paused = sender.snapshot();
+        assert!((still_paused.elapsed_seconds - paused.elapsed_seconds).abs() < 0.003);
+
+        sender.resume().unwrap();
+        loop {
+            let line = sender.next_line().unwrap();
+            let source_line = line.source_line();
+            let snapshot = sender.acknowledge_ok().unwrap();
+            if source_line == Some(2) {
+                assert_eq!(snapshot.estimated_completed_seconds, 60.0);
+                assert_eq!(snapshot.estimated_remaining_seconds, 60.25);
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(8));
+        let cancelled = sender.cancel().unwrap();
+        std::thread::sleep(Duration::from_millis(8));
+        assert_eq!(sender.snapshot().elapsed_seconds, cancelled.elapsed_seconds);
+        assert!(cancelled.elapsed_seconds >= paused.elapsed_seconds);
     }
 
     #[test]

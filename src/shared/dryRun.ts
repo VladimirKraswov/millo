@@ -26,6 +26,11 @@ export interface SenderSnapshot {
   readonly currentCommand?: string;
   readonly lastError?: string;
   readonly progress: number;
+  readonly elapsedSeconds: number;
+  readonly estimatedCompletedSeconds: number;
+  readonly estimatedRemainingSeconds: number;
+  readonly estimatedTotalSeconds: number;
+  readonly timeEstimateComplete: boolean;
 }
 
 export interface DryRunGateway {
@@ -46,4 +51,9 @@ export const idleSenderSnapshot: SenderSnapshot = {
   rxBufferBytes: 0,
   rxBufferCapacity: 127,
   progress: 0,
+  elapsedSeconds: 0,
+  estimatedCompletedSeconds: 0,
+  estimatedRemainingSeconds: 0,
+  estimatedTotalSeconds: 0,
+  timeEstimateComplete: false,
 };

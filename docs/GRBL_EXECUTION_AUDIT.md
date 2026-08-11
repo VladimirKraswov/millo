@@ -31,6 +31,9 @@
   30-second expiry, atomic one-time consume.
 - Dispatch: reported RX capacity minus one byte, exact command/newline accounting,
   oldest-command FIFO, periodic realtime status.
+- Timing: per-line millisecond estimate, correlated completed/remaining totals,
+  monotonic active elapsed, Hold exclusion, terminal freeze, explicit lower
+  bound when rapid timing is unknown.
 - Realtime: status, Hold, Resume, Jog Cancel, confirmed Reset, and closed-set
   feed/rapid/spindle overrides share the actor owner.
 - Terminal: every `ok` correlated; physical M2/M30 waits for fresh Idle; errors,

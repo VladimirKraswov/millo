@@ -1548,6 +1548,28 @@ select:focus-visible {
   white-space: nowrap;
 }
 
+.sender-timing {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  color: #75838c;
+  font-size: 8px;
+}
+
+.sender-timing span {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.sender-timing code {
+  color: #c9d3d8;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
 .dry-run-actions {
   gap: 6px;
 }

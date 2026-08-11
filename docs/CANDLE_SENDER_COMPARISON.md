@@ -21,6 +21,7 @@ cases. Source references describe the audited Candle checkout in
 | Source semantics | Preprocessing is spread across Qt regex helpers and sender code | Parser retains source lines and fails closed on unsupported `/` and `*checksum`; metadata-only `O` headers are omitted, mixed `O` blocks are rejected | Normalization cannot turn an optional/corrupted block into an unconditional command | Parser fixtures for optional block, checksum, and O headers |
 | Program authorization | File Send begins directly from the UI action | Serial motion requires fresh status + Inspector, hardware/profile policy, intent-specific checklist, and a short-lived program/position/session-bound one-use lease | A stale preview or plugin/UI call cannot start a different program or machine state | `millo-run` lease tests and successful physical Air run |
 | Runtime overrides | UI sends protocol bytes while reconciling slider state | Domain enums map to a closed GRBL byte set inside the controller; applied values return through typed `Ov:` telemetry | UI and future plugins cannot choose arbitrary realtime bytes | Mock preemption tests; physical `110/50/99 -> 100/100/100` smoke |
+| Runtime timing | `TimeEstimator` is integrated with Candle's UI/parser and includes planner-oriented estimation | Per-line integer timing is embedded in the immutable Rust plan; snapshots expose active elapsed and explicit complete/lower-bound ETA, exclude Hold, and freeze every terminal state | Timing survives UI replacement and cannot show paused wall time or a silently “exact” rapid estimate | Plan/sender timing tests and TS read-model tests |
 | Testability | Sender behavior depends heavily on `frmMain`, Qt widgets, timers, and dialogs | Parser, policy, lease, sender, actor, GRBL parser, Mock transport, and serial adapter are separate crates | Every state transition can be regression-tested without a window or physical machine | `npm run verify`; deterministic Mock fault injection |
 
 ## Deliberate non-parity
@@ -44,6 +45,11 @@ The following Candle features are not accepted as raw sender behavior in Millo:
 These are capability boundaries, not forgotten parser cases. Add each one as a
 small hardware-aware use case with fixtures before allowing it into production
 execution.
+
+Candle's planner/acceleration-aware `TimeEstimator` remains a useful reference
+and can be more physically accurate than Millo's current feed+dwell lower bound.
+Millo does not claim parity there yet; future acceleration modeling belongs in a
+separate estimator crate and must preserve the snapshot completeness flag.
 
 ## Candle locations audited
 
