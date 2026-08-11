@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use millo_domain::{
     AlarmState, CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot,
@@ -69,6 +69,8 @@ pub enum ControllerError {
         expected: MachineMode,
         actual: MachineMode,
     },
+    #[error("program response for '{pending}' cannot be correlated with '{requested}'")]
+    ProgramResponseMismatch { pending: String, requested: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,6 +139,20 @@ pub struct Controller<T> {
     transport: T,
     config: ControllerConfig,
     snapshot: ControllerSnapshot,
+    pending_program_response: Option<PendingProgramResponse>,
+}
+
+struct PendingProgramResponse {
+    command: String,
+    started_at: Instant,
+    lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProgramResponsePoll {
+    Pending,
+    StatusObserved,
+    Terminal(CommandResponse),
 }
 
 impl<T: Transport> Controller<T> {
@@ -160,6 +176,7 @@ impl<T: Transport> Controller<T> {
             transport,
             config,
             snapshot,
+            pending_program_response: None,
         }
     }
 
@@ -172,6 +189,7 @@ impl<T: Transport> Controller<T> {
     }
 
     pub async fn connect(&mut self) -> Result<ControllerSnapshot, ControllerError> {
+        self.pending_program_response = None;
         self.snapshot.connection = ConnectionState::Connecting;
         self.snapshot.last_error = None;
         self.snapshot.consecutive_failures = 0;
@@ -193,6 +211,7 @@ impl<T: Transport> Controller<T> {
     }
 
     pub async fn disconnect(&mut self) -> Result<ControllerSnapshot, ControllerError> {
+        self.pending_program_response = None;
         if let Err(error) = self.transport.disconnect().await {
             self.snapshot.connection = ConnectionState::Faulted;
             self.snapshot.last_error = Some(error.to_string());
@@ -401,11 +420,103 @@ impl<T: Transport> Controller<T> {
         }
     }
 
-    pub async fn read_program_response(
+    pub async fn poll_program_response(
         &mut self,
         line: &DryRunLine,
-    ) -> Result<CommandResponse, ControllerError> {
-        self.read_acknowledged_response(line.command()).await
+        wait: Duration,
+    ) -> Result<ProgramResponsePoll, ControllerError> {
+        if self.snapshot.connection != ConnectionState::Connected {
+            return Err(ControllerError::NotReady(self.snapshot.connection));
+        }
+        let command = line.command();
+        if let Some(pending) = &self.pending_program_response {
+            if pending.command != command {
+                return Err(ControllerError::ProgramResponseMismatch {
+                    pending: pending.command.clone(),
+                    requested: command.to_owned(),
+                });
+            }
+        } else {
+            self.pending_program_response = Some(PendingProgramResponse {
+                command: command.to_owned(),
+                started_at: Instant::now(),
+                lines: Vec::new(),
+            });
+        }
+
+        let elapsed = self
+            .pending_program_response
+            .as_ref()
+            .expect("pending response was initialized")
+            .started_at
+            .elapsed();
+        let Some(remaining) = self.config.command_timeout.checked_sub(elapsed) else {
+            return Err(self.fail_program_response_timeout());
+        };
+        let read_wait = wait.min(remaining);
+        let wire_line = match tokio::time::timeout(read_wait, self.transport.read_line()).await {
+            Ok(Ok(line)) => line,
+            Ok(Err(error)) => {
+                self.pending_program_response = None;
+                let error = ControllerError::from(error);
+                self.record_poll_failure(&error);
+                return Err(error);
+            }
+            Err(_) => {
+                if self
+                    .pending_program_response
+                    .as_ref()
+                    .is_some_and(|pending| {
+                        pending.started_at.elapsed() >= self.config.command_timeout
+                    })
+                {
+                    return Err(self.fail_program_response_timeout());
+                }
+                return Ok(ProgramResponsePoll::Pending);
+            }
+        };
+
+        match parse_incoming_line(&wire_line)? {
+            IncomingLine::Status(state) => {
+                self.apply_status(*state);
+                self.record_poll_success();
+                Ok(ProgramResponsePoll::StatusObserved)
+            }
+            IncomingLine::Message(message) => {
+                if !message.is_empty() {
+                    self.pending_program_response
+                        .as_mut()
+                        .expect("pending response exists")
+                        .lines
+                        .push(message);
+                }
+                Ok(ProgramResponsePoll::Pending)
+            }
+            IncomingLine::ResetBanner { raw, version } => {
+                self.apply_reset_banner(raw.clone(), version);
+                self.finish_program_response(CommandCompletion::Reset, Some(raw), None)
+            }
+            IncomingLine::Alarm { code, raw } => {
+                self.apply_alarm(code, raw.clone());
+                self.finish_program_response(CommandCompletion::Alarm, Some(raw), code)
+            }
+            IncomingLine::Error { code, raw } => {
+                self.finish_program_response(CommandCompletion::Error, Some(raw), code)
+            }
+            IncomingLine::Ok => self.finish_program_response(CommandCompletion::Ok, None, None),
+        }
+    }
+
+    pub async fn request_interleaved_status(&mut self) -> Result<(), ControllerError> {
+        if self.snapshot.connection != ConnectionState::Connected {
+            return Err(ControllerError::NotReady(self.snapshot.connection));
+        }
+        if let Err(error) = self.transport.write(b"?").await {
+            let error = ControllerError::from(error);
+            self.record_poll_failure(&error);
+            return Err(error);
+        }
+        Ok(())
     }
 
     pub async fn send_realtime(
@@ -419,6 +530,9 @@ impl<T: Transport> Controller<T> {
             return Err(ControllerError::NotReady(self.snapshot.connection));
         }
         self.transport.write(&[command.byte()]).await?;
+        if command == RealtimeCommand::SoftReset {
+            self.pending_program_response = None;
+        }
         Ok(self.snapshot())
     }
 
@@ -448,7 +562,49 @@ impl<T: Transport> Controller<T> {
 
         self.snapshot.consecutive_failures = 0;
         self.snapshot.last_error = None;
+        self.pending_program_response = None;
         Ok(self.snapshot())
+    }
+
+    fn finish_program_response(
+        &mut self,
+        completion: CommandCompletion,
+        terminal_line: Option<String>,
+        code: Option<u16>,
+    ) -> Result<ProgramResponsePoll, ControllerError> {
+        let mut pending = self
+            .pending_program_response
+            .take()
+            .expect("program response must be pending");
+        if let Some(line) = terminal_line {
+            pending.lines.push(line);
+        }
+        self.snapshot.consecutive_failures = 0;
+        self.snapshot.last_error = None;
+        let response = CommandResponse {
+            command: pending.command,
+            completion,
+            lines: pending.lines,
+            code,
+        };
+        if response.completion == CommandCompletion::Ok {
+            Ok(ProgramResponsePoll::Terminal(response))
+        } else {
+            Err(ControllerError::CommandRejected {
+                command: response.command,
+                completion: response.completion,
+                code: response.code,
+            })
+        }
+    }
+
+    fn fail_program_response_timeout(&mut self) -> ControllerError {
+        self.pending_program_response = None;
+        let error = ControllerError::CommandTimeout {
+            timeout_ms: duration_ms(self.config.command_timeout),
+        };
+        self.record_poll_failure(&error);
+        error
     }
 
     async fn recover(&mut self) -> Result<ControllerSnapshot, ControllerError> {
@@ -601,43 +757,6 @@ impl<T: Transport> Controller<T> {
             });
         }
 
-        self.snapshot.consecutive_failures = 0;
-        self.snapshot.last_error = None;
-        Ok(response)
-    }
-
-    async fn read_acknowledged_response(
-        &mut self,
-        command: &str,
-    ) -> Result<CommandResponse, ControllerError> {
-        if self.snapshot.connection != ConnectionState::Connected {
-            return Err(ControllerError::NotReady(self.snapshot.connection));
-        }
-        let timeout = self.config.command_timeout;
-        let response =
-            match tokio::time::timeout(timeout, self.command_response_inner(command)).await {
-                Ok(result) => match result {
-                    Ok(response) => response,
-                    Err(error) => {
-                        self.record_poll_failure(&error);
-                        return Err(error);
-                    }
-                },
-                Err(_) => {
-                    let error = ControllerError::CommandTimeout {
-                        timeout_ms: duration_ms(timeout),
-                    };
-                    self.record_poll_failure(&error);
-                    return Err(error);
-                }
-            };
-        if response.completion != CommandCompletion::Ok {
-            return Err(ControllerError::CommandRejected {
-                command: response.command,
-                completion: response.completion,
-                code: response.code,
-            });
-        }
         self.snapshot.consecutive_failures = 0;
         self.snapshot.last_error = None;
         Ok(response)

@@ -203,6 +203,12 @@ The immediate repeat accepted all 25 commands, reported the physical
 fresh `Idle`. No Hold, Soft Reset, spindle activation, or coordinate-changing
 motion was executed.
 
+After sender response waiting was split into preemptible 10 ms slices and
+status polling was enabled during active FIFO traffic, the same physical fixture
+again accepted 25/25 commands and returned to `Idle`. This confirms that real
+serial `status/ok` demultiplexing did not change line correlation or Check-mode
+cleanup.
+
 At each connection Millo treats the controller's complete `$$` response as the
 truth and keeps a duplicate in
 `~/Library/Application Support/io.millo.desktop/machines/machine-0001.settings.json`.

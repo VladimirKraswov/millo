@@ -231,6 +231,10 @@ port names remain untouched.
   Hold/Resume, Reset cancellation, and terminal-command timeout while deferred.
   Physical command failures also verify automatic Hold plus Soft Reset and that
   reset flushes every queued Mock GRBL response.
+- Delayed-response fixtures prove Feed Hold is serviced within one 10 ms read
+  slice instead of waiting for the command timeout. A separate fixture injects
+  realtime status ahead of a delayed `ok`, verifies live `Bf/Ov` telemetry, and
+  keeps FIFO acknowledgement counts unchanged.
 - A non-default Mock `[OPT:V,15,256]` fixture proves the inspected capacity is
   carried by the one-use lease and becomes a 255-byte sender window at Start.
 - Reusing a consumed authorization fails after only the fresh status read. No
@@ -264,6 +268,10 @@ port names remain untouched.
 cargo run -p millo-desktop --example hardware_check_run -- \
   /dev/cu.usbmodem11101 fixtures/programs/grbl-complex-check.nc
 ```
+
+- The same physical fixture was repeated after incremental response polling was
+  introduced. All 25 lines were again correlated and GRBL returned to `Idle`,
+  validating the real serial demultiplexer rather than only Mock ordering.
 
 ### Hardware Air-run fixture
 

@@ -139,6 +139,11 @@ The production serial sender derives its usable window as `reported RX - 1`
 from the authorization's fresh `[OPT]` inspection, falls back to 127 bytes,
 accounts for each newline, and correlates every FIFO terminal response with its
 source line.
+Program-response reads are sliced into short bounded waits, so actor requests
+such as Feed Hold and Soft Reset preempt a delayed `ok`. Periodic realtime `?`
+continues during an active FIFO; interleaved status frames update position,
+buffer, overrides, pins, and accessories without consuming a command
+acknowledgement.
 `M0/M1` are acknowledged program barriers; `M2/M30` end dispatch. After the
 final `ok`, physical runs enter `Draining` and complete only after a fresh GRBL
 `Idle` status. Feed Hold uses realtime `!`, Resume uses `~` when GRBL reports
@@ -268,6 +273,8 @@ Full modal arc parsing and conservative time estimation are recorded in
 [ADR 0026](docs/decisions/0026-modal-parser-and-time-estimation.md).
 The verified GRBL Check-run lifecycle is recorded in
 [ADR 0027](docs/decisions/0027-grbl-check-run.md).
+Responsive interleaved sender I/O is recorded in
+[ADR 0028](docs/decisions/0028-responsive-sender-io.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

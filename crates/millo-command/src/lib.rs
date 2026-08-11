@@ -1,7 +1,11 @@
-use std::{future::Future, time::Instant};
+use std::{
+    future::Future,
+    time::{Duration, Instant},
+};
 
 use millo_controller::{
-    Controller, ControllerConfig, ControllerError, RealtimeCommand, UnhomedSetting,
+    Controller, ControllerConfig, ControllerError, ProgramResponsePoll, RealtimeCommand,
+    UnhomedSetting,
 };
 use millo_domain::{
     CommandResponse, ConnectionState, ControllerSnapshot, DeviceInspection, HardwareInspection,
@@ -39,6 +43,7 @@ const REQUEST_CAPACITY: usize = 32;
 pub const JOG_PAD_STEPS_MM: [f64; 2] = [0.01, 0.1];
 pub const JOG_PAD_FEED_MM_PER_MIN: f64 = 10.0;
 const WORK_ZERO_TOLERANCE_MM: f64 = 0.002;
+const SENDER_RESPONSE_SLICE: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Error)]
 pub enum ArbiterError {
@@ -573,6 +578,47 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
     loop {
         tokio::select! {
             biased;
+            request = requests.recv() => {
+                let Some(request) = request else {
+                    break;
+                };
+                handle_request(request, &mut actor).await;
+            }
+            _ = ticker.tick() => {
+                if matches!(
+                    actor.controller.snapshot().connection,
+                    ConnectionState::Connected | ConnectionState::Recovering
+                ) {
+                    if actor.sender.has_in_flight()
+                        && actor.controller.snapshot().connection == ConnectionState::Connected
+                    {
+                        if let Err(error) = actor.controller.request_interleaved_status().await {
+                            fail_active_sender(
+                                &mut actor.sender,
+                                format!("controller status request failed during program run: {error}"),
+                                &actor.sender_snapshots,
+                            );
+                        }
+                    } else {
+                        let lifecycle = actor.controller.lifecycle_tick().await;
+                        actor.safety.observe(&actor.controller.snapshot(), Instant::now());
+                        actor.first_cut.observe(&actor.controller.snapshot(), Instant::now());
+                        match lifecycle {
+                            Ok(_) => reconcile_physical_sender(
+                                &mut actor.controller,
+                                &mut actor.sender,
+                                &actor.sender_snapshots,
+                            ).await,
+                            Err(error) => fail_active_sender(
+                                &mut actor.sender,
+                                format!("controller polling failed during program run: {error}"),
+                                &actor.sender_snapshots,
+                            ),
+                        }
+                    }
+                    publish(&actor.snapshots, &actor.controller);
+                }
+            }
             _ = tokio::task::yield_now(), if actor.sender_dispatch_enabled && actor.sender.has_in_flight() => {
                 execute_sender_step(
                     &mut actor.controller,
@@ -581,35 +627,6 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                     &actor.sender_snapshots,
                 )
                 .await;
-            }
-            request = requests.recv() => {
-                let Some(request) = request else {
-                    break;
-                };
-                handle_request(request, &mut actor).await;
-            }
-            _ = ticker.tick(), if !actor.sender.has_in_flight() => {
-                if matches!(
-                    actor.controller.snapshot().connection,
-                    ConnectionState::Connected | ConnectionState::Recovering
-                ) {
-                    let lifecycle = actor.controller.lifecycle_tick().await;
-                    actor.safety.observe(&actor.controller.snapshot(), Instant::now());
-                    actor.first_cut.observe(&actor.controller.snapshot(), Instant::now());
-                    match lifecycle {
-                        Ok(_) => reconcile_physical_sender(
-                            &mut actor.controller,
-                            &mut actor.sender,
-                            &actor.sender_snapshots,
-                        ).await,
-                        Err(error) => fail_active_sender(
-                            &mut actor.sender,
-                            format!("controller polling failed during program run: {error}"),
-                            &actor.sender_snapshots,
-                        ),
-                    }
-                    publish(&actor.snapshots, &actor.controller);
-                }
             }
             _ = tokio::task::yield_now(), if actor.sender_dispatch_enabled && actor.sender.is_dispatchable() => {
                 execute_sender_step(
@@ -1229,8 +1246,11 @@ async fn execute_sender_step(
     }
 
     if let Some(line) = sender.oldest_in_flight() {
-        match controller.read_program_response(&line).await {
-            Ok(_) => {
+        match controller
+            .poll_program_response(&line, SENDER_RESPONSE_SLICE)
+            .await
+        {
+            Ok(ProgramResponsePoll::Terminal(_)) => {
                 let _ = sender.acknowledge_ok();
                 if line.kind() == DryRunLineKind::ProgramEnd
                     && sender.snapshot().state == SenderState::Draining
@@ -1241,6 +1261,10 @@ async fn execute_sender_step(
                     let _ = sender.complete_draining();
                 }
             }
+            Ok(ProgramResponsePoll::StatusObserved) => {
+                reconcile_physical_sender(controller, sender, sender_snapshots).await;
+            }
+            Ok(ProgramResponsePoll::Pending) => {}
             Err(error) => {
                 let physical_run = matches!(
                     sender.snapshot().mode,
@@ -3079,6 +3103,75 @@ mod tests {
         arbiter.refresh_status().await.unwrap();
         let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
         assert_eq!(completed.mode, Some(millo_sender::SenderMode::CutRun));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn feed_hold_preempts_a_delayed_program_response() {
+        let source = "G21 G90 G94\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        control.queue_program_delay(20);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        tokio::time::sleep(Duration::from_millis(15)).await;
+
+        tokio::time::timeout(Duration::from_millis(30), arbiter.feed_hold())
+            .await
+            .expect("Feed Hold must preempt response waiting")
+            .unwrap();
+
+        assert_eq!(arbiter.sender_snapshot().state, SenderState::Paused);
+        assert!(control.writes().contains(&b"!".to_vec()));
+        let challenge = arbiter.request_soft_reset().await.unwrap();
+        arbiter.confirm_soft_reset(challenge.id).await.unwrap();
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn physical_sender_parses_interleaved_status_while_waiting_for_ok() {
+        let transport = MockTransport::default();
+        let control = transport.control();
+        control.queue_program_delay(12);
+        let (arbiter, worker) = CommandArbiter::new_with_execution_target(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_millis(5),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(250),
+                failures_before_recovery: 2,
+            },
+            HardwareProfile::first_machine(),
+            ExecutionTarget::Serial,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        authorize_and_start_serial_fixture(&arbiter, "G21 G90 G94\nG1 X2 F20", true).await;
+        control.set_status(
+            "<Run|MPos:1.000,0.000,0.000|WPos:1.000,0.000,0.000|FS:20,0|Bf:12,200|Ov:80,50,90>",
+        );
+
+        tokio::time::timeout(Duration::from_millis(150), async {
+            loop {
+                let snapshot = arbiter.snapshot();
+                if snapshot.machine.mode == MachineMode::Run
+                    && snapshot
+                        .machine
+                        .overrides
+                        .is_some_and(|overrides| overrides.feed_percent == 80)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("interleaved status should update live telemetry");
+
+        assert!(arbiter.sender_snapshot().in_flight_lines > 0);
+        assert!(control.writes().contains(&b"?".to_vec()));
+        let challenge = arbiter.request_soft_reset().await.unwrap();
+        arbiter.confirm_soft_reset(challenge.id).await.unwrap();
         task.abort();
     }
 

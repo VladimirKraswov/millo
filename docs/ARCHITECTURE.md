@@ -212,6 +212,15 @@ does not schedule or execute controller I/O.
 - Sender dispatch runs inside the existing command actor. Requests remain
   prioritized between lines, lifecycle polling uses the same controller, and
   no second task can write to the transport.
+- Waiting for the oldest program response is incremental. The controller keeps
+  the pending command, diagnostic lines, and original command deadline across
+  10 ms read slices; actor requests run before the next slice.
+- While a command response is pending, the ticker writes realtime `?` instead
+  of starting a competing status transaction. The same response demultiplexer
+  applies status frames and preserves the oldest FIFO `ok/error/ALARM`.
+- Sender reconciliation distinguishes a newly observed status frame from a
+  pending read or terminal response. Stale preflight `Idle` can never release a
+  deferred `M2/M30`.
 - Tauri checks the active descriptor and the actor checks `DryRunTarget`; both
   must identify Mock GRBL. Serial replacement automatically disables and
   cancels dry-run execution.
@@ -302,6 +311,9 @@ does not schedule or execute controller I/O.
 - GRBL 1.1 `Bf`, `Ov`, `Pn`, `A`, and `Ln` status fields are parsed into typed
   buffer, override, input, accessory, and source-line state. Missing optional
   telemetry remains absent instead of being synthesized.
+- Status polling continues while the bounded sender has lines in flight. The
+  single actor writes `?`; program-response polling consumes and classifies the
+  interleaved frame without a second transport reader.
 - A successful transport connection starts polling even if the initial status
   synchronization fails.
 - A single failed poll is transient; the configured failure threshold moves the

@@ -13,6 +13,7 @@ const DEFAULT_STATUS: &str = "<Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.00
 enum MockRead {
     Line(String),
     Stall,
+    DelaySlice,
     Disconnect,
 }
 
@@ -112,6 +113,14 @@ impl MockControl {
         self.lock()
             .planned_program
             .push_back(VecDeque::from([MockRead::Stall]));
+    }
+
+    pub fn queue_program_delay(&self, read_slices: usize) {
+        let mut response = (0..read_slices)
+            .map(|_| MockRead::DelaySlice)
+            .collect::<VecDeque<_>>();
+        response.push_back(MockRead::Line("ok".to_owned()));
+        self.lock().planned_program.push_back(response);
     }
 
     pub fn queue_program_alarm(&self, code: u16) {
@@ -233,7 +242,16 @@ impl Transport for MockTransport {
                 }
                 VecDeque::from([MockRead::Line(status_line)])
             };
-            state.active_reads.extend(cycle);
+            let reset_banner_pending = state.active_reads.front().is_some_and(
+                |read| matches!(read, MockRead::Line(line) if line.starts_with("Grbl ")),
+            );
+            if state.active_reads.is_empty() || reset_banner_pending {
+                state.active_reads.extend(cycle);
+            } else {
+                for read in cycle.into_iter().rev() {
+                    state.active_reads.push_front(read);
+                }
+            }
         } else if data == b"!" {
             if state.status_line.starts_with("<Run") || state.status_line.starts_with("<Jog") {
                 state.status_line = state
@@ -343,15 +361,21 @@ impl Transport for MockTransport {
             if !state.connected {
                 return Err(TransportError::NotConnected);
             }
-            state
-                .active_reads
-                .pop_front()
-                .ok_or(TransportError::NoData)?
+            match state.active_reads.front() {
+                Some(MockRead::Stall) => MockRead::Stall,
+                Some(_) => state
+                    .active_reads
+                    .pop_front()
+                    .expect("front entry must still exist"),
+                None => return Err(TransportError::NoData),
+            }
         };
 
         match read {
             MockRead::Line(line) => Ok(line),
-            MockRead::Stall => pending::<Result<String, TransportError>>().await,
+            MockRead::Stall | MockRead::DelaySlice => {
+                pending::<Result<String, TransportError>>().await
+            }
             MockRead::Disconnect => {
                 self.lock().connected = false;
                 Err(TransportError::NotConnected)
@@ -825,6 +849,22 @@ mod tests {
             control.writes(),
             vec![b"G21 G90\n".to_vec(), b"G1 X1 F10\n".to_vec()]
         );
+    }
+
+    #[tokio::test]
+    async fn realtime_status_precedes_a_delayed_program_acknowledgement() {
+        let mut transport = MockTransport::default();
+        let control = transport.control();
+        control.queue_program_delay(1);
+        transport.connect().await.unwrap();
+
+        transport.write(b"G1 X1 F10\n").await.unwrap();
+        transport.write(b"?").await.unwrap();
+
+        assert!(transport.read_line().await.unwrap().starts_with("<Idle|"));
+        let delayed = tokio::time::timeout(Duration::from_millis(2), transport.read_line()).await;
+        assert!(delayed.is_err());
+        assert_eq!(transport.read_line().await.unwrap(), "ok");
     }
 
     #[tokio::test]
