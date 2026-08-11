@@ -63,6 +63,13 @@ deeply frozen controller snapshots and tracked subscriptions when the host wires
 a state source. Unload and failed activation remove those subscriptions and
 close retained proxies. Job creation remains a declared future contract.
 
+The application now creates one `PluginHost` bootstrap containing the UI
+registry, machine snapshot store, and in-memory loader. React observes that store
+through `useSyncExternalStore`; the initial controller query, live Tauri
+`machine-state` events, and typed command results all publish into the same
+source. Bootstrap registers core UI but activates no plugins and performs no
+external code loading.
+
 ## Run
 
 Requirements: Node.js 20+, Rust 1.85+, and the platform prerequisites for
@@ -124,7 +131,8 @@ the [guarded step jog](docs/decisions/0008-guarded-step-jog.md) and
 then the [extension host boundary](docs/decisions/0010-extension-host-boundaries.md)
 and [versioned plugin manifest](docs/decisions/0011-versioned-plugin-manifest.md),
 followed by the
-[read-only machine capability](docs/decisions/0012-machine-read-capability.md).
+[read-only machine capability](docs/decisions/0012-machine-read-capability.md)
+and [PluginHost bootstrap](docs/decisions/0013-plugin-host-bootstrap.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

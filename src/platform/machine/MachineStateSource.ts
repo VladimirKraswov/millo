@@ -38,10 +38,10 @@ export class MachineSnapshotStore implements MachineStateSource {
     };
   };
 
-  publish(snapshot: ControllerSnapshot): void {
+  publish = (snapshot: ControllerSnapshot): void => {
     this.snapshot = freezeSnapshot(snapshot);
     for (const listener of [...this.listeners]) listener(this.snapshot);
-  }
+  };
 }
 
 function freezeSnapshot(

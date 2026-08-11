@@ -1,17 +1,15 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
-import { registerCoreUiExtensions } from "./app/registerCoreUiExtensions";
+import { bootstrapPluginHost } from "./app/bootstrapPluginHost";
 import {
   acknowledgeReset,
   clearMockAlarm,
   connectTransport,
   disconnect,
   getActiveTransport,
-  getControllerSnapshot,
   inspectDevice,
   isDesktopRuntime,
   listTransports,
-  onMachineState,
   refreshStatus,
   triggerMockAlarm,
   triggerMockDisconnect,
@@ -21,8 +19,9 @@ import {
 } from "./api/controller";
 import { ReadinessPanel } from "./components/ReadinessPanel";
 import { SafetyControls } from "./components/SafetyControls";
-import { createUiExtensionRegistry } from "./platform/extensions/UiExtensionRegistry";
+import { bindMachineStateStream } from "./platform/machine/MachineStateEventStream";
 import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineCommandGateway";
+import { tauriMachineStateEventStream } from "./platform/machine/tauriMachineStateEventStream";
 import {
   emptySnapshot,
   type ControllerSnapshot,
@@ -75,7 +74,19 @@ function PositionReadout({ position }: { position?: Position }) {
 }
 
 export default function App() {
-  const [snapshot, setSnapshot] = useState<ControllerSnapshot>(emptySnapshot);
+  const pluginHost = useMemo(
+    () =>
+      bootstrapPluginHost({
+        initialSnapshot: emptySnapshot,
+        machineCommands: tauriMachineCommandGateway,
+      }),
+    [],
+  );
+  const snapshot = useSyncExternalStore(
+    pluginHost.machineState.subscribe,
+    pluginHost.machineState.current,
+    pluginHost.machineState.current,
+  );
   const [transports, setTransports] = useState<TransportDescriptor[]>([
     mockTransport,
   ]);
@@ -90,11 +101,6 @@ export default function App() {
   const [discovering, setDiscovering] = useState(false);
   const [uiError, setUiError] = useState<string>();
   const desktopRuntime = useMemo(isDesktopRuntime, []);
-  const extensionRegistry = useMemo(() => {
-    const registry = createUiExtensionRegistry();
-    registerCoreUiExtensions(registry);
-    return registry;
-  }, []);
 
   useEffect(() => {
     if (!desktopRuntime) {
@@ -102,10 +108,26 @@ export default function App() {
     }
 
     let active = true;
-    let unlisten: (() => void) | undefined;
-
-    void getControllerSnapshot().then((value) => {
-      if (active) setSnapshot(value);
+    const unbindMachineState = bindMachineStateStream({
+      stream: tauriMachineStateEventStream,
+      store: pluginHost.machineState,
+      onSnapshot: (value) => {
+        if (!active) return;
+        if (
+          value.connection !== "connected" ||
+          value.machine.mode !== "idle" ||
+          value.alarm !== undefined ||
+          value.resetNotice !== undefined
+        ) {
+          setInspection(undefined);
+        }
+        if (value.connection === "connected" && value.consecutiveFailures === 0) {
+          setUiError(undefined);
+        }
+      },
+      onError: (error) => {
+        if (active) setUiError(String(error));
+      },
     });
     void getActiveTransport().then((value) => {
       if (active) {
@@ -120,30 +142,11 @@ export default function App() {
       .catch((error: unknown) => {
         if (active) setUiError(String(error));
       });
-    void onMachineState((value) => {
-      if (active) {
-        setSnapshot(value);
-        if (
-          value.connection !== "connected" ||
-          value.machine.mode !== "idle" ||
-          value.alarm !== undefined ||
-          value.resetNotice !== undefined
-        ) {
-          setInspection(undefined);
-        }
-        if (value.connection === "connected" && value.consecutiveFailures === 0) {
-          setUiError(undefined);
-        }
-      }
-    }).then((cleanup) => {
-      unlisten = cleanup;
-    });
-
     return () => {
       active = false;
-      unlisten?.();
+      unbindMachineState();
     };
-  }, [desktopRuntime]);
+  }, [desktopRuntime, pluginHost]);
 
   const runAction = async (
     action: () => Promise<ControllerSnapshot>,
@@ -151,7 +154,7 @@ export default function App() {
     setBusy(true);
     setUiError(undefined);
     try {
-      setSnapshot(await action());
+      pluginHost.machineState.publish(await action());
       return true;
     } catch (error) {
       setUiError(String(error));
@@ -447,11 +450,11 @@ export default function App() {
 
           <SafetyControls
             desktopRuntime={desktopRuntime}
-            extensionRegistry={extensionRegistry}
+            extensionRegistry={pluginHost.uiRegistry}
             machineGateway={tauriMachineCommandGateway}
             onError={setUiError}
             onInspection={setInspection}
-            onSnapshot={setSnapshot}
+            onSnapshot={pluginHost.machineState.publish}
             snapshot={snapshot}
           />
 

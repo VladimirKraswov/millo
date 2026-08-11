@@ -42,8 +42,9 @@ must both exist. Merely wiring a source does not authorize a plugin.
 - Mutation attempts cannot alter the host snapshot or another observer's view.
 - Unloaded and partially activated plugins cannot keep receiving machine events
   or reuse saved capability proxies.
-- The application shell still needs to wire its authoritative event stream into
-  `MachineSnapshotStore` when a production plugin host is introduced.
+- The application shell now wires its authoritative Tauri event stream and typed
+  command results into `MachineSnapshotStore` through the PluginHost bootstrap
+  defined by ADR 0013.
 - History, replay, throttling, selector subscriptions, and persistent grants are
   deliberately outside this slice.
 

@@ -216,9 +216,21 @@ does not schedule or execute controller I/O.
 - This loader accepts only modules already linked into the application. It does
   not read plugin files, dynamically import code, or establish a sandbox or
   signature trust model.
+- `bootstrapPluginHost` is the application composition root for the UI registry,
+  `MachineSnapshotStore`, and in-memory loader. It registers core UI but does not
+  discover or activate plugins. Grants therefore remain empty unless the host
+  explicitly supplies them.
+- React reads the shared machine store through `useSyncExternalStore`. Typed
+  command results publish back to that store instead of maintaining a second
+  component-owned controller snapshot.
+- `bindMachineStateStream` connects the initial `controller_snapshot` query and
+  live Tauri `machine-state` events to the same store. An event revision prevents
+  a late initial response from overwriting newer state, and a late async listen
+  setup is immediately cleaned up after effect disposal.
 - See `docs/decisions/0010-extension-host-boundaries.md` and
   `docs/decisions/0011-versioned-plugin-manifest.md`, plus
-  `docs/decisions/0012-machine-read-capability.md` for the accepted boundaries.
+  `docs/decisions/0012-machine-read-capability.md` and
+  `docs/decisions/0013-plugin-host-bootstrap.md` for the accepted boundaries.
 
 ## Near-term sequence
 

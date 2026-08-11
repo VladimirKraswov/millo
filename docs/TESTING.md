@@ -33,6 +33,12 @@ subscriber-error isolation, cleanup after activation failure, automatic
 unsubscribe on unload, and rejection through retained capability proxies after
 their plugin is gone.
 
+PluginHost bootstrap tests verify that core UI and the machine source share one
+composition root, no plugin is activated implicitly, and an explicitly loaded
+observer receives publications from that exact store. Stream-binding tests cover
+initial state, live events, stale initial-response suppression, and cleanup when
+the asynchronous Tauri listener resolves after disposal.
+
 The test phase also runs `scripts/check-brand.mjs`, which keeps npm, Cargo,
 Tauri, UI, and documentation naming consistent.
 
