@@ -19,10 +19,13 @@ import {
 } from "./api/controller";
 import { ReadinessPanel } from "./components/ReadinessPanel";
 import { SafetyControls } from "./components/SafetyControls";
+import { previewFixtureProgram } from "./features/program/previewFixtureProgram";
+import { ProgramWorkspace } from "./features/program/ProgramWorkspace";
 import { bindMachineStateStream } from "./platform/machine/MachineStateEventStream";
 import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineCommandGateway";
 import { tauriMachineStateEventStream } from "./platform/machine/tauriMachineStateEventStream";
 import { tauriWorkCoordinateGateway } from "./platform/machine/tauriWorkCoordinateGateway";
+import { tauriProgramGateway } from "./platform/program/tauriProgramGateway";
 import {
   emptySnapshot,
   type ControllerSnapshot,
@@ -49,6 +52,11 @@ const mockTransport: TransportDescriptor = {
 };
 
 const baudRates = [9_600, 19_200, 38_400, 57_600, 115_200, 230_400];
+const developmentPreviewFixture =
+  import.meta.env.DEV &&
+  new URLSearchParams(window.location.search).get("fixture") === "program"
+    ? previewFixtureProgram
+    : undefined;
 
 const formatCoordinate = (value: number | undefined): string =>
   value === undefined ? "--" : value.toFixed(3);
@@ -101,6 +109,9 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [uiError, setUiError] = useState<string>();
+  const [workbenchView, setWorkbenchView] = useState<"program" | "controller">(
+    "program",
+  );
   const desktopRuntime = useMemo(isDesktopRuntime, []);
 
   useEffect(() => {
@@ -263,7 +274,10 @@ export default function App() {
       </header>
 
       <main className="workspace">
-        <section className="machine-panel" aria-labelledby="machine-state-title">
+        <section
+          className={`machine-panel is-${workbenchView}`}
+          aria-labelledby="machine-state-title"
+        >
           <div className="section-heading">
             <div>
               <span>GRBL controller</span>
@@ -313,7 +327,47 @@ export default function App() {
             <PositionReadout position={snapshot.machine.machinePosition} />
           </div>
 
-          <section className="device-inspector" aria-labelledby="inspector-title">
+          <div className="workbench-tabs" role="tablist" aria-label="Workbench view">
+            <button
+              aria-controls="program-workbench"
+              aria-selected={workbenchView === "program"}
+              onClick={() => setWorkbenchView("program")}
+              role="tab"
+              type="button"
+            >
+              Program
+            </button>
+            <button
+              aria-controls="controller-workbench"
+              aria-selected={workbenchView === "controller"}
+              onClick={() => setWorkbenchView("controller")}
+              role="tab"
+              type="button"
+            >
+              Controller
+            </button>
+          </div>
+
+          <div
+            className="workbench-panel"
+            hidden={workbenchView !== "program"}
+            id="program-workbench"
+            role="tabpanel"
+          >
+            <ProgramWorkspace
+              desktopRuntime={desktopRuntime}
+              gateway={tauriProgramGateway}
+              initialProgram={developmentPreviewFixture}
+            />
+          </div>
+
+          <div
+            className="workbench-panel"
+            hidden={workbenchView !== "controller"}
+            id="controller-workbench"
+            role="tabpanel"
+          >
+            <section className="device-inspector" aria-labelledby="inspector-title">
             <div className="inspector-heading">
               <div>
                 <span>Read-only</span>
@@ -427,7 +481,8 @@ export default function App() {
                 <span>Движение и управление шпинделем недоступны</span>
               </div>
             )}
-          </section>
+            </section>
+          </div>
 
           <div className="telemetry-row">
             <div>

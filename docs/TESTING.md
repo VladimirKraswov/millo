@@ -19,6 +19,11 @@ The work-zero feature suite rejects an unconfirmed request before the gateway
 and delegates only a typed X/Y/Z request. Registry tests also verify that the
 core panel occupies the separate `control.coordinates` slot.
 
+Program-loader tests reject unsupported, empty, and oversized files before IPC
+and assert the exact typed parse request. Toolpath read-model tests verify rapid
+and cutting buffers, centering, framing, and grid placement independently from
+WebGL.
+
 Extension-registry tests cover deterministic slot ordering, duplicate and
 self-replacement rejection, add/replace/dispose behavior, one-revision owner
 unload, and restoration of `core.jog-pad` after a plugin replacement unloads.
@@ -109,6 +114,29 @@ port names remain untouched.
 - TypeScript tests cover the platform-neutral interactor, while the Tauri build
   verifies the typed command adapter. Automated tests never send work-zero to a
   physical controller.
+
+## Current G-code and preview coverage
+
+- Real `.nc`, `.ngc`, and `.tap` fixtures cover compact words, comments, common
+  headers/modal cancels, metric and imperial units, absolute and incremental
+  distance, linear moves, I/J arcs, and R arcs.
+- Safety fixtures cover `M3`, spindle speed, `M6`, `G38.2`, and `G53`; they load
+  for review but fail `dryRunEligible`, and unsafe movements are not invented as
+  preview segments.
+- Malformed fixtures retain line-addressable warnings for comments, tokens, and
+  invalid arc definitions instead of panicking or silently drawing a chord.
+- Missing/oversized source name, empty source, 2 MB input, 200,000-line, and
+  500,000-preview-point limits are enforced in Rust. The UI mirrors the
+  file-size and extension gate before reading a file.
+- The Tauri adapter test proves parsing returns a typed program without an
+  `AppState`, controller, transport, or command actor dependency.
+- Vitest checks the platform-neutral loader and pure toolpath read model. No
+  test invokes a sender because none exists in this slice.
+- Manual browser fixtures use `/?fixture=program` for desktop and
+  `/tests/visual/program-mobile.html` for a 390 x 844 responsive viewport.
+  Playwright screenshots verify layout and top/isometric switching. Canvas crops
+  are checked for non-uniform luminance and color: the accepted desktop fixture
+  measured Y `0..197`, and mobile measured Y `0..206`.
 
 ## Current hardware readiness coverage
 

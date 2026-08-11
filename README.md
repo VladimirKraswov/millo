@@ -12,6 +12,7 @@ The current slices form this path:
 
 ```text
 Serial / Mock -> command arbiter -> GRBL lifecycle/parser -> typed Tauri IPC -> React
+File source -> millo-gcode parser -> immutable program DTO -> Three.js preview
 ```
 
 The command arbiter now owns the active transport, periodic status polling, and
@@ -60,6 +61,17 @@ cannot choose `Pn`, format a line, or reuse the confirmation. This operation has
 been verified against Mock GRBL only; no work-zero write was sent to the physical
 machine in this slice. The probe is not installed or connected, so probing and
 heightmap motion remain unavailable.
+
+The Program workbench loads `.nc`, `.ngc`, `.gcode`, `.tap`, and `.cnc` files up
+to 2 MB through a separate `ProgramGateway`. Rust parses compact words,
+comments, metric/imperial and absolute/incremental modes, linear motion, and XY
+arcs into an immutable millimetre-based program model. Warnings retain source
+line numbers; spindle activation, tool change, probing, machine-coordinate
+motion, malformed geometry, and unsupported commands fail the future dry-run
+gate. A lazily loaded Three.js adapter renders rapid and cutting geometry from a
+pure read model with top/isometric views. Loading and preview have no access to
+the command actor, serial transport, or machine capabilities, so a parsed line
+cannot move the machine in this slice.
 
 UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
 first core contribution in the named `control.machine` slot; Work Zero occupies
@@ -119,6 +131,7 @@ successful GRBL status exchange.
 | Package | Responsibility |
 | --- | --- |
 | `millo-domain` | Stable machine and controller types |
+| `millo-gcode` | Immutable G-code program, warnings, parser, and preview geometry |
 | `millo-grbl` | GRBL wire-format parsing and encoding |
 | `millo-transport` | Controller-independent I/O contract |
 | `millo-mock` | Deterministic virtual machine for tests |
@@ -144,7 +157,8 @@ and [versioned plugin manifest](docs/decisions/0011-versioned-plugin-manifest.md
 followed by the
 [read-only machine capability](docs/decisions/0012-machine-read-capability.md)
 and [PluginHost bootstrap](docs/decisions/0013-plugin-host-bootstrap.md), then the
-[guarded work-zero transaction](docs/decisions/0014-guarded-work-zero.md).
+[guarded work-zero transaction](docs/decisions/0014-guarded-work-zero.md) and
+[G-code program boundary](docs/decisions/0015-gcode-program-boundary.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

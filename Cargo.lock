@@ -1848,6 +1848,7 @@ dependencies = [
  "millo-command",
  "millo-controller",
  "millo-domain",
+ "millo-gcode",
  "millo-mock",
  "millo-serial",
  "millo-transport",
@@ -1862,6 +1863,15 @@ name = "millo-domain"
 version = "0.1.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "millo-gcode"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

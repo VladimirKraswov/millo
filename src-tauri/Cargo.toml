@@ -16,6 +16,7 @@ tauri-build = { version = "2", features = [] }
 millo-command = { path = "../crates/millo-command" }
 millo-controller = { path = "../crates/millo-controller" }
 millo-domain = { path = "../crates/millo-domain" }
+millo-gcode = { path = "../crates/millo-gcode" }
 millo-mock = { path = "../crates/millo-mock" }
 millo-serial = { path = "../crates/millo-serial" }
 millo-transport = { path = "../crates/millo-transport" }

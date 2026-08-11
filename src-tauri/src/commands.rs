@@ -5,6 +5,7 @@ use millo_domain::{
     OperatorConfirmation, ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation,
     WorkZeroOutcome, WorkZeroRequest,
 };
+use millo_gcode::{GcodeProgram, ProgramParseRequest, parse_program};
 use millo_mock::{MockControl, MockTransport};
 use millo_serial::{
     SerialConfig, SerialPortDescriptor, SerialPortKind, SerialTransport,
@@ -271,6 +272,14 @@ pub async fn set_work_zero(
 }
 
 #[tauri::command]
+pub async fn parse_gcode_program(request: ProgramParseRequest) -> Result<GcodeProgram, String> {
+    tokio::task::spawn_blocking(move || parse_program(request))
+        .await
+        .map_err(|error| format!("G-code parser task failed: {error}"))?
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn cancel_jog(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
     state
         .arbiter
@@ -455,6 +464,20 @@ fn serial_port_name(transport_id: &str) -> Result<&str, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn tauri_parser_adapter_returns_a_typed_preview_without_machine_state() {
+        let program = parse_gcode_program(ProgramParseRequest {
+            source_name: "adapter.nc".to_owned(),
+            source: "G21 G90\nG0 X0 Y0 Z2\nG1 Z0 F50".to_owned(),
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(program.source_name, "adapter.nc");
+        assert_eq!(program.summary.motion_count, 2);
+        assert!(program.summary.preview_complete);
+    }
 
     #[test]
     fn serial_transport_id_preserves_the_native_port_name() {

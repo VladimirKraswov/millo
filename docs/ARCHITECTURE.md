@@ -36,6 +36,17 @@ GRBL. The command actor owns the controller and active transport; the controller
 owns protocol state and the current snapshot. Tauri only converts application
 calls into commands and events.
 
+Program loading is a parallel read-only path:
+
+```text
+File API -> ProgramGateway -> typed Tauri parse command -> millo-gcode
+                                                        -> immutable DTO
+                                                        -> TS read model -> Three.js
+```
+
+It does not pass through the command actor because parsing owns no controller
+state and cannot produce transport writes.
+
 ## Rules
 
 1. CNC behavior belongs in Rust and must be testable without Tauri.
@@ -46,6 +57,7 @@ calls into commands and events.
 6. Public domain types are serializable, explicit, and preserve unknown input.
 7. Safety-critical actions will be modeled as state transitions, not raw UI
    strings.
+8. Parsed source and preview geometry never imply permission to send a program.
 
 ## Implemented vertical slices
 
@@ -58,6 +70,34 @@ The command arbiter owns the periodic driver. Every tick calls one core method:
 a connected controller is polled, while a recovering controller attempts
 disconnect/connect/status synchronization. Tauri subscribes to snapshots and
 does not schedule or execute controller I/O.
+
+### G-code program boundary
+
+- `millo-gcode` owns source limits, lexical normalization, modal parsing,
+  warnings, safety features, bounds, distances, and sampled preview geometry.
+  It imports neither GRBL controller code nor Tauri.
+- The first parser supports comments, compact words, `G0/G1/G2/G3`, G17 XY
+  arcs with I/J or R, `G20/G21`, `G90/G91`, common modal cancels, and millimetre
+  normalization. Unsupported behavior is retained as a source-line warning; it
+  is never guessed into geometry.
+- Input is bounded to a 255-byte source name, 2 MB, and 200,000 lines. Preview
+  output is bounded to 500,000 points.
+- Safety/error warnings make `dryRunEligible` false. `M3/M4`, non-zero spindle
+  speed, `M6`, `G38.x`, `G53`, coordinate mutation, coolant activation, and
+  malformed/unsupported geometry are among the fail-closed cases.
+- React reads files through the browser File API and passes only name/source to
+  a platform-neutral `ProgramGateway`. The Tauri adapter runs parsing on a
+  blocking worker and returns the typed immutable DTO.
+- `toolpathReadModel` is a pure TypeScript adapter that separates rapid and cut
+  line pairs and derives a stable scene frame. Three.js is lazy-loaded only when
+  a parsed program exists.
+- The scene contains one XY grid, functional rapid/cut colors, top and
+  isometric views, bounded zoom/pan, and no machine-state mutation.
+- `Program` and `Controller` are separate retained workbench views. Program
+  state survives tab changes; Device Inspector remains available without being
+  mixed into preview diagnostics.
+- Neither the core UI nor plugins receive a sender or raw-line capability in
+  this slice. `jobs.create` remains reserved.
 
 ### Lifecycle invariants
 
@@ -251,14 +291,15 @@ does not schedule or execute controller I/O.
 
 ## Near-term sequence
 
-1. G-code domain, parser fixtures, warnings, and immutable program model.
-2. File loading plus a visualization read model and Three.js preview adapter.
-3. Bounded sender state machine with pause, cancel, and correlated line results.
-4. Safe dry run that rejects spindle activation and requires the spindle to stay
-   manually off.
-5. Probe input validation and guarded Z probing only after a physical sensor is
+1. Bounded sender state machine with pause, cancel, and correlated line results.
+2. Safe dry run policy that rejects spindle/coolant activation, probing, tool
+   changes, machine-coordinate moves, and parser blockers while requiring the
+   spindle to remain manually off.
+3. Program-line table and selection linked to preview geometry without editing
+   the immutable loaded source in place.
+4. Probe input validation and guarded Z probing only after a physical sensor is
    installed and connected.
 
-Ant Design and Three.js are intentionally absent from the first slice. They will
-be added when the first operator workflow and visualizer require them, keeping
-the initial dependency surface small.
+Three.js is now isolated behind the program preview adapter and a lazy bundle.
+Ant Design remains absent until a workflow needs its component contracts rather
+than adding it as general UI weight.
