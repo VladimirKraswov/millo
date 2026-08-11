@@ -36,6 +36,7 @@ export const previewFixturePreflight: RunPreflightReport = {
   sourceName: previewFixtureProgram.sourceName,
   programFingerprint: "fixture-preflight-sha256",
   intent: "airRun",
+  executionOptions: { optionalStop: false, blockDelete: false },
   ready: false,
   blockerCount: 1,
   cautionCount: 3,
@@ -110,7 +111,11 @@ export const previewFixturePreflight: RunPreflightReport = {
 };
 
 export const previewFixturePreflightGateway: RealRunPreflightGateway = {
-  preflight: async (_request, intent) => ({ ...previewFixturePreflight, intent }),
+  preflight: async (_request, intent, executionOptions) => ({
+    ...previewFixturePreflight,
+    intent,
+    executionOptions,
+  }),
   authorizeFirstCut: async () => {
     throw new Error("Blocked fixture cannot be authorized");
   },

@@ -15,7 +15,8 @@ use millo_domain::{
     WorkZeroOutcome, WorkZeroRequest,
 };
 use millo_dry_run::{
-    DryRunLineKind, DryRunPlan, DryRunPolicyError, ProgramRunPolicy, build_program_run_plan,
+    DryRunLineKind, DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy,
+    build_program_run_plan_with_options,
 };
 use millo_gcode::GcodeProgram;
 use millo_grbl::{
@@ -25,7 +26,8 @@ use millo_readiness::assess;
 use millo_run::program_fingerprint;
 use millo_run::{
     FirstCutAuthorizationError, FirstCutConfirmation, FirstCutGate, FirstCutPreparation,
-    ProgramRunIntent, RunPreflightReport, ToolChangeConfirmation, assess_real_run_preflight,
+    ProgramRunIntent, RunPreflightReport, ToolChangeConfirmation,
+    assess_real_run_preflight_with_options,
 };
 use millo_safety::{SafetyError, SafetyManager};
 use millo_sender::{
@@ -283,9 +285,20 @@ impl CommandArbiter {
         program: GcodeProgram,
         intent: ProgramRunIntent,
     ) -> Result<RunPreflightReport, ArbiterError> {
+        self.preflight_real_run_with_options(program, intent, ProgramExecutionOptions::default())
+            .await
+    }
+
+    pub async fn preflight_real_run_with_options(
+        &self,
+        program: GcodeProgram,
+        intent: ProgramRunIntent,
+        execution_options: ProgramExecutionOptions,
+    ) -> Result<RunPreflightReport, ArbiterError> {
         self.call(|response| Request::PreflightRealRun {
             program,
             intent,
+            execution_options,
             response,
         })
         .await
@@ -322,8 +335,21 @@ impl CommandArbiter {
         &self,
         program: GcodeProgram,
     ) -> Result<SenderSnapshot, ArbiterError> {
-        self.call(|response| Request::StartCheckRun { program, response })
+        self.start_check_run_with_options(program, ProgramExecutionOptions::default())
             .await
+    }
+
+    pub async fn start_check_run_with_options(
+        &self,
+        program: GcodeProgram,
+        execution_options: ProgramExecutionOptions,
+    ) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::StartCheckRun {
+            program,
+            execution_options,
+            response,
+        })
+        .await
     }
 
     pub async fn resume_program_run(&self) -> Result<SenderSnapshot, ArbiterError> {
@@ -532,6 +558,7 @@ enum Request {
     PreflightRealRun {
         program: GcodeProgram,
         intent: ProgramRunIntent,
+        execution_options: ProgramExecutionOptions,
         response: oneshot::Sender<Result<RunPreflightReport, ArbiterError>>,
     },
     AuthorizeFirstCut {
@@ -547,6 +574,7 @@ enum Request {
     },
     StartCheckRun {
         program: GcodeProgram,
+        execution_options: ProgramExecutionOptions,
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
     ResumeProgramRun {
@@ -828,13 +856,21 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         Request::PreflightRealRun {
             program,
             intent,
+            execution_options,
             response,
         } => {
             first_cut.invalidate();
             let result = if *execution_target != ExecutionTarget::Serial {
                 Err(ArbiterError::RealRunTransportUnavailable)
             } else {
-                execute_real_run_preflight(controller, hardware_profile, program, intent).await
+                execute_real_run_preflight(
+                    controller,
+                    hardware_profile,
+                    program,
+                    intent,
+                    execution_options,
+                )
+                .await
             };
             publish(snapshots, controller);
             let _ = response.send(result);
@@ -888,12 +924,16 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
         }
-        Request::StartCheckRun { program, response } => {
+        Request::StartCheckRun {
+            program,
+            execution_options,
+            response,
+        } => {
             *sender_dispatch_enabled = true;
             let result = if *execution_target != ExecutionTarget::Serial {
                 Err(ArbiterError::CheckRunTransportUnavailable)
             } else {
-                execute_check_run_start(controller, sender, program).await
+                execute_check_run_start(controller, sender, program, execution_options).await
             };
             publish(snapshots, controller);
             publish_sender(sender_snapshots, sender);
@@ -1097,6 +1137,7 @@ async fn execute_real_run_preflight(
     hardware_profile: &HardwareProfile,
     program: GcodeProgram,
     intent: ProgramRunIntent,
+    execution_options: ProgramExecutionOptions,
 ) -> Result<RunPreflightReport, ArbiterError> {
     controller.refresh_status().await?;
     ensure_stable_idle(&controller.snapshot())?;
@@ -1104,8 +1145,12 @@ async fn execute_real_run_preflight(
     let snapshot = controller.refresh_status().await?;
     let readiness = assess(hardware_profile, &device, &snapshot);
     let hardware = HardwareInspection { device, readiness };
-    Ok(assess_real_run_preflight(
-        &program, hardware, &snapshot, intent,
+    Ok(assess_real_run_preflight_with_options(
+        &program,
+        hardware,
+        &snapshot,
+        intent,
+        execution_options,
     ))
 }
 
@@ -1116,9 +1161,14 @@ async fn execute_first_cut_authorization(
     program: GcodeProgram,
     confirmation: FirstCutConfirmation,
 ) -> Result<FirstCutPreparation, ArbiterError> {
-    let report =
-        execute_real_run_preflight(controller, hardware_profile, program, confirmation.intent)
-            .await?;
+    let report = execute_real_run_preflight(
+        controller,
+        hardware_profile,
+        program,
+        confirmation.intent,
+        confirmation.execution_options,
+    )
+    .await?;
     let authorization = first_cut.authorize(
         confirmation,
         &report,
@@ -1157,7 +1207,8 @@ async fn execute_authorized_program_run_start(
         ProgramRunIntent::AirRun => ProgramRunPolicy::AirRun,
         ProgramRunIntent::Cutting => ProgramRunPolicy::Cutting,
     };
-    let plan = build_program_run_plan(&program, policy)?;
+    let plan =
+        build_program_run_plan_with_options(&program, policy, authorization.execution_options)?;
     sender.configure_rx_buffer_capacity(usable_rx_buffer_capacity(
         authorization.reported_rx_buffer_bytes,
     ))?;
@@ -1172,6 +1223,7 @@ async fn execute_check_run_start(
     controller: &mut Controller<BoxedTransport>,
     sender: &mut Sender,
     program: GcodeProgram,
+    execution_options: ProgramExecutionOptions,
 ) -> Result<SenderSnapshot, ArbiterError> {
     let sender_state = sender.snapshot().state;
     if matches!(
@@ -1184,7 +1236,11 @@ async fn execute_check_run_start(
         return Err(SenderError::Busy(sender_state).into());
     }
 
-    let plan = build_program_run_plan(&program, ProgramRunPolicy::Cutting)?;
+    let plan = build_program_run_plan_with_options(
+        &program,
+        ProgramRunPolicy::Cutting,
+        execution_options,
+    )?;
     let initial = controller.refresh_status().await?;
     ensure_stable_idle(&initial)?;
     let inspection = controller.inspect_device().await?;
@@ -1878,8 +1934,10 @@ fn publish_sender(snapshots: &watch::Sender<SenderSnapshot>, sender: &Sender) {
 mod tests {
     use std::time::Duration;
 
-    use millo_dry_run::build_dry_run_plan;
-    use millo_gcode::{ProgramParseRequest, parse_program};
+    use millo_dry_run::{build_dry_run_plan, build_program_run_plan};
+    use millo_gcode::{
+        ProgramParseOptions, ProgramParseRequest, parse_program, parse_program_with_options,
+    };
     use millo_mock::MockTransport;
 
     use super::*;
@@ -1917,6 +1975,7 @@ mod tests {
     fn first_cut_confirmation() -> FirstCutConfirmation {
         FirstCutConfirmation {
             intent: ProgramRunIntent::Cutting,
+            execution_options: ProgramExecutionOptions::default(),
             stock_secured: true,
             tool_secured: true,
             tool_removed: false,
@@ -1932,6 +1991,7 @@ mod tests {
     fn air_run_confirmation() -> FirstCutConfirmation {
         FirstCutConfirmation {
             intent: ProgramRunIntent::AirRun,
+            execution_options: ProgramExecutionOptions::default(),
             stock_secured: false,
             tool_secured: false,
             tool_removed: true,
@@ -1997,6 +2057,22 @@ mod tests {
             source_name: "sender-fixture.nc".to_owned(),
             source: source.to_owned(),
         })
+        .unwrap()
+    }
+
+    fn parsed_program_with_options(
+        source: &str,
+        execution_options: ProgramExecutionOptions,
+    ) -> GcodeProgram {
+        parse_program_with_options(
+            ProgramParseRequest {
+                source_name: "sender-fixture.nc".to_owned(),
+                source: source.to_owned(),
+            },
+            ProgramParseOptions {
+                block_delete: execution_options.block_delete,
+            },
+        )
         .unwrap()
     }
 
@@ -3198,6 +3274,40 @@ mod tests {
                 .collect::<Vec<_>>()
                 .ends_with(&["S6000", "M4"])
         }));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn serial_check_run_applies_bound_optional_stop_block_delete_and_checksums() {
+        let source = include_str!("../../../fixtures/programs/grbl-stream-semantics-check.nc");
+        let options = ProgramExecutionOptions {
+            optional_stop: true,
+            block_delete: true,
+        };
+        let program = parsed_program_with_options(source, options);
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        arbiter
+            .start_check_run_with_options(program, options)
+            .await
+            .unwrap();
+        let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
+
+        assert_eq!(completed.acknowledged_lines, completed.total_lines);
+        let commands = control
+            .writes()
+            .into_iter()
+            .filter(|write| {
+                write.ends_with(b"\n") && !write.starts_with(b"$") && write.as_slice() != b"$C\n"
+            })
+            .map(|write| String::from_utf8(write).unwrap())
+            .collect::<Vec<_>>();
+        assert!(commands.contains(&"N50 M1\n".to_owned()));
+        assert!(!commands.iter().any(|line| line.contains("N30")));
+        assert!(commands.iter().all(|line| !line.contains('*')));
+        assert_eq!(arbiter.snapshot().machine.mode, MachineMode::Idle);
         task.abort();
     }
 

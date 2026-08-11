@@ -3,19 +3,26 @@ use std::{error::Error, fs, io, path::PathBuf, time::Duration};
 use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{HardwareProfile, MachineMode};
-use millo_gcode::{ProgramParseRequest, parse_program};
+use millo_dry_run::ProgramExecutionOptions;
+use millo_gcode::{ProgramParseOptions, ProgramParseRequest, parse_program_with_options};
 use millo_sender::SenderState;
 use millo_serial::{SerialConfig, SerialTransport};
 
-const USAGE: &str = "usage: hardware_check_run <serial-port> <program.nc>";
+const USAGE: &str =
+    "usage: hardware_check_run <serial-port> <program.nc> [--optional-stop] [--block-delete]";
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let port = args.next().ok_or_else(|| input_error(USAGE))?;
     let path = PathBuf::from(args.next().ok_or_else(|| input_error(USAGE))?);
-    if args.next().is_some() {
-        return Err(input_error(USAGE).into());
+    let mut execution_options = ProgramExecutionOptions::default();
+    for argument in args {
+        match argument.as_str() {
+            "--optional-stop" => execution_options.optional_stop = true,
+            "--block-delete" => execution_options.block_delete = true,
+            _ => return Err(input_error(USAGE).into()),
+        }
     }
 
     let source = fs::read_to_string(&path)?;
@@ -24,10 +31,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .and_then(|name| name.to_str())
         .ok_or_else(|| input_error("program path has no UTF-8 file name"))?
         .to_owned();
-    let program = parse_program(ProgramParseRequest {
-        source_name,
-        source,
-    })?;
+    let program = parse_program_with_options(
+        ProgramParseRequest {
+            source_name,
+            source,
+        },
+        ProgramParseOptions {
+            block_delete: execution_options.block_delete,
+        },
+    )?;
     println!(
         "Parsed {} source lines, {} motions, {:.3} mm of cutting geometry",
         program.summary.line_count,
@@ -43,7 +55,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ExecutionTarget::Serial,
     );
     let worker = tokio::spawn(worker);
-    let result = run(&arbiter, &port, program).await;
+    let result = run(&arbiter, &port, program, execution_options).await;
     let _ = arbiter.disconnect().await;
     worker.abort();
     result
@@ -53,6 +65,7 @@ async fn run(
     arbiter: &CommandArbiter,
     port: &str,
     program: millo_gcode::GcodeProgram,
+    execution_options: ProgramExecutionOptions,
 ) -> Result<(), Box<dyn Error>> {
     println!("Connecting to {port} at 115200 baud");
     arbiter.connect().await?;
@@ -72,10 +85,15 @@ async fn run(
     }
 
     let mut updates = arbiter.subscribe_sender();
-    let started = arbiter.start_check_run(program).await?;
+    let started = arbiter
+        .start_check_run_with_options(program, execution_options)
+        .await?;
     println!(
-        "CHECK START: {} line(s), controller RX capacity {} byte(s)",
-        started.total_lines, started.rx_buffer_capacity
+        "CHECK START: {} line(s), controller RX capacity {} byte(s), optional stop {}, block delete {}",
+        started.total_lines,
+        started.rx_buffer_capacity,
+        execution_options.optional_stop,
+        execution_options.block_delete,
     );
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);

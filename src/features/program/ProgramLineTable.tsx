@@ -90,7 +90,7 @@ export function ProgramLineTable({
                 aria-posinset={absoluteIndex + 1}
                 aria-selected={selected}
                 aria-setsize={lines.length}
-                className={`program-line-row${selected ? " is-selected" : ""}${line.executable ? "" : " is-comment"}`}
+                className={`program-line-row${selected ? " is-selected" : ""}${line.executable ? "" : " is-comment"}${line.optionalBlock ? " is-optional" : ""}${line.blockDeleted ? " is-block-deleted" : ""}`}
                 key={line.sourceLine}
                 onClick={() => onSelect(line.sourceLine)}
                 role="option"

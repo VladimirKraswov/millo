@@ -19,6 +19,12 @@ pub struct ProgramParseRequest {
     pub source: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramParseOptions {
+    pub block_delete: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgramPoint {
@@ -48,6 +54,8 @@ pub enum ToolpathKind {
 #[serde(rename_all = "camelCase")]
 pub struct ToolpathSegment {
     pub source_line: usize,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub optional_block: bool,
     pub kind: ToolpathKind,
     pub points: Vec<ProgramPoint>,
     pub distance_mm: f64,
@@ -72,7 +80,10 @@ pub enum ProgramWarningCode {
     UnexpectedCommentClose,
     InvalidToken,
     DuplicateWord,
+    OptionalBlock,
     OptionalBlockUnsupported,
+    ChecksumValidated,
+    ChecksumInvalid,
     ChecksumUnsupported,
     UnsupportedGCode,
     UnsupportedMCode,
@@ -106,6 +117,12 @@ pub struct ProgramLine {
     pub source: String,
     pub normalized: String,
     pub executable: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub optional_block: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub block_deleted: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checksum: Option<u8>,
     pub warning_count: usize,
 }
 
@@ -142,6 +159,7 @@ pub struct ProgramSummary {
 #[serde(rename_all = "camelCase")]
 pub struct GcodeProgram {
     pub source_name: String,
+    pub block_delete_enabled: bool,
     pub lines: Vec<ProgramLine>,
     pub warnings: Vec<ProgramWarning>,
     pub features: ProgramFeatures,
@@ -211,6 +229,7 @@ enum Plane {
 }
 
 struct Parser {
+    block_delete: bool,
     position: ProgramPoint,
     motion: MotionMode,
     units: UnitMode,
@@ -236,6 +255,7 @@ struct Parser {
 impl Default for Parser {
     fn default() -> Self {
         Self {
+            block_delete: false,
             position: ProgramPoint::default(),
             motion: MotionMode::Rapid,
             units: UnitMode::Millimeters,
@@ -300,6 +320,13 @@ impl BoundsAccumulator {
 }
 
 pub fn parse_program(request: ProgramParseRequest) -> Result<GcodeProgram, ProgramParseError> {
+    parse_program_with_options(request, ProgramParseOptions::default())
+}
+
+pub fn parse_program_with_options(
+    request: ProgramParseRequest,
+    options: ProgramParseOptions,
+) -> Result<GcodeProgram, ProgramParseError> {
     let source_name = request.source_name.trim();
     if source_name.is_empty() {
         return Err(ProgramParseError::MissingSourceName);
@@ -324,7 +351,10 @@ pub fn parse_program(request: ProgramParseRequest) -> Result<GcodeProgram, Progr
         });
     }
 
-    let mut parser = Parser::default();
+    let mut parser = Parser {
+        block_delete: options.block_delete,
+        ..Parser::default()
+    };
     for (index, raw) in request.source.lines().enumerate() {
         parser.parse_line(index + 1, raw.trim_end_matches('\r'));
     }
@@ -351,6 +381,7 @@ pub fn parse_program(request: ProgramParseRequest) -> Result<GcodeProgram, Progr
 
     Ok(GcodeProgram {
         source_name: source_name.to_owned(),
+        block_delete_enabled: options.block_delete,
         lines: parser.lines,
         warnings: parser.warnings,
         features: parser.features,
@@ -362,12 +393,24 @@ pub fn parse_program(request: ProgramParseRequest) -> Result<GcodeProgram, Progr
 impl Parser {
     fn parse_line(&mut self, source_line: usize, source: &str) {
         let warning_start = self.warnings.len();
-        let code = strip_comments(source, source_line, &mut self.warnings);
+        let (checksummed_code, checksum) =
+            validate_checksum(source, source_line, &mut self.warnings);
+        let code = strip_comments(&checksummed_code, source_line, &mut self.warnings);
+        let (code, optional_block) = strip_optional_block(&code, source_line, &mut self.warnings);
         let words = if code.trim() == "%" {
             Vec::new()
         } else {
             tokenize(&code, source_line, &mut self.warnings)
         };
+        if checksum.is_some() && words.first().is_none_or(|word| word.letter != 'N') {
+            self.preview_complete = false;
+            self.warn(
+                source_line,
+                ProgramWarningSeverity::Error,
+                ProgramWarningCode::ChecksumInvalid,
+                "a checksummed block must begin with an N line number",
+            );
+        }
         let normalized = words
             .iter()
             .map(|word| word.lexeme.as_str())
@@ -386,8 +429,9 @@ impl Parser {
             );
         }
 
-        if executable {
-            self.apply_block(source_line, &words);
+        let block_deleted = executable && optional_block && self.block_delete;
+        if executable && !block_deleted {
+            self.apply_block(source_line, &words, optional_block);
         }
 
         self.lines.push(ProgramLine {
@@ -395,11 +439,14 @@ impl Parser {
             source: source.to_owned(),
             normalized,
             executable,
+            optional_block,
+            block_deleted,
+            checksum,
             warning_count: self.warnings.len() - warning_start,
         });
     }
 
-    fn apply_block(&mut self, source_line: usize, words: &[Word]) {
+    fn apply_block(&mut self, source_line: usize, words: &[Word], optional_block: bool) {
         let mut block_motion = self.motion;
         let mut skip_motion = false;
         let mut dwell = false;
@@ -747,6 +794,7 @@ impl Parser {
         }
         self.toolpath.push(ToolpathSegment {
             source_line,
+            optional_block,
             kind,
             points,
             distance_mm,
@@ -965,6 +1013,95 @@ fn strip_comments(source: &str, source_line: usize, warnings: &mut Vec<ProgramWa
     output
 }
 
+fn validate_checksum(
+    source: &str,
+    source_line: usize,
+    warnings: &mut Vec<ProgramWarning>,
+) -> (String, Option<u8>) {
+    let mut in_comment = false;
+    let mut separator = None;
+    for (index, character) in source.char_indices() {
+        match character {
+            ';' if !in_comment => break,
+            '(' if !in_comment => in_comment = true,
+            ')' if in_comment => in_comment = false,
+            '*' if !in_comment => {
+                if separator.is_some() {
+                    warnings.push(ProgramWarning {
+                        source_line,
+                        severity: ProgramWarningSeverity::Error,
+                        code: ProgramWarningCode::ChecksumInvalid,
+                        message: "a checksummed block contains more than one '*' separator"
+                            .to_owned(),
+                    });
+                    return (source[..separator.unwrap_or(index)].to_owned(), None);
+                }
+                separator = Some(index);
+            }
+            _ => {}
+        }
+    }
+    let Some(separator) = separator else {
+        return (source.to_owned(), None);
+    };
+
+    let payload = &source[..separator];
+    let supplied = source[separator + 1..].trim();
+    let parsed = supplied.parse::<u16>().ok().filter(|value| *value <= 255);
+    let Some(supplied) = parsed.map(|value| value as u8) else {
+        warnings.push(ProgramWarning {
+            source_line,
+            severity: ProgramWarningSeverity::Error,
+            code: ProgramWarningCode::ChecksumInvalid,
+            message: "checksum must be a final decimal byte from 0 to 255".to_owned(),
+        });
+        return (payload.to_owned(), None);
+    };
+    let computed = payload
+        .as_bytes()
+        .iter()
+        .fold(0u8, |checksum, byte| checksum ^ byte);
+    if computed == supplied {
+        warnings.push(ProgramWarning {
+            source_line,
+            severity: ProgramWarningSeverity::Warning,
+            code: ProgramWarningCode::ChecksumValidated,
+            message: format!("checksum {supplied} validated before normalization"),
+        });
+    } else {
+        warnings.push(ProgramWarning {
+            source_line,
+            severity: ProgramWarningSeverity::Error,
+            code: ProgramWarningCode::ChecksumInvalid,
+            message: format!("checksum mismatch: source declares {supplied}, computed {computed}"),
+        });
+    }
+    (payload.to_owned(), Some(supplied))
+}
+
+fn strip_optional_block(
+    code: &str,
+    source_line: usize,
+    warnings: &mut Vec<ProgramWarning>,
+) -> (String, bool) {
+    let Some(non_whitespace) = code.find(|character: char| !character.is_whitespace()) else {
+        return (code.to_owned(), false);
+    };
+    if code[non_whitespace..].starts_with('/') {
+        warnings.push(ProgramWarning {
+            source_line,
+            severity: ProgramWarningSeverity::Warning,
+            code: ProgramWarningCode::OptionalBlock,
+            message: "optional block is preserved for the Block Delete run option".to_owned(),
+        });
+        let mut normalized = code.to_owned();
+        normalized.remove(non_whitespace);
+        (normalized, true)
+    } else {
+        (code.to_owned(), false)
+    }
+}
+
 fn tokenize(code: &str, source_line: usize, warnings: &mut Vec<ProgramWarning>) -> Vec<Word> {
     let characters = code.chars().collect::<Vec<_>>();
     let mut words = Vec::new();
@@ -980,8 +1117,7 @@ fn tokenize(code: &str, source_line: usize, warnings: &mut Vec<ProgramWarning>) 
                 source_line,
                 severity: ProgramWarningSeverity::Error,
                 code: ProgramWarningCode::OptionalBlockUnsupported,
-                message: "optional block-delete semantics are not supported; execution is blocked"
-                    .to_owned(),
+                message: "'/' is valid only as the first non-whitespace block character".to_owned(),
             });
             index += 1;
             continue;
@@ -991,8 +1127,7 @@ fn tokenize(code: &str, source_line: usize, warnings: &mut Vec<ProgramWarning>) 
                 source_line,
                 severity: ProgramWarningSeverity::Error,
                 code: ProgramWarningCode::ChecksumUnsupported,
-                message: "checksummed input cannot be normalized safely; execution is blocked"
-                    .to_owned(),
+                message: "'*' is valid only as one final checksum separator".to_owned(),
             });
             break;
         }
@@ -1054,6 +1189,10 @@ fn tokenize(code: &str, source_line: usize, warnings: &mut Vec<ProgramWarning>) 
         }
     }
     words
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn resolve_axis(current: f64, value: Option<f64>, distance: DistanceMode) -> f64 {

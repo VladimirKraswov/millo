@@ -7,6 +7,7 @@ const report = (ready: boolean): RunPreflightReport => ({
     sourceName: "fixture.nc",
     programFingerprint: "fixture-sha256",
     intent: "airRun",
+    executionOptions: { optionalStop: false, blockDelete: false },
     ready,
     blockerCount: ready ? 0 : 1,
     cautionCount: 3,

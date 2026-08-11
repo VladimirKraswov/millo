@@ -35,9 +35,11 @@ import {
   type SenderState,
 } from "../../shared/dryRun";
 import type { GcodeProgram, ProgramWarning } from "../../shared/program";
+import { defaultProgramExecutionOptions } from "../../shared/realRun";
 import type {
   FirstCutConfirmation,
   FirstCutPreparation,
+  ProgramExecutionOptions,
   ProgramRunIntent,
   RealRunPreflightGateway,
   RunPreflightReport,
@@ -150,6 +152,8 @@ export function ProgramWorkspace({
   const [realRunReport, setRealRunReport] = useState<RunPreflightReport>();
   const [programRunIntent, setProgramRunIntent] =
     useState<ProgramRunIntent>("airRun");
+  const [programExecutionOptions, setProgramExecutionOptions] =
+    useState<ProgramExecutionOptions>(defaultProgramExecutionOptions);
   const [firstCutOpen, setFirstCutOpen] = useState(false);
   const [toolChangeOpen, setToolChangeOpen] = useState(false);
   const [firstCutPreparation, setFirstCutPreparation] =
@@ -287,10 +291,43 @@ export function ProgramWorkspace({
     loading,
   });
   const progressPercent = controls.progressPercent;
+  const updateExecutionOption = async (
+    key: keyof ProgramExecutionOptions,
+    value: boolean,
+  ) => {
+    setRealRunReport(undefined);
+    setFirstCutPreparation(undefined);
+    if (key !== "blockDelete" || !loaded) {
+      setProgramExecutionOptions((current) => ({ ...current, [key]: value }));
+      return;
+    }
+
+    setLoading(true);
+    setError(undefined);
+    try {
+      const reparsed = await gateway.parse(
+        {
+          sourceName: loaded.program.sourceName,
+          source: loaded.source,
+        },
+        { blockDelete: value },
+      );
+      setLoaded({ ...loaded, program: reparsed });
+      setProgramExecutionOptions((current) => ({ ...current, [key]: value }));
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setLoading(false);
+    }
+  };
   const reportForProgram =
     realRunReport &&
     realRunReport.sourceName === program?.sourceName &&
-    realRunReport.intent === programRunIntent
+    realRunReport.intent === programRunIntent &&
+    realRunReport.executionOptions.optionalStop ===
+      programExecutionOptions.optionalStop &&
+    realRunReport.executionOptions.blockDelete ===
+      programExecutionOptions.blockDelete
       ? realRunReport
       : undefined;
   const preflightControls = realRunPreflightControls(reportForProgram, {
@@ -311,6 +348,7 @@ export function ProgramWorkspace({
           source: loaded.source,
         },
         programRunIntent,
+        programExecutionOptions,
       );
       setRealRunReport(report);
       onInspection?.(report.hardware);
@@ -347,15 +385,19 @@ export function ProgramWorkspace({
         source: loaded.source,
       },
       preparation.authorization.id,
+      programExecutionOptions,
     );
   };
   const startCheckRun = () => {
     if (!loaded || !realRunGateway) return;
     void runSenderAction(() =>
-      realRunGateway.startCheck({
-        sourceName: loaded.program.sourceName,
-        source: loaded.source,
-      }),
+      realRunGateway.startCheck(
+        {
+          sourceName: loaded.program.sourceName,
+          source: loaded.source,
+        },
+        programExecutionOptions,
+      ),
     );
   };
   const completeToolChange = async (
@@ -636,6 +678,30 @@ export function ProgramWorkspace({
                   >
                     Обработка
                   </button>
+                </div>
+                <div className="program-execution-options">
+                  <label title="M1 Optional Stop">
+                    <input
+                      checked={programExecutionOptions.optionalStop}
+                      disabled={preflightLoading || loading || senderActive}
+                      onChange={(event) =>
+                        void updateExecutionOption("optionalStop", event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                    <span>M1 Stop</span>
+                  </label>
+                  <label title="Optional Block Delete">
+                    <input
+                      checked={programExecutionOptions.blockDelete}
+                      disabled={preflightLoading || loading || senderActive}
+                      onChange={(event) =>
+                        void updateExecutionOption("blockDelete", event.target.checked)
+                      }
+                      type="checkbox"
+                    />
+                    <span>/ Delete</span>
+                  </label>
                 </div>
                 <div className="real-run-preflight-heading">
                   <div>
@@ -942,6 +1008,7 @@ export function ProgramWorkspace({
       )}
 
       <FirstCutAuthorizationDialog
+        executionOptions={programExecutionOptions}
         intent={programRunIntent}
         onAuthorize={authorizeFirstCut}
         onAuthorized={(preparation) => {

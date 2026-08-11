@@ -8,8 +8,11 @@ use millo_domain::{
     ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation, WorkZeroOutcome,
     WorkZeroRequest,
 };
-use millo_dry_run::{DryRunPlan, DryRunPolicyError, build_dry_run_plan};
-use millo_gcode::{GcodeProgram, ProgramParseRequest, parse_program};
+use millo_dry_run::{DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, build_dry_run_plan};
+use millo_gcode::{
+    GcodeProgram, ProgramParseOptions, ProgramParseRequest, parse_program,
+    parse_program_with_options,
+};
 use millo_mock::{MockControl, MockTransport};
 use millo_profile::{
     DetectedController, IdentityConfidence, MachineConnectionPreset, MachineFingerprint,
@@ -1073,17 +1076,23 @@ pub async fn set_work_zero(
 }
 
 #[tauri::command]
-pub async fn parse_gcode_program(request: ProgramParseRequest) -> Result<GcodeProgram, String> {
-    tokio::task::spawn_blocking(move || parse_program(request))
-        .await
-        .map_err(|error| format!("G-code parser task failed: {error}"))?
-        .map_err(|error| error.to_string())
+pub async fn parse_gcode_program(
+    request: ProgramParseRequest,
+    options: Option<ProgramParseOptions>,
+) -> Result<GcodeProgram, String> {
+    tokio::task::spawn_blocking(move || {
+        parse_program_with_options(request, options.unwrap_or_default())
+    })
+    .await
+    .map_err(|error| format!("G-code parser task failed: {error}"))?
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
 pub async fn preflight_real_run(
     request: ProgramParseRequest,
     intent: ProgramRunIntent,
+    execution_options: ProgramExecutionOptions,
     state: State<'_, AppState>,
 ) -> Result<RunPreflightReport, String> {
     let _transition = state.transition_lock.lock().await;
@@ -1091,13 +1100,20 @@ pub async fn preflight_real_run(
     if state.active_transport.lock().await.kind != TransportKind::Serial {
         return Err("real-run preflight requires an active serial transport".to_owned());
     }
-    let program = tokio::task::spawn_blocking(move || parse_program(request))
-        .await
-        .map_err(|error| format!("real-run parser task failed: {error}"))?
-        .map_err(|error| error.to_string())?;
+    let program = tokio::task::spawn_blocking(move || {
+        parse_program_with_options(
+            request,
+            ProgramParseOptions {
+                block_delete: execution_options.block_delete,
+            },
+        )
+    })
+    .await
+    .map_err(|error| format!("real-run parser task failed: {error}"))?
+    .map_err(|error| error.to_string())?;
     state
         .arbiter
-        .preflight_real_run(program, intent)
+        .preflight_real_run_with_options(program, intent, execution_options)
         .await
         .map_err(|error| error.to_string())
 }
@@ -1113,10 +1129,18 @@ pub async fn authorize_first_cut(
     if state.active_transport.lock().await.kind != TransportKind::Serial {
         return Err("first-cut authorization requires an active serial transport".to_owned());
     }
-    let program = tokio::task::spawn_blocking(move || parse_program(request))
-        .await
-        .map_err(|error| format!("first-cut parser task failed: {error}"))?
-        .map_err(|error| error.to_string())?;
+    let execution_options = confirmation.execution_options;
+    let program = tokio::task::spawn_blocking(move || {
+        parse_program_with_options(
+            request,
+            ProgramParseOptions {
+                block_delete: execution_options.block_delete,
+            },
+        )
+    })
+    .await
+    .map_err(|error| format!("first-cut parser task failed: {error}"))?
+    .map_err(|error| error.to_string())?;
     state
         .arbiter
         .authorize_first_cut(program, confirmation)
@@ -1128,6 +1152,7 @@ pub async fn authorize_first_cut(
 pub async fn start_program_run(
     request: ProgramParseRequest,
     authorization_id: u64,
+    execution_options: ProgramExecutionOptions,
     state: State<'_, AppState>,
 ) -> Result<SenderSnapshot, String> {
     let _transition = state.transition_lock.lock().await;
@@ -1135,10 +1160,17 @@ pub async fn start_program_run(
     if state.active_transport.lock().await.kind != TransportKind::Serial {
         return Err("program run requires an active serial transport".to_owned());
     }
-    let program = tokio::task::spawn_blocking(move || parse_program(request))
-        .await
-        .map_err(|error| format!("program-run parser task failed: {error}"))?
-        .map_err(|error| error.to_string())?;
+    let program = tokio::task::spawn_blocking(move || {
+        parse_program_with_options(
+            request,
+            ProgramParseOptions {
+                block_delete: execution_options.block_delete,
+            },
+        )
+    })
+    .await
+    .map_err(|error| format!("program-run parser task failed: {error}"))?
+    .map_err(|error| error.to_string())?;
     state
         .arbiter
         .start_program_run(program, authorization_id)
@@ -1149,6 +1181,7 @@ pub async fn start_program_run(
 #[tauri::command]
 pub async fn start_check_run(
     request: ProgramParseRequest,
+    execution_options: ProgramExecutionOptions,
     state: State<'_, AppState>,
 ) -> Result<SenderSnapshot, String> {
     let _transition = state.transition_lock.lock().await;
@@ -1156,13 +1189,20 @@ pub async fn start_check_run(
     if state.active_transport.lock().await.kind != TransportKind::Serial {
         return Err("GRBL Check requires an active serial transport".to_owned());
     }
-    let program = tokio::task::spawn_blocking(move || parse_program(request))
-        .await
-        .map_err(|error| format!("check-run parser task failed: {error}"))?
-        .map_err(|error| error.to_string())?;
+    let program = tokio::task::spawn_blocking(move || {
+        parse_program_with_options(
+            request,
+            ProgramParseOptions {
+                block_delete: execution_options.block_delete,
+            },
+        )
+    })
+    .await
+    .map_err(|error| format!("check-run parser task failed: {error}"))?
+    .map_err(|error| error.to_string())?;
     state
         .arbiter
-        .start_check_run(program)
+        .start_check_run_with_options(program, execution_options)
         .await
         .map_err(|error| error.to_string())
 }
@@ -1468,16 +1508,36 @@ mod tests {
 
     #[tokio::test]
     async fn tauri_parser_adapter_returns_a_typed_preview_without_machine_state() {
-        let program = parse_gcode_program(ProgramParseRequest {
-            source_name: "adapter.nc".to_owned(),
-            source: "G21 G90\nG0 X0 Y0 Z2\nG1 Z0 F50".to_owned(),
-        })
+        let program = parse_gcode_program(
+            ProgramParseRequest {
+                source_name: "adapter.nc".to_owned(),
+                source: "G21 G90\nG0 X0 Y0 Z2\nG1 Z0 F50".to_owned(),
+            },
+            None,
+        )
         .await
         .unwrap();
 
         assert_eq!(program.source_name, "adapter.nc");
         assert_eq!(program.summary.motion_count, 2);
         assert!(program.summary.preview_complete);
+    }
+
+    #[tokio::test]
+    async fn tauri_parser_adapter_applies_block_delete_to_preview_geometry() {
+        let request = ProgramParseRequest {
+            source_name: "optional.nc".to_owned(),
+            source: "G21 G90 G94\n/G91\nG1 X10 F10\nG1 X20".to_owned(),
+        };
+        let included = parse_gcode_program(request.clone(), None).await.unwrap();
+        let deleted =
+            parse_gcode_program(request, Some(ProgramParseOptions { block_delete: true }))
+                .await
+                .unwrap();
+
+        assert_eq!(included.summary.bounds.unwrap().max.x, 30.0);
+        assert_eq!(deleted.summary.bounds.unwrap().max.x, 20.0);
+        assert!(deleted.lines[1].block_deleted);
     }
 
     #[test]

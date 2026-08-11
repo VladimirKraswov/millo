@@ -476,7 +476,9 @@ impl Sender {
             if self.in_flight.back().is_some_and(|line| {
                 matches!(
                     line.kind(),
-                    DryRunLineKind::ProgramPause | DryRunLineKind::ProgramEnd
+                    DryRunLineKind::ProgramPause
+                        | DryRunLineKind::OptionalPause
+                        | DryRunLineKind::ProgramEnd
                 )
             }) {
                 return None;
@@ -530,7 +532,11 @@ impl Sender {
         }
         self.last_line = Some(line);
         self.acknowledged_lines = self.acknowledged_lines.saturating_add(1);
-        if line_kind == DryRunLineKind::ProgramPause && self.mode != Some(SenderMode::CheckRun) {
+        if matches!(
+            line_kind,
+            DryRunLineKind::ProgramPause | DryRunLineKind::OptionalPause
+        ) && self.mode != Some(SenderMode::CheckRun)
+        {
             self.paused_from = Some(SenderState::Running);
             self.state = SenderState::Paused;
             self.pause_clock();
@@ -740,7 +746,10 @@ fn command_rx_bytes(line: &DryRunLine) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use millo_dry_run::{ProgramRunPolicy, build_dry_run_plan, build_program_run_plan};
+    use millo_dry_run::{
+        ProgramExecutionOptions, ProgramRunPolicy, build_dry_run_plan, build_program_run_plan,
+        build_program_run_plan_with_options,
+    };
     use millo_gcode::{ProgramParseRequest, parse_program};
 
     use super::*;
@@ -761,6 +770,19 @@ mod tests {
         })
         .unwrap();
         build_program_run_plan(&program, ProgramRunPolicy::Cutting).unwrap()
+    }
+
+    fn cutting_plan_with_options(
+        source: &str,
+        execution_options: ProgramExecutionOptions,
+    ) -> DryRunPlan {
+        let program = parse_program(ProgramParseRequest {
+            source_name: "sender.nc".to_owned(),
+            source: source.to_owned(),
+        })
+        .unwrap();
+        build_program_run_plan_with_options(&program, ProgramRunPolicy::Cutting, execution_options)
+            .unwrap()
     }
 
     #[test]
@@ -872,6 +894,37 @@ mod tests {
 
         sender.resume().unwrap();
         assert_eq!(sender.next_line().unwrap().command(), "G1 X1 F10");
+    }
+
+    #[test]
+    fn enabled_optional_stop_pauses_while_the_default_plan_omits_m1() {
+        let source = "G21\nM1\nG1 X1 F10";
+        assert!(
+            !cutting_plan(source)
+                .lines()
+                .iter()
+                .any(|line| line.command() == "M1")
+        );
+
+        let mut sender = Sender::default();
+        sender
+            .load_cut_run(cutting_plan_with_options(
+                source,
+                ProgramExecutionOptions {
+                    optional_stop: true,
+                    block_delete: false,
+                },
+            ))
+            .unwrap();
+        sender.start().unwrap();
+        loop {
+            let line = sender.next_line().unwrap();
+            sender.acknowledge_ok().unwrap();
+            if line.command() == "M1" {
+                break;
+            }
+        }
+        assert_eq!(sender.snapshot().state, SenderState::Paused);
     }
 
     #[test]
@@ -1041,7 +1094,7 @@ mod tests {
         assert_eq!(completed.mode, Some(SenderMode::CheckRun));
         assert_eq!(completed.state, SenderState::Completed);
         assert_eq!(completed.acknowledged_lines, completed.total_lines);
-        assert_eq!(checked_pauses, 2);
+        assert_eq!(checked_pauses, 1);
         assert!(sender.deferred_program_end().is_none());
     }
 

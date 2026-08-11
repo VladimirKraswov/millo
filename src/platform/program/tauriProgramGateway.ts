@@ -1,9 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { GcodeProgram, ProgramParseRequest } from "../../shared/program";
+import type {
+  GcodeProgram,
+  ProgramParseOptions,
+  ProgramParseRequest,
+} from "../../shared/program";
 import type { ProgramGateway } from "./ProgramGateway";
 
 export const tauriProgramGateway: ProgramGateway = {
-  parse: (request: ProgramParseRequest) =>
-    invoke<GcodeProgram>("parse_gcode_program", { request }),
+  parse: (request: ProgramParseRequest, options?: ProgramParseOptions) =>
+    invoke<GcodeProgram>("parse_gcode_program", { request, options }),
 };

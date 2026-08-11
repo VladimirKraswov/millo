@@ -1780,6 +1780,46 @@ select:focus-visible {
   background: #1c4939;
 }
 
+.program-execution-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  border-bottom: 1px solid #27323a;
+}
+
+.program-execution-options label {
+  display: flex;
+  min-width: 0;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 9px;
+  color: #8e9aa1;
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.program-execution-options label + label {
+  border-left: 1px solid #27323a;
+}
+
+.program-execution-options label:has(input:disabled) {
+  opacity: 0.48;
+  cursor: default;
+}
+
+.program-execution-options input {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  accent-color: #69cfaa;
+}
+
+.program-execution-options span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .program-run-mode-summary {
   display: flex;
   min-height: 42px;
@@ -2228,6 +2268,19 @@ button.real-run-check:hover {
 
 .program-line-row.is-comment {
   color: #6f7c84;
+}
+
+.program-line-row.is-optional {
+  box-shadow: inset 2px 0 #6b7780;
+}
+
+.program-line-row.is-block-deleted {
+  color: #66737a;
+  background: #0d1317;
+}
+
+.program-line-row.is-block-deleted > code {
+  text-decoration: line-through;
 }
 
 .program-line-number {

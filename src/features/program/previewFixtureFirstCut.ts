@@ -74,6 +74,7 @@ const preparation: FirstCutPreparation = {
     programFingerprint: previewFixtureFirstCutReport.programFingerprint,
     pollSequence: 43,
     intent: "airRun",
+    executionOptions: { optionalStop: false, blockDelete: false },
   },
 };
 
@@ -82,13 +83,14 @@ let fixtureSourceName = previewFixtureFirstCutProgram.sourceName;
 const fixtureIsAirSquare = () => fixtureSourceName === "air-square-20mm.nc";
 
 export const previewFixtureFirstCutGateway: RealRunPreflightGateway = {
-  preflight: async (request, intent) => {
+  preflight: async (request, intent, executionOptions) => {
     fixtureIntent = intent;
     fixtureSourceName = request.sourceName;
     return {
       ...previewFixtureFirstCutReport,
       sourceName: fixtureSourceName,
       intent,
+      executionOptions,
       bounds: fixtureIsAirSquare()
         ? {
             min: { x: 0, y: 0, z: 0 },
@@ -106,11 +108,13 @@ export const previewFixtureFirstCutGateway: RealRunPreflightGateway = {
         ...preparation.report,
         sourceName: fixtureSourceName,
         intent: confirmation.intent,
+        executionOptions: confirmation.executionOptions,
       },
       authorization: {
         ...preparation.authorization,
         sourceName: fixtureSourceName,
         intent: confirmation.intent,
+        executionOptions: confirmation.executionOptions,
       },
     };
   },

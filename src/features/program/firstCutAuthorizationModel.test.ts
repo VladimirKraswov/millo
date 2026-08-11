@@ -11,6 +11,7 @@ import {
 
 const complete: FirstCutConfirmation = {
   intent: "cutting",
+  executionOptions: { optionalStop: false, blockDelete: false },
   stockSecured: true,
   toolSecured: true,
   toolRemoved: false,

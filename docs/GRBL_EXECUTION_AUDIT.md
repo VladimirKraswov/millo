@@ -14,7 +14,9 @@
 | G64 | Rejected before execution | Physical controller returns `error:20`; parser reports a blocking error | Blocked | Blocked |
 | G90/G91/G91.1 | Yes | Yes | Yes | Yes |
 | G93/G94 | Yes, with time estimates | Yes | Yes | Yes |
-| M0/M1 | Program barrier | Validated without operator pause | Sender pause state | Sender pause state |
+| M0/M1 | M0 barrier; M1 conditional on explicit Optional Stop | M0 validated; M1 sent only when Optional Stop is enabled | M0 pause; optional M1 pause | M0 pause; optional M1 pause |
+| Leading `/` | Retained; modal state and geometry depend on Block Delete | Included or omitted by explicit option | Included or omitted by authorized option | Included or omitted by authorized option |
+| `N...*checksum` | Decimal XOR checked before normalization; N retained, checksum removed | Yes | Yes | Yes |
 | M2/M30 | Program end barrier | Yes | Deferred until fresh Idle | Deferred until fresh Idle |
 | M3/M4/S/M5 | Parsed and marked | Yes under Cutting grammar | Start/speed blocked; M5 allowed | Yes after Cutting authorization |
 | M9 | Yes | Yes | Yes | Yes |
@@ -30,7 +32,11 @@
 - Preconditions: selected profile, serial target, connected stable state, fresh
   Inspector, explicit modal contract, policy-approved immutable parse result.
 - Authorization: intent, program SHA-256, controller session, observed position,
-  30-second expiry, atomic one-time consume.
+  execution options, 30-second expiry, atomic one-time consume.
+- Optional semantics: Block Delete is applied during parsing, not by dropping
+  text at dispatch; Optional Stop and Block Delete are included in preflight,
+  confirmation and the consumed lease. Preview is reparsed when Block Delete
+  changes.
 - Dispatch: reported RX capacity minus one byte, exact command/newline accounting,
   oldest-command FIFO, periodic realtime status.
 - Timing: per-line millisecond estimate, correlated completed/remaining totals,
@@ -63,6 +69,10 @@ On `/dev/cu.usbmodem11101`, GRBL `1.1f.20230316`:
 - `grbl-tool-change-check.nc`: 16/16 sender steps completed on 2026-08-12.
   Physical GRBL validated `T2` and mixed geometry, Millo acknowledged the M6
   barrier locally, and the controller returned to Idle.
+- `grbl-stream-semantics-check.nc`: 8/8 sender steps completed on 2026-08-12
+  with Optional Stop and Block Delete enabled. Host checksum validation passed,
+  the optional `N30` block was absent from the wire, `N50 M1` was accepted, and
+  the controller returned from Check to Idle.
 - `air-square-20mm.nc`: 10/10 physical Air run, planner drained, WPos returned
   to XYZ zero.
 - Realtime override smoke: observed `Ov:110,50,99`, then verified restore to

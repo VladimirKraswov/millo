@@ -3,6 +3,16 @@ import type { ProgramBounds, ProgramParseRequest } from "./program";
 
 export type ProgramRunIntent = "airRun" | "cutting";
 
+export interface ProgramExecutionOptions {
+  readonly optionalStop: boolean;
+  readonly blockDelete: boolean;
+}
+
+export const defaultProgramExecutionOptions: ProgramExecutionOptions = {
+  optionalStop: false,
+  blockDelete: false,
+};
+
 export type RunPreflightLevel = "pass" | "caution" | "blocker";
 
 export interface RunPreflightCheck {
@@ -22,6 +32,7 @@ export interface RunPreflightReport {
   readonly sourceName: string;
   readonly programFingerprint: string;
   readonly intent: ProgramRunIntent;
+  readonly executionOptions: ProgramExecutionOptions;
   readonly ready: boolean;
   readonly blockerCount: number;
   readonly cautionCount: number;
@@ -35,6 +46,7 @@ export interface RunPreflightReport {
 
 export interface FirstCutConfirmation {
   readonly intent: ProgramRunIntent;
+  readonly executionOptions: ProgramExecutionOptions;
   readonly stockSecured: boolean;
   readonly toolSecured: boolean;
   readonly toolRemoved: boolean;
@@ -53,6 +65,7 @@ export interface FirstCutAuthorization {
   readonly programFingerprint: string;
   readonly pollSequence: number;
   readonly intent: ProgramRunIntent;
+  readonly executionOptions: ProgramExecutionOptions;
 }
 
 export interface FirstCutPreparation {
@@ -75,6 +88,7 @@ export interface RealRunPreflightGateway {
   preflight(
     request: ProgramParseRequest,
     intent: ProgramRunIntent,
+    executionOptions: ProgramExecutionOptions,
   ): Promise<RunPreflightReport>;
   authorizeFirstCut(
     request: ProgramParseRequest,
@@ -83,9 +97,11 @@ export interface RealRunPreflightGateway {
   startProgram(
     request: ProgramParseRequest,
     authorizationId: number,
+    executionOptions: ProgramExecutionOptions,
   ): Promise<import("./dryRun").SenderSnapshot>;
   startCheck(
     request: ProgramParseRequest,
+    executionOptions: ProgramExecutionOptions,
   ): Promise<import("./dryRun").SenderSnapshot>;
   resumeProgram(): Promise<import("./dryRun").SenderSnapshot>;
   completeToolChange(

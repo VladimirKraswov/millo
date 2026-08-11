@@ -5,7 +5,8 @@ use millo_domain::{
     SpindleControl,
 };
 use millo_dry_run::{
-    DryRunBlocker, DryRunBlockerKind, DryRunPolicyError, ProgramRunPolicy, build_program_run_plan,
+    DryRunBlocker, DryRunBlockerKind, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy,
+    build_program_run_plan_with_options,
 };
 use millo_gcode::{GcodeProgram, ProgramBounds, ToolpathKind};
 use serde::{Deserialize, Serialize};
@@ -28,6 +29,8 @@ pub enum ProgramRunIntent {
 #[serde(rename_all = "camelCase")]
 pub struct FirstCutConfirmation {
     pub intent: ProgramRunIntent,
+    #[serde(default)]
+    pub execution_options: ProgramExecutionOptions,
     pub stock_secured: bool,
     pub tool_secured: bool,
     pub tool_removed: bool,
@@ -121,6 +124,7 @@ pub struct FirstCutAuthorization {
     pub program_fingerprint: String,
     pub poll_sequence: u64,
     pub intent: ProgramRunIntent,
+    pub execution_options: ProgramExecutionOptions,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -133,6 +137,7 @@ pub struct FirstCutPreparation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConsumedFirstCutAuthorization {
     pub intent: ProgramRunIntent,
+    pub execution_options: ProgramExecutionOptions,
     pub reported_rx_buffer_bytes: Option<u16>,
 }
 
@@ -204,6 +209,9 @@ impl FirstCutGate {
         if report.intent != confirmation.intent {
             return Err(FirstCutAuthorizationError::StalePreflightEvidence);
         }
+        if report.execution_options != confirmation.execution_options {
+            return Err(FirstCutAuthorizationError::StalePreflightEvidence);
+        }
         ensure_stable_idle(snapshot)?;
         if snapshot.machine.machine_position.is_none() && snapshot.machine.work_position.is_none() {
             return Err(FirstCutAuthorizationError::ControllerPositionUnavailable);
@@ -217,6 +225,7 @@ impl FirstCutGate {
             program_fingerprint: report.program_fingerprint.clone(),
             poll_sequence: report.poll_sequence,
             intent: confirmation.intent,
+            execution_options: confirmation.execution_options,
         };
         self.lease = Some(FirstCutLease {
             authorization: authorization.clone(),
@@ -272,6 +281,7 @@ impl FirstCutGate {
         }
         Ok(ConsumedFirstCutAuthorization {
             intent: lease.authorization.intent,
+            execution_options: lease.authorization.execution_options,
             reported_rx_buffer_bytes: lease.reported_rx_buffer_bytes,
         })
     }
@@ -334,6 +344,7 @@ pub struct RunPreflightReport {
     pub source_name: String,
     pub program_fingerprint: String,
     pub intent: ProgramRunIntent,
+    pub execution_options: ProgramExecutionOptions,
     pub ready: bool,
     pub blocker_count: usize,
     pub caution_count: usize,
@@ -351,6 +362,22 @@ pub fn assess_real_run_preflight(
     hardware: HardwareInspection,
     snapshot: &ControllerSnapshot,
     intent: ProgramRunIntent,
+) -> RunPreflightReport {
+    assess_real_run_preflight_with_options(
+        program,
+        hardware,
+        snapshot,
+        intent,
+        ProgramExecutionOptions::default(),
+    )
+}
+
+pub fn assess_real_run_preflight_with_options(
+    program: &GcodeProgram,
+    hardware: HardwareInspection,
+    snapshot: &ControllerSnapshot,
+    intent: ProgramRunIntent,
+    execution_options: ProgramExecutionOptions,
 ) -> RunPreflightReport {
     let mut checks = Vec::new();
     let stable_idle = snapshot.connection == ConnectionState::Connected
@@ -405,11 +432,12 @@ pub fn assess_real_run_preflight(
         ProgramRunIntent::AirRun => ProgramRunPolicy::AirRun,
         ProgramRunIntent::Cutting => ProgramRunPolicy::Cutting,
     };
-    let (policy_blockers, empty_program) = match build_program_run_plan(program, policy) {
-        Ok(_) => (Vec::new(), false),
-        Err(DryRunPolicyError::Rejected(_, blockers)) => (blockers, false),
-        Err(DryRunPolicyError::EmptyProgram) => (Vec::new(), true),
-    };
+    let (policy_blockers, empty_program) =
+        match build_program_run_plan_with_options(program, policy, execution_options) {
+            Ok(_) => (Vec::new(), false),
+            Err(DryRunPolicyError::Rejected(_, blockers)) => (blockers, false),
+            Err(DryRunPolicyError::EmptyProgram) => (Vec::new(), true),
+        };
     let first_policy_blocker = policy_blockers.first();
     checks.push(check(
         "program-policy",
@@ -553,6 +581,7 @@ pub fn assess_real_run_preflight(
         source_name: program.source_name.clone(),
         program_fingerprint: program_fingerprint(program),
         intent,
+        execution_options,
         ready: blocker_count == 0,
         blocker_count,
         caution_count,
@@ -568,6 +597,7 @@ pub fn assess_real_run_preflight(
 pub fn program_fingerprint(program: &GcodeProgram) -> String {
     let mut digest = Sha256::new();
     update_digest_field(&mut digest, program.source_name.as_bytes());
+    update_digest_field(&mut digest, &[u8::from(program.block_delete_enabled)]);
     for line in &program.lines {
         update_digest_field(&mut digest, line.source.as_bytes());
     }
@@ -702,6 +732,7 @@ fn last_modal_code(program: &GcodeProgram, through_line: usize, family: &[u16]) 
     for line in program
         .lines
         .iter()
+        .filter(|line| !line.block_deleted)
         .take_while(|line| line.source_line <= through_line)
     {
         for word in line.normalized.split_whitespace() {
@@ -745,7 +776,9 @@ mod tests {
         ControllerCapabilities, ControllerSnapshot, DeviceInspection, HardwareProfile,
         MachineState, ReadinessCheck, ReadinessReport,
     };
-    use millo_gcode::{ProgramParseRequest, parse_program};
+    use millo_gcode::{
+        ProgramParseOptions, ProgramParseRequest, parse_program, parse_program_with_options,
+    };
 
     use super::*;
 
@@ -816,6 +849,7 @@ mod tests {
     fn first_cut_confirmation() -> FirstCutConfirmation {
         FirstCutConfirmation {
             intent: ProgramRunIntent::Cutting,
+            execution_options: ProgramExecutionOptions::default(),
             stock_secured: true,
             tool_secured: true,
             tool_removed: false,
@@ -831,6 +865,7 @@ mod tests {
     fn air_run_confirmation() -> FirstCutConfirmation {
         FirstCutConfirmation {
             intent: ProgramRunIntent::AirRun,
+            execution_options: ProgramExecutionOptions::default(),
             stock_secured: false,
             tool_secured: false,
             tool_removed: true,
@@ -1104,7 +1139,95 @@ mod tests {
             .unwrap();
 
         assert_eq!(consumed.intent, ProgramRunIntent::Cutting);
+        assert_eq!(
+            consumed.execution_options,
+            ProgramExecutionOptions::default()
+        );
         assert_eq!(consumed.reported_rx_buffer_bytes, Some(256));
+    }
+
+    #[test]
+    fn authorization_binds_optional_stop_and_block_delete_semantics() {
+        let now = Instant::now();
+        let snapshot = snapshot(MachineMode::Idle);
+        let options = ProgramExecutionOptions {
+            optional_stop: true,
+            block_delete: true,
+        };
+        let parsed = parse_program_with_options(
+            ProgramParseRequest {
+                source_name: "optional.nc".to_owned(),
+                source: "G21 G90 G94\n/G91\nG1 X10 F10\nM1\nG1 X20".to_owned(),
+            },
+            ProgramParseOptions { block_delete: true },
+        )
+        .unwrap();
+        let report = assess_real_run_preflight_with_options(
+            &parsed,
+            hardware(Vec::new()),
+            &snapshot,
+            ProgramRunIntent::Cutting,
+            options,
+        );
+        assert!(report.ready);
+        let mut confirmation = first_cut_confirmation();
+        confirmation.execution_options = options;
+        let mut gate = FirstCutGate::default();
+        let authorization = gate
+            .authorize(confirmation, &report, &snapshot, now)
+            .unwrap();
+        let consumed = gate
+            .consume(
+                authorization.id,
+                &report.program_fingerprint,
+                &snapshot,
+                now,
+            )
+            .unwrap();
+
+        assert_eq!(authorization.execution_options, options);
+        assert_eq!(consumed.execution_options, options);
+
+        let mut mismatched = confirmation;
+        mismatched.execution_options.optional_stop = false;
+        assert_eq!(
+            gate.authorize(mismatched, &report, &snapshot, now),
+            Err(FirstCutAuthorizationError::StalePreflightEvidence)
+        );
+    }
+
+    #[test]
+    fn block_delete_is_part_of_the_program_fingerprint_and_modal_contract() {
+        let request = ProgramParseRequest {
+            source_name: "optional-modal.nc".to_owned(),
+            source: "/G21\nG90 G94\nG1 X10 F10".to_owned(),
+        };
+        let included = parse_program(request.clone()).unwrap();
+        let deleted =
+            parse_program_with_options(request, ProgramParseOptions { block_delete: true })
+                .unwrap();
+
+        assert_ne!(
+            program_fingerprint(&included),
+            program_fingerprint(&deleted)
+        );
+        let report = assess_real_run_preflight_with_options(
+            &deleted,
+            hardware(Vec::new()),
+            &snapshot(MachineMode::Idle),
+            ProgramRunIntent::Cutting,
+            ProgramExecutionOptions {
+                optional_stop: false,
+                block_delete: true,
+            },
+        );
+        let modal = report
+            .checks
+            .iter()
+            .find(|item| item.id == "program-modal-contract")
+            .unwrap();
+        assert_eq!(modal.level, RunPreflightLevel::Blocker);
+        assert!(modal.detail.contains("G21"));
     }
 
     #[test]

@@ -5,6 +5,7 @@ import type {
 
 export const emptyFirstCutConfirmation: FirstCutConfirmation = {
   intent: "airRun",
+  executionOptions: { optionalStop: false, blockDelete: false },
   stockSecured: false,
   toolSecured: false,
   toolRemoved: false,
@@ -32,7 +33,9 @@ const cuttingConfirmationKeys = [
 
 export const firstCutConfirmationKeys = (
   intent: FirstCutConfirmation["intent"],
-): ReadonlyArray<Exclude<keyof FirstCutConfirmation, "intent">> => [
+): ReadonlyArray<
+  Exclude<keyof FirstCutConfirmation, "intent" | "executionOptions">
+> => [
   ...commonConfirmationKeys,
   ...(intent === "airRun" ? airRunConfirmationKeys : cuttingConfirmationKeys),
 ];

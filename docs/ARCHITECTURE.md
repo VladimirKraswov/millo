@@ -85,8 +85,9 @@ Original source -> typed Tauri command -> Rust reparse -> Cutting policy
                                                    -> verified $C exit -> Idle
 ```
 
-The UI cannot pass a prepared plan or toggle `$C`. M0/M1 are syntax-validation
-lines in this mode and do not enter the physical-run operator pause state.
+The UI cannot pass a prepared plan or toggle `$C`. M0 is a syntax-validation
+line in this mode; M1 is sent only when Optional Stop is enabled. Neither enters
+the physical-run operator pause state while GRBL is in Check.
 
 ## Rules
 
@@ -311,7 +312,8 @@ does not schedule or execute controller I/O.
   the matching lease, and starts the shared bounded-RX state machine in one
   actor request. Authorization alone still emits no program command.
 - `SenderSnapshot.mode` distinguishes `mockDryRun`, `checkRun`, `airRun`, and `cutRun`
-  without creating separate implementations. `M0/M1` pause after `ok`;
+  without creating separate implementations. `M0` pauses after `ok`; `M1`
+  does so only when Optional Stop was bound into the plan;
   `M2/M30` terminate dispatch. For physical modes the terminal line is retained
   as an unsent barrier while the sender enters `Draining`; a fresh `Idle`
   dispatches it and only its `ok` permits completion. Hold/Resume and Reset stay
@@ -482,6 +484,19 @@ does not schedule or execute controller I/O.
 - Sender failures are typed at the controller boundary. GRBL error/alarm/reset,
   timeout, disconnect, transport, unsafe-state, and internal faults retain the
   exact source line and command after buffered state is cleared.
+- Stream-control syntax is interpreted before a plan exists. A final decimal
+  `*checksum` is XOR-validated against the exact pre-separator source bytes; a
+  mismatch, malformed value, duplicate separator, or checksummed block without
+  a leading `N` is a parser error. The verified checksum is not sent to GRBL.
+- A leading `/` marks an optional block. Block Delete is applied inside the
+  parser so skipped modal commands cannot affect later preview geometry. The UI
+  requests a complete Rust reparse when this option changes.
+- `M0` is an unconditional empty-FIFO host pause. `M1` is either the same pause
+  or is omitted, according to Optional Stop. Both must be isolated from other
+  behavior so the host barrier is unambiguous.
+- Optional Stop and Block Delete travel together through policy, preflight,
+  operator confirmation, program fingerprint, and the atomically consumed
+  first-cut lease. Sender code cannot reinterpret them after authorization.
 
 ### Extension host boundary
 

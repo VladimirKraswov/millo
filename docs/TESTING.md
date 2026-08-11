@@ -245,6 +245,15 @@ port names remain untouched.
   completion repeats fresh status, Inspector, G54-G59, and final status checks.
 - TypeScript tests bind all six operator facts to the exact line/tool dialog;
   sender read models keep `toolChange` active and non-restartable.
+- Parser fixtures validate exact XOR checksums before normalization, reject
+  corrupt or ambiguous checksums, preserve leading `/`, and prove that deleting
+  an optional modal block changes all following geometry. Policy and sender
+  tests independently cover M1 enabled/disabled and Block Delete enabled/disabled.
+- Lease tests reject an execution-option mismatch and prove that the consumed
+  authorization carries the exact Optional Stop and Block Delete values. The
+  Tauri parser adapter verifies that Block Delete changes preview bounds, while
+  the actor fixture checks exact Check-mode writes and confirms neither deleted
+  blocks nor checksum suffixes reach GRBL.
 - Delayed-response fixtures prove Feed Hold is serviced within one 10 ms read
   slice instead of waiting for the command timeout. A separate fixture injects
   realtime status ahead of a delayed `ok`, verifies live `Bf/Ov` telemetry, and
@@ -326,6 +335,20 @@ can reach the sender.
 cargo run -p millo-desktop --example hardware_check_run -- \
   /dev/cu.usbmodem11101 fixtures/programs/grbl-tool-change-check.nc
 ```
+
+- `grbl-stream-semantics-check.nc` uses a validated checksum on every line,
+  one optional motion block and M1. The two options can be exercised without
+  physical motion through GRBL Check:
+
+```bash
+cargo run -p millo-desktop --example hardware_check_run -- \
+  /dev/cu.usbmodem11101 fixtures/programs/grbl-stream-semantics-check.nc \
+  --optional-stop --block-delete
+```
+
+On 2026-08-12 the physical controller accepted all 8/8 sender steps with both
+options enabled and returned to `Idle`. The parser reported two motions because
+the optional `N30` block was removed before modal/geometry construction.
 
 - The React check-run read model requires a loaded program, typed gateway, and
   serial target and refuses to replace an active sender. Program workspace

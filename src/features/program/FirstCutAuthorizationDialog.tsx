@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import type {
   FirstCutConfirmation,
   FirstCutPreparation,
+  ProgramExecutionOptions,
   ProgramRunIntent,
   RunPreflightReport,
 } from "../../shared/realRun";
@@ -23,6 +24,7 @@ import {
 interface FirstCutAuthorizationDialogProps {
   readonly open: boolean;
   readonly intent: ProgramRunIntent;
+  readonly executionOptions: ProgramExecutionOptions;
   readonly report?: RunPreflightReport;
   readonly onAuthorize: (
     confirmation: FirstCutConfirmation,
@@ -33,7 +35,10 @@ interface FirstCutAuthorizationDialogProps {
   readonly onClose: () => void;
 }
 
-type ConfirmationKey = Exclude<keyof FirstCutConfirmation, "intent">;
+type ConfirmationKey = Exclude<
+  keyof FirstCutConfirmation,
+  "intent" | "executionOptions"
+>;
 
 const commonChecklist: ReadonlyArray<{
   key: ConfirmationKey;
@@ -104,6 +109,7 @@ const airRunChecklist: ReadonlyArray<{
 export function FirstCutAuthorizationDialog({
   open,
   intent,
+  executionOptions,
   report,
   onAuthorize,
   onAuthorized,
@@ -120,11 +126,11 @@ export function FirstCutAuthorizationDialog({
 
   useEffect(() => {
     if (!open) return;
-    setConfirmation({ ...emptyFirstCutConfirmation, intent });
+    setConfirmation({ ...emptyFirstCutConfirmation, intent, executionOptions });
     setBusy(false);
     setError(undefined);
     setPreparation(undefined);
-  }, [open, intent, report?.programFingerprint]);
+  }, [executionOptions, open, intent, report?.programFingerprint]);
 
   if (!open) return null;
 

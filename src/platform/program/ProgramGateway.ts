@@ -1,5 +1,12 @@
-import type { GcodeProgram, ProgramParseRequest } from "../../shared/program";
+import type {
+  GcodeProgram,
+  ProgramParseOptions,
+  ProgramParseRequest,
+} from "../../shared/program";
 
 export interface ProgramGateway {
-  parse(request: ProgramParseRequest): Promise<GcodeProgram>;
+  parse(
+    request: ProgramParseRequest,
+    options?: ProgramParseOptions,
+  ): Promise<GcodeProgram>;
 }

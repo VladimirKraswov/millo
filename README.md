@@ -162,8 +162,15 @@ Feed, rapid, and spindle overrides are exposed as typed actor/Tauri operations
 and map only to GRBL 1.1 realtime bytes. They remain responsive while a line is
 in flight and are verified through the parsed `Ov:` status field. This surface
 cannot start a spindle, submit a line, or bypass sender authorization.
-`M0/M1` are acknowledged program barriers; `M2/M30` end dispatch. After the
-final `ok`, physical runs enter `Draining` and complete only after a fresh GRBL
+`M0` is always an acknowledged program barrier. `M1` becomes a barrier only
+when Optional Stop is enabled; otherwise it is omitted locally. Leading `/`
+blocks are conditional on Block Delete. Changing Block Delete reparses the
+original source in Rust, so preview geometry, modal state, bounds, preflight,
+fingerprint, authorization, and sender plan describe the same program. Decimal
+XOR checksums are verified against untouched source bytes before normalization,
+then removed because GRBL 1.1 does not consume that transport syntax. Corrupt
+or ambiguous checksums fail closed. `M2/M30` end dispatch. After the final `ok`,
+physical runs enter `Draining` and complete only after a fresh GRBL
 `Idle` status. Feed Hold uses realtime `!`, Resume uses `~` when GRBL reports
 Hold, and an operator stop remains challenge-confirmed. A physical `error`,
 `ALARM`, response timeout, or write failure automatically sends Hold then Soft
@@ -182,9 +189,9 @@ Check uses Cutting grammar, so production `M3/M4/S` syntax can be firmware-
 validated while Air policy continues to reject it. A second physical fixture
 passed 26/26 lines, including validation-only M0/M1, and returned to Idle.
 Program workspace exposes this lifecycle through typed `GRBL Check`; Tauri
-reparses the retained source before the actor enters `$C`. Unsupported optional-block and checksum
-syntax now fails closed instead of being stripped into a different command;
-metadata-only `O` program headers are retained but never sent.
+reparses the retained source before the actor enters `$C`. Optional-block and
+checksum semantics are covered by the same Check path; metadata-only `O`
+program headers are retained but never sent.
 
 The execution-core differences from the Candle reference, the problem each one
 solves, and the remaining deliberate capability gates are maintained in

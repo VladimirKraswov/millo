@@ -1,6 +1,6 @@
 use millo_gcode::{
-    ProgramParseError, ProgramParseRequest, ProgramWarningCode, ProgramWarningSeverity,
-    ToolpathKind, parse_program,
+    ProgramParseError, ProgramParseOptions, ProgramParseRequest, ProgramWarningCode,
+    ProgramWarningSeverity, ToolpathKind, parse_program, parse_program_with_options,
 };
 
 fn parse_fixture(name: &str, source: &str) -> millo_gcode::GcodeProgram {
@@ -184,25 +184,76 @@ fn accepts_common_program_headers_and_modal_cancels() {
 }
 
 #[test]
-fn fails_closed_instead_of_rewriting_stream_control_syntax() {
-    for (name, source, expected) in [
-        (
-            "optional-block.nc",
-            "G21 G90 G94\n/G1 X1 F10",
-            ProgramWarningCode::OptionalBlockUnsupported,
-        ),
-        (
-            "checksummed.nc",
-            "G21 G90 G94\nN2 G1 X1 F10*42",
-            ProgramWarningCode::ChecksumUnsupported,
-        ),
+fn preserves_optional_blocks_and_validates_checksums_before_normalization() {
+    let optional = parse_fixture("optional-block.nc", "G21 G90 G94\n/G1 X1 F10");
+    assert!(optional.summary.dry_run_eligible);
+    assert!(optional.lines[1].optional_block);
+    assert!(!optional.lines[1].block_deleted);
+    assert_eq!(optional.lines[1].normalized, "G1 X1 F10");
+    assert!(optional.toolpath[0].optional_block);
+
+    let payload = "N2 G1 X1 F10";
+    let checksum = payload
+        .as_bytes()
+        .iter()
+        .fold(0u8, |value, byte| value ^ byte);
+    let checksummed = parse_fixture("checksummed.nc", &format!("{payload}*{checksum}"));
+    assert!(checksummed.summary.dry_run_eligible);
+    assert_eq!(checksummed.lines[0].checksum, Some(checksum));
+    assert_eq!(checksummed.lines[0].normalized, payload);
+    assert!(checksummed.warnings.iter().any(|warning| {
+        warning.code == ProgramWarningCode::ChecksumValidated
+            && warning.severity == ProgramWarningSeverity::Warning
+    }));
+}
+
+#[test]
+fn block_delete_changes_parser_state_instead_of_only_dropping_sender_text() {
+    let source = "G21 G90 G94\n/G91\nG1 X10 F10\nG1 X20";
+    let included = parse_fixture("optional-modal.nc", source);
+    let deleted = parse_program_with_options(
+        ProgramParseRequest {
+            source_name: "optional-modal.nc".to_owned(),
+            source: source.to_owned(),
+        },
+        ProgramParseOptions { block_delete: true },
+    )
+    .unwrap();
+
+    assert_eq!(
+        included.toolpath.last().unwrap().points.last().unwrap().x,
+        30.0
+    );
+    assert_eq!(
+        deleted.toolpath.last().unwrap().points.last().unwrap().x,
+        20.0
+    );
+    assert!(deleted.block_delete_enabled);
+    assert!(deleted.lines[1].block_deleted);
+    assert!(deleted.lines[1].optional_block);
+}
+
+#[test]
+fn corrupted_or_ambiguous_stream_integrity_syntax_fails_closed() {
+    for source in [
+        "N2 G1 X1 F10*42",
+        "G1 X1 F10*0",
+        "N2 G1 X1 F10*999",
+        "N2 G1 X1 F10*1*2",
+        "G1 /X1 F10",
     ] {
-        let program = parse_fixture(name, source);
-        assert!(!program.summary.dry_run_eligible, "{name}");
+        let program = parse_fixture("bad-stream.nc", source);
+        assert!(!program.summary.dry_run_eligible, "{source}");
         assert!(program.warnings.iter().any(|warning| {
-            warning.code == expected && warning.severity == ProgramWarningSeverity::Error
+            matches!(
+                warning.code,
+                ProgramWarningCode::ChecksumInvalid | ProgramWarningCode::OptionalBlockUnsupported
+            ) && warning.severity == ProgramWarningSeverity::Error
         }));
     }
+
+    let comment = parse_fixture("comment-star.nc", "G21 (not a *checksum)\nG90");
+    assert!(comment.summary.dry_run_eligible);
 }
 
 #[test]

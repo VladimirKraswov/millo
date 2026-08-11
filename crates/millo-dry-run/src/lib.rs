@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use millo_gcode::{GcodeProgram, ProgramWarningCode, ProgramWarningSeverity};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const MAX_DRY_RUN_COMMAND_BYTES: usize = 255;
@@ -12,6 +12,13 @@ pub enum ProgramRunPolicy {
     #[default]
     AirRun,
     Cutting,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramExecutionOptions {
+    pub optional_stop: bool,
+    pub block_delete: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -43,6 +50,7 @@ pub enum DryRunLineKind {
     SafetyPreamble,
     Program,
     ProgramPause,
+    OptionalPause,
     ToolChange,
     ProgramEnd,
 }
@@ -87,6 +95,7 @@ pub struct DryRunPlan {
     lines: Vec<DryRunLine>,
     estimated_total_ms: u64,
     time_estimate_complete: bool,
+    execution_options: ProgramExecutionOptions,
 }
 
 impl DryRunPlan {
@@ -108,6 +117,10 @@ impl DryRunPlan {
 
     pub fn time_estimate_complete(&self) -> bool {
         self.time_estimate_complete
+    }
+
+    pub fn execution_options(&self) -> ProgramExecutionOptions {
+        self.execution_options
     }
 }
 
@@ -136,8 +149,26 @@ pub fn build_program_run_plan(
     program: &GcodeProgram,
     policy: ProgramRunPolicy,
 ) -> Result<DryRunPlan, DryRunPolicyError> {
+    build_program_run_plan_with_options(program, policy, ProgramExecutionOptions::default())
+}
+
+pub fn build_program_run_plan_with_options(
+    program: &GcodeProgram,
+    policy: ProgramRunPolicy,
+    execution_options: ProgramExecutionOptions,
+) -> Result<DryRunPlan, DryRunPolicyError> {
     let mut blockers = Vec::new();
     let mut seen = BTreeSet::new();
+
+    if program.block_delete_enabled != execution_options.block_delete {
+        add_blocker(
+            &mut blockers,
+            &mut seen,
+            None,
+            DryRunBlockerKind::UnsupportedProgram,
+            "program parse and sender disagree about Block Delete",
+        );
+    }
 
     if !program.summary.preview_complete {
         add_blocker(
@@ -149,7 +180,11 @@ pub fn build_program_run_plan(
         );
     }
 
-    for line in program.lines.iter().filter(|line| line.executable) {
+    for line in program
+        .lines
+        .iter()
+        .filter(|line| line.executable && !line.block_deleted)
+    {
         inspect_normalized_line(
             line.source_line,
             &line.normalized,
@@ -211,9 +246,12 @@ pub fn build_program_run_plan(
     for line in program
         .lines
         .iter()
-        .filter(|line| line.executable && !line.normalized.is_empty())
+        .filter(|line| line.executable && !line.block_deleted && !line.normalized.is_empty())
     {
         let kind = classify_line(&line.normalized);
+        if kind == DryRunLineKind::OptionalPause && !execution_options.optional_stop {
+            continue;
+        }
         if let Some(tool_number) = tool_number(&line.normalized) {
             selected_tool = Some(tool_number);
             if kind == DryRunLineKind::ToolChange {
@@ -270,6 +308,7 @@ pub fn build_program_run_plan(
         lines,
         estimated_total_ms,
         time_estimate_complete,
+        execution_options,
     })
 }
 
@@ -414,6 +453,27 @@ fn inspect_normalized_line(
             }
         }
     }
+    for pause_code in [0.0, 1.0] {
+        if !has_code(normalized, 'M', pause_code) {
+            continue;
+        }
+        for word in normalized.split_whitespace() {
+            let Some((letter, value)) = split_word(word) else {
+                continue;
+            };
+            let allowed = letter == 'N' || (letter == 'M' && code_is(value, pause_code));
+            if !allowed {
+                add_blocker(
+                    blockers,
+                    seen,
+                    Some(source_line),
+                    DryRunBlockerKind::UnsupportedProgram,
+                    format!("M{pause_code:.0} must be isolated so its host pause is unambiguous"),
+                );
+                break;
+            }
+        }
+    }
 }
 
 fn warning_allowed_by_policy(
@@ -431,7 +491,7 @@ fn warning_allowed_by_policy(
 }
 
 fn classify_line(normalized: &str) -> DryRunLineKind {
-    let mut pause = false;
+    let mut pause = None;
     for word in normalized.split_whitespace() {
         let Some(('M', value)) = split_word(word) else {
             continue;
@@ -443,14 +503,14 @@ fn classify_line(normalized: &str) -> DryRunLineKind {
             return DryRunLineKind::ToolChange;
         }
         if code_is(value, 0.0) || code_is(value, 1.0) {
-            pause = true;
+            pause = Some(if code_is(value, 0.0) {
+                DryRunLineKind::ProgramPause
+            } else {
+                DryRunLineKind::OptionalPause
+            });
         }
     }
-    if pause {
-        DryRunLineKind::ProgramPause
-    } else {
-        DryRunLineKind::Program
-    }
+    pause.unwrap_or(DryRunLineKind::Program)
 }
 
 fn has_code(normalized: &str, letter: char, expected: f64) -> bool {
@@ -500,7 +560,9 @@ fn add_blocker(
 
 #[cfg(test)]
 mod tests {
-    use millo_gcode::{ProgramParseRequest, parse_program};
+    use millo_gcode::{
+        ProgramParseOptions, ProgramParseRequest, parse_program, parse_program_with_options,
+    };
 
     use super::*;
 
@@ -509,6 +571,17 @@ mod tests {
             source_name: "fixture.nc".to_owned(),
             source: source.to_owned(),
         })
+        .unwrap()
+    }
+
+    fn parse_with_block_delete(source: &str) -> GcodeProgram {
+        parse_program_with_options(
+            ProgramParseRequest {
+                source_name: "fixture.nc".to_owned(),
+                source: source.to_owned(),
+            },
+            ProgramParseOptions { block_delete: true },
+        )
         .unwrap()
     }
 
@@ -670,6 +743,63 @@ mod tests {
                 .iter()
                 .any(|line| line.command().contains("X99"))
         );
+    }
+
+    #[test]
+    fn optional_stop_and_block_delete_are_independent_host_options() {
+        let source = "G21 G90 G94\n/G1 X1 F10\nM1\nG1 X2 F10\nM30";
+        let default = build_program_run_plan(&parse(source), ProgramRunPolicy::Cutting).unwrap();
+        assert!(
+            default
+                .lines()
+                .iter()
+                .any(|line| line.command() == "G1 X1 F10")
+        );
+        assert!(!default.lines().iter().any(|line| line.command() == "M1"));
+
+        let options = ProgramExecutionOptions {
+            optional_stop: true,
+            block_delete: true,
+        };
+        let configured = build_program_run_plan_with_options(
+            &parse_with_block_delete(source),
+            ProgramRunPolicy::Cutting,
+            options,
+        )
+        .unwrap();
+        assert!(
+            !configured
+                .lines()
+                .iter()
+                .any(|line| line.command() == "G1 X1 F10")
+        );
+        assert!(configured.lines().iter().any(|line| {
+            line.command() == "M1" && line.kind() == DryRunLineKind::OptionalPause
+        }));
+        assert_eq!(configured.execution_options(), options);
+    }
+
+    #[test]
+    fn rejects_ambiguous_pause_blocks_and_parse_option_mismatch() {
+        for source in ["M0 G1 X1 F10", "M1 S1000"] {
+            let error =
+                build_program_run_plan(&parse(source), ProgramRunPolicy::Cutting).unwrap_err();
+            assert!(error.blockers().iter().any(|blocker| {
+                blocker.kind == DryRunBlockerKind::UnsupportedProgram
+                    && blocker.message.contains("must be isolated")
+            }));
+        }
+
+        let mismatch = build_program_run_plan_with_options(
+            &parse_with_block_delete("G21\n/G1 X1 F10"),
+            ProgramRunPolicy::Cutting,
+            ProgramExecutionOptions::default(),
+        )
+        .unwrap_err();
+        assert!(mismatch.blockers().iter().any(|blocker| {
+            blocker.kind == DryRunBlockerKind::UnsupportedProgram
+                && blocker.message.contains("disagree")
+        }));
     }
 
     #[test]

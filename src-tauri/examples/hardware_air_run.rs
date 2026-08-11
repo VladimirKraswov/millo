@@ -145,6 +145,7 @@ async fn run(
             program.clone(),
             FirstCutConfirmation {
                 intent: ProgramRunIntent::AirRun,
+                execution_options: millo_dry_run::ProgramExecutionOptions::default(),
                 stock_secured: false,
                 tool_secured: false,
                 tool_removed: true,

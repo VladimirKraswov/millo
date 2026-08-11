@@ -3,6 +3,10 @@ export interface ProgramParseRequest {
   readonly source: string;
 }
 
+export interface ProgramParseOptions {
+  readonly blockDelete: boolean;
+}
+
 export interface ProgramPoint {
   readonly x: number;
   readonly y: number;
@@ -23,6 +27,7 @@ export type ToolpathKind =
 
 export interface ToolpathSegment {
   readonly sourceLine: number;
+  readonly optionalBlock?: boolean;
   readonly kind: ToolpathKind;
   readonly points: readonly ProgramPoint[];
   readonly distanceMm: number;
@@ -37,7 +42,10 @@ export type ProgramWarningCode =
   | "unexpected-comment-close"
   | "invalid-token"
   | "duplicate-word"
+  | "optional-block"
   | "optional-block-unsupported"
+  | "checksum-validated"
+  | "checksum-invalid"
   | "checksum-unsupported"
   | "unsupported-g-code"
   | "unsupported-m-code"
@@ -66,6 +74,9 @@ export interface ProgramLine {
   readonly source: string;
   readonly normalized: string;
   readonly executable: boolean;
+  readonly optionalBlock?: boolean;
+  readonly blockDeleted?: boolean;
+  readonly checksum?: number;
   readonly warningCount: number;
 }
 
@@ -96,6 +107,7 @@ export interface ProgramSummary {
 
 export interface GcodeProgram {
   readonly sourceName: string;
+  readonly blockDeleteEnabled?: boolean;
   readonly lines: readonly ProgramLine[];
   readonly warnings: readonly ProgramWarning[];
   readonly features: ProgramFeatures;
