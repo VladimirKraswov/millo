@@ -24,9 +24,11 @@ until they are read from the controller or measured before cutting.
 - Approved hardware interactions are the read-only Inspector, realtime Feed
   Hold, challenge-confirmed Soft Reset, guarded single-axis step jog, and typed
   per-axis work zero while Idle. A serial real-run preflight may additionally
-  reparse a file and repeat status plus Inspector reads. There is no arbitrary
-  motion or spindle command endpoint. The program sender is hard-disabled for
-  serial targets and runs only against the deterministic Mock GRBL transport.
+  reparse a file and repeat status plus Inspector reads. The first-cut gate may
+  repeat those reads and issue an in-memory 30-second lease after six operator
+  confirmations. There is no arbitrary motion or spindle command endpoint. The
+  program sender is hard-disabled for serial targets and runs only against the
+  deterministic Mock GRBL transport.
 - Step jog is deliberately limited to `0.01..1.00 mm` at `10..100 mm/min`, with
   one fresh preflight lease required for every attempt and the operator present
   at the machine power control.
@@ -52,6 +54,12 @@ combines motion-critical readiness with the strict motion-only file policy. A
 clear report still does not establish physical travel bounds. Stock dimensions,
 cutter, verified XYZ work zero, safe Z, cutting depth/feed, manual spindle state,
 and a reachable power control remain required before a future run authorization.
+
+The implemented first-cut dialog records those six confirmations and then
+repeats the whole preflight in the command actor. Its single-use lease is bound
+to the parsed program fingerprint, controller session, and observed positions.
+It expires after 30 seconds and does not itself send G-code. Cutting depth and
+feed remain properties of the reviewed program, not operator-checkbox overrides.
 
 ## Readiness interpretation
 

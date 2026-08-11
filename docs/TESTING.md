@@ -193,14 +193,22 @@ port names remain untouched.
   and assert the exact read-only sequence `?`, `$I`, `$$`, `$G`, `$#`, `?`.
 - An unsafe-program actor test proves every emitted byte belongs to that
   read-only allowlist and no normalized program line is dispatched.
-- TypeScript tests expose only `Check` states; the read model contains no Start
-  action. Missing serial state, missing gateway, and concurrent checks fail
-  closed.
+- TypeScript tests keep preflight and first-cut controls separate. The checklist
+  requires six independent confirmations; blocked, missing-gateway, and busy
+  states fail closed, and neither read model exposes a Start action.
 - The `/?fixture=preflight` browser fixture covers Blocked status, the dedicated
   Preflight diagnostics tab, internal scrolling, desktop/mobile layout, and the
   source-line jump from a policy blocker to selected `L8`.
-- This preflight creates no lease or plan. Passing it is evidence for the next
-  operator workflow, not permission to move hardware.
+- `millo-run` tests cover incomplete confirmations, blocked/stale evidence,
+  SHA-256 program binding, 30-second expiry, single-use consumption, and
+  position/session invalidation.
+- Actor fixtures model a Serial execution target with deterministic Mock GRBL.
+  A successful authorization repeats exactly `?`, `$I`, `$$`, `$G`, `$#`, `?`,
+  leaves the sender Idle, and emits no program line. Incomplete confirmation
+  fails before controller I/O.
+- `/?fixture=first-cut` provides the clear-preflight and six-confirmation dialog
+  for desktop/mobile visual regression. The issued fixture lease still has no
+  Start action.
 
 ## Current hardware readiness coverage
 

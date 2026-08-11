@@ -48,3 +48,6 @@ authority.
   changing future execution order.
 - A future Start transaction must repeat or consume equally fresh evidence
   atomically and remain entirely inside Rust.
+
+ADR 0021 adds that next evidence boundary as a short-lived first-cut lease. It
+does not change this report's read-only semantics or introduce a serial sender.

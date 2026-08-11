@@ -34,6 +34,7 @@ const hardware: HardwareInspection = {
 
 export const previewFixturePreflight: RunPreflightReport = {
   sourceName: previewFixtureProgram.sourceName,
+  programFingerprint: "fixture-preflight-sha256",
   ready: false,
   blockerCount: 1,
   cautionCount: 3,
@@ -109,4 +110,7 @@ export const previewFixturePreflight: RunPreflightReport = {
 
 export const previewFixturePreflightGateway: RealRunPreflightGateway = {
   preflight: async () => previewFixturePreflight,
+  authorizeFirstCut: async () => {
+    throw new Error("Blocked fixture cannot be authorized");
+  },
 };

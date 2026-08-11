@@ -1,14 +1,14 @@
 mod commands;
 
 use commands::{
-    AppState, acknowledge_reset, active_transport, cancel_dry_run, cancel_jog, confirm_soft_reset,
-    connect_transport, controller_settings, controller_snapshot, create_machine_profile,
-    detect_machine_profile, disconnect, feed_hold, inspect_device, jog_pad_step, list_transports,
-    machine_profiles, mock_clear_alarm, mock_start_run, mock_trigger_alarm,
-    mock_trigger_disconnect, mock_trigger_reset, mock_trigger_timeout, parse_gcode_program,
-    pause_dry_run, preflight_real_run, prepare_test_jog, refresh_status, request_soft_reset,
-    resume_dry_run, rollback_controller_setting, select_machine_profile, sender_snapshot,
-    set_work_zero, start_mock_dry_run, step_jog, update_controller_setting,
+    AppState, acknowledge_reset, active_transport, authorize_first_cut, cancel_dry_run, cancel_jog,
+    confirm_soft_reset, connect_transport, controller_settings, controller_snapshot,
+    create_machine_profile, detect_machine_profile, disconnect, feed_hold, inspect_device,
+    jog_pad_step, list_transports, machine_profiles, mock_clear_alarm, mock_start_run,
+    mock_trigger_alarm, mock_trigger_disconnect, mock_trigger_reset, mock_trigger_timeout,
+    parse_gcode_program, pause_dry_run, preflight_real_run, prepare_test_jog, refresh_status,
+    request_soft_reset, resume_dry_run, rollback_controller_setting, select_machine_profile,
+    sender_snapshot, set_work_zero, start_mock_dry_run, step_jog, update_controller_setting,
     update_machine_local_settings,
 };
 use tauri::Manager;
@@ -45,6 +45,7 @@ pub fn run() {
             set_work_zero,
             parse_gcode_program,
             preflight_real_run,
+            authorize_first_cut,
             sender_snapshot,
             start_mock_dry_run,
             pause_dry_run,

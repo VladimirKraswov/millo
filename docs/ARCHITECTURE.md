@@ -59,16 +59,20 @@ Original source -> Rust reparse -> millo-dry-run -> opaque DryRunPlan
 
 Neither an immutable preview DTO nor a React flag can become a sender plan.
 
-Serial real-run preparation is currently read-only:
+Serial real-run preparation has a read-only report followed by a separate
+one-use authorization gate:
 
 ```text
 Original source -> Rust reparse -> command actor -> ? + Inspector + ?
                                       |                    |
                                    serial-only         fresh snapshot
                                       +--------> millo-run report -> React
+
+Original source + six confirmations -> command actor -> fresh preflight
+                                                       -> first-cut lease
 ```
 
-This path mints neither a sender plan nor an authorization.
+The lease is not a sender plan and this path still has no serial dispatch.
 
 ## Rules
 
@@ -230,8 +234,19 @@ does not schedule or execute controller I/O.
 - The Preflight diagnostics tab links a source-addressable blocker back to the
   immutable program-line selection. That selection still cannot alter policy or
   future execution order.
-- No program command, safety preamble, authorization, serial sender, or Start
-  control exists in this slice.
+- A clear report only reveals the first-cut checklist. All six physical facts
+  are mandatory: stock, cutter, XYZ work zero, safe Z, running manual spindle,
+  and reachable power control.
+- The authorize request reparses the retained source and repeats the complete
+  preflight inside the actor. React cannot submit its previous report as
+  evidence.
+- `millo-run` binds the 30-second lease to a SHA-256 program fingerprint,
+  reset/reconnect counters, and observed machine/work positions. It is removed
+  by expiry, a non-Idle observation, position/session change, profile/settings
+  mutation, jog, work-zero, reset, reconnect, or a failed consumption attempt.
+- A future serial sender must consume the matching lease once inside its start
+  transaction. There is currently no serial sender, safety preamble, or Start
+  control, so authorization still emits no program command.
 
 ### Lifecycle invariants
 

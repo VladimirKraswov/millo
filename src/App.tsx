@@ -31,6 +31,10 @@ import { ReadinessPanel } from "./components/ReadinessPanel";
 import { SafetyControls } from "./components/SafetyControls";
 import { previewFixtureProgram } from "./features/program/previewFixtureProgram";
 import { previewFixturePreflightGateway } from "./features/program/previewFixturePreflight";
+import {
+  previewFixtureFirstCutGateway,
+  previewFixtureFirstCutProgram,
+} from "./features/program/previewFixtureFirstCut";
 import { ProgramWorkspace } from "./features/program/ProgramWorkspace";
 import { MachineProfiles } from "./features/machine-profiles/MachineProfiles";
 import { MachineSettingsDialog } from "./features/machine-settings/MachineSettingsDialog";
@@ -81,10 +85,14 @@ const developmentFixture = import.meta.env.DEV
   ? new URLSearchParams(window.location.search).get("fixture")
   : undefined;
 const developmentPreviewFixture =
-  developmentFixture === "program" || developmentFixture === "preflight"
-    ? previewFixtureProgram
-    : undefined;
-const developmentPreflightFixture = developmentFixture === "preflight";
+  developmentFixture === "first-cut"
+    ? previewFixtureFirstCutProgram
+    : developmentFixture === "program" || developmentFixture === "preflight"
+      ? previewFixtureProgram
+      : undefined;
+const developmentPreflightFixture =
+  developmentFixture === "preflight" || developmentFixture === "first-cut";
+const developmentFirstCutFixture = developmentFixture === "first-cut";
 const developmentProfileFixture: MachineProfileState = {
   profiles: [
     {
@@ -634,7 +642,9 @@ export default function App() {
                   && machineBound
               }
               realRunGateway={
-                developmentPreflightFixture
+                developmentFirstCutFixture
+                  ? previewFixtureFirstCutGateway
+                  : developmentPreflightFixture
                   ? previewFixturePreflightGateway
                   : desktopRuntime
                     ? tauriRealRunPreflightGateway

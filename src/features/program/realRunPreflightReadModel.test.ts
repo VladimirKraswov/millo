@@ -5,6 +5,7 @@ import { realRunPreflightControls } from "./realRunPreflightReadModel";
 
 const report = (ready: boolean): RunPreflightReport => ({
     sourceName: "fixture.nc",
+    programFingerprint: "fixture-sha256",
     ready,
     blockerCount: ready ? 0 : 1,
     cautionCount: 3,

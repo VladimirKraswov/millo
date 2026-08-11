@@ -15,7 +15,7 @@ use millo_profile::{
     MachineLocalSettingsUpdate, MachineProfile, MachineProfileDraft, MachineProfileState,
     MachineProfileStore,
 };
-use millo_run::RunPreflightReport;
+use millo_run::{FirstCutConfirmation, FirstCutPreparation, RunPreflightReport};
 use millo_sender::SenderSnapshot;
 use millo_serial::{
     SerialConfig, SerialPortDescriptor, SerialPortKind, SerialTransport,
@@ -1057,6 +1057,28 @@ pub async fn preflight_real_run(
     state
         .arbiter
         .preflight_real_run(program)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn authorize_first_cut(
+    request: ProgramParseRequest,
+    confirmation: FirstCutConfirmation,
+    state: State<'_, AppState>,
+) -> Result<FirstCutPreparation, String> {
+    let _transition = state.transition_lock.lock().await;
+    ensure_machine_bound(&state).await?;
+    if state.active_transport.lock().await.kind != TransportKind::Serial {
+        return Err("first-cut authorization requires an active serial transport".to_owned());
+    }
+    let program = tokio::task::spawn_blocking(move || parse_program(request))
+        .await
+        .map_err(|error| format!("first-cut parser task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
+    state
+        .arbiter
+        .authorize_first_cut(program, confirmation)
         .await
         .map_err(|error| error.to_string())
 }

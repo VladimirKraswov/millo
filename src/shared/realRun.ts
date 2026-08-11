@@ -18,6 +18,7 @@ export interface RunProgramBlocker {
 
 export interface RunPreflightReport {
   readonly sourceName: string;
+  readonly programFingerprint: string;
   readonly ready: boolean;
   readonly blockerCount: number;
   readonly cautionCount: number;
@@ -29,6 +30,32 @@ export interface RunPreflightReport {
   readonly totalProgramBlockers: number;
 }
 
+export interface FirstCutConfirmation {
+  readonly stockSecured: boolean;
+  readonly toolSecured: boolean;
+  readonly xyzZeroVerified: boolean;
+  readonly safeZVerified: boolean;
+  readonly manualSpindleRunning: boolean;
+  readonly powerControlReachable: boolean;
+}
+
+export interface FirstCutAuthorization {
+  readonly id: number;
+  readonly expiresInMs: number;
+  readonly sourceName: string;
+  readonly programFingerprint: string;
+  readonly pollSequence: number;
+}
+
+export interface FirstCutPreparation {
+  readonly report: RunPreflightReport;
+  readonly authorization: FirstCutAuthorization;
+}
+
 export interface RealRunPreflightGateway {
   preflight(request: ProgramParseRequest): Promise<RunPreflightReport>;
+  authorizeFirstCut(
+    request: ProgramParseRequest,
+    confirmation: FirstCutConfirmation,
+  ): Promise<FirstCutPreparation>;
 }

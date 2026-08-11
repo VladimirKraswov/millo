@@ -15,6 +15,7 @@ Serial / Mock -> command arbiter -> GRBL lifecycle/parser -> typed Tauri IPC -> 
 File source -> millo-gcode parser -> immutable program DTO -> Three.js preview
 Safe source -> dry-run policy -> bounded sender -> Mock GRBL only
 Candidate source -> Rust preflight -> fresh serial Inspector -> read-only report
+Clear preflight + six confirmations -> fresh Inspector -> one-use first-cut lease
 ```
 
 The command arbiter now owns the active transport, periodic status polling, and
@@ -107,8 +108,13 @@ Tauri reparses the retained source, and the command actor performs a fresh
 `? -> $I/$$/$G/$# -> ?` transaction before `millo-run` combines the strict
 motion-only program policy with motion-critical hardware readiness. The report
 links blockers to exact source lines and keeps unhomed travel, manual spindle,
-and physical setup visible as cautions. It creates no authorization, sends no
-program line, and exposes no serial Start action. The first-cut contract also
+and physical setup visible as cautions. A clear report opens a separate
+first-cut checklist for secured stock, secured cutter, verified XYZ work zero,
+safe Z clearance, a running manually controlled spindle, and immediately
+reachable power control. Submission does not trust the displayed report: the
+actor repeats the complete serial preflight and then issues a 30-second,
+program-bound, position-bound, single-use lease. It still sends no program line
+and exposes no serial Start action. The first-cut contract also
 requires explicit `G21`, `G90`, `G94`, and `G17` before the motions that depend
 on them, so preview cannot silently rely on ambient controller modes.
 
@@ -181,7 +187,7 @@ successful GRBL status exchange.
 | `millo-dry-run` | Fail-closed program policy and opaque approved plans |
 | `millo-command` | Single-owner command actor, polling, and response arbitration |
 | `millo-readiness` | Hardware-profile policy and guarded test-jog readiness |
-| `millo-run` | Read-only real-run preflight policy and operator report |
+| `millo-run` | Real-run preflight policy, operator checklist, and one-use first-cut lease |
 | `millo-safety` | Reset challenges and short-lived test-jog authorization |
 | `millo-sender` | Bounded one-line-in-flight sender state machine |
 | `millo-desktop` | Thin Tauri command/event adapter |
@@ -207,7 +213,8 @@ the [Mock-only bounded sender](docs/decisions/0016-mock-dry-run-sender.md) and
 [immutable line selection](docs/decisions/0017-program-line-selection.md), then
 the [serial real-run preflight](docs/decisions/0018-real-run-preflight.md), and
 the [persistent machine-profile boundary](docs/decisions/0019-machine-profiles.md),
-and the [controller settings and identity boundary](docs/decisions/0020-controller-settings-sync.md).
+the [controller settings and identity boundary](docs/decisions/0020-controller-settings-sync.md),
+and the [first-cut authorization boundary](docs/decisions/0021-first-cut-authorization.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

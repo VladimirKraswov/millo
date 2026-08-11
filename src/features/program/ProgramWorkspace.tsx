@@ -7,6 +7,7 @@ import {
   Play,
   RefreshCw,
   ShieldAlert,
+  ShieldCheck,
   Square,
   Trash2,
   TriangleAlert,
@@ -33,9 +34,12 @@ import {
 } from "../../shared/dryRun";
 import type { GcodeProgram, ProgramWarning } from "../../shared/program";
 import type {
+  FirstCutConfirmation,
+  FirstCutPreparation,
   RealRunPreflightGateway,
   RunPreflightReport,
 } from "../../shared/realRun";
+import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramLineTable } from "./ProgramLineTable";
 import { dryRunControls } from "./dryRunReadModel";
@@ -101,6 +105,9 @@ export function ProgramWorkspace({
   >("lines");
   const [selectedSourceLine, setSelectedSourceLine] = useState<number>();
   const [realRunReport, setRealRunReport] = useState<RunPreflightReport>();
+  const [firstCutOpen, setFirstCutOpen] = useState(false);
+  const [firstCutPreparation, setFirstCutPreparation] =
+    useState<FirstCutPreparation>();
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [error, setError] = useState<string>();
   const program = loaded?.program;
@@ -138,6 +145,8 @@ export function ProgramWorkspace({
   useEffect(() => {
     if (!realRunTarget || !realRunAvailable) {
       setRealRunReport(undefined);
+      setFirstCutPreparation(undefined);
+      setFirstCutOpen(false);
     }
   }, [realRunAvailable, realRunTarget]);
 
@@ -151,6 +160,8 @@ export function ProgramWorkspace({
       setSelectedSourceLine(undefined);
       setDiagnosticView("lines");
       setRealRunReport(undefined);
+      setFirstCutPreparation(undefined);
+      setFirstCutOpen(false);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -231,6 +242,7 @@ export function ProgramWorkspace({
     setPreflightLoading(true);
     setError(undefined);
     setRealRunReport(undefined);
+    setFirstCutPreparation(undefined);
     try {
       const report = await realRunGateway.preflight({
         sourceName: loaded.program.sourceName,
@@ -244,6 +256,20 @@ export function ProgramWorkspace({
     } finally {
       setPreflightLoading(false);
     }
+  };
+  const authorizeFirstCut = async (
+    confirmation: FirstCutConfirmation,
+  ): Promise<FirstCutPreparation> => {
+    if (!loaded || !realRunGateway) {
+      throw new Error("First-cut gateway is unavailable");
+    }
+    return realRunGateway.authorizeFirstCut(
+      {
+        sourceName: loaded.program.sourceName,
+        source: loaded.source,
+      },
+      confirmation,
+    );
   };
 
   return (
@@ -286,6 +312,8 @@ export function ProgramWorkspace({
                 setSender(idleSenderSnapshot);
                 setSelectedSourceLine(undefined);
                 setRealRunReport(undefined);
+                setFirstCutPreparation(undefined);
+                setFirstCutOpen(false);
                 setError(undefined);
               }}
               title="Закрыть программу"
@@ -413,8 +441,20 @@ export function ProgramWorkspace({
                   />
                   {reportForProgram ? "Проверить снова" : "Проверить готовность"}
                 </button>
+                {reportForProgram?.ready && (
+                  <button
+                    className="first-cut-open"
+                    onClick={() => setFirstCutOpen(true)}
+                    type="button"
+                  >
+                    <ShieldCheck aria-hidden="true" size={13} />
+                    {firstCutPreparation ? "Разрешение выпущено" : "Подтвердить первый рез"}
+                  </button>
+                )}
                 <small>
-                  {reportForProgram?.ready
+                  {firstCutPreparation
+                    ? `Lease #${firstCutPreparation.authorization.id} · максимум 30 секунд · sender закрыт`
+                    : reportForProgram?.ready
                     ? `${reportForProgram.cautionCount} caution · Serial sender закрыт`
                     : reportForProgram
                       ? `${reportForProgram.blockerCount} blocker · ${reportForProgram.cautionCount} caution`
@@ -671,6 +711,18 @@ export function ProgramWorkspace({
           <span>.nc · .ngc · .gcode · .tap · .cnc</span>
         </div>
       )}
+
+      <FirstCutAuthorizationDialog
+        onAuthorize={authorizeFirstCut}
+        onAuthorized={(preparation) => {
+          setFirstCutPreparation(preparation);
+          setRealRunReport(preparation.report);
+          onInspection?.(preparation.report.hardware);
+        }}
+        onClose={() => setFirstCutOpen(false)}
+        open={firstCutOpen}
+        report={reportForProgram}
+      />
 
       {error && <p className="program-error">{error}</p>}
     </section>

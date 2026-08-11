@@ -15,7 +15,10 @@ use millo_grbl::{
     active_work_coordinate_system, build_device_inspection, work_coordinate_parameter,
 };
 use millo_readiness::assess;
-use millo_run::{RunPreflightReport, assess_real_run_preflight};
+use millo_run::{
+    FirstCutAuthorizationError, FirstCutConfirmation, FirstCutGate, FirstCutPreparation,
+    RunPreflightReport, assess_real_run_preflight,
+};
 use millo_safety::{SafetyError, SafetyManager};
 use millo_sender::{Sender, SenderError, SenderSnapshot, SenderState};
 use millo_settings::{
@@ -62,6 +65,8 @@ pub enum ArbiterError {
     DryRunTransportUnavailable,
     #[error("real-run preflight requires the serial transport target")]
     RealRunTransportUnavailable,
+    #[error(transparent)]
+    FirstCut(#[from] FirstCutAuthorizationError),
     #[error("machine profile can be changed only while disconnected, current state is {0:?}")]
     ProfileChangeUnavailable(ConnectionState),
     #[error(transparent)]
@@ -131,6 +136,7 @@ impl CommandArbiter {
             execution_target,
             sender,
             safety: SafetyManager::default(),
+            first_cut: FirstCutGate::default(),
             snapshots: snapshot_tx,
             sender_snapshots: sender_snapshot_tx,
         };
@@ -236,6 +242,19 @@ impl CommandArbiter {
     ) -> Result<RunPreflightReport, ArbiterError> {
         self.call(|response| Request::PreflightRealRun { program, response })
             .await
+    }
+
+    pub async fn authorize_first_cut(
+        &self,
+        program: GcodeProgram,
+        confirmation: FirstCutConfirmation,
+    ) -> Result<FirstCutPreparation, ArbiterError> {
+        self.call(|response| Request::AuthorizeFirstCut {
+            program,
+            confirmation,
+            response,
+        })
+        .await
     }
 
     pub async fn feed_hold(&self) -> Result<ControllerSnapshot, ArbiterError> {
@@ -379,6 +398,11 @@ enum Request {
         program: GcodeProgram,
         response: oneshot::Sender<Result<RunPreflightReport, ArbiterError>>,
     },
+    AuthorizeFirstCut {
+        program: GcodeProgram,
+        confirmation: FirstCutConfirmation,
+        response: oneshot::Sender<Result<FirstCutPreparation, ArbiterError>>,
+    },
     Realtime {
         command: RealtimeCommand,
         response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
@@ -434,6 +458,7 @@ struct ActorState {
     execution_target: ExecutionTarget,
     sender: Sender,
     safety: SafetyManager,
+    first_cut: FirstCutGate,
     snapshots: watch::Sender<ControllerSnapshot>,
     sender_snapshots: watch::Sender<SenderSnapshot>,
 }
@@ -459,6 +484,7 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                 ) {
                     let _ = actor.controller.lifecycle_tick().await;
                     actor.safety.observe(&actor.controller.snapshot(), Instant::now());
+                    actor.first_cut.observe(&actor.controller.snapshot(), Instant::now());
                     publish(&actor.snapshots, &actor.controller);
                 }
             }
@@ -483,6 +509,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         execution_target,
         sender,
         safety,
+        first_cut,
         snapshots,
         sender_snapshots,
     } = actor;
@@ -493,7 +520,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             response,
         } => {
             let _ = controller.disconnect().await;
-            safety.invalidate_test_jog();
+            invalidate_authorizations(safety, first_cut);
             cancel_active_sender(sender, sender_snapshots);
             *controller = Controller::with_config(transport, *config);
             *execution_target = replacement_target;
@@ -501,7 +528,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(Ok(controller.snapshot()));
         }
         Request::Connect { response } => {
-            safety.invalidate_test_jog();
+            invalidate_authorizations(safety, first_cut);
             cancel_active_sender(sender, sender_snapshots);
             let result = controller.connect().await.map_err(ArbiterError::from);
             publish(snapshots, controller);
@@ -510,7 +537,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         Request::SetHardwareProfile { profile, response } => {
             let connection = controller.snapshot().connection;
             let result = if connection == ConnectionState::Disconnected {
-                safety.invalidate_test_jog();
+                invalidate_authorizations(safety, first_cut);
                 *hardware_profile = profile;
                 Ok(hardware_profile.clone())
             } else {
@@ -520,20 +547,20 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         }
         Request::BindHardwareProfile { profile, response } => {
             let result = ensure_profile_binding_available(&controller.snapshot()).map(|()| {
-                safety.invalidate_test_jog();
+                invalidate_authorizations(safety, first_cut);
                 *hardware_profile = profile;
                 hardware_profile.clone()
             });
             let _ = response.send(result);
         }
         Request::UpdateControllerSetting { request, response } => {
-            safety.invalidate_test_jog();
+            invalidate_authorizations(safety, first_cut);
             let result = execute_controller_setting_update(controller, request).await;
             publish(snapshots, controller);
             let _ = response.send(result);
         }
         Request::Disconnect { response } => {
-            safety.invalidate_test_jog();
+            invalidate_authorizations(safety, first_cut);
             cancel_active_sender(sender, sender_snapshots);
             let result = controller.disconnect().await.map_err(ArbiterError::from);
             publish(snapshots, controller);
@@ -545,10 +572,12 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 .await
                 .map_err(ArbiterError::from);
             safety.observe(&controller.snapshot(), Instant::now());
+            first_cut.observe(&controller.snapshot(), Instant::now());
             publish(snapshots, controller);
             let _ = response.send(result);
         }
         Request::AcknowledgeReset { response } => {
+            invalidate_authorizations(safety, first_cut);
             let result = Ok(controller.acknowledge_reset());
             publish(snapshots, controller);
             let _ = response.send(result);
@@ -566,6 +595,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(result);
         }
         Request::PreflightRealRun { program, response } => {
+            first_cut.invalidate();
             let result = if *execution_target != ExecutionTarget::Serial {
                 Err(ArbiterError::RealRunTransportUnavailable)
             } else {
@@ -574,9 +604,35 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             publish(snapshots, controller);
             let _ = response.send(result);
         }
+        Request::AuthorizeFirstCut {
+            program,
+            confirmation,
+            response,
+        } => {
+            first_cut.invalidate();
+            let result = if *execution_target != ExecutionTarget::Serial {
+                Err(ArbiterError::RealRunTransportUnavailable)
+            } else if !confirmation.is_complete() {
+                Err(FirstCutAuthorizationError::IncompleteConfirmation {
+                    missing: confirmation.missing(),
+                }
+                .into())
+            } else {
+                execute_first_cut_authorization(
+                    controller,
+                    hardware_profile,
+                    first_cut,
+                    program,
+                    confirmation,
+                )
+                .await
+            };
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
         Request::Realtime { command, response } => {
             if command != RealtimeCommand::Status {
-                safety.invalidate_test_jog();
+                invalidate_authorizations(safety, first_cut);
             }
             if command == RealtimeCommand::FeedHold
                 && sender.snapshot().state == SenderState::Running
@@ -595,6 +651,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(result);
         }
         Request::BeginSoftReset { response } => {
+            invalidate_authorizations(safety, first_cut);
             let result = if controller.snapshot().connection == ConnectionState::Connected {
                 Ok(safety.request_soft_reset(Instant::now()))
             } else {
@@ -606,6 +663,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             challenge_id,
             response,
         } => {
+            first_cut.invalidate();
             cancel_active_sender(sender, sender_snapshots);
             let result = safety
                 .confirm_soft_reset(challenge_id, Instant::now())
@@ -624,11 +682,13 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             confirmation,
             response,
         } => {
+            first_cut.invalidate();
             let result = prepare_test_jog(controller, hardware_profile, safety, confirmation).await;
             publish(snapshots, controller);
             let _ = response.send(result);
         }
         Request::StepJog { request, response } => {
+            first_cut.invalidate();
             let result = safety
                 .consume_test_jog(
                     request.authorization_id,
@@ -647,12 +707,13 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(result);
         }
         Request::JogPadStep { request, response } => {
+            first_cut.invalidate();
             let result = execute_jog_pad_step(controller, hardware_profile, safety, request).await;
             publish(snapshots, controller);
             let _ = response.send(result);
         }
         Request::CancelJog { response } => {
-            safety.invalidate_test_jog();
+            invalidate_authorizations(safety, first_cut);
             let mode = controller.snapshot().machine.mode;
             let result = if mode == MachineMode::Jog {
                 controller
@@ -666,13 +727,13 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(result);
         }
         Request::ConfigureUnhomedOperation { response } => {
-            safety.invalidate_test_jog();
+            invalidate_authorizations(safety, first_cut);
             let result = configure_unhomed_operation(controller).await;
             publish(snapshots, controller);
             let _ = response.send(result);
         }
         Request::SetWorkZero { request, response } => {
-            safety.invalidate_test_jog();
+            invalidate_authorizations(safety, first_cut);
             let result = execute_set_work_zero(controller, request).await;
             publish(snapshots, controller);
             let _ = response.send(result);
@@ -720,6 +781,31 @@ async fn execute_real_run_preflight(
     let readiness = assess(hardware_profile, &device, &snapshot);
     let hardware = HardwareInspection { device, readiness };
     Ok(assess_real_run_preflight(&program, hardware, &snapshot))
+}
+
+async fn execute_first_cut_authorization(
+    controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
+    first_cut: &mut FirstCutGate,
+    program: GcodeProgram,
+    confirmation: FirstCutConfirmation,
+) -> Result<FirstCutPreparation, ArbiterError> {
+    let report = execute_real_run_preflight(controller, hardware_profile, program).await?;
+    let authorization = first_cut.authorize(
+        confirmation,
+        &report,
+        &controller.snapshot(),
+        Instant::now(),
+    )?;
+    Ok(FirstCutPreparation {
+        report,
+        authorization,
+    })
+}
+
+fn invalidate_authorizations(safety: &mut SafetyManager, first_cut: &mut FirstCutGate) {
+    safety.invalidate_test_jog();
+    first_cut.invalidate();
 }
 
 async fn execute_sender_step(
@@ -1112,6 +1198,17 @@ mod tests {
         OperatorConfirmation {
             spindle_off: true,
             tool_clear: true,
+            power_control_reachable: true,
+        }
+    }
+
+    fn first_cut_confirmation() -> FirstCutConfirmation {
+        FirstCutConfirmation {
+            stock_secured: true,
+            tool_secured: true,
+            xyz_zero_verified: true,
+            safe_z_verified: true,
+            manual_spindle_running: true,
             power_control_reachable: true,
         }
     }
@@ -1977,6 +2074,62 @@ mod tests {
             write.as_slice(),
             b"?" | b"$I\n" | b"$$\n" | b"$G\n" | b"$#\n"
         )));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn first_cut_authorization_repeats_preflight_and_emits_no_motion() {
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let preparation = arbiter
+            .authorize_first_cut(
+                parsed_program("G21 G90 G94\nG0 Z2\nG1 X2 F20\nM5"),
+                first_cut_confirmation(),
+            )
+            .await
+            .unwrap();
+
+        assert!(preparation.report.ready);
+        assert_eq!(
+            preparation.authorization.program_fingerprint,
+            preparation.report.program_fingerprint
+        );
+        assert_eq!(preparation.authorization.poll_sequence, 2);
+        assert_eq!(
+            control.writes(),
+            vec![
+                b"?".to_vec(),
+                b"$I\n".to_vec(),
+                b"$$\n".to_vec(),
+                b"$G\n".to_vec(),
+                b"$#\n".to_vec(),
+                b"?".to_vec(),
+            ]
+        );
+        assert_eq!(arbiter.sender_snapshot().state, SenderState::Idle);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn incomplete_first_cut_confirmation_fails_before_controller_io() {
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        let mut confirmation = first_cut_confirmation();
+        confirmation.stock_secured = false;
+
+        let error = arbiter
+            .authorize_first_cut(parsed_program("G21 G90 G94\nG1 X2 F20"), confirmation)
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArbiterError::FirstCut(FirstCutAuthorizationError::IncompleteConfirmation { .. })
+        ));
+        assert!(control.writes().is_empty());
         task.abort();
     }
 

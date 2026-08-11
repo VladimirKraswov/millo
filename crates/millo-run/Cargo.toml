@@ -9,3 +9,5 @@ millo-domain = { path = "../millo-domain" }
 millo-dry-run = { path = "../millo-dry-run" }
 millo-gcode = { path = "../millo-gcode" }
 serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true

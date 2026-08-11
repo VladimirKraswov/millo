@@ -1,12 +1,216 @@
+use std::time::{Duration, Instant};
+
 use millo_domain::{
-    ConnectionState, ControllerSnapshot, HardwareInspection, MachineMode, ReadinessLevel,
+    ConnectionState, ControllerSnapshot, HardwareInspection, MachineMode, Position, ReadinessLevel,
     SpindleControl,
 };
 use millo_dry_run::{DryRunBlocker, DryRunBlockerKind, DryRunPolicyError, build_dry_run_plan};
 use millo_gcode::{GcodeProgram, ProgramBounds, ToolpathKind};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use thiserror::Error;
 
 const MAX_REPORTED_PROGRAM_BLOCKERS: usize = 20;
+const FIRST_CUT_POSITION_TOLERANCE_MM: f64 = 0.002;
+pub const FIRST_CUT_AUTHORIZATION_TTL: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstCutConfirmation {
+    pub stock_secured: bool,
+    pub tool_secured: bool,
+    pub xyz_zero_verified: bool,
+    pub safe_z_verified: bool,
+    pub manual_spindle_running: bool,
+    pub power_control_reachable: bool,
+}
+
+impl FirstCutConfirmation {
+    pub fn is_complete(self) -> bool {
+        self.missing().is_empty()
+    }
+
+    pub fn missing(self) -> Vec<&'static str> {
+        [
+            (!self.stock_secured).then_some("stock secured"),
+            (!self.tool_secured).then_some("tool secured"),
+            (!self.xyz_zero_verified).then_some("XYZ zero verified"),
+            (!self.safe_z_verified).then_some("safe Z verified"),
+            (!self.manual_spindle_running).then_some("manual spindle running"),
+            (!self.power_control_reachable).then_some("power control reachable"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstCutAuthorization {
+    pub id: u64,
+    pub expires_in_ms: u64,
+    pub source_name: String,
+    pub program_fingerprint: String,
+    pub poll_sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FirstCutPreparation {
+    pub report: RunPreflightReport,
+    pub authorization: FirstCutAuthorization,
+}
+
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum FirstCutAuthorizationError {
+    #[error("first-cut confirmation is incomplete: {missing:?}")]
+    IncompleteConfirmation { missing: Vec<&'static str> },
+    #[error("real-run preflight contains {blockers} blocker(s)")]
+    PreflightBlocked { blockers: usize },
+    #[error("preflight evidence does not match the current controller snapshot")]
+    StalePreflightEvidence,
+    #[error("controller is not connected and idle")]
+    UnsafeControllerState,
+    #[error("controller did not report an XYZ position for first-cut authorization")]
+    ControllerPositionUnavailable,
+    #[error("first-cut authorization is missing")]
+    AuthorizationMissing,
+    #[error("first-cut authorization does not match the active lease")]
+    AuthorizationMismatch,
+    #[error("first-cut authorization expired")]
+    AuthorizationExpired,
+    #[error("controller session changed after first-cut authorization")]
+    ControllerSessionChanged,
+    #[error("controller position changed after first-cut authorization")]
+    ControllerPositionChanged,
+    #[error("program changed after first-cut authorization")]
+    ProgramChanged,
+}
+
+#[derive(Debug)]
+struct FirstCutLease {
+    authorization: FirstCutAuthorization,
+    expires_at: Instant,
+    reset_count: u64,
+    reconnect_count: u32,
+    machine_position: Option<Position>,
+    work_position: Option<Position>,
+    work_coordinate_offset: Option<Position>,
+}
+
+#[derive(Debug, Default)]
+pub struct FirstCutGate {
+    next_id: u64,
+    lease: Option<FirstCutLease>,
+}
+
+impl FirstCutGate {
+    pub fn authorize(
+        &mut self,
+        confirmation: FirstCutConfirmation,
+        report: &RunPreflightReport,
+        snapshot: &ControllerSnapshot,
+        now: Instant,
+    ) -> Result<FirstCutAuthorization, FirstCutAuthorizationError> {
+        self.lease = None;
+        let missing = confirmation.missing();
+        if !missing.is_empty() {
+            return Err(FirstCutAuthorizationError::IncompleteConfirmation { missing });
+        }
+        if !report.ready {
+            return Err(FirstCutAuthorizationError::PreflightBlocked {
+                blockers: report.blocker_count,
+            });
+        }
+        if report.poll_sequence != snapshot.poll_sequence {
+            return Err(FirstCutAuthorizationError::StalePreflightEvidence);
+        }
+        ensure_stable_idle(snapshot)?;
+        if snapshot.machine.machine_position.is_none() && snapshot.machine.work_position.is_none() {
+            return Err(FirstCutAuthorizationError::ControllerPositionUnavailable);
+        }
+
+        self.next_id = self.next_id.saturating_add(1);
+        let authorization = FirstCutAuthorization {
+            id: self.next_id,
+            expires_in_ms: duration_ms(FIRST_CUT_AUTHORIZATION_TTL),
+            source_name: report.source_name.clone(),
+            program_fingerprint: report.program_fingerprint.clone(),
+            poll_sequence: report.poll_sequence,
+        };
+        self.lease = Some(FirstCutLease {
+            authorization: authorization.clone(),
+            expires_at: now + FIRST_CUT_AUTHORIZATION_TTL,
+            reset_count: snapshot.reset_count,
+            reconnect_count: snapshot.reconnect_count,
+            machine_position: snapshot.machine.machine_position,
+            work_position: snapshot.machine.work_position,
+            work_coordinate_offset: snapshot.machine.work_coordinate_offset,
+        });
+        Ok(authorization)
+    }
+
+    pub fn consume(
+        &mut self,
+        authorization_id: u64,
+        program_fingerprint: &str,
+        snapshot: &ControllerSnapshot,
+        now: Instant,
+    ) -> Result<(), FirstCutAuthorizationError> {
+        let Some(lease) = self.lease.take() else {
+            return Err(FirstCutAuthorizationError::AuthorizationMissing);
+        };
+        if lease.authorization.id != authorization_id {
+            return Err(FirstCutAuthorizationError::AuthorizationMismatch);
+        }
+        if now > lease.expires_at {
+            return Err(FirstCutAuthorizationError::AuthorizationExpired);
+        }
+        ensure_stable_idle(snapshot)?;
+        if lease.reset_count != snapshot.reset_count
+            || lease.reconnect_count != snapshot.reconnect_count
+        {
+            return Err(FirstCutAuthorizationError::ControllerSessionChanged);
+        }
+        if !positions_equal(lease.machine_position, snapshot.machine.machine_position)
+            || !positions_equal(lease.work_position, snapshot.machine.work_position)
+            || !positions_equal(
+                lease.work_coordinate_offset,
+                snapshot.machine.work_coordinate_offset,
+            )
+        {
+            return Err(FirstCutAuthorizationError::ControllerPositionChanged);
+        }
+        if lease.authorization.program_fingerprint != program_fingerprint {
+            return Err(FirstCutAuthorizationError::ProgramChanged);
+        }
+        Ok(())
+    }
+
+    pub fn observe(&mut self, snapshot: &ControllerSnapshot, now: Instant) {
+        let Some(lease) = self.lease.as_ref() else {
+            return;
+        };
+        let valid = now <= lease.expires_at
+            && stable_idle(snapshot)
+            && lease.reset_count == snapshot.reset_count
+            && lease.reconnect_count == snapshot.reconnect_count
+            && positions_equal(lease.machine_position, snapshot.machine.machine_position)
+            && positions_equal(lease.work_position, snapshot.machine.work_position)
+            && positions_equal(
+                lease.work_coordinate_offset,
+                snapshot.machine.work_coordinate_offset,
+            );
+        if !valid {
+            self.lease = None;
+        }
+    }
+
+    pub fn invalidate(&mut self) {
+        self.lease = None;
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -40,6 +244,7 @@ pub struct RunProgramBlocker {
 #[serde(rename_all = "camelCase")]
 pub struct RunPreflightReport {
     pub source_name: String,
+    pub program_fingerprint: String,
     pub ready: bool,
     pub blocker_count: usize,
     pub caution_count: usize,
@@ -247,6 +452,7 @@ pub fn assess_real_run_preflight(
 
     RunPreflightReport {
         source_name: program.source_name.clone(),
+        program_fingerprint: program_fingerprint(program),
         ready: blocker_count == 0,
         blocker_count,
         caution_count,
@@ -257,6 +463,60 @@ pub fn assess_real_run_preflight(
         program_blockers,
         total_program_blockers,
     }
+}
+
+pub fn program_fingerprint(program: &GcodeProgram) -> String {
+    let mut digest = Sha256::new();
+    update_digest_field(&mut digest, program.source_name.as_bytes());
+    for line in &program.lines {
+        update_digest_field(&mut digest, line.source.as_bytes());
+    }
+    format!("{:x}", digest.finalize())
+}
+
+fn update_digest_field(digest: &mut Sha256, value: &[u8]) {
+    digest.update((value.len() as u64).to_be_bytes());
+    digest.update(value);
+}
+
+fn ensure_stable_idle(snapshot: &ControllerSnapshot) -> Result<(), FirstCutAuthorizationError> {
+    if stable_idle(snapshot) {
+        Ok(())
+    } else {
+        Err(FirstCutAuthorizationError::UnsafeControllerState)
+    }
+}
+
+fn stable_idle(snapshot: &ControllerSnapshot) -> bool {
+    snapshot.connection == ConnectionState::Connected
+        && snapshot.machine.mode == MachineMode::Idle
+        && snapshot.alarm.is_none()
+        && snapshot.reset_notice.is_none()
+}
+
+fn positions_equal(left: Option<Position>, right: Option<Position>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => {
+            coordinate_equal(left.x, right.x)
+                && coordinate_equal(left.y, right.y)
+                && coordinate_equal(left.z, right.z)
+                && match (left.a, right.a) {
+                    (Some(left), Some(right)) => coordinate_equal(left, right),
+                    (None, None) => true,
+                    _ => false,
+                }
+        }
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn coordinate_equal(left: f64, right: f64) -> bool {
+    left.is_finite() && right.is_finite() && (left - right).abs() <= FIRST_CUT_POSITION_TOLERANCE_MM
+}
+
+fn duration_ms(duration: Duration) -> u64 {
+    duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 fn program_blocker(blocker: DryRunBlocker) -> RunProgramBlocker {
@@ -407,6 +667,8 @@ mod tests {
                 } else {
                     "Run".to_owned()
                 },
+                machine_position: Some(Position::default()),
+                work_position: Some(Position::default()),
                 ..MachineState::default()
             },
             poll_sequence: 42,
@@ -449,6 +711,28 @@ mod tests {
             detail: id.to_owned(),
             evidence: None,
         }
+    }
+
+    fn first_cut_confirmation() -> FirstCutConfirmation {
+        FirstCutConfirmation {
+            stock_secured: true,
+            tool_secured: true,
+            xyz_zero_verified: true,
+            safe_z_verified: true,
+            manual_spindle_running: true,
+            power_control_reachable: true,
+        }
+    }
+
+    fn ready_first_cut(snapshot: &ControllerSnapshot) -> (GcodeProgram, RunPreflightReport) {
+        let program = program("G21 G90 G94\nG0 Z2\nG1 X5 Y2 F50\nM5");
+        let report = assess_real_run_preflight(
+            &program,
+            hardware(vec![readiness_check("axis-steps", ReadinessLevel::Pass)]),
+            snapshot,
+        );
+        assert!(report.ready);
+        (program, report)
     }
 
     #[test]
@@ -536,5 +820,139 @@ mod tests {
         assert_eq!(modal.level, RunPreflightLevel::Blocker);
         assert!(modal.detail.contains("G21, G90, G94"));
         assert_eq!(modal.source_line, Some(1));
+    }
+
+    #[test]
+    fn first_cut_gate_requires_all_six_confirmations_and_fresh_clear_preflight() {
+        let now = Instant::now();
+        let snapshot = snapshot(MachineMode::Idle);
+        let (_, report) = ready_first_cut(&snapshot);
+        let mut gate = FirstCutGate::default();
+        let mut incomplete = first_cut_confirmation();
+        incomplete.safe_z_verified = false;
+
+        assert_eq!(
+            gate.authorize(incomplete, &report, &snapshot, now),
+            Err(FirstCutAuthorizationError::IncompleteConfirmation {
+                missing: vec!["safe Z verified"]
+            })
+        );
+
+        let mut blocked = report.clone();
+        blocked.ready = false;
+        blocked.blocker_count = 2;
+        assert_eq!(
+            gate.authorize(first_cut_confirmation(), &blocked, &snapshot, now),
+            Err(FirstCutAuthorizationError::PreflightBlocked { blockers: 2 })
+        );
+
+        let mut stale = report.clone();
+        stale.poll_sequence -= 1;
+        assert_eq!(
+            gate.authorize(first_cut_confirmation(), &stale, &snapshot, now),
+            Err(FirstCutAuthorizationError::StalePreflightEvidence)
+        );
+
+        let mut missing_position = snapshot.clone();
+        missing_position.machine.machine_position = None;
+        missing_position.machine.work_position = None;
+        let (_, report) = ready_first_cut(&missing_position);
+        assert_eq!(
+            gate.authorize(first_cut_confirmation(), &report, &missing_position, now,),
+            Err(FirstCutAuthorizationError::ControllerPositionUnavailable)
+        );
+    }
+
+    #[test]
+    fn first_cut_authorization_is_short_lived_program_bound_and_single_use() {
+        let now = Instant::now();
+        let snapshot = snapshot(MachineMode::Idle);
+        let (_, report) = ready_first_cut(&snapshot);
+        let mut gate = FirstCutGate::default();
+        let authorization = gate
+            .authorize(first_cut_confirmation(), &report, &snapshot, now)
+            .unwrap();
+
+        assert_eq!(
+            authorization.program_fingerprint,
+            report.program_fingerprint
+        );
+        assert_eq!(authorization.expires_in_ms, 30_000);
+        assert_eq!(
+            gate.consume(
+                authorization.id,
+                &program_fingerprint(&program("G21 G90 G94\nG1 X9 F50")),
+                &snapshot,
+                now,
+            ),
+            Err(FirstCutAuthorizationError::ProgramChanged)
+        );
+        assert_eq!(
+            gate.consume(
+                authorization.id,
+                &report.program_fingerprint,
+                &snapshot,
+                now,
+            ),
+            Err(FirstCutAuthorizationError::AuthorizationMissing)
+        );
+
+        let authorization = gate
+            .authorize(first_cut_confirmation(), &report, &snapshot, now)
+            .unwrap();
+        assert_eq!(
+            gate.consume(
+                authorization.id,
+                &report.program_fingerprint,
+                &snapshot,
+                now + FIRST_CUT_AUTHORIZATION_TTL + Duration::from_millis(1),
+            ),
+            Err(FirstCutAuthorizationError::AuthorizationExpired)
+        );
+    }
+
+    #[test]
+    fn first_cut_authorization_dies_when_position_or_controller_session_changes() {
+        let now = Instant::now();
+        let mut snapshot = snapshot(MachineMode::Idle);
+        snapshot.machine.machine_position = Some(Position {
+            x: 1.0,
+            y: 2.0,
+            z: 3.0,
+            a: None,
+        });
+        let (_, report) = ready_first_cut(&snapshot);
+        let mut gate = FirstCutGate::default();
+        let authorization = gate
+            .authorize(first_cut_confirmation(), &report, &snapshot, now)
+            .unwrap();
+
+        snapshot.machine.machine_position.as_mut().unwrap().x += 0.01;
+        gate.observe(&snapshot, now);
+        assert_eq!(
+            gate.consume(
+                authorization.id,
+                &report.program_fingerprint,
+                &snapshot,
+                now,
+            ),
+            Err(FirstCutAuthorizationError::AuthorizationMissing)
+        );
+
+        snapshot.machine.machine_position.as_mut().unwrap().x = 1.0;
+        let (_, report) = ready_first_cut(&snapshot);
+        let authorization = gate
+            .authorize(first_cut_confirmation(), &report, &snapshot, now)
+            .unwrap();
+        snapshot.reconnect_count += 1;
+        assert_eq!(
+            gate.consume(
+                authorization.id,
+                &report.program_fingerprint,
+                &snapshot,
+                now,
+            ),
+            Err(FirstCutAuthorizationError::ControllerSessionChanged)
+        );
     }
 }
