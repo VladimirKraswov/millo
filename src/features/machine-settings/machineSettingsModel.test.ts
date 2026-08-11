@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import type { ControllerSettingValue } from "../../shared/settings";
-import { filterSettings, settingValuesEqual } from "./machineSettingsModel";
+import type {
+  ControllerSettingsState,
+  ControllerSettingValue,
+} from "../../shared/settings";
+import {
+  controllerSettingsIdentity,
+  createSettingsWriteToken,
+  filterSettings,
+  isSettingsWriteTokenCurrent,
+  settingValuesEqual,
+} from "./machineSettingsModel";
 
 const values: ControllerSettingValue[] = [
   {
@@ -38,5 +47,44 @@ describe("machine settings model", () => {
     ]);
     expect(filterSettings(values, "")).toHaveLength(2);
   });
-});
 
+  it("binds queued writes to the controller fingerprint and profile", () => {
+    const state = {
+      snapshot: { revision: 1, values: [] },
+      sessionBaseline: {},
+      revisionCount: 0,
+      profileId: "machine-0001",
+      fingerprint: {
+        key: "usb:0483:5740:abc",
+        confidence: "strong",
+        label: "Controller",
+      },
+    } satisfies ControllerSettingsState;
+
+    expect(controllerSettingsIdentity(state)).toBe(
+      "usb:0483:5740:abc\u0000machine-0001",
+    );
+    expect(
+      controllerSettingsIdentity({ ...state, profileId: "machine-0002" }),
+    ).not.toBe(controllerSettingsIdentity(state));
+    expect(
+      controllerSettingsIdentity({
+        ...state,
+        snapshot: { revision: 99, values: [] },
+      }),
+    ).toBe(controllerSettingsIdentity(state));
+
+    const token = createSettingsWriteToken(3, state);
+    expect(isSettingsWriteTokenCurrent(token, 3, state, true)).toBe(true);
+    expect(isSettingsWriteTokenCurrent(token, 4, state, true)).toBe(false);
+    expect(isSettingsWriteTokenCurrent(token, 3, state, false)).toBe(false);
+    expect(
+      isSettingsWriteTokenCurrent(
+        token,
+        3,
+        { ...state, profileId: "machine-0002" },
+        true,
+      ),
+    ).toBe(false);
+  });
+});

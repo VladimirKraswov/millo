@@ -65,7 +65,9 @@ numeric formatting, immutable connection baselines, bounded reconnect history,
 fresh-observation persistence, positive travel, and stale external changes.
 Actor tests prove profile binding does not dismiss a reset banner and that one
 setting edit executes the exact read/write/reread sequence. TypeScript tests keep
-unverified hardware flags off and cover settings search/value comparison. The
+unverified hardware flags off and cover settings search/value comparison plus
+write fencing by controller fingerprint, profile, dialog lifecycle, and open
+state. The
 `/?fixture=profiles` and `/?fixture=settings` screens are checked at desktop and
 mobile sizes.
 

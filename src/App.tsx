@@ -253,12 +253,16 @@ export default function App() {
         if (active) setUiError(String(error));
       },
     });
-    void getActiveTransport().then((value) => {
-      if (active) {
-        setActiveTransport(value);
-        setSelectedTransportId(value.id);
-      }
-    });
+    void getActiveTransport()
+      .then((value) => {
+        if (active) {
+          setActiveTransport(value);
+          setSelectedTransportId(value.id);
+        }
+      })
+      .catch((error: unknown) => {
+        if (active) setUiError(String(error));
+      });
     void listTransports()
       .then((value) => {
         if (active) setTransports(value);
@@ -319,6 +323,15 @@ export default function App() {
       setUiError(String(error));
     } finally {
       setDiscovering(false);
+    }
+  };
+
+  const refreshMachineProfiles = async () => {
+    if (!desktopRuntime) return;
+    try {
+      setMachineProfiles(await getMachineProfiles());
+    } catch (error) {
+      setUiError(String(error));
     }
   };
 
@@ -403,7 +416,7 @@ export default function App() {
       setControllerSettings(undefined);
       setOnboardingDraft(undefined);
       setSettingsOpen(false);
-      if (desktopRuntime) setMachineProfiles(await getMachineProfiles());
+      await refreshMachineProfiles();
     }
   };
 
@@ -474,7 +487,7 @@ export default function App() {
   ): Promise<ControllerSettingsState> => {
     const next = await updateControllerSetting(request);
     setControllerSettings(next);
-    setMachineProfiles(await getMachineProfiles());
+    await refreshMachineProfiles();
     return next;
   };
 
@@ -484,7 +497,7 @@ export default function App() {
   ): Promise<ControllerSettingsState> => {
     const next = await rollbackControllerSetting(key, revision);
     setControllerSettings(next);
-    setMachineProfiles(await getMachineProfiles());
+    await refreshMachineProfiles();
     return next;
   };
 

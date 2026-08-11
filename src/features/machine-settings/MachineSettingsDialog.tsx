@@ -18,14 +18,23 @@ import type {
   SettingGroup,
 } from "../../shared/settings";
 import {
+  controllerSettingsIdentity,
+  createSettingsWriteToken,
   filterSettings,
+  isSettingsWriteTokenCurrent,
   settingGroupLabels,
   settingGroupOrder,
   settingValuesEqual,
+  type SettingsWriteToken,
 } from "./machineSettingsModel";
 
 type WriteStatus = "idle" | "pending" | "saving" | "saved" | "error";
 type SettingsView = "local" | "controller" | "history";
+
+interface PendingWrite {
+  readonly timer: number;
+  readonly guard: SettingsWriteToken;
+}
 
 interface MachineSettingsDialogProps {
   open: boolean;
@@ -39,8 +48,14 @@ interface MachineSettingsDialogProps {
   ) => Promise<ControllerSettingsState>;
 }
 
-const settingValue = (state: ControllerSettingsState, key: string): string | undefined =>
+const settingValue = (
+  state: ControllerSettingsState,
+  key: string,
+): string | undefined =>
   state.snapshot.values.find((setting) => setting.key === key)?.value;
+
+const writeIsPending = (status?: WriteStatus): boolean =>
+  status === "pending" || status === "saving";
 
 export function MachineSettingsDialog({
   open,
@@ -59,18 +74,24 @@ export function MachineSettingsDialog({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [localDraft, setLocalDraft] = useState<MachineProfile>();
   const [localStatus, setLocalStatus] = useState<WriteStatus>("idle");
+  const openRef = useRef(open);
+  openRef.current = open;
+  const profileIdRef = useRef(profile?.id);
+  profileIdRef.current = profile?.id;
   const settingsRef = useRef(settings);
-  const timers = useRef(new Map<string, number>());
+  settingsRef.current = settings;
+  const timers = useRef(new Map<string, PendingWrite>());
   const localTimer = useRef<number | undefined>(undefined);
   const writeQueue = useRef(Promise.resolve());
+  const lifecycle = useRef(0);
+  const settingsIdentity = controllerSettingsIdentity(settings);
 
   useEffect(() => {
-    settingsRef.current = settings;
     if (!settings) return;
     setDraftValues((current) => {
       const next = { ...current };
       for (const setting of settings.snapshot.values) {
-        if (!(["pending", "saving"] as WriteStatus[]).includes(statuses[setting.key])) {
+        if (!writeIsPending(statuses[setting.key])) {
           next[setting.key] = setting.value;
         }
       }
@@ -80,13 +101,27 @@ export function MachineSettingsDialog({
 
   useEffect(() => setLocalDraft(profile ? { ...profile } : undefined), [profile]);
 
-  useEffect(
-    () => () => {
-      for (const timer of timers.current.values()) window.clearTimeout(timer);
+  useEffect(() => {
+    lifecycle.current += 1;
+    for (const pending of timers.current.values()) {
+      window.clearTimeout(pending.timer);
+    }
+    timers.current.clear();
+    if (localTimer.current !== undefined) window.clearTimeout(localTimer.current);
+    localTimer.current = undefined;
+    setStatuses({});
+    setErrors({});
+    setLocalStatus("idle");
+    return () => {
+      lifecycle.current += 1;
+      for (const pending of timers.current.values()) {
+        window.clearTimeout(pending.timer);
+      }
+      timers.current.clear();
       if (localTimer.current !== undefined) window.clearTimeout(localTimer.current);
-    },
-    [],
-  );
+      localTimer.current = undefined;
+    };
+  }, [open, profile?.id, settingsIdentity]);
 
   const filtered = useMemo(
     () => filterSettings(settings?.snapshot.values ?? [], query),
@@ -114,15 +149,32 @@ export function MachineSettingsDialog({
     key: string,
     value: string,
     operation: "write" | "rollback" = "write",
+    guard: SettingsWriteToken = createSettingsWriteToken(
+      lifecycle.current,
+      settingsRef.current,
+    ),
   ) => {
+    const guardIsCurrent = () =>
+      isSettingsWriteTokenCurrent(
+        guard,
+        lifecycle.current,
+        settingsRef.current,
+        openRef.current,
+      );
+    if (!guardIsCurrent()) return;
     mark(key, "saving");
     writeQueue.current = writeQueue.current
       .catch(() => undefined)
       .then(async () => {
+        if (!guardIsCurrent()) return;
         const current = settingsRef.current;
         if (!current) throw new Error("Контроллер не синхронизирован");
         const currentValue = settingValue(current, key);
-        if (operation === "write" && currentValue !== undefined && settingValuesEqual(currentValue, value)) {
+        if (
+          operation === "write" &&
+          currentValue !== undefined &&
+          settingValuesEqual(currentValue, value)
+        ) {
           mark(key, "saved");
           return;
         }
@@ -137,6 +189,10 @@ export function MachineSettingsDialog({
                   expectedValue: currentValue ?? "",
                   expectedRevision: current.snapshot.revision,
                 });
+          if (!guardIsCurrent()) return;
+          if (controllerSettingsIdentity(next) !== guard.settingsIdentity) {
+            throw new Error("Ответ настроек относится к другому контроллеру");
+          }
           settingsRef.current = next;
           setDraftValues((draft) => ({
             ...draft,
@@ -144,43 +200,56 @@ export function MachineSettingsDialog({
           }));
           mark(key, "saved");
         } catch (error) {
-          mark(key, "error", String(error));
+          if (guardIsCurrent()) mark(key, "error", String(error));
         }
       });
   };
 
   const scheduleWrite = (key: string, value: string, delay = 650) => {
     const previous = timers.current.get(key);
-    if (previous !== undefined) window.clearTimeout(previous);
-    mark(key, "pending");
-    timers.current.set(
-      key,
-      window.setTimeout(() => {
-        timers.current.delete(key);
-        enqueue(key, value);
-      }, delay),
+    if (previous !== undefined) window.clearTimeout(previous.timer);
+    const guard = createSettingsWriteToken(
+      lifecycle.current,
+      settingsRef.current,
     );
+    mark(key, "pending");
+    const timer = window.setTimeout(() => {
+      timers.current.delete(key);
+      enqueue(key, value, "write", guard);
+    }, delay);
+    timers.current.set(key, { timer, guard });
   };
 
   const flushWrite = (key: string) => {
-    const timer = timers.current.get(key);
-    if (timer === undefined || statuses[key] !== "pending") return;
-    window.clearTimeout(timer);
+    const pending = timers.current.get(key);
+    if (pending === undefined) return;
+    window.clearTimeout(pending.timer);
     timers.current.delete(key);
-    enqueue(key, draftValues[key]);
+    const value = draftValues[key];
+    if (value !== undefined) enqueue(key, value, "write", pending.guard);
   };
 
   const updateLocalDraft = (next: MachineProfile) => {
     setLocalDraft(next);
     setLocalStatus("pending");
     if (localTimer.current !== undefined) window.clearTimeout(localTimer.current);
+    const expectedLifecycle = lifecycle.current;
+    const expectedProfileId = next.id;
     localTimer.current = window.setTimeout(async () => {
+      localTimer.current = undefined;
+      if (
+        !openRef.current ||
+        expectedLifecycle !== lifecycle.current ||
+        profileIdRef.current !== expectedProfileId
+      ) {
+        return;
+      }
       setLocalStatus("saving");
       try {
         await onLocalUpdate(next);
-        setLocalStatus("saved");
+        if (expectedLifecycle === lifecycle.current) setLocalStatus("saved");
       } catch {
-        setLocalStatus("error");
+        if (expectedLifecycle === lifecycle.current) setLocalStatus("error");
       }
     }, 500);
   };

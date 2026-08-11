@@ -173,6 +173,13 @@ caller. The UI treats the event as authoritative.
   field edits, shows pending/writing/verified/error per field, rolls back to the
   connection baseline, and can explicitly restore a value from the preceding
   archived session.
+- Every queued write is fenced by dialog lifecycle, controller fingerprint, and
+  bound profile ID. Closing the dialog or switching machines cancels pending
+  timers and makes queued completions stale, so an old draft cannot be written
+  into a newly connected controller even when setting keys/revisions coincide.
+- A successful firmware write remains `saved` even if the secondary profile-list
+  refresh fails; that ancillary error is reported separately instead of falsely
+  claiming the controller rejected a change it already stored.
 
 The command arbiter owns the periodic driver. Every tick calls one core method:
 a connected controller is polled, while a recovering controller attempts

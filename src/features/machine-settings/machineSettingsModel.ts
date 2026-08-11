@@ -1,4 +1,5 @@
 import type {
+  ControllerSettingsState,
   ControllerSettingValue,
   SettingGroup,
 } from "../../shared/settings";
@@ -35,6 +36,34 @@ export const settingValuesEqual = (left: string, right: string): boolean => {
     : left === right;
 };
 
+export const controllerSettingsIdentity = (
+  state?: ControllerSettingsState,
+): string | undefined =>
+  state ? `${state.fingerprint.key}\u0000${state.profileId ?? "unbound"}` : undefined;
+
+export interface SettingsWriteToken {
+  readonly lifecycle: number;
+  readonly settingsIdentity?: string;
+}
+
+export const createSettingsWriteToken = (
+  lifecycle: number,
+  state?: ControllerSettingsState,
+): SettingsWriteToken => ({
+  lifecycle,
+  settingsIdentity: controllerSettingsIdentity(state),
+});
+
+export const isSettingsWriteTokenCurrent = (
+  token: SettingsWriteToken,
+  lifecycle: number,
+  state: ControllerSettingsState | undefined,
+  dialogOpen: boolean,
+): boolean =>
+  dialogOpen &&
+  token.lifecycle === lifecycle &&
+  token.settingsIdentity === controllerSettingsIdentity(state);
+
 export const filterSettings = (
   values: readonly ControllerSettingValue[],
   query: string,
@@ -47,4 +76,3 @@ export const filterSettings = (
       .some((value) => value!.toLocaleLowerCase().includes(needle)),
   );
 };
-
