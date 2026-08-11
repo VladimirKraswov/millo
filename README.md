@@ -177,6 +177,11 @@ Hold, and an operator stop remains challenge-confirmed. A physical `error`,
 Reset so already-buffered commands cannot continue. Polling failure, reset
 banner, or disconnect also fails closed. The sender is available only for an
 active, profile-bound serial target and has no plugin or raw-command entry point.
+Every immutable plan adds a non-configurable `M5`, `M9` shutdown tail before
+its deferred end command. Sender snapshots expose the last correlated `ok`, its
+source line, acknowledgement age, a monotonic progress sequence, and whether
+both shutdown commands were accepted. Snapshot work is constant-time; a
+100,000-line regression completes with only the bounded RX FIFO in flight.
 
 A separate serial-only Check run validates an approved file through GRBL's
 typed `$C` mode without executing motion. The actor enters only from fresh
@@ -197,7 +202,9 @@ The execution-core differences from the Candle reference, the problem each one
 solves, and the remaining deliberate capability gates are maintained in
 [Millo sender compared with Candle](docs/CANDLE_SENDER_COMPARISON.md). The
 current command matrix and physical evidence are in
-[GRBL execution audit](docs/GRBL_EXECUTION_AUDIT.md).
+[GRBL execution audit](docs/GRBL_EXECUTION_AUDIT.md). Issue-driven reliability
+work and explicit limitations are recorded in
+[Sender hardening](docs/SENDER_HARDENING.md).
 
 UI composition now starts with a generic `ExtensionRegistry`. Jog Pad is the
 first core contribution in the named `control.machine` slot; Work Zero occupies

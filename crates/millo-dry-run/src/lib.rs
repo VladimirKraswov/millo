@@ -6,6 +6,7 @@ use thiserror::Error;
 
 pub const MAX_DRY_RUN_COMMAND_BYTES: usize = 255;
 const SAFETY_PREAMBLE: [&str; 2] = ["M5", "M9"];
+const SAFETY_EPILOGUE: [&str; 2] = ["M5", "M9"];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ProgramRunPolicy {
@@ -48,6 +49,7 @@ pub struct DryRunBlocker {
 #[serde(rename_all = "kebab-case")]
 pub enum DryRunLineKind {
     SafetyPreamble,
+    SafetyEpilogue,
     Program,
     ProgramPause,
     OptionalPause,
@@ -283,7 +285,17 @@ pub fn build_program_run_plan_with_options(
         return Err(DryRunPolicyError::EmptyProgram);
     }
 
-    let mut lines = Vec::with_capacity(SAFETY_PREAMBLE.len() + program_lines.len());
+    let program_end = program_lines
+        .last()
+        .is_some_and(|line| line.kind == DryRunLineKind::ProgramEnd)
+        .then(|| program_lines.pop())
+        .flatten();
+    let mut lines = Vec::with_capacity(
+        SAFETY_PREAMBLE.len()
+            + program_lines.len()
+            + SAFETY_EPILOGUE.len()
+            + usize::from(program_end.is_some()),
+    );
     lines.extend(SAFETY_PREAMBLE.map(|command| DryRunLine {
         source_line: None,
         command: command.to_owned(),
@@ -292,6 +304,14 @@ pub fn build_program_run_plan_with_options(
         estimated_duration_ms: Some(0),
     }));
     lines.extend(program_lines);
+    lines.extend(SAFETY_EPILOGUE.map(|command| DryRunLine {
+        source_line: None,
+        command: command.to_owned(),
+        kind: DryRunLineKind::SafetyEpilogue,
+        tool_number: None,
+        estimated_duration_ms: Some(0),
+    }));
+    lines.extend(program_end);
 
     let estimated_total_ms = lines
         .iter()
@@ -594,7 +614,7 @@ mod tests {
                 .iter()
                 .map(DryRunLine::command)
                 .collect::<Vec<_>>(),
-            vec!["M5", "M9", "G21 G90", "G0 X1", "M5 M9"]
+            vec!["M5", "M9", "G21 G90", "G0 X1", "M5 M9", "M5", "M9"]
         );
         assert_eq!(plan.lines()[0].kind(), DryRunLineKind::SafetyPreamble);
         assert_eq!(plan.lines()[2].source_line(), Some(1));
@@ -736,7 +756,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.lines()[3].kind(), DryRunLineKind::ProgramPause);
-        assert_eq!(plan.lines()[5].kind(), DryRunLineKind::ProgramEnd);
+        assert_eq!(plan.lines()[5].kind(), DryRunLineKind::SafetyEpilogue);
+        assert_eq!(plan.lines()[6].kind(), DryRunLineKind::SafetyEpilogue);
+        assert_eq!(plan.lines()[7].kind(), DryRunLineKind::ProgramEnd);
         assert!(
             !plan
                 .lines()

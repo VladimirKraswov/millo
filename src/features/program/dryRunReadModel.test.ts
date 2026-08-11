@@ -4,6 +4,7 @@ import { idleSenderSnapshot, type SenderSnapshot } from "../../shared/dryRun";
 import {
   dryRunControls,
   senderFailureSummary,
+  senderHeartbeat,
   senderTiming,
 } from "./dryRunReadModel";
 
@@ -89,5 +90,32 @@ describe("dryRunControls", () => {
     expect(senderFailureSummary(sender({ lastError: "legacy" }))).toBe(
       "legacy",
     );
+  });
+
+  it("formats acknowledgement heartbeat and shutdown evidence", () => {
+    expect(
+      senderHeartbeat(
+        sender({
+          acknowledgedLines: 42,
+          progressSequence: 42,
+          lastAcknowledgedSourceLine: 38,
+          secondsSinceAcknowledgement: 0.36,
+          shutdownCommandsAcknowledged: true,
+        }),
+      ),
+    ).toEqual({
+      sequence: 42,
+      lastLine: "L38",
+      age: "0.4s",
+      shutdownAcknowledged: true,
+    });
+    expect(
+      senderHeartbeat(
+        sender({
+          acknowledgedLines: 2,
+          secondsSinceAcknowledgement: Number.POSITIVE_INFINITY,
+        }),
+      ),
+    ).toMatchObject({ sequence: 2, lastLine: "Guard", age: "0.0s" });
   });
 });

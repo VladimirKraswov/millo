@@ -7,8 +7,8 @@ use millo_dry_run::{DryRunLine, DryRunLineKind, DryRunPlan, MAX_DRY_RUN_COMMAND_
 use serde::Serialize;
 use thiserror::Error;
 
-pub const MAX_SENDER_LINES: usize = 200_002;
-pub const MAX_SENDER_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_SENDER_LINES: usize = 400_004;
+pub const MAX_SENDER_BYTES: usize = 4 * 1024 * 1024;
 pub const DEFAULT_GRBL_RX_BUFFER_BYTES: usize = 127;
 pub const MAX_GRBL_RX_BUFFER_BYTES: usize = 4095;
 
@@ -130,6 +130,11 @@ pub struct SenderSnapshot {
     pub current_source_line: Option<usize>,
     pub current_command: Option<String>,
     pub requested_tool: Option<u8>,
+    pub progress_sequence: u64,
+    pub last_acknowledged_source_line: Option<usize>,
+    pub last_acknowledged_command: Option<String>,
+    pub seconds_since_acknowledgement: f64,
+    pub shutdown_commands_acknowledged: bool,
     pub last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure: Option<SenderFailure>,
@@ -156,6 +161,11 @@ impl Default for SenderSnapshot {
             current_source_line: None,
             current_command: None,
             requested_tool: None,
+            progress_sequence: 0,
+            last_acknowledged_source_line: None,
+            last_acknowledged_command: None,
+            seconds_since_acknowledgement: 0.0,
+            shutdown_commands_acknowledged: false,
             last_error: None,
             failure: None,
             progress: 0.0,
@@ -204,6 +214,11 @@ pub struct Sender {
     in_flight_bytes: usize,
     deferred_program_end: Option<DryRunLine>,
     last_line: Option<DryRunLine>,
+    last_acknowledged_line: Option<DryRunLine>,
+    last_acknowledged_at: Option<Instant>,
+    finished_acknowledgement_age: Option<Duration>,
+    shutdown_acknowledged: usize,
+    shutdown_total: usize,
     last_error: Option<String>,
     failure: Option<SenderFailure>,
     paused_from: Option<SenderState>,
@@ -233,6 +248,11 @@ impl Sender {
             in_flight_bytes: 0,
             deferred_program_end: None,
             last_line: None,
+            last_acknowledged_line: None,
+            last_acknowledged_at: None,
+            finished_acknowledgement_age: None,
+            shutdown_acknowledged: 0,
+            shutdown_total: 0,
             last_error: None,
             failure: None,
             paused_from: None,
@@ -299,6 +319,11 @@ impl Sender {
             return Err(SenderError::Busy(self.state));
         }
         self.validate_plan(&plan)?;
+        self.shutdown_total = plan
+            .lines()
+            .iter()
+            .filter(|line| line.kind() == DryRunLineKind::SafetyEpilogue)
+            .count();
         self.plan = Some(plan);
         self.state = SenderState::Ready;
         self.mode = Some(mode);
@@ -308,6 +333,10 @@ impl Sender {
         self.in_flight_bytes = 0;
         self.deferred_program_end = None;
         self.last_line = None;
+        self.last_acknowledged_line = None;
+        self.last_acknowledged_at = None;
+        self.finished_acknowledgement_age = None;
+        self.shutdown_acknowledged = 0;
         self.last_error = None;
         self.failure = None;
         self.paused_from = None;
@@ -327,7 +356,9 @@ impl Sender {
             });
         }
         self.state = SenderState::Running;
-        self.started_at = Some(Instant::now());
+        let now = Instant::now();
+        self.started_at = Some(now);
+        self.last_acknowledged_at = Some(now);
         Ok(self.snapshot())
     }
 
@@ -441,6 +472,9 @@ impl Sender {
             });
         }
         self.acknowledged_lines = self.acknowledged_lines.saturating_add(1);
+        if let Some(line) = self.last_line.clone() {
+            self.record_acknowledgement(&line);
+        }
         self.state = SenderState::Running;
         self.resume_clock();
         Ok(self.snapshot())
@@ -492,6 +526,9 @@ impl Sender {
                 self.last_line = Some(line);
                 if self.mode == Some(SenderMode::CheckRun) {
                     self.acknowledged_lines = self.acknowledged_lines.saturating_add(1);
+                    if let Some(line) = self.last_line.clone() {
+                        self.record_acknowledgement(&line);
+                    }
                     continue;
                 }
                 self.state = SenderState::ToolChange;
@@ -530,6 +567,7 @@ impl Sender {
         if let Some(duration_ms) = line.estimated_duration_ms() {
             self.estimated_completed_ms = self.estimated_completed_ms.saturating_add(duration_ms);
         }
+        self.record_acknowledgement(&line);
         self.last_line = Some(line);
         self.acknowledged_lines = self.acknowledged_lines.saturating_add(1);
         if matches!(
@@ -637,6 +675,20 @@ impl Sender {
             current_source_line: current.and_then(DryRunLine::source_line),
             current_command: current.map(|line| line.command().to_owned()),
             requested_tool: current.and_then(DryRunLine::tool_number),
+            progress_sequence: self.acknowledged_lines as u64,
+            last_acknowledged_source_line: self
+                .last_acknowledged_line
+                .as_ref()
+                .and_then(DryRunLine::source_line),
+            last_acknowledged_command: self
+                .last_acknowledged_line
+                .as_ref()
+                .map(|line| line.command().to_owned()),
+            seconds_since_acknowledgement: self
+                .acknowledgement_age_at(Instant::now())
+                .as_secs_f64(),
+            shutdown_commands_acknowledged: self.shutdown_total > 0
+                && self.shutdown_acknowledged == self.shutdown_total,
             last_error: self.last_error.clone(),
             failure: self.failure.clone(),
             progress: if total_lines == 0 {
@@ -675,9 +727,28 @@ impl Sender {
 
     fn freeze_clock(&mut self) {
         if self.finished_elapsed.is_none() {
-            self.finished_elapsed = Some(self.elapsed_at(Instant::now()));
+            let now = Instant::now();
+            self.finished_elapsed = Some(self.elapsed_at(now));
+            self.finished_acknowledgement_age = Some(self.acknowledgement_age_at(now));
             self.paused_at = None;
         }
+    }
+
+    fn record_acknowledgement(&mut self, line: &DryRunLine) {
+        self.last_acknowledged_line = Some(line.clone());
+        self.last_acknowledged_at = Some(Instant::now());
+        if line.kind() == DryRunLineKind::SafetyEpilogue {
+            self.shutdown_acknowledged = self.shutdown_acknowledged.saturating_add(1);
+        }
+    }
+
+    fn acknowledgement_age_at(&self, now: Instant) -> Duration {
+        if let Some(age) = self.finished_acknowledgement_age {
+            return age;
+        }
+        self.last_acknowledged_at
+            .map(|at| now.saturating_duration_since(at))
+            .unwrap_or(Duration::ZERO)
     }
 
     fn elapsed_at(&self, now: Instant) -> Duration {
@@ -858,6 +929,9 @@ mod tests {
         assert_eq!(failure.grbl_code, Some(20));
         assert_eq!(failure.source_line, Some(1));
         assert_eq!(failure.command.as_deref(), Some("G21"));
+        assert_eq!(snapshot.progress_sequence, 2);
+        assert_eq!(snapshot.last_acknowledged_command.as_deref(), Some("M9"));
+        assert!(!snapshot.shutdown_commands_acknowledged);
         assert!(sender.next_line().is_none());
     }
 
@@ -1066,6 +1140,7 @@ mod tests {
         assert_eq!(snapshot.state, SenderState::Draining);
         assert_eq!(snapshot.current_command.as_deref(), Some("M30"));
         assert_eq!(snapshot.acknowledged_lines + 1, snapshot.total_lines);
+        assert!(snapshot.shutdown_commands_acknowledged);
     }
 
     #[test]
@@ -1145,7 +1220,7 @@ mod tests {
         assert_eq!(
             sender.load(plan("G0 X1")).unwrap_err(),
             SenderError::TooManyLines {
-                actual: 3,
+                actual: 5,
                 limit: 2
             }
         );
@@ -1184,6 +1259,59 @@ mod tests {
             sender.complete_draining().unwrap().state,
             SenderState::Completed
         );
+    }
+
+    #[test]
+    fn acknowledgement_heartbeat_resets_on_ok_and_freezes_at_terminal_state() {
+        let mut sender = Sender::default();
+        sender.load(plan("G21\nG1 X1 F10")).unwrap();
+        sender.start().unwrap();
+        std::thread::sleep(Duration::from_millis(8));
+        assert!(sender.snapshot().seconds_since_acknowledgement >= 0.005);
+
+        let line = sender.next_line().unwrap();
+        let acknowledged = sender.acknowledge_ok().unwrap();
+        assert_eq!(acknowledged.progress_sequence, 1);
+        assert_eq!(
+            acknowledged.last_acknowledged_command.as_deref(),
+            Some(line.command())
+        );
+        assert!(acknowledged.seconds_since_acknowledgement < 0.005);
+
+        let cancelled = sender.cancel().unwrap();
+        std::thread::sleep(Duration::from_millis(8));
+        assert_eq!(
+            sender.snapshot().seconds_since_acknowledgement,
+            cancelled.seconds_since_acknowledgement
+        );
+    }
+
+    #[test]
+    fn streams_one_hundred_thousand_lines_with_constant_bounded_fifo_state() {
+        let source = "G1X1F10\n".repeat(100_000);
+        let plan = plan(&source);
+        assert_eq!(plan.lines().len(), 100_004);
+        let mut sender = Sender::default();
+        sender.load(plan).unwrap();
+        sender.start().unwrap();
+        let mut peak_in_flight = 0;
+
+        while sender.snapshot().state == SenderState::Running {
+            while sender.next_line().is_some() {
+                let snapshot = sender.snapshot();
+                peak_in_flight = peak_in_flight.max(snapshot.in_flight_lines);
+                assert!(snapshot.rx_buffer_bytes <= snapshot.rx_buffer_capacity);
+            }
+            if sender.has_in_flight() {
+                sender.acknowledge_ok().unwrap();
+            }
+        }
+
+        let completed = sender.snapshot();
+        assert_eq!(completed.state, SenderState::Completed);
+        assert_eq!(completed.acknowledged_lines, 100_004);
+        assert!(completed.shutdown_commands_acknowledged);
+        assert!(peak_in_flight < 32);
     }
 
     #[test]

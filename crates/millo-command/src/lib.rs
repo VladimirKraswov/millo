@@ -2675,7 +2675,7 @@ mod tests {
         assert!(blocked_while_moving.receipt.is_none());
         assert!(!blocked_while_moving.inspection.readiness.test_jog_ready);
 
-        for _ in 0..4 {
+        for _ in 0..6 {
             if arbiter.refresh_status().await.unwrap().machine.mode == MachineMode::Idle {
                 break;
             }
@@ -3423,15 +3423,12 @@ mod tests {
     async fn deferred_program_end_timeout_fails_the_correlated_line() {
         let source = "G21 G90 G94\nG1 X2 F20\nM30";
         let (arbiter, control, worker) = serial_preflight_arbiter();
-        for _ in 0..4 {
-            control.queue_program_ok();
-        }
-        control.queue_program_stall();
         let task = tokio::spawn(worker);
         arbiter.connect().await.unwrap();
         authorize_and_start_serial_fixture(&arbiter, source, true).await;
         wait_for_sender(&arbiter, SenderState::Draining).await;
 
+        control.queue_program_stall();
         arbiter.refresh_status().await.unwrap();
         let failed = wait_for_sender(&arbiter, SenderState::Failed).await;
 
@@ -3726,8 +3723,9 @@ mod tests {
         let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
 
         assert_eq!(started.state, SenderState::Running);
-        assert_eq!(completed.acknowledged_lines, 5);
-        assert_eq!(completed.total_lines, 5);
+        assert_eq!(completed.acknowledged_lines, 7);
+        assert_eq!(completed.total_lines, 7);
+        assert!(completed.shutdown_commands_acknowledged);
         assert_eq!(
             control.writes(),
             vec![
@@ -3737,6 +3735,8 @@ mod tests {
                 b"G21 G90\n".to_vec(),
                 b"G0 X1\n".to_vec(),
                 b"G1 X2 F10\n".to_vec(),
+                b"M5\n".to_vec(),
+                b"M9\n".to_vec(),
             ]
         );
         task.abort();
@@ -3813,6 +3813,8 @@ mod tests {
                 b"M9\n".to_vec(),
                 b"G21\n".to_vec(),
                 b"G0 X1\n".to_vec(),
+                b"M5\n".to_vec(),
+                b"M9\n".to_vec(),
             ]
         );
         task.abort();

@@ -1570,6 +1570,32 @@ select:focus-visible {
   font-size: 8px;
 }
 
+.sender-heartbeat {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  padding-top: 5px;
+  border-top: 1px solid #263139;
+  color: #75838c;
+  font-size: 7px;
+}
+
+.sender-heartbeat code {
+  overflow: hidden;
+  color: #aebbc1;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sender-heartbeat strong {
+  color: #77d6b3;
+  font-size: 7px;
+  white-space: nowrap;
+}
+
 .dry-run-actions {
   gap: 6px;
 }

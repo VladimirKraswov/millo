@@ -21,6 +21,13 @@ export interface SenderTimingReadModel {
   readonly remaining: string;
 }
 
+export interface SenderHeartbeatReadModel {
+  readonly sequence: number;
+  readonly lastLine: string;
+  readonly age: string;
+  readonly shutdownAcknowledged: boolean;
+}
+
 const failureLabels: Record<NonNullable<SenderSnapshot["failure"]>["kind"], string> = {
   grblError: "GRBL error",
   alarm: "GRBL alarm",
@@ -49,6 +56,25 @@ export const senderTiming = (
   estimateLabel: sender.timeEstimateComplete ? "ETA" : "ETA >=",
   remaining: formatRuntime(sender.estimatedRemainingSeconds),
 });
+
+export const senderHeartbeat = (
+  sender: SenderSnapshot,
+): SenderHeartbeatReadModel => {
+  const reportedAge = sender.secondsSinceAcknowledgement ?? 0;
+  const age = Number.isFinite(reportedAge) ? Math.max(0, reportedAge) : 0;
+  return {
+    sequence: Math.max(
+      0,
+      Math.trunc(sender.progressSequence ?? sender.acknowledgedLines),
+    ),
+    lastLine:
+      sender.lastAcknowledgedSourceLine === undefined
+        ? "Guard"
+        : `L${sender.lastAcknowledgedSourceLine}`,
+    age: age < 10 ? `${age.toFixed(1)}s` : `${Math.round(age)}s`,
+    shutdownAcknowledged: sender.shutdownCommandsAcknowledged ?? false,
+  };
+};
 
 export const senderFailureSummary = (
   sender: SenderSnapshot,

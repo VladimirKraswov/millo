@@ -177,12 +177,18 @@ port names remain untouched.
   speed, coolant activation, probing, Air-run M6, machine/reference-coordinate motion,
   coordinate mutation, parser safety/errors, incomplete previews, and commands
   over 255 bytes.
-- Approved plans contain normalized executable lines plus only an M5/M9 safety
-  preamble. Plan and line fields are private and have no deserialize path.
+- Approved plans contain normalized executable lines plus an M5/M9 safety
+  preamble and a distinct M5/M9 safety epilogue. Plan and line fields are
+  private and have no deserialize path.
 - Sender tests prove bounded RX-window fill, exact command-plus-newline byte
   accounting, FIFO response correlation, pause/resume/cancel transitions,
   exact failed source-line retention, terminal completion only after every
   `ok`, and line/plan bounds.
+- A 100,000-line sender regression finishes in bounded FIFO state, asserts every
+  snapshot remains within RX capacity, and prevents accidental O(n) heartbeat
+  work. The test exposed and fixed an initial quadratic shutdown-counter scan.
+- Heartbeat tests verify that each `ok` resets acknowledgement age, updates the
+  exact line/command and sequence, and freezes evidence on terminal state.
 - Sender and actor tests assert structured failure kind, GRBL code, source line,
   and command for rejected responses and disconnects. UI tests format this
   contract without parsing backend error text.
@@ -346,9 +352,10 @@ cargo run -p millo-desktop --example hardware_check_run -- \
   --optional-stop --block-delete
 ```
 
-On 2026-08-12 the physical controller accepted all 8/8 sender steps with both
+On 2026-08-12 the physical controller accepted all 10/10 sender steps with both
 options enabled and returned to `Idle`. The parser reported two motions because
-the optional `N30` block was removed before modal/geometry construction.
+the optional `N30` block was removed before modal/geometry construction. The
+additional two steps are the typed M5/M9 shutdown epilogue before M30.
 
 - The React check-run read model requires a loaded program, typed gateway, and
   serial target and refuses to replace an active sender. Program workspace

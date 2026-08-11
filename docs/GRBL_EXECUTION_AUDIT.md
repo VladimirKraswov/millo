@@ -39,6 +39,8 @@
   changes.
 - Dispatch: reported RX capacity minus one byte, exact command/newline accounting,
   oldest-command FIFO, periodic realtime status.
+- Shutdown: typed `M5`, `M9` epilogue follows source commands and precedes a
+  deferred M2/M30; their acknowledgements are explicit snapshot evidence.
 - Timing: per-line millisecond estimate, correlated completed/remaining totals,
   monotonic active elapsed, Hold exclusion, terminal freeze, explicit lower
   bound when rapid timing is unknown.
@@ -49,6 +51,9 @@
 - Failure data: terminal snapshots retain a closed failure kind, optional GRBL
   code, source line, and exact command after the FIFO is cleared. Text remains
   display-only compatibility data.
+- Progress data: monotonic acknowledgement sequence, last acknowledged source
+  line/command, acknowledgement age, and shutdown-tail completion. Snapshot
+  generation is constant-time regardless of program length.
 - Check: serial-only typed `$C`, one command in flight, automatic verified exit.
 - Tool change: isolated `M6` drains the response FIFO into a host-only
   `ToolChange` state; continuation is line/tool-bound and repeats fresh
@@ -69,10 +74,10 @@ On `/dev/cu.usbmodem11101`, GRBL `1.1f.20230316`:
 - `grbl-tool-change-check.nc`: 16/16 sender steps completed on 2026-08-12.
   Physical GRBL validated `T2` and mixed geometry, Millo acknowledged the M6
   barrier locally, and the controller returned to Idle.
-- `grbl-stream-semantics-check.nc`: 8/8 sender steps completed on 2026-08-12
+- `grbl-stream-semantics-check.nc`: 10/10 sender steps completed on 2026-08-12
   with Optional Stop and Block Delete enabled. Host checksum validation passed,
-  the optional `N30` block was absent from the wire, `N50 M1` was accepted, and
-  the controller returned from Check to Idle.
+  the optional `N30` block was absent from the wire, `N50 M1` and the injected
+  M5/M9 shutdown tail were accepted, and the controller returned to Idle.
 - `air-square-20mm.nc`: 10/10 physical Air run, planner drained, WPos returned
   to XYZ zero.
 - Realtime override smoke: observed `Ov:110,50,99`, then verified restore to

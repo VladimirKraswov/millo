@@ -53,6 +53,7 @@ import { canStartCheckRun } from "./checkRunReadModel";
 import {
   dryRunControls,
   senderFailureSummary,
+  senderHeartbeat,
   senderTiming,
 } from "./dryRunReadModel";
 import { realRunPreflightControls } from "./realRunPreflightReadModel";
@@ -95,15 +96,28 @@ const formatDuration = (seconds: number, complete: boolean): string => {
 
 function SenderTiming({ sender }: { readonly sender: SenderSnapshot }) {
   const timing = senderTiming(sender);
+  const heartbeat = senderHeartbeat(sender);
   return (
-    <div className="sender-timing" aria-label="Run timing">
-      <span>
-        Elapsed <code>{timing.elapsed}</code>
-      </span>
-      <span>
-        {timing.estimateLabel} <code>{timing.remaining}</code>
-      </span>
-    </div>
+    <>
+      <div className="sender-timing" aria-label="Run timing">
+        <span>
+          Elapsed <code>{timing.elapsed}</code>
+        </span>
+        <span>
+          {timing.estimateLabel} <code>{timing.remaining}</code>
+        </span>
+      </div>
+      <div
+        className="sender-heartbeat"
+        aria-label="Sender acknowledgement heartbeat"
+      >
+        <span>ACK #{heartbeat.sequence}</span>
+        <code>
+          {heartbeat.lastLine} · {heartbeat.age}
+        </code>
+        {heartbeat.shutdownAcknowledged && <strong>M5 · M9 OK</strong>}
+      </div>
+    </>
   );
 }
 

@@ -1561,7 +1561,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(plan.source_name(), "safe.nc");
-        assert_eq!(plan.lines().len(), 5);
+        assert_eq!(plan.lines().len(), 7);
+        assert_eq!(plan.lines().first().unwrap().command(), "M5");
+        assert_eq!(plan.lines().get(1).unwrap().command(), "M9");
+        assert_eq!(plan.lines().get(5).unwrap().command(), "M5");
+        assert_eq!(plan.lines().last().unwrap().command(), "M9");
     }
 
     #[test]

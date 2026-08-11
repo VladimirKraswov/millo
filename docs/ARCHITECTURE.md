@@ -484,6 +484,17 @@ does not schedule or execute controller I/O.
 - Sender failures are typed at the controller boundary. GRBL error/alarm/reset,
   timeout, disconnect, transport, unsafe-state, and internal faults retain the
   exact source line and command after buffered state is cleared.
+- Plan construction injects two immutable epilogue lines, `M5` and `M9`, after
+  the last source command and before an optional M2/M30. They use a distinct
+  `SafetyEpilogue` kind and cannot be changed by UI, profile, plugin, or file.
+  Physical completion requires those lines to be acknowledged and fresh `Idle`.
+- Sender snapshots retain progress metadata directly: acknowledgement sequence,
+  last accepted source line/command, age since the last `ok`, and whether the
+  full shutdown tail was accepted. All values are O(1); no snapshot walks the
+  plan or response history.
+- The sender owns only the immutable plan plus a `VecDeque` bounded by reported
+  RX capacity. It never creates one UI object or response future per source
+  line. A 100,000-line regression checks byte bounds and peak in-flight depth.
 - Stream-control syntax is interpreted before a plan exists. A final decimal
   `*checksum` is XOR-validated against the exact pre-separator source bytes; a
   mismatch, malformed value, duplicate separator, or checksummed block without
