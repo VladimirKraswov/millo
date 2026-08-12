@@ -103,7 +103,7 @@ export function ToolChangeDialog({
       >
         <header>
           <div>
-            <span>Host-managed M6 · L{sourceLine}</span>
+            <span>Смена инструмента · строка L{sourceLine}</span>
             <h2 id="tool-change-title">
               {requestedTool === undefined
                 ? "Смена инструмента"
@@ -124,8 +124,8 @@ export function ToolChangeDialog({
         <div className="first-cut-intro">
           <CircleAlert aria-hidden="true" size={18} />
           <div>
-            <strong>Sender остановлен перед M6</strong>
-            <span>GRBL не получал M6. Продолжение потребует свежий Idle и проверку G54-G59.</span>
+            <strong>Выполнение остановлено перед M6</strong>
+            <span>Команда M6 не отправлялась в GRBL. Перед продолжением Millo проверит Idle и G54-G59.</span>
           </div>
           <code>M6</code>
         </div>
@@ -180,7 +180,7 @@ export function ToolChangeDialog({
           {error ?? "Нет ошибок"}
         </p>
         <footer>
-          <span>Sender повторно проверит Idle и рабочую систему координат.</span>
+          <span>Millo повторно проверит Idle и рабочую систему координат.</span>
           <button
             className="first-cut-authorize"
             disabled={!progress.complete || busy}

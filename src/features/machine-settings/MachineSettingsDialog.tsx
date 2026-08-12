@@ -282,7 +282,7 @@ export function MachineSettingsDialog({
       >
         <header>
           <div>
-            <span>Machine settings</span>
+            <span>Настройки станка</span>
             <h2 id="settings-dialog-title">{profile?.name ?? "Настройки станка"}</h2>
           </div>
           <button aria-label="Закрыть" onClick={onClose} title="Закрыть" type="button">
@@ -329,7 +329,7 @@ export function MachineSettingsDialog({
               </div>
               <label className="machine-jog-limit-field">
                 <span>
-                  <strong>Максимальный jog</strong>
+                  <strong>Максимальный шаг Jog</strong>
                   <small>
                     Локальный предел одного перемещения · не больше {Math.max(
                       localDraft.travelMm.x,
@@ -377,7 +377,7 @@ export function MachineSettingsDialog({
                 <legend>Физически установлено</legend>
                 {[
                   ["limitSwitchesInstalled", "Концевики"],
-                  ["homingInstalled", "Homing"],
+                  ["homingInstalled", "Датчики базирования"],
                   ["probeInstalled", "Датчик касания"],
                   ["emergencyStopInstalled", "Аварийная кнопка"],
                 ].map(([key, label]) => (
@@ -523,13 +523,13 @@ export function MachineSettingsDialog({
             <section className="settings-history">
               <History aria-hidden="true" size={22} />
               <div>
-                <strong>Baseline текущего подключения</strong>
+                <strong>Исходные значения текущего подключения</strong>
                 <span>
                   Откат у поля всегда возвращает значение, считанное при этом подключении.
                 </span>
               </div>
               <dl>
-                <div><dt>Fingerprint</dt><dd>{settings?.fingerprint.label ?? "Нет соединения"}</dd></div>
+                <div><dt>Идентификатор</dt><dd>{settings?.fingerprint.label ?? "Нет соединения"}</dd></div>
                 <div><dt>Надёжность ID</dt><dd>{settings?.fingerprint.confidence ?? "--"}</dd></div>
                 <div><dt>Архивных ревизий</dt><dd>{settings?.revisionCount ?? 0}</dd></div>
                 <div><dt>Параметров</dt><dd>{settings?.snapshot.values.length ?? 0}</dd></div>

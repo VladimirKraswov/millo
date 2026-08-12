@@ -325,6 +325,10 @@ evidence. The contract is recorded in
 Completed GRBL Check run sequences are consumed once by the UI before preflight
 is repeated; recurring terminal snapshots cannot replace the resulting
 `Начать гравировку` or `Запустить без резания` action.
+An active Check card always exposes `Отменить проверку`; cancellation performs
+the verified `$C -> Idle` cleanup and returns to the same readiness surface.
+Failed and cancelled checks never enter physical-run recovery because no motion
+authorization or recovery record was created.
 GRBL's periodic `WCO`/override fields are reconciled in the Rust controller, so
 work coordinates and readiness remain stable between sparse status frames while
 reset and reconnect still discard stale evidence. See

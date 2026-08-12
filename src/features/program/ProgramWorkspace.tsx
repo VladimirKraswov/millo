@@ -70,6 +70,7 @@ import {
 } from "./dryRunReadModel";
 import { realRunPreflightControls } from "./realRunPreflightReadModel";
 import {
+  checkSenderAction,
   physicalSenderActionLayout,
   senderActionLayout,
   senderRunIsVisibleForProgram,
@@ -117,16 +118,29 @@ interface ProgramWorkspaceProps {
 const formatDistance = (value: number): string =>
   value >= 1_000 ? `${(value / 1_000).toFixed(2)} m` : `${value.toFixed(1)} mm`;
 
+const formatSegmentCount = (count: number): string => {
+  const lastTwo = count % 100;
+  const last = count % 10;
+  const noun = lastTwo >= 11 && lastTwo <= 14
+    ? "сегментов"
+    : last === 1
+      ? "сегмент"
+      : last >= 2 && last <= 4
+        ? "сегмента"
+        : "сегментов";
+  return `${count} ${noun} траектории`;
+};
+
 const formatDuration = (seconds: number, complete: boolean): string => {
   const rounded = Math.max(0, Math.round(seconds));
   const hours = Math.floor(rounded / 3_600);
   const minutes = Math.floor((rounded % 3_600) / 60);
   const remainder = rounded % 60;
   const value = hours > 0
-    ? `${hours}h ${minutes}m`
+      ? `${hours} ч ${minutes} мин`
     : minutes > 0
-      ? `${minutes}m ${remainder}s`
-      : `${remainder}s`;
+      ? `${minutes} мин ${remainder} с`
+      : `${remainder} с`;
   return `${complete ? "~" : ">="}${value}`;
 };
 
@@ -135,17 +149,18 @@ function SenderTiming({ sender }: { readonly sender: SenderSnapshot }) {
   const heartbeat = senderHeartbeat(sender);
   return (
     <>
-      <div className="sender-timing" aria-label="Run timing">
+      <div className="sender-timing" aria-label="Время выполнения">
         <span>
-          Elapsed <code>{timing.elapsed}</code>
+          Прошло <code>{timing.elapsed}</code>
         </span>
         <span>
-          {timing.estimateLabel} <code>{timing.remaining}</code>
+          {timing.estimateLabel === "ETA" ? "Осталось" : "Осталось ≥"}{" "}
+          <code>{timing.remaining}</code>
         </span>
       </div>
       <div
         className="sender-heartbeat"
-        aria-label="Sender acknowledgement heartbeat"
+        aria-label="Подтверждения контроллера"
       >
         <span>ACK #{heartbeat.sequence}</span>
         <code>
@@ -163,15 +178,15 @@ const warningTitle = (warning: ProgramWarning): string =>
   warning.code.replaceAll("-", " ");
 
 const senderLabels: Record<SenderState, string> = {
-  idle: "Not started",
-  ready: "Ready",
-  running: "Running",
-  paused: "Paused",
-  toolChange: "Tool change",
-  draining: "Physical motion",
-  completed: "Completed",
-  failed: "Stopped on error",
-  cancelled: "Cancelled",
+  idle: "Не запускалась",
+  ready: "Готово",
+  running: "Выполняется",
+  paused: "Пауза",
+  toolChange: "Смена инструмента",
+  draining: "Завершение движения",
+  completed: "Завершено",
+  failed: "Остановлено из-за ошибки",
+  cancelled: "Остановлено",
 };
 
 export function ProgramWorkspace({
@@ -286,7 +301,8 @@ export function ProgramWorkspace({
   useEffect(() => {
     if (
       !realRunGateway ||
-      (sender.state !== "failed" && sender.state !== "cancelled")
+      (sender.state !== "failed" && sender.state !== "cancelled") ||
+      (sender.mode !== "airRun" && sender.mode !== "cutRun")
     ) {
       return;
     }
@@ -309,7 +325,7 @@ export function ProgramWorkspace({
     return () => {
       active = false;
     };
-  }, [realRunGateway, sender.runSequence, sender.state]);
+  }, [realRunGateway, sender.mode, sender.runSequence, sender.state]);
 
   useEffect(() => {
     if (!realRunTarget || !realRunAvailable) {
@@ -704,6 +720,7 @@ export function ProgramWorkspace({
   });
   const mockActions = senderActionLayout(displayedSender.state);
   const physicalActions = physicalSenderActionLayout(displayedSender.state);
+  const checkAction = checkSenderAction(displayedSender.state);
   const mockStatus = displayedSenderFailure
     ? displayedSenderFailure
     : !dryRunAvailable
@@ -711,8 +728,18 @@ export function ProgramWorkspace({
       : displayedSender.state === "completed"
         ? "Все строки подтверждены Mock GRBL"
         : displayedSender.state === "cancelled"
-          ? "Sender остановлен оператором"
+          ? "Тест остановлен оператором"
           : "Каждая строка сопоставляется с ответом контроллера";
+
+  const returnFromCheck = () => {
+    setClearedSenderRunSequence(sender.runSequence);
+    setSender((current) => ({
+      ...idleSenderSnapshot,
+      runSequence: current.runSequence,
+    }));
+    setRealRunReport(undefined);
+    setDiagnosticsOpen(displayedSender.state === "failed");
+  };
 
   const runMockPrimaryAction = () => {
     if (!dryRunGateway) return;
@@ -748,26 +775,26 @@ export function ProgramWorkspace({
     <section className="program-workspace" aria-labelledby="program-title">
       <header className="program-header">
         <div className="program-identity">
-          <span>Program</span>
-          <strong id="program-title">{program?.sourceName ?? "G-code preview"}</strong>
+          <span>Программа</span>
+          <strong id="program-title">{program?.sourceName ?? "Предпросмотр G-code"}</strong>
         </div>
         <div className="program-actions">
           {program && (
-            <div className="preview-view" role="group" aria-label="Preview view">
+            <div className="preview-view" role="group" aria-label="Вид траектории">
               <button
-                aria-label="Top view"
+                aria-label="Вид сверху"
                 aria-pressed={view === "top"}
                 onClick={() => setView("top")}
-                title="Top view"
+                title="Вид сверху"
                 type="button"
               >
                 <Square aria-hidden="true" size={14} />
               </button>
               <button
-                aria-label="Isometric view"
+                aria-label="Изометрический вид"
                 aria-pressed={view === "iso"}
                 onClick={() => setView("iso")}
-                title="Isometric view"
+                title="Изометрический вид"
                 type="button"
               >
                 <Box aria-hidden="true" size={14} />
@@ -819,11 +846,11 @@ export function ProgramWorkspace({
           </div>
           <dl>
             <div>
-              <dt>Executed</dt>
+              <dt>Выполнено</dt>
               <dd>{recoveryCandidate.executingSourceLine ?? "нет Ln"}</dd>
             </div>
             <div>
-              <dt>Restart</dt>
+              <dt>Начать с</dt>
               <dd>
                 {recoveryCandidate.checkpointRestartAvailable
                   ? recoveryCandidate.restartSourceLine
@@ -841,7 +868,7 @@ export function ProgramWorkspace({
         <div className="program-body">
           <div className="program-preview-stage">
             <Suspense
-              fallback={<div className="toolpath-preview is-loading">Preview...</div>}
+              fallback={<div className="toolpath-preview is-loading">Загрузка траектории...</div>}
             >
               <ToolpathPreview
                 program={program}
@@ -849,20 +876,20 @@ export function ProgramWorkspace({
                 view={view}
               />
             </Suspense>
-            <div className="preview-legend" aria-label="Toolpath legend">
-              <span className="is-cut">Cut</span>
-              <span className="is-rapid">Rapid</span>
+            <div className="preview-legend" aria-label="Обозначения траектории">
+              <span className="is-cut">Рабочий ход</span>
+              <span className="is-rapid">Быстрый ход</span>
             </div>
             {selectedProgramLine && (
               <div className="preview-selection" role="status">
                 <span>L{selectedProgramLine.sourceLine}</span>
                 <code title={selectedProgramLine.source}>
-                  {selectedProgramLine.source || "Empty line"}
+                  {selectedProgramLine.source || "Пустая строка"}
                 </code>
                 <small>
                   {selectedMotionCount > 0
-                    ? `${selectedMotionCount} preview segment${selectedMotionCount === 1 ? "" : "s"}`
-                    : "No preview motion"}
+                    ? formatSegmentCount(selectedMotionCount)
+                    : "В этой строке нет движения"}
                 </small>
                 <button
                   aria-label="Очистить выбор строки"
@@ -876,11 +903,11 @@ export function ProgramWorkspace({
             )}
             <dl className="program-metrics">
               <div>
-                <dt>Lines</dt>
+                <dt>Строки</dt>
                 <dd>{program.summary.lineCount}</dd>
               </div>
               <div>
-                <dt>Time</dt>
+                <dt>Время</dt>
                 <dd>
                   {formatDuration(
                     program.summary.estimatedTotalTimeSeconds,
@@ -889,11 +916,11 @@ export function ProgramWorkspace({
                 </dd>
               </div>
               <div>
-                <dt>Path</dt>
+                <dt>Траектория</dt>
                 <dd>{formatDistance(pathDistance)}</dd>
               </div>
               <div>
-                <dt>Size XYZ</dt>
+                <dt>Размер XYZ</dt>
                 <dd>
                   {bounds
                     ? `${bounds.size.x.toFixed(1)} × ${bounds.size.y.toFixed(1)} × ${bounds.size.z.toFixed(1)}`
@@ -903,28 +930,28 @@ export function ProgramWorkspace({
             </dl>
           </div>
 
-          <aside className="program-diagnostics" aria-label="Program diagnostics">
+          <aside className="program-diagnostics" aria-label="Выполнение и диагностика программы">
             {realRunTarget && (programRunVisible || checkRunVisible) ? (
               <div className={`dry-run-card program-run-card is-${displayedSender.state}`}>
                 <div className="dry-run-heading">
                   <div>
                     <span>
                       {checkRunVisible
-                        ? "GRBL Check"
+                        ? "Проверка GRBL"
                         : sender.mode === "airRun"
-                          ? "Air run"
-                          : "Cut run"}
+                          ? "Без резания"
+                          : "Гравировка"}
                     </span>
                     <strong>
                       {displayedSender.state === "draining"
-                        ? "Waiting for GRBL Idle"
+                        ? "Ждём полной остановки станка"
                         : senderLabels[displayedSender.state]}
                     </strong>
                   </div>
                   <code>{progressPercent}%</code>
                 </div>
                 <div
-                  aria-label="Program run progress"
+                  aria-label="Прогресс выполнения программы"
                   aria-valuemax={100}
                   aria-valuemin={0}
                   aria-valuenow={progressPercent}
@@ -937,9 +964,9 @@ export function ProgramWorkspace({
                   <span>
                     {displayedSender.currentSourceLine !== undefined
                       ? `L${displayedSender.currentSourceLine}`
-                      : "Guard"}
+                      : "Подготовка"}
                   </span>
-                  <code>{displayedSender.currentCommand ?? "M5 · M9 preamble"}</code>
+                  <code>{displayedSender.currentCommand ?? "M5 · M9 перед запуском"}</code>
                 </div>
                 <SenderTiming sender={displayedSender} />
                 <div className="dry-run-actions">
@@ -1000,6 +1027,28 @@ export function ProgramWorkspace({
                       {stopConfirming ? "Ещё раз: завершить" : "Завершить задание"}
                     </button>
                   )}
+                  {checkRunVisible && checkAction === "cancel" && dryRunGateway && (
+                    <button
+                      className="is-cancel"
+                      disabled={senderCommandBusy}
+                      onClick={() => void runSenderAction(dryRunGateway.cancel)}
+                      type="button"
+                    >
+                      <X aria-hidden="true" size={13} />
+                      Отменить проверку
+                    </button>
+                  )}
+                  {checkRunVisible && checkAction === "returnToPreparation" && (
+                    <button
+                      className="is-terminal-action"
+                      disabled={senderCommandBusy}
+                      onClick={returnFromCheck}
+                      type="button"
+                    >
+                      <RotateCcw aria-hidden="true" size={13} />
+                      Вернуться к подготовке
+                    </button>
+                  )}
                   {programRunVisible &&
                     physicalActions.primary === "prepareRerun" && (
                     <button
@@ -1057,7 +1106,9 @@ export function ProgramWorkspace({
                       : displayedSender.state === "paused"
                         ? "Задание на паузе: продолжите его или завершите, чтобы освободить Jog"
                       : displayedSender.state === "cancelled"
-                        ? "Задание завершено оператором; выберите восстановление или новый запуск"
+                        ? checkRunVisible
+                          ? "Проверка остановлена; вернитесь к подготовке и запустите её снова"
+                          : "Задание завершено оператором; выберите восстановление или новый запуск"
                       : checkRunVisible
                         ? "По одной строке · без движения и включения выходов"
                         : "Пауза сохраняет продолжение; завершение останавливает поток через Hold и Reset"}
@@ -1094,7 +1145,7 @@ export function ProgramWorkspace({
                     <ChevronDown aria-hidden="true" size={13} />
                   </summary>
                   <div className="program-execution-options">
-                    <label title="M1 Optional Stop">
+                    <label title="Остановка программы по M1">
                       <input
                         checked={programExecutionOptions.optionalStop}
                         disabled={preflightLoading || loading || senderActive}
@@ -1103,9 +1154,9 @@ export function ProgramWorkspace({
                         }
                         type="checkbox"
                       />
-                      <span>M1 Optional Stop</span>
+                      <span>Остановка по M1</span>
                     </label>
-                    <label title="Optional Block Delete">
+                    <label title="Не выполнять строки, начинающиеся с /">
                       <input
                         checked={programExecutionOptions.blockDelete}
                         disabled={preflightLoading || loading || senderActive}
@@ -1114,7 +1165,7 @@ export function ProgramWorkspace({
                         }
                         type="checkbox"
                       />
-                      <span>/ Block Delete</span>
+                      <span>Пропуск строк с /</span>
                     </label>
                   </div>
                   <button
@@ -1133,13 +1184,13 @@ export function ProgramWorkspace({
               <div className={`dry-run-card is-${displayedSender.state}`}>
                 <div className="dry-run-heading">
                   <div>
-                    <span>Bounded sender</span>
+                    <span>Тестовый прогон</span>
                     <strong>{senderLabels[displayedSender.state]}</strong>
                   </div>
                   <code>{progressPercent}%</code>
                 </div>
                 <div
-                  aria-label="Dry run progress"
+                  aria-label="Прогресс тестового прогона"
                   aria-valuemax={100}
                   aria-valuemin={0}
                   aria-valuenow={progressPercent}
@@ -1152,10 +1203,10 @@ export function ProgramWorkspace({
                   <span>
                     {displayedSender.currentSourceLine !== undefined
                       ? `L${displayedSender.currentSourceLine}`
-                      : "Guard"}
+                      : "Подготовка"}
                   </span>
                   <code>
-                    {displayedSender.currentCommand ?? "M5 · M9 preamble"}
+                    {displayedSender.currentCommand ?? "M5 · M9 перед запуском"}
                   </code>
                 </div>
                 <SenderTiming sender={displayedSender} />
@@ -1184,10 +1235,10 @@ export function ProgramWorkspace({
                       <Play aria-hidden="true" size={13} />
                     )}
                     {mockActions.primary === "pause"
-                      ? "Pause"
+                      ? "Пауза"
                       : mockActions.primary === "resume"
-                        ? "Resume"
-                        : "Mock dry run"}
+                        ? "Продолжить"
+                        : "Запустить тест"}
                   </button>
                   <button
                     aria-hidden={!mockActions.cancelVisible}
@@ -1202,7 +1253,7 @@ export function ProgramWorkspace({
                     type="button"
                   >
                     <X aria-hidden="true" size={13} />
-                    Cancel
+                    Отменить
                   </button>
                 </div>
                 <small className={displayedSenderFailure ? "is-error" : undefined}>
@@ -1226,7 +1277,7 @@ export function ProgramWorkspace({
                 <ChevronDown aria-hidden="true" size={13} />
               </summary>
               <div
-                aria-label="Program diagnostics view"
+                aria-label="Раздел диагностики программы"
                 className={`program-diagnostic-tabs${realRunTarget ? " has-preflight" : ""}`}
                 role="tablist"
               >
@@ -1238,7 +1289,7 @@ export function ProgramWorkspace({
                 role="tab"
                 type="button"
               >
-                Lines <strong>{program.lines.length}</strong>
+                Строки <strong>{program.lines.length}</strong>
               </button>
               <button
                 aria-controls="program-warnings-panel"
@@ -1248,7 +1299,7 @@ export function ProgramWorkspace({
                 role="tab"
                 type="button"
               >
-                Warnings <strong>{program.warnings.length}</strong>
+                Замечания <strong>{program.warnings.length}</strong>
               </button>
               {realRunTarget && (
                 <button
@@ -1260,7 +1311,7 @@ export function ProgramWorkspace({
                   role="tab"
                   type="button"
                 >
-                  Preflight <strong>{reportForProgram?.blockerCount ?? "--"}</strong>
+                  Проверка <strong>{reportForProgram?.blockerCount ?? "--"}</strong>
                 </button>
               )}
               </div>
@@ -1290,7 +1341,7 @@ export function ProgramWorkspace({
               role="tabpanel"
             >
               {program.warnings.length === 0 ? (
-                <div className="warnings-empty">Parser warnings отсутствуют</div>
+                <div className="warnings-empty">Парсер не нашёл замечаний</div>
               ) : (
                 program.warnings.map((warning, index) => (
                   <button
@@ -1367,14 +1418,14 @@ export function ProgramWorkspace({
       ) : senderActive && dryRunGateway ? (
         <div className="program-dropzone sender-recovery" role="status">
           <ShieldAlert aria-hidden="true" size={28} />
-          <strong>{sender.sourceName ?? "Mock dry run"}</strong>
+          <strong>{sender.sourceName ?? "Тестовый прогон"}</strong>
           <span>{senderLabels[sender.state]}</span>
           <button
             onClick={() => void runSenderAction(dryRunGateway.cancel)}
             type="button"
           >
             <X aria-hidden="true" size={13} />
-            Cancel sender
+            Остановить выполнение
           </button>
         </div>
       ) : (

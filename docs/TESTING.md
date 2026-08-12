@@ -113,6 +113,10 @@ mobile sizes.
 - `/?fixture=check-complete` starts from a recurring terminal Check snapshot and
   must render ready validation plus the intent-specific `Начать гравировку`
   action, never the old Completed card.
+- `/?fixture=check-running` renders a live Check with one stable
+  `Отменить проверку` action. Cancelling must expose
+  `Вернуться к подготовке`, and that action must restore the ordinary readiness
+  panel without a recovery prompt.
 - The same fixture exercises `Start -> Pause -> Finish job -> Prepare new run`.
   The physical sender action model keeps two stable action slots, and the actor
   regression proves typed stop writes `!` then `Ctrl-X`, becomes `Cancelled`,
@@ -374,6 +378,8 @@ port names remain untouched.
 - Actor tests reject non-serial targets before I/O, run the complete multi-plane
   fixture, verify every approved line exactly once, cover correlated error, and
   require automatic cleanup to `Idle`.
+- A stalled-response regression cancels an active Check, verifies the second
+  `$C`, fresh `Idle`, terminal `Cancelled`, and absence of a Check certificate.
 - An actor integration test proves Cutting is blocked before Check, then follows
   `Check completed -> verified Idle -> certificate -> ready preflight`; changing
   Optional Stop afterwards blocks the same source again.

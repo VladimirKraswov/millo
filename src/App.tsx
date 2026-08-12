@@ -43,6 +43,8 @@ import { previewFixtureAirSquareProgram } from "./features/program/previewFixtur
 import { previewFixturePreflightGateway } from "./features/program/previewFixturePreflight";
 import {
   previewFixtureCheckCompleteSender,
+  previewFixtureCheckControlGateway,
+  previewFixtureCheckRunningSender,
   previewFixtureFirstCutGateway,
   previewFixtureFirstCutProgram,
   previewFixtureRecoveryGateway,
@@ -92,9 +94,9 @@ const mockTransport: TransportDescriptor = {
   id: "mock",
   kind: "mock",
   label: "Mock GRBL",
-  detail: "Deterministic test controller",
+  detail: "Встроенный тестовый контроллер",
   likelyGrbl: true,
-  matchReason: "Built-in test controller",
+  matchReason: "Встроенный тестовый контроллер",
 };
 
 const baudRates = [9_600, 19_200, 38_400, 57_600, 115_200, 230_400];
@@ -106,6 +108,7 @@ const developmentPreviewFixture =
     ? previewFixtureAirSquareProgram
     : developmentFixture === "first-cut" ||
         developmentFixture === "check-complete" ||
+        developmentFixture === "check-running" ||
         developmentFixture === "tool-change" ||
         developmentFixture === "recovery"
       ? previewFixtureFirstCutProgram
@@ -116,12 +119,14 @@ const developmentPreflightFixture =
   developmentFixture === "preflight" ||
   developmentFixture === "first-cut" ||
   developmentFixture === "check-complete" ||
+  developmentFixture === "check-running" ||
   developmentFixture === "tool-change" ||
   developmentFixture === "recovery" ||
   developmentFixture === "air-square";
 const developmentFirstCutFixture =
   developmentFixture === "first-cut" ||
   developmentFixture === "check-complete" ||
+  developmentFixture === "check-running" ||
   developmentFixture === "tool-change" ||
   developmentFixture === "recovery" ||
   developmentFixture === "air-square";
@@ -658,7 +663,7 @@ export default function App() {
           </span>
           <div>
             <strong>Millo</strong>
-            <span>Machine control</span>
+            <span>Управление станком</span>
           </div>
         </div>
 
@@ -694,7 +699,7 @@ export default function App() {
         >
           <div className="section-heading">
             <div>
-              <span>GRBL controller</span>
+              <span>Контроллер GRBL</span>
               <h1 id="machine-state-title">
                 {snapshot.machine.reportedMode}
                 {snapshot.machine.substate !== undefined
@@ -706,7 +711,7 @@ export default function App() {
               {snapshot.alarm ? (
                 <div className="operator-notice alarm-notice" role="alert">
                   <div>
-                    <span>Alarm</span>
+                    <span>Аварийное состояние</span>
                     <strong>
                       {snapshot.alarm.code !== undefined
                         ? `ALARM:${snapshot.alarm.code}`
@@ -726,7 +731,7 @@ export default function App() {
               ) : snapshot.resetNotice ? (
                 <div className="operator-notice reset-notice" role="status">
                   <div>
-                    <span>Controller reset</span>
+                    <span>Контроллер перезапущен</span>
                     <strong>{snapshot.resetNotice.banner}</strong>
                   </div>
                   <button type="button" onClick={() => void runAction(acknowledgeReset)}>
@@ -758,7 +763,7 @@ export default function App() {
             </div>
           </div>
 
-          <div className="workbench-tabs" role="tablist" aria-label="Workbench view">
+          <div className="workbench-tabs" role="tablist" aria-label="Рабочий раздел">
             <button
               aria-controls="program-workbench"
               aria-selected={workbenchView === "program"}
@@ -766,7 +771,7 @@ export default function App() {
               role="tab"
               type="button"
             >
-              Program
+              Задание
             </button>
             <button
               aria-controls="controller-workbench"
@@ -775,7 +780,7 @@ export default function App() {
               role="tab"
               type="button"
             >
-              Controller
+              Контроллер
             </button>
           </div>
 
@@ -795,7 +800,13 @@ export default function App() {
                 snapshot.alarm === undefined &&
                 snapshot.resetNotice === undefined
               }
-              dryRunGateway={desktopRuntime ? tauriDryRunGateway : undefined}
+              dryRunGateway={
+                developmentFixture === "check-running"
+                  ? previewFixtureCheckControlGateway
+                  : desktopRuntime
+                    ? tauriDryRunGateway
+                    : undefined
+              }
               gateway={tauriProgramGateway}
               initialProgram={developmentPreviewFixture}
               initialRunIntent={
@@ -804,6 +815,8 @@ export default function App() {
               initialSender={
                 developmentFixture === "tool-change"
                   ? previewFixtureToolChangeSender
+                  : developmentFixture === "check-running"
+                    ? previewFixtureCheckRunningSender
                   : developmentFixture === "check-complete"
                     ? previewFixtureCheckCompleteSender
                   : undefined
@@ -859,8 +872,8 @@ export default function App() {
             <section className="device-inspector" aria-labelledby="inspector-title">
             <div className="inspector-heading">
               <div>
-                <span>Read-only</span>
-                <h2 id="inspector-title">Device Inspector</h2>
+                <span>Только чтение</span>
+                <h2 id="inspector-title">Состояние контроллера</h2>
               </div>
               <button
                 disabled={!isConnected || controlsBusy}
@@ -880,17 +893,17 @@ export default function App() {
                   <div className="inspector-content">
                     <div className="inspector-identity">
                       <div className="firmware-readout">
-                        <span>Firmware</span>
+                        <span>Прошивка</span>
                         <strong>
-                          {inspection.device.firmwareVersion ?? "Unknown GRBL"}
+                          {inspection.device.firmwareVersion ?? "Неизвестная версия GRBL"}
                         </strong>
                         <small>
-                          {inspection.device.firmwareBuildInfo ?? "No build info"}
+                          {inspection.device.firmwareBuildInfo ?? "Нет сведений о сборке"}
                         </small>
                       </div>
                       <dl className="inspection-meta">
                         <div>
-                          <dt>Options</dt>
+                          <dt>Возможности</dt>
                           <dd title={inspection.device.firmwareOptions}>
                             {inspection.device.controllerCapabilities
                               ? `${inspection.device.controllerCapabilities.optionFlags} · P${inspection.device.controllerCapabilities.plannerBufferBlocks ?? "?"} · RX${inspection.device.controllerCapabilities.rxBufferBytes ?? "?"}`
@@ -898,18 +911,18 @@ export default function App() {
                           </dd>
                         </div>
                         <div>
-                          <dt>Settings</dt>
+                          <dt>Настройки</dt>
                           <dd>{Object.keys(inspection.device.settings).length}</dd>
                         </div>
                         <div>
-                          <dt>Parameters</dt>
+                          <dt>Параметры</dt>
                           <dd>
                             {Object.keys(inspection.device.parameters).length}
                           </dd>
                         </div>
                       </dl>
                       <div className="modal-state">
-                        <span>Modal state</span>
+                        <span>Модальное состояние</span>
                         <div>
                           {inspection.device.modalState.map((mode) => (
                             <code key={mode}>{mode}</code>
@@ -918,7 +931,7 @@ export default function App() {
                       </div>
                       <div
                         className="query-results"
-                        aria-label="Device query results"
+                        aria-label="Результаты запросов к контроллеру"
                       >
                         {inspection.device.responses.map((response) => (
                           <div
@@ -939,7 +952,7 @@ export default function App() {
 
                     <div className="inspector-registers">
                       <div>
-                        <span>Controller settings</span>
+                        <span>Настройки контроллера</span>
                         <div className="register-list">
                           {Object.entries(inspection.device.settings).map(
                             ([key, value]) => (
@@ -952,7 +965,7 @@ export default function App() {
                         </div>
                       </div>
                       <div>
-                        <span>Coordinate parameters</span>
+                        <span>Системы координат</span>
                         <div className="register-list">
                           {Object.entries(inspection.device.parameters).map(
                             ([key, value]) => (
@@ -979,19 +992,19 @@ export default function App() {
 
           <div className="telemetry-row">
             <div>
-              <span>Feed</span>
+              <span>Подача</span>
               <strong>{snapshot.machine.feedRate.toFixed(1)}</strong>
               <small>mm/min</small>
             </div>
             <div>
-              <span>Spindle</span>
+              <span>Шпиндель</span>
               <strong>{snapshot.machine.spindleSpeed.toFixed(0)}</strong>
               <small>rpm</small>
             </div>
           </div>
         </section>
 
-        <aside className="control-panel" aria-label="Connection controls">
+        <aside className="control-panel" aria-label="Управление подключением">
           <div className="panel-title">
             <span>Подключение</span>
             <strong>{displayedTransport.label}</strong>
@@ -1037,7 +1050,7 @@ export default function App() {
             <ScrollText aria-hidden="true" size={14} />
             <span>
               <strong>Журнал событий</strong>
-              <small>Подключение · GRBL · Sender</small>
+              <small>Подключение · GRBL · Выполнение</small>
             </span>
           </button>
 
@@ -1113,7 +1126,7 @@ export default function App() {
 
               {selectedTransport.kind === "serial" && (
                 <label className="baud-field" htmlFor="baud-rate">
-                  <span>Baud rate</span>
+                  <span>Скорость порта</span>
                   <select
                     id="baud-rate"
                     disabled={transportLocked || controlsBusy}
@@ -1139,21 +1152,21 @@ export default function App() {
               </summary>
               <div className="lifecycle-metrics">
                 <div>
-                  <span>Polling</span>
+                  <span>Опрос</span>
                   <strong>{snapshot.pollIntervalMs || "--"} ms</strong>
                 </div>
                 <div>
-                  <span>Timeout</span>
+                  <span>Тайм-аут</span>
                   <strong>{snapshot.statusTimeoutMs || "--"} ms</strong>
                 </div>
                 <div>
-                  <span>Failures</span>
+                  <span>Сбои</span>
                   <strong>
                     {snapshot.consecutiveFailures}/{snapshot.failureThreshold || "--"}
                   </strong>
                 </div>
                 <div>
-                  <span>Reconnects</span>
+                  <span>Переподключения</span>
                   <strong>{snapshot.reconnectCount}</strong>
                 </div>
               </div>
@@ -1170,7 +1183,7 @@ export default function App() {
 
               {displayedTransport.kind === "mock" && (
                 <div className="mock-scenarios">
-                  <span>Mock scenarios</span>
+                  <span>Сценарии Mock GRBL</span>
                   <div>
                     <button
                       disabled={controlsBusy || !isConnected}

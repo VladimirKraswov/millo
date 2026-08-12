@@ -32,11 +32,11 @@ const categories: readonly (AuditCategory | "all")[] = [
 ];
 
 const levelLabels: Record<AuditLevel, string> = {
-  debug: "Debug",
-  info: "Info",
-  warning: "Warning",
-  error: "Error",
-  critical: "Critical",
+  debug: "Отладка",
+  info: "События",
+  warning: "Предупреждения",
+  error: "Ошибки",
+  critical: "Критические",
 };
 
 interface DiagnosticLogViewerProps {
@@ -115,24 +115,24 @@ export function DiagnosticLogViewer({
 
   return (
     <div className="log-viewer-backdrop" role="presentation">
-      <section aria-label="Diagnostic log" aria-modal="true" className="log-viewer" role="dialog">
+      <section aria-label="Журнал диагностики" aria-modal="true" className="log-viewer" role="dialog">
         <header>
           <div>
-            <span>Diagnostics</span>
+            <span>Диагностика</span>
             <strong>Журнал событий</strong>
             <small>{snapshot.activePath ?? "Постоянный файл доступен в Tauri"}</small>
           </div>
           <dl>
             <div className={counts.errors > 0 ? "has-errors" : undefined}>
-              <dt>Errors</dt>
+              <dt>Ошибки</dt>
               <dd>{counts.errors}</dd>
             </div>
             <div className={counts.warnings > 0 ? "has-warnings" : undefined}>
-              <dt>Warnings</dt>
+              <dt>Предупреждения</dt>
               <dd>{counts.warnings}</dd>
             </div>
             <div>
-              <dt>Events</dt>
+              <dt>События</dt>
               <dd>{snapshot.entries.length}</dd>
             </div>
           </dl>
@@ -222,7 +222,7 @@ export function DiagnosticLogViewer({
             <div className="log-empty">
               <Bug aria-hidden="true" size={24} />
               <strong>Событий по этому фильтру нет</strong>
-              <span>Включите Debug или измените категорию</span>
+              <span>Включите уровень «Отладка» или измените категорию</span>
             </div>
           ) : (
             [...visibleEntries].reverse().map((entry) => (
@@ -254,7 +254,7 @@ export function DiagnosticLogViewer({
           )}
         </div>
         <footer>
-          <span>Session {snapshot.sessionId}</span>
+          <span>Сессия {snapshot.sessionId}</span>
           <strong>{visibleEntries.length} из {snapshot.entries.length}</strong>
         </footer>
       </section>

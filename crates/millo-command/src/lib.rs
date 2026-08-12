@@ -3721,6 +3721,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cancelled_check_exits_check_mode_without_issuing_a_certificate() {
+        let source = "G21 G90 G94\nM3 S1000\nG1 X1 F10\nM5";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        control.queue_program_stall();
+
+        let started = arbiter
+            .start_check_run(parsed_program(source))
+            .await
+            .unwrap();
+        assert_eq!(started.state, SenderState::Running);
+
+        let cancelled = arbiter.cancel_dry_run().await.unwrap();
+        assert_eq!(cancelled.state, SenderState::Cancelled);
+        assert_eq!(cancelled.mode, Some(millo_sender::SenderMode::CheckRun));
+        assert_eq!(arbiter.snapshot().machine.mode, MachineMode::Idle);
+
+        let report = arbiter
+            .preflight_real_run(parsed_program(source), ProgramRunIntent::Cutting)
+            .await
+            .unwrap();
+        assert!(!report.ready);
+        assert!(report.checks.iter().any(|check| {
+            check.id == "grbl-check-certificate" && check.level == RunPreflightLevel::Blocker
+        }));
+        assert_eq!(
+            control
+                .writes()
+                .iter()
+                .filter(|write| write.as_slice() == b"$C\n")
+                .count(),
+            2
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn incomplete_first_cut_confirmation_fails_before_controller_io() {
         let (arbiter, control, worker) = serial_preflight_arbiter();
         let task = tokio::spawn(worker);

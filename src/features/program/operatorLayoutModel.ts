@@ -20,6 +20,8 @@ export interface PhysicalSenderActionLayout {
   readonly stopVisible: boolean;
 }
 
+export type CheckSenderAction = "cancel" | "returnToPreparation" | "none";
+
 export const senderActionLayout = (state: SenderState): SenderActionLayout => {
   switch (state) {
     case "running":
@@ -52,6 +54,21 @@ export const physicalSenderActionLayout = (
       return { primary: "resolveInterruption", stopVisible: false };
     default:
       return { primary: "none", stopVisible: false };
+  }
+};
+
+export const checkSenderAction = (state: SenderState): CheckSenderAction => {
+  switch (state) {
+    case "running":
+    case "paused":
+    case "toolChange":
+    case "draining":
+      return "cancel";
+    case "failed":
+    case "cancelled":
+      return "returnToPreparation";
+    default:
+      return "none";
   }
 };
 

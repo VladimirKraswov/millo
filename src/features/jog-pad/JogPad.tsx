@@ -187,7 +187,7 @@ export function JogPad({
     <section className="jog-pad" aria-labelledby="jog-pad-title">
       <div className="jog-pad-heading">
         <div>
-          <span>Motion deck</span>
+          <span>Управление движением</span>
           <strong id="jog-pad-title">
             <Move3d aria-hidden="true" size={14} />
             Jog
@@ -335,7 +335,7 @@ export function JogPad({
           <span className="is-blocked">Движение заблокировано: {blockedCount}</span>
         )}
         {!busy && !lastJog && blockedCount === undefined && (
-          <span>Каждое нажатие повторяет status и Inspector</span>
+          <span>Каждое нажатие повторно проверяет станок</span>
         )}
       </div>
     </section>

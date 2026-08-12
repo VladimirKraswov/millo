@@ -1,6 +1,6 @@
 import type { GcodeProgram } from "../../shared/program";
 import { idleSenderSnapshot } from "../../shared/dryRun";
-import type { SenderSnapshot } from "../../shared/dryRun";
+import type { DryRunGateway, SenderSnapshot } from "../../shared/dryRun";
 import type {
   FirstCutPreparation,
   RealRunPreflightGateway,
@@ -62,6 +62,36 @@ export const previewFixtureCheckCompleteSender: SenderSnapshot = {
   estimatedRemainingSeconds: 0,
   estimatedTotalSeconds: 32,
   timeEstimateComplete: true,
+};
+
+export const previewFixtureCheckRunningSender: SenderSnapshot = {
+  ...previewFixtureCheckCompleteSender,
+  runSequence: 42,
+  state: "running",
+  dispatchedLines: 7,
+  acknowledgedLines: 6,
+  inFlightLines: 1,
+  currentSourceLine: 7,
+  currentCommand: "G1 X12 Y8 F240",
+  progress: 0.6,
+  elapsedSeconds: 18,
+  estimatedCompletedSeconds: 20,
+  estimatedRemainingSeconds: 14,
+  estimatedTotalSeconds: 34,
+  timeEstimateComplete: false,
+};
+
+export const previewFixtureCheckControlGateway: DryRunGateway = {
+  snapshot: async () => previewFixtureCheckRunningSender,
+  start: async () => previewFixtureCheckRunningSender,
+  pause: async () => previewFixtureCheckRunningSender,
+  resume: async () => previewFixtureCheckRunningSender,
+  cancel: async () => ({
+    ...previewFixtureCheckRunningSender,
+    state: "cancelled",
+    inFlightLines: 0,
+  }),
+  subscribe: async () => () => undefined,
 };
 
 export const previewFixtureFirstCutReport: RunPreflightReport = {

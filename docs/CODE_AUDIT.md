@@ -28,6 +28,13 @@ tests, configuration, and direct/transitive dependency reports.
 - Promise rejection paths in application bootstrap/profile refresh are reported.
 - Production and development Tauri CSPs now allow local assets and IPC only;
   a repository check prevents accidental return to null/wildcard/eval policy.
+- GRBL Check is no longer an operator dead end: active checks expose typed
+  cancellation, terminal checks return to readiness, and their failures cannot
+  trigger physical-run recovery lookup. A stalled-response actor regression
+  verifies `$C` cleanup, fresh `Idle`, and absence of a false certificate.
+- The main operator surface, dialogs, settings, line table, diagnostics, and
+  accessibility labels now use one Russian operator vocabulary. GRBL/G-code
+  tokens remain untranslated where changing them would reduce diagnostic value.
 
 ## Dependency evidence
 
@@ -52,6 +59,10 @@ tests, configuration, and direct/transitive dependency reports.
 - Physical motion was not needed for this review. Protocol and sender behavior
   remains covered by Mock/serial-class fixtures; the existing operator-controlled
   hardware Check/Air procedures remain the release gate for machine movement.
+- The lazily loaded Three.js preview chunk is about 534 kB minified (134 kB
+  gzip), so Vite reports its default 500 kB warning. It is excluded from the
+  345 kB initial application chunk; further reduction is a performance task,
+  not a sender or operator-workflow blocker.
 
 ## Verification contract
 

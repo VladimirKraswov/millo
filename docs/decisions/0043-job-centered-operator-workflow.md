@@ -51,6 +51,9 @@ Program owns a compact, non-modal job-readiness surface beside the toolpath.
 - A completed GRBL Check run sequence is consumed exactly once. Repeated backend
   snapshots with that sequence remain hidden while automatic preflight exposes
   an intent-specific `Начать гравировку` or `Запустить без резания` action.
+- An active GRBL Check always has an explicit Cancel action. Cancellation and
+  failure return to readiness through a dedicated Check action model and never
+  invoke physical-run recovery lookup.
 
 The model is host-owned and receives typed machine facts. Plugin UI slots may
 decorate or replace presentation, but cannot mint readiness, unlock, work-zero,
@@ -80,7 +83,8 @@ or sender authority.
   zero controls visible.
 - `/?fixture=first-cut` visually verifies unchecked, ready, work-zero dialog, and
   final confirmation plus Pause/Finish/new-run states. `/?fixture=check-complete`
-  verifies the terminal Check-to-Start transition. `/?fixture=recovery`
+  verifies the terminal Check-to-Start transition; `/?fixture=check-running`
+  verifies Cancel-to-preparation. `/?fixture=recovery`
   verifies that unresolved evidence replaces Start and opens the explicit
   continue-or-dismiss decision.
 - `npm run verify` remains the repository gate.

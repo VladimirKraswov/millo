@@ -59,7 +59,7 @@ export function ToolpathPreview({
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    renderer.domElement.setAttribute("aria-label", "G-code toolpath preview");
+    renderer.domElement.setAttribute("aria-label", "Предпросмотр траектории G-code");
     host.replaceChildren(renderer.domElement);
 
     const grid = new THREE.GridHelper(
@@ -220,8 +220,8 @@ export function ToolpathPreview({
     runtime.renderer.domElement.setAttribute(
       "aria-label",
       selectedSourceLine === undefined
-        ? "G-code toolpath preview"
-        : `G-code toolpath preview, line ${selectedSourceLine} selected`,
+        ? "Предпросмотр траектории G-code"
+        : `Предпросмотр траектории G-code, выбрана строка ${selectedSourceLine}`,
     );
   }, [program, selectedSourceLine, view]);
 

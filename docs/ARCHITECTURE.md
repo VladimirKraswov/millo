@@ -259,10 +259,10 @@ does not schedule or execute controller I/O.
   replace only those two geometries and adjust base material opacity; they do
   not recreate the renderer, camera, controls, grid, or full path buffers.
 - Lines without preview motion produce an empty overlay and a visible
-  `No preview motion` state rather than borrowing adjacent geometry.
+  `В этой строке нет движения` state rather than borrowing adjacent geometry.
 - The scene contains one XY grid, functional rapid/cut colors, top and
   isometric views, bounded zoom/pan, and no machine-state mutation.
-- `Program` and `Controller` are separate retained workbench views. Program
+- `Задание` and `Контроллер` are separate retained workbench views. Program
   state survives tab changes; Device Inspector remains available without being
   mixed into preview diagnostics.
 - Program composes a host-owned job-readiness read model from typed controller,
@@ -345,6 +345,9 @@ does not schedule or execute controller I/O.
   M2/M30 does not reach firmware and there is no motion planner to drain.
   Completion, correlated error, cancellation, disconnect,
   and transport replacement all attempt a verified `Check -> Idle` transition.
+- The Check card has its own operator-exit model. Active states expose typed
+  cancellation; failed/cancelled states return to job readiness. They do not
+  query or display physical-run recovery because Check cannot authorize motion.
 - Firmware may emit a reset banner while disabling `$C`. The actor accepts only
   one reset count increment first observed inside that successful cleanup,
   clears its notice, and requires another clean `Idle` status. Any earlier or

@@ -213,7 +213,7 @@ export function ProgramRecoveryDialog({
               </div>
               {candidate.restartPosition && (
                 <div className="recovery-restart-position">
-                  <dt>Restart XYZ</dt>
+                  <dt>Позиция перезапуска XYZ</dt>
                   <dd>
                     {candidate.restartPosition.x.toFixed(3)} ·{" "}
                     {candidate.restartPosition.y.toFixed(3)} ·{" "}
@@ -280,7 +280,7 @@ export function ProgramRecoveryDialog({
               </details>
               <label className="recovery-safe-z">
                 <span>
-                  <strong>Safe Z</strong>
+                  <strong>Безопасная высота Z</strong>
                   <small>
                     Не ниже {candidate.minimumSafeZMm?.toFixed(3) ?? "?"} mm
                   </small>
@@ -338,7 +338,7 @@ export function ProgramRecoveryDialog({
                 </div>
               </details>
               <details className="recovery-explanation">
-                <summary>Почему по умолчанию выбран полный restart</summary>
+                <summary>Почему по умолчанию выбран полный перезапуск</summary>
                 <div>
                   <CircleAlert aria-hidden="true" size={17} />
                   <p>

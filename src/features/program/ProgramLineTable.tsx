@@ -66,7 +66,7 @@ export function ProgramLineTable({
 
   return (
     <div
-      aria-label="Program lines"
+      aria-label="Строки программы"
       className="program-line-table"
       onScroll={onScroll}
       ref={viewportRef}
@@ -86,7 +86,7 @@ export function ProgramLineTable({
             const hasMotion = motionSourceLines.has(line.sourceLine);
             return (
               <button
-                aria-label={`Line ${line.sourceLine}: ${line.source || "empty line"}`}
+                aria-label={`Строка ${line.sourceLine}: ${line.source || "пустая строка"}`}
                 aria-posinset={absoluteIndex + 1}
                 aria-selected={selected}
                 aria-setsize={lines.length}
@@ -99,12 +99,12 @@ export function ProgramLineTable({
               >
                 <span className="program-line-number">{line.sourceLine}</span>
                 <i
-                  aria-label={hasMotion ? "Preview motion" : undefined}
+                  aria-label={hasMotion ? "Есть движение на предпросмотре" : undefined}
                   className={hasMotion ? "has-motion" : undefined}
                 />
                 <code title={line.source}>{line.source || " "}</code>
                 {line.warningCount > 0 && (
-                  <span className="program-line-warning" title="Parser warning">
+                  <span className="program-line-warning" title="Замечание парсера">
                     <TriangleAlert aria-hidden="true" size={10} />
                     {line.warningCount}
                   </span>

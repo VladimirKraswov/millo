@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { SenderState } from "../../shared/dryRun";
 import {
+  checkSenderAction,
   physicalSenderActionLayout,
   senderActionLayout,
   senderRunIsVisibleForProgram,
@@ -55,6 +56,14 @@ describe("operator layout model", () => {
       primary: "prepareRerun",
       stopVisible: false,
     });
+  });
+
+  it("always gives an active or failed GRBL check an exit", () => {
+    expect(checkSenderAction("running")).toBe("cancel");
+    expect(checkSenderAction("draining")).toBe("cancel");
+    expect(checkSenderAction("failed")).toBe("returnToPreparation");
+    expect(checkSenderAction("cancelled")).toBe("returnToPreparation");
+    expect(checkSenderAction("completed")).toBe("none");
   });
 
   it("does not resurrect a terminal run after the UI consumed its sequence", () => {
