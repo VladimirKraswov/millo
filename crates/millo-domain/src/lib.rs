@@ -244,6 +244,8 @@ pub struct HardwareProfile {
     pub homing_installed: bool,
     pub limit_switches_installed: bool,
     pub probe_installed: bool,
+    #[serde(default)]
+    pub probe_mode: ProbeWorkflowMode,
     pub emergency_stop_installed: bool,
 }
 
@@ -258,6 +260,7 @@ impl HardwareProfile {
             homing_installed: false,
             limit_switches_installed: false,
             probe_installed: false,
+            probe_mode: ProbeWorkflowMode::Off,
             emergency_stop_installed: false,
         }
     }
@@ -430,4 +433,134 @@ pub struct ReturnToWorkZeroOutcome {
     pub coordinate_system: WorkCoordinateSystem,
     pub command: String,
     pub snapshot: ControllerSnapshot,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProbeWorkflowMode {
+    #[default]
+    Off,
+    WorkZero,
+    Heightmap,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZProbeSettings {
+    pub mode: ProbeWorkflowMode,
+    pub plate_thickness_mm: f64,
+    pub max_travel_mm: f64,
+    pub probe_feed_mm_per_min: f64,
+    pub retract_mm: f64,
+    pub retract_feed_mm_per_min: f64,
+}
+
+impl Default for ZProbeSettings {
+    fn default() -> Self {
+        Self {
+            mode: ProbeWorkflowMode::Off,
+            plate_thickness_mm: 0.0,
+            max_travel_mm: 10.0,
+            probe_feed_mm_per_min: 25.0,
+            retract_mm: 3.0,
+            retract_feed_mm_per_min: 100.0,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ZProbeSettings {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Stored {
+            mode: Option<ProbeWorkflowMode>,
+            use_for_work_zero: Option<bool>,
+            plate_thickness_mm: Option<f64>,
+            max_travel_mm: Option<f64>,
+            probe_feed_mm_per_min: Option<f64>,
+            retract_mm: Option<f64>,
+            retract_feed_mm_per_min: Option<f64>,
+        }
+        let stored = Stored::deserialize(deserializer)?;
+        let defaults = Self::default();
+        Ok(Self {
+            mode: stored.mode.unwrap_or_else(|| {
+                if stored.use_for_work_zero.unwrap_or(false) {
+                    ProbeWorkflowMode::WorkZero
+                } else {
+                    ProbeWorkflowMode::Off
+                }
+            }),
+            plate_thickness_mm: stored
+                .plate_thickness_mm
+                .unwrap_or(defaults.plate_thickness_mm),
+            max_travel_mm: stored.max_travel_mm.unwrap_or(defaults.max_travel_mm),
+            probe_feed_mm_per_min: stored
+                .probe_feed_mm_per_min
+                .unwrap_or(defaults.probe_feed_mm_per_min),
+            retract_mm: stored.retract_mm.unwrap_or(defaults.retract_mm),
+            retract_feed_mm_per_min: stored
+                .retract_feed_mm_per_min
+                .unwrap_or(defaults.retract_feed_mm_per_min),
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZProbeRequest {
+    pub settings: ZProbeSettings,
+    pub setup_confirmed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZProbeOutcome {
+    pub coordinate_system: WorkCoordinateSystem,
+    pub probe_command: String,
+    pub zero_command: String,
+    pub retract_command: String,
+    pub contact_machine_position: Position,
+    pub final_work_z: f64,
+    pub snapshot: ControllerSnapshot,
+}
+
+#[cfg(test)]
+mod z_probe_settings_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_work_zero_flag_migrates_to_the_typed_probe_mode() {
+        let settings: ZProbeSettings = serde_json::from_str(
+            r#"{
+                "useForWorkZero": true,
+                "plateThicknessMm": 19.1,
+                "maxTravelMm": 10.0,
+                "probeFeedMmPerMin": 25.0,
+                "retractMm": 3.0,
+                "retractFeedMmPerMin": 100.0
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.mode, ProbeWorkflowMode::WorkZero);
+        assert_eq!(settings.plate_thickness_mm, 19.1);
+    }
+
+    #[test]
+    fn explicit_heightmap_mode_wins_over_the_legacy_flag() {
+        let settings: ZProbeSettings = serde_json::from_str(
+            r#"{
+                "mode": "heightmap",
+                "useForWorkZero": true,
+                "plateThicknessMm": 19.1
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.mode, ProbeWorkflowMode::Heightmap);
+    }
 }

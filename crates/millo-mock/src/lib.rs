@@ -31,6 +31,10 @@ struct MockState {
     settings: BTreeMap<u16, String>,
     active_wcs: usize,
     work_offsets: [[f64; 3]; 6],
+    last_probe: [f64; 3],
+    probe_succeeded: bool,
+    probe_trigger_distance_mm: Option<f64>,
+    probe_delay_slices: usize,
     firmware_options: String,
     overrides: [u16; 3],
 }
@@ -165,6 +169,14 @@ impl MockControl {
         self.lock().firmware_options = value.into();
     }
 
+    pub fn set_probe_trigger_distance(&self, distance_mm: Option<f64>) {
+        self.lock().probe_trigger_distance_mm = distance_mm;
+    }
+
+    pub fn set_probe_delay(&self, read_slices: usize) {
+        self.lock().probe_delay_slices = read_slices;
+    }
+
     fn lock(&self) -> MutexGuard<'_, MockState> {
         self.state
             .lock()
@@ -200,6 +212,10 @@ impl MockTransport {
                     settings: default_settings(),
                     active_wcs: 0,
                     work_offsets: [[0.0; 3]; 6],
+                    last_probe: [0.0; 3],
+                    probe_succeeded: false,
+                    probe_trigger_distance_mm: Some(1.0),
+                    probe_delay_slices: 0,
                     firmware_options: "V,15,128".to_owned(),
                     overrides: [100, 100, 100],
                 })),
@@ -316,6 +332,52 @@ impl Transport for MockTransport {
                     .active_reads
                     .push_back(MockRead::Line("error:8".to_owned()));
             }
+        } else if let Some(probe) = parse_z_probe(data) {
+            let trigger = state.probe_trigger_distance_mm;
+            if trigger.is_none_or(|distance| distance > probe.max_travel_mm) {
+                state.status_line = status_with_mode(&state.status_line, "Alarm", 0.0);
+                state
+                    .active_reads
+                    .push_back(MockRead::Line("ALARM:5".to_owned()));
+            } else {
+                let mut machine_position = status_position(&state.status_line).unwrap_or([0.0; 3]);
+                machine_position[2] -= trigger.unwrap_or_default();
+                state.last_probe = machine_position;
+                state.probe_succeeded = true;
+                let work_position =
+                    subtract_position(machine_position, state.work_offsets[state.active_wcs]);
+                state.status_line = format_status("Idle", machine_position, work_position, 0.0);
+                let delay_slices = state.probe_delay_slices;
+                state
+                    .active_reads
+                    .extend((0..delay_slices).map(|_| MockRead::DelaySlice));
+                state.active_reads.extend(lines(&[
+                    &format!(
+                        "[PRB:{:.3},{:.3},{:.3}:1]",
+                        machine_position[0], machine_position[1], machine_position[2]
+                    ),
+                    "ok",
+                ]));
+            }
+        } else if let Some(jog) = parse_xy_jog(data) {
+            let mut position = status_position(&state.status_line).unwrap_or([0.0; 3]);
+            let target_x = state.work_offsets[state.active_wcs][0] + jog.x_mm;
+            let target_y = state.work_offsets[state.active_wcs][1] + jog.y_mm;
+            let distance_mm =
+                ((target_x - position[0]).powi(2) + (target_y - position[1]).powi(2)).sqrt();
+            position[0] = target_x;
+            position[1] = target_y;
+            let work_position = subtract_position(position, state.work_offsets[state.active_wcs]);
+            state.status_line = format_status("Jog", position, work_position, jog.feed_mm_per_min);
+            state.jog_polls_remaining = mock_jog_status_polls(MockJog {
+                axis: 0,
+                distance_mm,
+                feed_mm_per_min: jog.feed_mm_per_min,
+                absolute: true,
+            });
+            state
+                .active_reads
+                .push_back(MockRead::Line("ok".to_owned()));
         } else if let Some(jog) = parse_jog(data) {
             let mut position = status_position(&state.status_line).unwrap_or([0.0; 3]);
             let distance_mm = if jog.absolute {
@@ -336,7 +398,7 @@ impl Transport for MockTransport {
         } else if let Some(work_zero) = parse_work_zero(data) {
             let machine_position = status_position(&state.status_line).unwrap_or([0.0; 3]);
             state.work_offsets[work_zero.coordinate_system][work_zero.axis] =
-                machine_position[work_zero.axis];
+                machine_position[work_zero.axis] - work_zero.value_mm;
             if work_zero.coordinate_system == state.active_wcs {
                 let work_position =
                     subtract_position(machine_position, state.work_offsets[state.active_wcs]);
@@ -424,10 +486,41 @@ struct MockJog {
     absolute: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 struct MockWorkZero {
     coordinate_system: usize,
     axis: usize,
+    value_mm: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MockZProbe {
+    max_travel_mm: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct MockXyJog {
+    x_mm: f64,
+    y_mm: f64,
+    feed_mm_per_min: f64,
+}
+
+fn parse_xy_jog(data: &[u8]) -> Option<MockXyJog> {
+    let command = std::str::from_utf8(data)
+        .ok()?
+        .trim_end_matches(['\r', '\n']);
+    let words = command
+        .strip_prefix("$J=G90 G21 ")?
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    if words.len() != 3 {
+        return None;
+    }
+    Some(MockXyJog {
+        x_mm: words[0].strip_prefix('X')?.parse().ok()?,
+        y_mm: words[1].strip_prefix('Y')?.parse().ok()?,
+        feed_mm_per_min: words[2].strip_prefix('F')?.parse().ok()?,
+    })
 }
 
 fn parse_jog(data: &[u8]) -> Option<MockJog> {
@@ -484,10 +577,25 @@ fn parse_work_zero(data: &[u8]) -> Option<MockWorkZero> {
         b'Z' => 2,
         _ => return None,
     };
-    (words[3].get(1..)?.parse::<f64>().ok()? == 0.0).then_some(MockWorkZero {
+    let value_mm = words[3].get(1..)?.parse::<f64>().ok()?;
+    Some(MockWorkZero {
         coordinate_system: parameter - 1,
         axis,
+        value_mm,
     })
+}
+
+fn parse_z_probe(data: &[u8]) -> Option<MockZProbe> {
+    let command = std::str::from_utf8(data)
+        .ok()?
+        .trim_end_matches(['\r', '\n']);
+    let words = command.split_whitespace().collect::<Vec<_>>();
+    if words.len() != 6 || words[..4] != ["G91", "G21", "G94", "G38.2"] {
+        return None;
+    }
+    let max_travel_mm = -words[4].strip_prefix('Z')?.parse::<f64>().ok()?;
+    let _feed = words[5].strip_prefix('F')?.parse::<f64>().ok()?;
+    (max_travel_mm > 0.0).then_some(MockZProbe { max_travel_mm })
 }
 
 fn parse_setting_write(data: &[u8]) -> Option<(u16, String)> {
@@ -669,7 +777,13 @@ fn device_query_response(command: &[u8], state: &MockState) -> Option<VecDeque<M
             response.extend(lines(&[
                 "[G92:0.000,0.000,0.000]",
                 "[TLO:0.000]",
-                "[PRB:0.000,0.000,0.000:0]",
+                &format!(
+                    "[PRB:{:.3},{:.3},{:.3}:{}]",
+                    state.last_probe[0],
+                    state.last_probe[1],
+                    state.last_probe[2],
+                    u8::from(state.probe_succeeded)
+                ),
                 "ok",
             ]));
             Some(response)

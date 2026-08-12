@@ -5,7 +5,7 @@ use std::{
 
 use millo_domain::{
     DEFAULT_MAX_JOG_DISTANCE_MM, DeviceInspection, HardwareProfile, MachineTravel, SpindleControl,
-    default_max_jog_distance_mm,
+    ZProbeSettings, default_max_jog_distance_mm,
 };
 use millo_storage::{backup_path, write_atomically};
 use serde::{Deserialize, Serialize};
@@ -62,6 +62,8 @@ pub struct MachineProfile {
     pub homing_installed: bool,
     pub limit_switches_installed: bool,
     pub probe_installed: bool,
+    #[serde(default)]
+    pub probe_settings: ZProbeSettings,
     pub emergency_stop_installed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<MachineConnectionPreset>,
@@ -80,6 +82,7 @@ impl MachineProfile {
             homing_installed: self.homing_installed,
             limit_switches_installed: self.limit_switches_installed,
             probe_installed: self.probe_installed,
+            probe_mode: self.probe_settings.mode,
             emergency_stop_installed: self.emergency_stop_installed,
         }
     }
@@ -101,6 +104,8 @@ pub struct MachineProfileDraft {
     #[serde(default)]
     pub probe_installed: bool,
     #[serde(default)]
+    pub probe_settings: ZProbeSettings,
+    #[serde(default)]
     pub emergency_stop_installed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub connection: Option<MachineConnectionPreset>,
@@ -117,6 +122,8 @@ pub struct MachineLocalSettingsUpdate {
     pub homing_installed: bool,
     pub limit_switches_installed: bool,
     pub probe_installed: bool,
+    #[serde(default)]
+    pub probe_settings: ZProbeSettings,
     pub emergency_stop_installed: bool,
 }
 
@@ -139,6 +146,7 @@ impl MachineProfileDraft {
             homing_installed: false,
             limit_switches_installed: false,
             probe_installed: false,
+            probe_settings: ZProbeSettings::default(),
             emergency_stop_installed: false,
             connection: Some(connection),
             detected_controller: Some(DetectedController {
@@ -269,6 +277,7 @@ impl MachineProfileStore {
             homing_installed: draft.homing_installed,
             limit_switches_installed: draft.limit_switches_installed,
             probe_installed: draft.probe_installed,
+            probe_settings: draft.probe_settings,
             emergency_stop_installed: draft.emergency_stop_installed,
             connection: draft.connection,
             detected_controller: draft.detected_controller,
@@ -317,11 +326,13 @@ impl MachineProfileStore {
             .ok_or_else(|| ProfileError::UnknownProfile(profile_id.to_owned()))?;
         profile.name = update.name.trim().to_owned();
         validate_max_jog_distance(profile.travel_mm, update.max_jog_distance_mm)?;
+        validate_probe_settings(update.probe_settings)?;
         profile.max_jog_distance_mm = update.max_jog_distance_mm;
         profile.spindle_control = update.spindle_control;
         profile.homing_installed = update.homing_installed;
         profile.limit_switches_installed = update.limit_switches_installed;
         profile.probe_installed = update.probe_installed;
+        profile.probe_settings = update.probe_settings;
         profile.emergency_stop_installed = update.emergency_stop_installed;
         self.commit(next)?;
         Ok(self.state())
@@ -370,6 +381,8 @@ pub enum ProfileError {
     InvalidTravel(&'static str),
     #[error("maximum jog distance must be finite and between 0.01 mm and the largest machine axis")]
     InvalidMaxJogDistance,
+    #[error("probe settings contain a value outside the supported range")]
+    InvalidProbeSettings,
     #[error("machine profile already exists: {0}")]
     DuplicateName(String),
     #[error("machine profile limit reached: {0}")]
@@ -411,6 +424,7 @@ fn validate_document(document: &StoredProfiles) -> Result<(), ProfileError> {
             homing_installed: profile.homing_installed,
             limit_switches_installed: profile.limit_switches_installed,
             probe_installed: profile.probe_installed,
+            probe_settings: profile.probe_settings,
             emergency_stop_installed: profile.emergency_stop_installed,
             connection: profile.connection.clone(),
             detected_controller: profile.detected_controller.clone(),
@@ -432,7 +446,26 @@ fn validate_draft(draft: &MachineProfileDraft) -> Result<(), ProfileError> {
     validate_travel("X", draft.travel_mm.x)?;
     validate_travel("Y", draft.travel_mm.y)?;
     validate_travel("Z", draft.travel_mm.z)?;
-    validate_max_jog_distance(draft.travel_mm, draft.max_jog_distance_mm)
+    validate_max_jog_distance(draft.travel_mm, draft.max_jog_distance_mm)?;
+    validate_probe_settings(draft.probe_settings)
+}
+
+fn validate_probe_settings(settings: ZProbeSettings) -> Result<(), ProfileError> {
+    let valid = settings.plate_thickness_mm.is_finite()
+        && (0.0..=100.0).contains(&settings.plate_thickness_mm)
+        && settings.max_travel_mm.is_finite()
+        && (0.1..=100.0).contains(&settings.max_travel_mm)
+        && settings.probe_feed_mm_per_min.is_finite()
+        && (1.0..=500.0).contains(&settings.probe_feed_mm_per_min)
+        && settings.retract_mm.is_finite()
+        && (0.1..=100.0).contains(&settings.retract_mm)
+        && settings.retract_feed_mm_per_min.is_finite()
+        && (1.0..=2_000.0).contains(&settings.retract_feed_mm_per_min);
+    if valid {
+        Ok(())
+    } else {
+        Err(ProfileError::InvalidProbeSettings)
+    }
 }
 
 fn max_travel(travel: MachineTravel) -> f64 {
@@ -528,6 +561,7 @@ mod tests {
             homing_installed: false,
             limit_switches_installed: false,
             probe_installed: false,
+            probe_settings: ZProbeSettings::default(),
             emergency_stop_installed: false,
             connection: None,
             detected_controller: None,
@@ -556,6 +590,35 @@ mod tests {
         assert_eq!(reloaded, created);
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(backup_path(&path));
+    }
+
+    #[test]
+    fn loads_legacy_profiles_with_probe_workflow_disabled() {
+        let document: StoredProfiles = serde_json::from_str(
+            r#"{
+              "schemaVersion": 1,
+              "nextId": 2,
+              "selectedProfileId": "machine-0001",
+              "profiles": [{
+                "id": "machine-0001",
+                "name": "Legacy router",
+                "travelMm": { "x": 300.0, "y": 180.0, "z": 80.0 },
+                "maxJogDistanceMm": 50.0,
+                "spindleControl": "manual",
+                "homingInstalled": false,
+                "limitSwitchesInstalled": false,
+                "probeInstalled": false,
+                "emergencyStopInstalled": false
+              }]
+            }"#,
+        )
+        .unwrap();
+
+        validate_document(&document).unwrap();
+        let settings = document.profiles[0].probe_settings;
+        assert_eq!(settings.mode, millo_domain::ProbeWorkflowMode::Off);
+        assert_eq!(settings.plate_thickness_mm, 0.0);
+        assert_eq!(settings.max_travel_mm, 10.0);
     }
 
     #[test]
@@ -665,6 +728,11 @@ mod tests {
                     homing_installed: false,
                     limit_switches_installed: false,
                     probe_installed: true,
+                    probe_settings: ZProbeSettings {
+                        mode: millo_domain::ProbeWorkflowMode::WorkZero,
+                        plate_thickness_mm: 19.1,
+                        ..ZProbeSettings::default()
+                    },
                     emergency_stop_installed: false,
                 },
             )

@@ -1,5 +1,9 @@
 # External plugins and macros
 
+This page is the operator/security overview. Authors should use the complete
+[Plugin development guide](PLUGIN_DEVELOPMENT.md), which also explains the
+separate trusted TypeScript SDK, package schema, lifecycle and test contract.
+
 Millo accepts external source packages with the `.millo-plugin` extension. The
 format is JSON so the manifest, UI declaration, requested authority, and Rhai
 source can be inspected before installation. Import never enables a package.
@@ -72,6 +76,17 @@ The manager's `Новый макрос` template exposes optional machine/job ca
 but grants none of them until selected and enabled. Parameterized commands or
 multiple command surfaces can be authored by exporting the template, editing
 its JSON declaration, and reimporting it.
+
+Every package must require `ui.contribute`. A returned action's capability must
+also appear in that command's `requiredCapabilities`; a broad manifest grant
+alone cannot turn an innocuous-looking command into a machine action. Generated
+job names must be plain file names without directories.
+
+The persistent store publishes install/configure/delete mutations only after an
+atomic disk write succeeds, restores a corrupt primary from its preceding
+backup, and bounds package count and total storage size. Configuration and
+execution are serialized, so a disable/update cannot race an already validated
+machine action.
 
 ## Bundled macros
 

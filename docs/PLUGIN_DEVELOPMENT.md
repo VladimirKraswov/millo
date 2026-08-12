@@ -1,0 +1,208 @@
+# Разработка плагинов Millo
+
+Документ описывает фактический API Millo v1. В проекте есть два разных уровня
+расширений. Выбор уровня является частью модели доверия, а не вопросом удобства.
+
+## Какой тип выбрать
+
+| Тип | Для чего | Код | Установка | Доступ |
+| --- | --- | --- | --- | --- |
+| Встроенный trusted plugin | Системная функция с полноценным React UI | TypeScript/React, собирается вместе с Millo | Через исходный код и релиз Millo | Только выданные typed capabilities |
+| Внешний plugin/macro | Пользовательская команда или генератор задания | JSON + Rhai | Импорт `.millo-plugin` оператором | Одна декларативная команда и одно typed действие за запуск |
+
+Внешний пакет не может добавлять React, HTML, JavaScript, native library или
+произвольный Tauri command. Для внешнего UI используются объявленные команды,
+поля и одна из двух поверхностей. Это сохраняет возможность проверить пакет до
+включения и не даёт стороннему коду получить serial/sender в обход ядра.
+
+## Встроенный TypeScript plugin
+
+### Структура
+
+```text
+src/plugins/my-plugin/
+  createMyPlugin.tsx       # manifest и activate/deactivate
+  MyPluginPanel.tsx        # UI, не знает про Tauri
+  createMyPlugin.test.tsx  # grants, registration, unload
+```
+
+Плагин импортирует host contract только из `src/plugin-sdk`. Прямой импорт
+`platform/plugins`, `platform/extensions`, `src/api` или `@tauri-apps/*` из
+production-файлов плагина запрещён `npm run test:architecture`.
+
+```tsx
+import {
+  createPluginManifest,
+  definePlugin,
+  uiSlots,
+  type InMemoryPluginModule,
+} from "../../plugin-sdk";
+
+export const SAMPLE_PLUGIN_ID = "dev.example.sample";
+
+export function createSamplePlugin(): InMemoryPluginModule {
+  return definePlugin({
+    manifest: createPluginManifest({
+      id: SAMPLE_PLUGIN_ID,
+      name: "Sample",
+      version: "1.0.0",
+      capabilities: {
+        required: ["ui.contribute", "machine.read"],
+        optional: [],
+      },
+    }),
+    activate(context) {
+      if (!context.ui || !context.machineRead) {
+        throw new Error("required capabilities are unavailable");
+      }
+      const registration = context.ui.register({
+        id: `${SAMPLE_PLUGIN_ID}.panel`,
+        slot: uiSlots.controlMachine,
+        order: 100,
+        render: () => <SamplePanel machine={context.machineRead!} />,
+      });
+      return () => registration.dispose();
+    },
+  });
+}
+```
+
+`definePlugin` проверяет manifest при загрузке модуля. ID плагина состоит из
+строчных ASCII-сегментов, разделённых `.` или `-`; ID каждого UI contribution
+начинается с `${pluginId}.`. `apiVersion` и `manifestVersion` подставляются
+helper-функцией и не должны задаваться вручную.
+
+### Подключение
+
+1. Добавьте factory в `bundledPlugins` внутри `bootstrapPluginHost`.
+2. Добавьте grant для того же ID в `CapabilityGrantStore` composition root.
+3. Для новой host capability сначала создайте узкий platform-neutral gateway,
+   policy в Rust и тесты. Не передавайте плагину Tauri `invoke` или actor.
+4. Проверьте отсутствие функции без grant, её работу с grant и закрытие proxy
+   после `unload`.
+
+Пример регистрации уже есть в `src/App.tsx`; эталонные реализации находятся в
+`src/plugins/image-to-gcode` и `src/plugins/spoilboard-surfacing`.
+
+### Trusted capabilities v1
+
+- `ui.contribute`: регистрация React contribution в именованном slot.
+- `machine.read`: frozen snapshot и автоматически очищаемая подписка.
+- `machine.jog`: один typed jog через обычный command actor.
+- `machine.coordinates`: typed `setZero` и `returnToZero`.
+- `jobs.create`: генерация только через Millo CAM core; открыть/сохранить можно
+  только job object, ранее выданный этим core.
+- `tools.read`: frozen библиотека инструмента и tracked subscription.
+
+Capability proxy проверяет resource scope до и после `await`. Unload сначала
+закрывает scope и подписки, затем вызывает plugin deactivation. Поздний результат
+асинхронного activate не может повторно включить уже выгруженный плагин. Ошибка
+рендера contribution изолируется React error boundary и не роняет App Shell.
+При размонтировании composition root `PluginHost.dispose()` выгружает активные
+и отменяет ещё загружающиеся плагины; повторный dispose идемпотентен.
+
+## Внешний `.millo-plugin`
+
+### Минимальный пакет
+
+```json
+{
+  "packageVersion": 1,
+  "manifest": {
+    "manifestVersion": 1,
+    "apiVersion": 1,
+    "id": "local.example-notice",
+    "name": "Example notice",
+    "version": "1.0.0",
+    "description": "Shows one checked message.",
+    "capabilities": {
+      "required": ["ui.contribute"],
+      "optional": []
+    }
+  },
+  "commands": [
+    {
+      "id": "show",
+      "title": "Показать сообщение",
+      "description": "Проверка внешнего плагина.",
+      "icon": "braces",
+      "surface": "workspaceTools",
+      "fields": [],
+      "requiredCapabilities": []
+    }
+  ],
+  "source": "fn run(command, input, machine) { #{ kind: \"notice\", title: \"Готово\", message: \"Плагин работает\", tone: \"success\" } }"
+}
+```
+
+`ui.contribute` обязателен для command package. Capabilities действия должны
+быть объявлены и в manifest, и в `command.requiredCapabilities`. Если команда
+вернёт jog, не объявив `machine.jog`, runtime отклонит результат. Поля бывают
+`number`, `boolean`, `text`; неизвестные поля, NaN/Infinity, неверный тип,
+границы и слишком длинный text отклоняются до выполнения Rhai.
+
+### Действия v1
+
+```rhai
+// Создать программу; она будет повторно разобрана millo-gcode.
+#{ kind: "createProgram", sourceName: "frame.nc", source: "G21\nM5\nM9\nM30" }
+
+// Один guarded jog.
+#{ kind: "jog", axis: "z", distanceMm: 1.0, feedMmPerMin: 100.0 }
+
+// Установить или вернуть одну координату рабочего нуля.
+#{ kind: "setZero", axis: "z" }
+#{ kind: "returnZero", axis: "z", feedMmPerMin: 100.0 }
+
+// Сообщение без machine capability.
+#{ kind: "notice", title: "Готово", message: "Операция завершена", tone: "success" }
+```
+
+Каждый запуск возвращает ровно одно действие. `sourceName` должен быть простым
+именем файла без каталога. Machine action требует capability, подтверждение
+оператора, привязанный профиль и проверки существующего actor use case. Сам
+Rhai runtime не получает serial, sender, filesystem, network, Tauri, DOM,
+`import` или `eval`.
+
+### Установка и обновление
+
+1. Откройте `Плагины` в Millo и импортируйте файл.
+2. Сверьте ID, команды, исходник, capabilities и SHA-256 digest.
+3. Выберите optional grants и включите пакет.
+4. После изменения или повторного импорта digest меняется, пакет выключается,
+   старые grants удаляются. Его надо проверить заново.
+
+Store ограничен 128 пакетами и 64 MiB, пишет candidate atomically и только
+после успешного `fsync` публикует новое состояние в процессе. Повреждённый
+primary восстанавливается из `.bak`. Import/configure/delete/execute проходят
+через один execution fence: выключение или обновление не может обогнать уже
+проверяемое machine action.
+
+## Тестирование плагина
+
+Минимальный набор для trusted plugin:
+
+1. Без required grant `activate` не вызывается.
+2. С grants contribution появляется только в заявленном slot.
+3. Сгенерированный job выдан core и проходит parser fixtures.
+4. Unload удаляет UI/подписки; сохранённый proxy отклоняет новый вызов.
+5. Ошибка activate откатывает частичную регистрацию.
+
+Для external package добавьте Rust fixtures в `millo-script`: schema failure,
+operation budget, корректное действие, недостающая capability и повторный parse
+созданного G-code.
+
+```bash
+npm run test:architecture
+npm run test:ui -- --run src/platform/plugins src/plugin-sdk src/plugins
+cargo test -p millo-script
+npm run verify
+```
+
+## Версионирование
+
+Изменение смысла capability, action, manifest/package field или lifecycle
+является изменением API. Оно требует нового `PLUGIN_API_VERSION`, migration
+note, fixtures старой версии и обновления этого документа. Добавление новой
+capability в v1 допустимо только как явное разрешение с отсутствующим proxy без
+grant; неизвестные capabilities всегда отклоняются.

@@ -71,4 +71,32 @@ describe("bootstrapPluginHost", () => {
     expect(listener.mock.calls[0]?.[0].pollSequence).toBe(3);
     await host.plugins.unload(pluginId);
   });
+
+  it("disposes every active plugin exactly once", async () => {
+    const pluginId = "dev.millo.bootstrap-dispose";
+    const deactivate = vi.fn();
+    const host = bootstrapPluginHost({
+      initialSnapshot: snapshot(0),
+      machineCommands,
+      bundledPlugins: [
+        {
+          manifest: {
+            manifestVersion: PLUGIN_MANIFEST_VERSION,
+            apiVersion: PLUGIN_API_VERSION,
+            id: pluginId,
+            name: "Dispose fixture",
+            version: "1.0.0",
+            capabilities: { required: [] },
+          },
+          activate: () => deactivate,
+        },
+      ],
+    });
+    await host.ready;
+
+    await Promise.all([host.dispose(), host.dispose()]);
+
+    expect(deactivate).toHaveBeenCalledOnce();
+    expect(host.plugins.list()).toEqual([]);
+  });
 });

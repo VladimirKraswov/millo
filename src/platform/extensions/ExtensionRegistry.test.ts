@@ -108,4 +108,27 @@ describe("ExtensionRegistry", () => {
       }),
     ).toThrow("cannot replace itself");
   });
+
+  it("rejects ambiguous replacement lists", () => {
+    const registry = new ExtensionRegistry<"slot", string>();
+
+    expect(() =>
+      registry.register({
+        id: "plugin.panel",
+        owner: "plugin",
+        slot: "slot",
+        replaces: ["core.panel", "core.panel"],
+        extension: "panel",
+      }),
+    ).toThrow("replacements contain duplicates");
+    expect(() =>
+      registry.register({
+        id: "plugin.panel",
+        owner: "plugin",
+        slot: "slot",
+        replaces: [""],
+        extension: "panel",
+      }),
+    ).toThrow("replacement ids must be non-empty");
+  });
 });

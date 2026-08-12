@@ -4,6 +4,7 @@ import {
   type UiExtensionRegistry,
 } from "../platform/extensions/UiExtensionRegistry";
 import type { MachineCommandGateway } from "../platform/machine/MachineCommandGateway";
+import type { WorkCoordinateGateway } from "../platform/machine/WorkCoordinateGateway";
 import { MachineSnapshotStore } from "../platform/machine/MachineStateSource";
 import { CapabilityGrantStore } from "../platform/plugins/CapabilityGrantStore";
 import { InMemoryPluginLoader } from "../platform/plugins/InMemoryPluginLoader";
@@ -22,11 +23,13 @@ export interface PluginHost {
   readonly generatedJobs: GeneratedJobStore;
   readonly tools?: ToolLibraryService;
   readonly ready: Promise<void>;
+  dispose(): Promise<void>;
 }
 
 export interface PluginHostOptions {
   readonly initialSnapshot: ControllerSnapshot;
   readonly machineCommands: MachineCommandGateway;
+  readonly workCoordinates?: WorkCoordinateGateway;
   readonly grants?: CapabilityGrantStore;
   readonly imageJobs?: ImageJobGateway;
   readonly toolLibrary?: ToolLibraryGateway;
@@ -49,6 +52,7 @@ export function bootstrapPluginHost(options: PluginHostOptions): PluginHost {
     uiRegistry,
     machineState,
     machineCommands: options.machineCommands,
+    workCoordinates: options.workCoordinates,
     jobs,
     tools,
     grants: options.grants,
@@ -63,6 +67,11 @@ export function bootstrapPluginHost(options: PluginHostOptions): PluginHost {
   void ready.catch(() => {
     // The caller still owns reporting; attach immediately to avoid an unhandled rejection.
   });
+  let disposePromise: Promise<void> | undefined;
+  const dispose = (): Promise<void> => {
+    disposePromise ??= plugins.unloadAll();
+    return disposePromise;
+  };
 
   return Object.freeze({
     uiRegistry,
@@ -71,5 +80,6 @@ export function bootstrapPluginHost(options: PluginHostOptions): PluginHost {
     generatedJobs,
     tools,
     ready,
+    dispose,
   });
 }

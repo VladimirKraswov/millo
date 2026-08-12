@@ -5,6 +5,7 @@ export const pluginCapabilityCatalog = [
   "ui.contribute",
   "machine.read",
   "machine.jog",
+  "machine.coordinates",
   "jobs.create",
   "tools.read",
 ] as const;
@@ -54,6 +55,9 @@ export function validatePluginManifest(value: unknown): PluginManifestV1 {
   }
 
   const id = requiredString(value.id, "id");
+  if (id.length > 100) {
+    throw new PluginManifestError("plugin manifest id must not exceed 100 bytes");
+  }
   if (!/^[a-z0-9]+(?:[.-][a-z0-9]+)+$/.test(id)) {
     throw new PluginManifestError(
       "plugin id must contain lowercase dot- or dash-separated segments",
@@ -61,6 +65,12 @@ export function validatePluginManifest(value: unknown): PluginManifestV1 {
   }
   const name = requiredString(value.name, "name");
   const version = requiredString(value.version, "version");
+  if (name.length > 100) {
+    throw new PluginManifestError("plugin manifest name must not exceed 100 bytes");
+  }
+  if (version.length > 64) {
+    throw new PluginManifestError("plugin manifest version must not exceed 64 bytes");
+  }
   if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
     throw new PluginManifestError("plugin version must use semantic versioning");
   }

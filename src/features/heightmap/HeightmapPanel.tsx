@@ -1,0 +1,265 @@
+import {
+  Box,
+  Crosshair,
+  Grid3X3,
+  Pause,
+  Play,
+  RotateCcw,
+  ScanLine,
+  Square,
+  Table2,
+  Trash2,
+  WandSparkles,
+} from "lucide-react";
+import { lazy, Suspense, useEffect, useMemo, useState } from "react";
+
+import type { HeightmapGateway } from "../../platform/machine/HeightmapGateway";
+import type { ControllerSnapshot, MachineTravel } from "../../shared/machine";
+import type { HeightmapOperationSnapshot, HeightmapPlanRequest, SurfaceSession } from "../../shared/heightmap";
+import type { GcodeProgram } from "../../shared/program";
+import {
+  defaultHeightmapRequest,
+  emptyHeightmapOperation,
+  emptySurfaceSession,
+} from "./heightmapDefaults";
+import { HeightmapValues } from "./HeightmapValues";
+import {
+  applyDensity,
+  estimateHeightmapSeconds,
+  perimeterFromProgram,
+  validateHeightmapRequest,
+  type HeightmapDensity,
+} from "./heightmapModel";
+
+const HeightmapScene = lazy(async () => {
+  const module = await import("./HeightmapScene");
+  return { default: module.HeightmapScene };
+});
+
+interface HeightmapPanelProps {
+  readonly desktopRuntime: boolean;
+  readonly gateway: HeightmapGateway;
+  readonly machineProfileId?: string;
+  readonly machineTravel?: MachineTravel;
+  readonly onAbort: () => Promise<ControllerSnapshot>;
+  readonly onError: (message?: string) => void;
+  readonly onSaveMode: () => Promise<void>;
+  readonly program?: GcodeProgram;
+  readonly snapshot: ControllerSnapshot;
+}
+
+const duration = (seconds: number): string => {
+  const minutes = Math.ceil(seconds / 60);
+  return minutes < 60 ? `до ${minutes} мин` : `до ${Math.floor(minutes / 60)} ч ${minutes % 60} мин`;
+};
+
+const requestFromSession = (session: SurfaceSession): HeightmapPlanRequest | undefined =>
+  session.pending?.operation.map?.plan.request ?? session.active?.map.plan.request;
+
+export function HeightmapPanel({
+  desktopRuntime,
+  gateway,
+  machineProfileId,
+  machineTravel,
+  onAbort,
+  onError,
+  onSaveMode,
+  program,
+  snapshot,
+}: HeightmapPanelProps) {
+  const [request, setRequest] = useState(defaultHeightmapRequest);
+  const [operation, setOperation] = useState<HeightmapOperationSnapshot>(emptyHeightmapOperation);
+  const [session, setSession] = useState<SurfaceSession>(emptySurfaceSession);
+  const [density, setDensity] = useState<HeightmapDensity>("normal");
+  const [margin, setMargin] = useState(1);
+  const [representation, setRepresentation] = useState<"surface" | "values">("surface");
+  const [view, setView] = useState<"top" | "iso">("iso");
+  const [showPerimeter, setShowPerimeter] = useState(true);
+  const [showJob, setShowJob] = useState(true);
+  const [showProbeGrid, setShowProbeGrid] = useState(true);
+  const [showInterpolation, setShowInterpolation] = useState(true);
+  const [showInterpolationGrid, setShowInterpolationGrid] = useState(false);
+  const [interpolationColumns, setInterpolationColumns] = useState(50);
+  const [interpolationRows, setInterpolationRows] = useState(50);
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [localError, setLocalError] = useState<string>();
+
+  useEffect(() => {
+    if (!desktopRuntime) return;
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+    void Promise.all([gateway.getSession(), gateway.getOperation()])
+      .then(([nextSession, nextOperation]) => {
+        if (disposed) return;
+        setSession(nextSession);
+        setOperation(nextOperation);
+        setRequest(requestFromSession(nextSession) ?? defaultHeightmapRequest());
+      })
+      .catch((error) => !disposed && setLocalError(String(error)));
+    void gateway.subscribeSession((next) => {
+      if (!disposed) setSession(next);
+    }).then((unlisten) => unlisteners.push(unlisten));
+    void gateway.subscribeOperation((next) => {
+      if (!disposed) setOperation(next);
+    }).then((unlisten) => unlisteners.push(unlisten));
+    return () => {
+      disposed = true;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, [desktopRuntime, gateway]);
+
+  const displayedMap = operation.map ?? session.pending?.operation.map ?? session.active?.map;
+  const active = operation.state === "running" || operation.state === "paused";
+  const validationError = validateHeightmapRequest(request, machineTravel);
+  const totalPoints = request.columns * request.rows;
+  const estimate = useMemo(() => estimateHeightmapSeconds(request), [request]);
+  const programOutside = Boolean(program?.summary.bounds && (
+    program.summary.bounds.min.x < request.originXmm ||
+    program.summary.bounds.min.y < request.originYmm ||
+    program.summary.bounds.max.x > request.originXmm + request.widthMm ||
+    program.summary.bounds.max.y > request.originYmm + request.heightMm
+  ));
+
+  const updateNumber = (key: keyof HeightmapPlanRequest, value: string) => {
+    setRequest((current) => ({ ...current, [key]: Number(value) }));
+    setDensity("custom");
+  };
+  const runAction = async (action: () => Promise<void>) => {
+    setBusy(true);
+    setLocalError(undefined);
+    onError(undefined);
+    try {
+      await action();
+    } catch (error) {
+      const message = String(error);
+      setLocalError(message);
+      onError(message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const autoPerimeter = () => {
+    if (!program?.summary.bounds) return;
+    setRequest((current) => perimeterFromProgram(current, program.summary.bounds!, margin));
+  };
+  const start = () => runAction(async () => {
+    if (!machineProfileId) throw new Error("Сначала выберите профиль станка");
+    if (validationError) throw new Error(validationError);
+    if (programOutside) throw new Error("Часть задания находится за периметром карты");
+    if (!confirmed) throw new Error("Подтвердите, что весь периметр доступен щупу");
+    await onSaveMode();
+    setOperation(await gateway.start({
+      plan: request,
+      setupConfirmed: true,
+      contactAvailableAtEveryPoint: true,
+    }, machineProfileId));
+    setConfirmed(false);
+  });
+
+  return (
+    <div className="heightmap-workspace">
+      <div className="heightmap-visual">
+        <div className="heightmap-visual-toolbar">
+          <div className="heightmap-view-tabs" role="tablist" aria-label="Представление карты">
+            <button aria-selected={representation === "surface"} onClick={() => setRepresentation("surface")} role="tab" type="button"><Box size={14} /> Поверхность</button>
+            <button aria-selected={representation === "values"} onClick={() => setRepresentation("values")} role="tab" type="button"><Table2 size={14} /> Значения</button>
+          </div>
+          {representation === "surface" && (
+            <div className="heightmap-view-tabs compact">
+              <button aria-pressed={view === "top"} onClick={() => setView("top")} type="button">Сверху</button>
+              <button aria-pressed={view === "iso"} onClick={() => setView("iso")} type="button">3D</button>
+            </div>
+          )}
+        </div>
+        <div className="heightmap-visual-stage">
+          {representation === "surface" ? (
+            <Suspense fallback={<div className="heightmap-scene-loading">3D карта загружается...</div>}>
+              <HeightmapScene
+                interpolationColumns={interpolationColumns}
+                interpolationRows={interpolationRows}
+                map={displayedMap}
+                program={program}
+                request={request}
+                showInterpolation={showInterpolation}
+                showInterpolationGrid={showInterpolationGrid}
+                showJob={showJob}
+                showPerimeter={showPerimeter}
+                showProbeGrid={showProbeGrid}
+                view={view}
+              />
+            </Suspense>
+          ) : <HeightmapValues map={displayedMap} />}
+          <div className="heightmap-dimensions"><span>X {request.originXmm.toFixed(2)} → {(request.originXmm + request.widthMm).toFixed(2)}</span><span>Y {request.originYmm.toFixed(2)} → {(request.originYmm + request.heightMm).toFixed(2)}</span></div>
+          {displayedMap?.samples.some(Boolean) && <div className="heightmap-color-legend"><span>ниже</span><i /><span>выше</span></div>}
+        </div>
+        <div className="heightmap-layers">
+          <label><input checked={showPerimeter} onChange={(event) => setShowPerimeter(event.target.checked)} type="checkbox" /> Периметр</label>
+          <label><input checked={showJob} onChange={(event) => setShowJob(event.target.checked)} type="checkbox" /> Контур задания</label>
+          <label><input checked={showProbeGrid} onChange={(event) => setShowProbeGrid(event.target.checked)} type="checkbox" /> Точки касания</label>
+          <label><input checked={showInterpolation} onChange={(event) => setShowInterpolation(event.target.checked)} type="checkbox" /> Поверхность</label>
+        </div>
+      </div>
+
+      <div className="heightmap-settings">
+        <section>
+          <header><span>Периметр заготовки</span><button disabled={!program?.summary.bounds || active} onClick={autoPerimeter} type="button"><WandSparkles size={14} /> Авто по заданию</button></header>
+          <div className="heightmap-margin"><label>Отступ <input min="0" onChange={(event) => setMargin(Number(event.target.value))} step="0.5" type="number" value={margin} /> mm</label></div>
+          <div className="heightmap-field-grid">
+            {(["originXmm", "originYmm", "widthMm", "heightMm"] as const).map((key) => (
+              <label key={key}><span>{{ originXmm: "X от", originYmm: "Y от", widthMm: "Ширина", heightMm: "Высота" }[key]}</span><input disabled={active} onChange={(event) => updateNumber(key, event.target.value)} step="0.1" type="number" value={request[key]} /><small>mm</small></label>
+            ))}
+          </div>
+          {programOutside && <p className="heightmap-warning">Красные участки задания выходят за выбранный периметр.</p>}
+        </section>
+
+        <section>
+          <header><span>Плотность касаний</span><strong>{totalPoints} точек · {duration(estimate)}</strong></header>
+          <div className="heightmap-density">
+            {(["sparse", "normal", "precise"] as const).map((value) => <button aria-pressed={density === value} disabled={active} key={value} onClick={() => { setDensity(value); setRequest((current) => applyDensity(current, value)); }} type="button">{{ sparse: "Редко", normal: "Обычно", precise: "Точно" }[value]}</button>)}
+          </div>
+          <div className="heightmap-field-grid two">
+            <label><span>Точек X</span><input disabled={active} max="101" min="2" onChange={(event) => updateNumber("columns", event.target.value)} type="number" value={request.columns} /></label>
+            <label><span>Точек Y</span><input disabled={active} max="101" min="2" onChange={(event) => updateNumber("rows", event.target.value)} type="number" value={request.rows} /></label>
+          </div>
+          <p className="heightmap-spacing"><Grid3X3 size={13} /> Шаг X {(request.widthMm / Math.max(1, request.columns - 1)).toFixed(2)} mm · Y {(request.heightMm / Math.max(1, request.rows - 1)).toFixed(2)} mm</p>
+        </section>
+
+        <details className="heightmap-advanced">
+          <summary>Контакт, подачи и интерполяция</summary>
+          <div className="heightmap-contact-mode">
+            <label><input checked={request.contactMode === "directSurface"} disabled={active} name="contactMode" onChange={() => setRequest((current) => ({ ...current, contactMode: "directSurface", contactOffsetMm: 0 }))} type="radio" /> Прямой контакт с проводящей поверхностью</label>
+            <label><input checked={request.contactMode === "fixedPlate"} disabled={active} name="contactMode" onChange={() => setRequest((current) => ({ ...current, contactMode: "fixedPlate" }))} type="radio" /> Сплошная пластина на всей области</label>
+          </div>
+          <div className="heightmap-field-grid two">
+            {(["clearanceZmm", "maxProbeDepthMm", "probeFeedMmPerMin", "travelFeedMmPerMin", "retractFeedMmPerMin"] as const).map((key) => <label key={key}><span>{{ clearanceZmm: "Безопасная Z", maxProbeDepthMm: "Поиск вниз", probeFeedMmPerMin: "Подача щупа", travelFeedMmPerMin: "Переход XY", retractFeedMmPerMin: "Подъём Z" }[key]}</span><input disabled={active} min="0.1" onChange={(event) => updateNumber(key, event.target.value)} type="number" value={request[key]} /></label>)}
+            {request.contactMode === "fixedPlate" && <label><span>Толщина пластины</span><input disabled={active} min="0.01" onChange={(event) => updateNumber("contactOffsetMm", event.target.value)} step="0.01" type="number" value={request.contactOffsetMm} /></label>}
+          </div>
+          <div className="heightmap-interpolation-settings">
+            <span>Сетка отображения</span>
+            <input max="150" min="2" onChange={(event) => setInterpolationColumns(Number(event.target.value))} type="number" value={interpolationColumns} /> ×
+            <input max="150" min="2" onChange={(event) => setInterpolationRows(Number(event.target.value))} type="number" value={interpolationRows} />
+            <label><input checked={showInterpolationGrid} onChange={(event) => setShowInterpolationGrid(event.target.checked)} type="checkbox" /> показать линии</label>
+          </div>
+        </details>
+
+        <div className="heightmap-progress" aria-live="polite">
+          <span><ScanLine size={15} /> {operation.state === "completed" ? "Карта готова" : active ? operation.state === "paused" ? "Карта на паузе" : "Снимаю карту" : session.active ? "Последняя карта сохранена" : "Готово к измерению"}</span>
+          <strong>{operation.progress.measured}/{operation.progress.total || totalPoints}</strong>
+          <i><b style={{ width: `${operation.progress.total ? operation.progress.measured / operation.progress.total * 100 : 0}%` }} /></i>
+        </div>
+        {!active && <label className="heightmap-confirm"><input checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} type="checkbox" /><span>Щуп доступен во всём периметре, шпиндель остановлен, безопасная Z свободна</span></label>}
+        <div className="heightmap-primary-actions">
+          {active ? (
+            <>
+              <button disabled={busy} onClick={() => void runAction(async () => setOperation(operation.state === "paused" ? await gateway.resume() : await gateway.pause()))} type="button">{operation.state === "paused" ? <Play size={15} /> : <Pause size={15} />}{operation.state === "paused" ? "Продолжить" : "Пауза"}</button>
+              <button className="is-danger" disabled={busy} onClick={() => void runAction(async () => { await onAbort(); })} type="button"><Square size={14} /> Остановить</button>
+            </>
+          ) : <button className="is-primary" disabled={busy || !desktopRuntime || !confirmed || Boolean(validationError) || programOutside || snapshot.connection !== "connected" || snapshot.machine.mode !== "idle"} onClick={() => void start()} type="button"><Crosshair size={15} /> Снять новую карту</button>}
+        </div>
+        {session.active && !active && <div className="heightmap-session-actions"><button onClick={() => void runAction(async () => setSession(await gateway.setApplication(!session.applicationEnabled, true)))} type="button"><RotateCcw size={14} /> {session.applicationEnabled ? "Отозвать подтверждение" : "Подтвердить ту же установку"}</button><button aria-label="Очистить карту" className="icon-only" onClick={() => void runAction(async () => setSession(await gateway.clear()))} title="Очистить карту" type="button"><Trash2 size={14} /></button></div>}
+        <p className="heightmap-status-message">{localError ?? validationError ?? operation.error ?? (session.requiresSetupConfirmation ? "Карта восстановлена. Перед применением подтвердите, что заготовка и рабочий ноль не менялись." : "Новая карта заменит последнюю только после успешного измерения всех точек.")}</p>
+      </div>
+    </div>
+  );
+}

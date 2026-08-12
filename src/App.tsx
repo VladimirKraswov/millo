@@ -20,13 +20,16 @@ import {
   acknowledgeReset,
   clearMockAlarm,
   connectTransport,
+  confirmSoftReset,
   disconnect,
+  feedHold,
   getActiveTransport,
   getControllerSettings,
   inspectDevice,
   isDesktopRuntime,
   listTransports,
   refreshStatus,
+  requestSoftReset,
   rollbackControllerSetting,
   triggerMockAlarm,
   triggerMockDisconnect,
@@ -63,6 +66,9 @@ import { ProgramWorkspace } from "./features/program/ProgramWorkspace";
 import { MachineProfiles } from "./features/machine-profiles/MachineProfiles";
 import { MachineSettingsDialog } from "./features/machine-settings/MachineSettingsDialog";
 import { DiagnosticLogViewer } from "./features/diagnostics/DiagnosticLogViewer";
+import { ProbeIndicator } from "./features/probe/ProbeIndicator";
+import { ZProbeDialog } from "./features/probe/ZProbeDialog";
+import { previewHeightmapGateway } from "./features/heightmap/previewHeightmapGateway";
 import { WorkZeroDialog } from "./features/work-zero/WorkZeroDialog";
 import { ToolLibraryDialog } from "./features/tool-library/ToolLibraryDialog";
 import { WorkspaceToolsMenu } from "./components/WorkspaceToolsMenu";
@@ -75,6 +81,8 @@ import { bindMachineStateStream } from "./platform/machine/MachineStateEventStre
 import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineCommandGateway";
 import { tauriMachineStateEventStream } from "./platform/machine/tauriMachineStateEventStream";
 import { tauriWorkCoordinateGateway } from "./platform/machine/tauriWorkCoordinateGateway";
+import { tauriZProbeGateway } from "./platform/machine/tauriZProbeGateway";
+import { tauriHeightmapGateway } from "./platform/machine/tauriHeightmapGateway";
 import { tauriProgramGateway } from "./platform/program/tauriProgramGateway";
 import { tauriImageJobGateway } from "./platform/jobs/tauriImageJobGateway";
 import { tauriToolLibraryGateway } from "./platform/tooling/tauriToolLibraryGateway";
@@ -89,6 +97,7 @@ import {
   type TransportDescriptor,
   type WorkAxis,
 } from "./shared/machine";
+import type { GcodeProgram } from "./shared/program";
 import type {
   MachineProfile,
   MachineProfileDraft,
@@ -133,7 +142,7 @@ const developmentPreviewFixture =
         developmentFixture === "tool-change" ||
         developmentFixture === "recovery"
       ? previewFixtureFirstCutProgram
-      : developmentFixture === "program" || developmentFixture === "preflight"
+      : developmentFixture === "program" || developmentFixture === "preflight" || developmentFixture === "heightmap"
         ? previewFixtureProgram
         : undefined;
 const developmentPreflightFixture =
@@ -156,7 +165,9 @@ const developmentFirstCutFixture =
 const developmentJogFixture = ["jog", "jog-active", "alarm", "reset", "logs"].includes(
   developmentFixture ?? "",
 );
-const developmentMachineFixture = developmentJogFixture || developmentPreflightFixture;
+const developmentProbeFixture = developmentFixture === "probe" || developmentFixture === "heightmap";
+const developmentMachineFixture =
+  developmentJogFixture || developmentProbeFixture || developmentPreflightFixture;
 const developmentMachineMode =
   developmentFixture === "jog-active"
     ? "jog"
@@ -179,6 +190,22 @@ const developmentJogSnapshot: ControllerSnapshot = {
     workPosition: { x: 12.4, y: 8.2, z: 5.25 },
     feedRate: 0,
     spindleSpeed: 0,
+    pins: developmentProbeFixture
+      ? {
+          raw: "P",
+          xLimit: false,
+          yLimit: false,
+          zLimit: false,
+          aLimit: false,
+          bLimit: false,
+          cLimit: false,
+          probe: developmentFixture === "probe",
+          door: false,
+          hold: false,
+          softReset: false,
+          cycleStart: false,
+        }
+      : undefined,
   },
   pollSequence: 42,
   pollIntervalMs: 250,
@@ -203,7 +230,15 @@ const developmentProfileFixture: MachineProfileState = {
       spindleControl: "manual",
       homingInstalled: false,
       limitSwitchesInstalled: false,
-      probeInstalled: false,
+      probeInstalled: developmentProbeFixture,
+      probeSettings: {
+        mode: developmentFixture === "heightmap" ? "heightmap" : "workZero",
+        plateThicknessMm: 19.1,
+        maxTravelMm: 10,
+        probeFeedMmPerMin: 25,
+        retractMm: 3,
+        retractFeedMmPerMin: 100,
+      },
       emergencyStopInstalled: false,
       connection: { transportId: "mock", baudRate: 115_200 },
       detectedController: { firmwareVersion: "1.1f.20230316" },
@@ -320,6 +355,7 @@ export default function App() {
       bootstrapPluginHost({
         initialSnapshot: developmentMachineFixture ? developmentJogSnapshot : emptySnapshot,
         machineCommands: tauriMachineCommandGateway,
+        workCoordinates: tauriWorkCoordinateGateway,
         imageJobs: tauriImageJobGateway,
         toolLibrary: isDesktopRuntime()
           ? tauriToolLibraryGateway
@@ -372,6 +408,7 @@ export default function App() {
         : undefined,
     );
   const [onboardingDraft, setOnboardingDraft] = useState<MachineProfileDraft>();
+  const [activeProgram, setActiveProgram] = useState<GcodeProgram>();
   const [settingsOpen, setSettingsOpen] = useState(developmentFixture === "settings");
   const [settingsFocus, setSettingsFocus] = useState<"local" | "motion">("local");
   const [inspecting, setInspecting] = useState(false);
@@ -380,6 +417,7 @@ export default function App() {
   const [uiError, setUiError] = useState<string>();
   const [logOpen, setLogOpen] = useState(developmentFixture === "logs");
   const [workZeroOpen, setWorkZeroOpen] = useState(false);
+  const [zProbeOpen, setZProbeOpen] = useState(developmentProbeFixture);
   const [toolLibraryOpen, setToolLibraryOpen] = useState(
     developmentFixture === "tools",
   );
@@ -401,6 +439,9 @@ export default function App() {
 
   useEffect(() => {
     void pluginHost.ready.catch((error: unknown) => setUiError(String(error)));
+    return () => {
+      void pluginHost.dispose().catch((error: unknown) => setUiError(String(error)));
+    };
   }, [pluginHost]);
 
   useEffect(() => {
@@ -695,6 +736,7 @@ export default function App() {
       homingInstalled: profile.homingInstalled,
       limitSwitchesInstalled: profile.limitSwitchesInstalled,
       probeInstalled: profile.probeInstalled,
+      probeSettings: profile.probeSettings,
       emergencyStopInstalled: profile.emergencyStopInstalled,
     });
     setMachineProfiles(next);
@@ -732,6 +774,7 @@ export default function App() {
           homingInstalled: fixture.homingInstalled,
           limitSwitchesInstalled: fixture.limitSwitchesInstalled,
           probeInstalled: fixture.probeInstalled,
+          probeSettings: fixture.probeSettings,
           emergencyStopInstalled: fixture.emergencyStopInstalled,
           connection: fixture.connection ? { ...fixture.connection } : undefined,
           detectedController: fixture.detectedController
@@ -774,7 +817,12 @@ export default function App() {
         />
 
         <div className="topbar-tools" aria-label="Инструменты задания">
-          <WorkspaceToolsMenu registry={pluginHost.uiRegistry} />
+          <WorkspaceToolsMenu
+            onExtensionError={(contributionId, error) =>
+              setUiError(`Plugin UI ${contributionId}: ${String(error)}`)
+            }
+            registry={pluginHost.uiRegistry}
+          />
           <button
             aria-label="Макросы и плагины"
             className="script-manager-trigger"
@@ -845,9 +893,16 @@ export default function App() {
               ) : (
                 <div aria-hidden="true" className="operator-notice is-empty" />
               )}
-              <span className={`mode-indicator is-${snapshot.machine.mode}`}>
-                {snapshot.machine.mode}
-              </span>
+              <div className="machine-indicators">
+                <ProbeIndicator
+                  active={snapshot.machine.pins?.probe ?? false}
+                  connection={snapshot.connection}
+                  onClick={() => setZProbeOpen(true)}
+                />
+                <span className={`mode-indicator is-${snapshot.machine.mode}`}>
+                  {snapshot.machine.mode}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -952,6 +1007,7 @@ export default function App() {
                 workPosition: workPositionView.position,
               }}
               onInspection={setInspection}
+              onProgramChange={setActiveProgram}
               realRunAvailable={
                 developmentPreflightFixture ||
                 (desktopRuntime &&
@@ -1189,6 +1245,7 @@ export default function App() {
               machineBound={machineBound}
               maxJogDistanceMm={maxJogDistanceMm}
               maxJogFeedMmPerMin={maxJogFeedMmPerMin}
+              useProbeForZ={selectedMachine?.probeSettings.mode === "workZero"}
             />
           )}
 
@@ -1374,7 +1431,7 @@ export default function App() {
         settings={controllerSettings}
       />
       <DiagnosticLogViewer
-        desktopRuntime={desktopRuntime}
+        desktopRuntime={desktopRuntime || developmentFixture === "heightmap"}
         initialSnapshot={developmentFixture === "logs" ? developmentAuditFixture : undefined}
         onClose={() => setLogOpen(false)}
         onError={setUiError}
@@ -1391,6 +1448,45 @@ export default function App() {
         onSnapshot={pluginHost.machineState.publish}
         open={workZeroOpen}
         position={workPositionView.position}
+        snapshot={snapshot}
+        useProbeForZ={selectedMachine?.probeSettings.mode === "workZero"}
+      />
+      <ZProbeDialog
+        desktopRuntime={desktopRuntime || developmentFixture === "heightmap"}
+        disabled={controlsBusy}
+        gateway={tauriZProbeGateway}
+        heightmapGateway={developmentFixture === "heightmap" ? previewHeightmapGateway : tauriHeightmapGateway}
+        machineTravel={selectedMachine?.travelMm}
+        onAbort={async () => {
+          await feedHold();
+          const challenge = await requestSoftReset();
+          return confirmSoftReset(challenge.id);
+        }}
+        onClose={() => setZProbeOpen(false)}
+        onError={setUiError}
+        onSaveSettings={async (settings) => {
+          if (!selectedMachine) throw new Error("Сначала выберите профиль станка");
+          if (developmentFixture === "heightmap" && !desktopRuntime) {
+            setMachineProfiles((current) => ({
+              ...current,
+              profiles: current.profiles.map((profile) => profile.id === selectedMachine.id
+                ? { ...profile, probeInstalled: true, probeSettings: settings }
+                : profile),
+            }));
+            return;
+          }
+          await updateLocalMachine({
+            ...selectedMachine,
+            probeInstalled: true,
+            probeSettings: settings,
+          });
+        }}
+        onSnapshot={pluginHost.machineState.publish}
+        open={zProbeOpen}
+        profileId={selectedMachine?.id}
+        program={activeProgram}
+        probeInstalled={selectedMachine?.probeInstalled ?? false}
+        settings={selectedMachine?.probeSettings}
         snapshot={snapshot}
       />
       {pluginHost.tools && (

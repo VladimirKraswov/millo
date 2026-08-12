@@ -168,6 +168,7 @@ export interface HardwareProfile {
   homingInstalled: boolean;
   limitSwitchesInstalled: boolean;
   probeInstalled: boolean;
+  probeMode: "off" | "workZero" | "heightmap";
   emergencyStopInstalled: boolean;
 }
 
@@ -270,6 +271,30 @@ export interface ReturnToWorkZeroOutcome {
   axis: WorkAxis;
   coordinateSystem: WorkCoordinateSystem;
   command: string;
+  snapshot: ControllerSnapshot;
+}
+
+export interface ZProbeSettings {
+  mode: "off" | "workZero" | "heightmap";
+  plateThicknessMm: number;
+  maxTravelMm: number;
+  probeFeedMmPerMin: number;
+  retractMm: number;
+  retractFeedMmPerMin: number;
+}
+
+export interface ZProbeRequest {
+  settings: ZProbeSettings;
+  setupConfirmed: boolean;
+}
+
+export interface ZProbeOutcome {
+  coordinateSystem: WorkCoordinateSystem;
+  probeCommand: string;
+  zeroCommand: string;
+  retractCommand: string;
+  contactMachinePosition: Position;
+  finalWorkZ: number;
   snapshot: ControllerSnapshot;
 }
 

@@ -25,6 +25,7 @@ const renderControls = (mode: "idle" | "jog"): string =>
       machineGateway={{ jogPadStep: vi.fn() }}
       maxJogDistanceMm={50}
       maxJogFeedMmPerMin={1_000}
+      useProbeForZ={false}
       onError={vi.fn()}
       onInspection={vi.fn()}
       onOpenMotionSettings={vi.fn()}

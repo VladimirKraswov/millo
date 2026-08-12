@@ -13,11 +13,16 @@ export class CapabilityGrantStore {
 
   constructor(initial: readonly PluginCapabilityGrant[] = []) {
     for (const grant of initial) {
-      if (!grant.pluginId.trim()) {
-        throw new Error("capability grant pluginId must not be empty");
+      if (!/^[a-z0-9]+(?:[.-][a-z0-9]+)+$/.test(grant.pluginId)) {
+        throw new Error("capability grant pluginId must be a valid plugin id");
       }
       const current = new Set(this.grants.get(grant.pluginId) ?? []);
-      for (const capability of grant.capabilities) current.add(capability);
+      for (const capability of grant.capabilities) {
+        if (!pluginCapabilityCatalog.includes(capability)) {
+          throw new Error(`unknown plugin capability grant: ${String(capability)}`);
+        }
+        current.add(capability);
+      }
       this.grants.set(grant.pluginId, current);
     }
   }

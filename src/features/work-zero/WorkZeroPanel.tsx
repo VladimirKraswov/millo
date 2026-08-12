@@ -22,6 +22,7 @@ interface WorkZeroPanelProps {
   readonly onSnapshot: (snapshot: ControllerSnapshot) => void;
   readonly onError: (error?: string) => void;
   readonly onOutcome?: (outcome: WorkZeroOutcome) => void;
+  readonly useProbeForZ?: boolean;
 }
 
 export function WorkZeroPanel({
@@ -33,6 +34,7 @@ export function WorkZeroPanel({
   onSnapshot,
   onError,
   onOutcome,
+  useProbeForZ = false,
 }: WorkZeroPanelProps) {
   const interactor = useMemo(() => new WorkZeroInteractor(gateway), [gateway]);
   const [positionConfirmed, setPositionConfirmed] = useState(false);
@@ -99,7 +101,7 @@ export function WorkZeroPanel({
     onError(undefined);
     try {
       let next: WorkZeroOutcome | undefined;
-      for (const axis of axes) {
+      for (const axis of useProbeForZ ? axes.slice(0, 2) : axes) {
         next = await interactor.set(axis, true);
         onSnapshot(next.snapshot);
       }
@@ -174,19 +176,19 @@ export function WorkZeroPanel({
         type="button"
       >
         <Crosshair aria-hidden="true" size={15} />
-        Установить XYZ = 0
+        {useProbeForZ ? "Установить XY = 0" : "Установить XYZ = 0"}
       </button>
 
       <div className="work-zero-actions" role="group" aria-label="Рабочий ноль">
         {axes.map((axis) => (
           <button
-            disabled={!canSet}
+            disabled={!canSet || (axis === "z" && useProbeForZ)}
             key={axis}
             onClick={() => void setZero(axis)}
             type="button"
           >
             <span>0</span>
-            Только {axis.toUpperCase()}
+            {axis === "z" && useProbeForZ ? "Z задаётся щупом" : `Только ${axis.toUpperCase()}`}
           </button>
         ))}
       </div>

@@ -121,6 +121,7 @@ interface ProgramWorkspaceProps {
   readonly incomingJob?: PublishedJob;
   readonly machineContext?: ProgramMachineContext;
   readonly onInspection?: (inspection: HardwareInspection) => void;
+  readonly onProgramChange?: (program?: GcodeProgram) => void;
   readonly realRunAvailable?: boolean;
   readonly realRunGateway?: RealRunPreflightGateway;
   readonly realRunTarget?: boolean;
@@ -217,6 +218,7 @@ export function ProgramWorkspace({
   incomingJob,
   machineContext,
   onInspection,
+  onProgramChange,
   realRunAvailable = false,
   realRunGateway,
   realRunTarget = false,
@@ -225,6 +227,9 @@ export function ProgramWorkspace({
   const [loaded, setLoaded] = useState<LoadedProgram | undefined>(
     initialProgram ? { program: initialProgram, source: initialSource } : undefined,
   );
+  useEffect(() => {
+    onProgramChange?.(loaded?.program);
+  }, [loaded?.program, onProgramChange]);
   const [sender, setSender] = useState<SenderSnapshot>(
     initialSender ?? idleSenderSnapshot,
   );

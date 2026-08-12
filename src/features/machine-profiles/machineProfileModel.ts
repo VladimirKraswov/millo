@@ -1,4 +1,5 @@
 import type { MachineProfileDraft } from "../../shared/profile";
+import { defaultZProbeSettings } from "../../shared/profile";
 
 export const emptyMachineProfileDraft = (): MachineProfileDraft => ({
   name: "",
@@ -8,6 +9,7 @@ export const emptyMachineProfileDraft = (): MachineProfileDraft => ({
   homingInstalled: false,
   limitSwitchesInstalled: false,
   probeInstalled: false,
+  probeSettings: defaultZProbeSettings(),
   emergencyStopInstalled: false,
 });
 

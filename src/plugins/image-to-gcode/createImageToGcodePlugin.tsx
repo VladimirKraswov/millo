@@ -1,8 +1,9 @@
-import { uiSlots } from "../../platform/extensions/UiExtensionRegistry";
 import {
+  createPluginManifest,
+  definePlugin,
   type InMemoryPluginModule,
-} from "../../platform/plugins/InMemoryPluginLoader";
-import { PLUGIN_API_VERSION, PLUGIN_MANIFEST_VERSION } from "../../platform/plugins/PluginManifest";
+  uiSlots,
+} from "../../plugin-sdk";
 import { ImageToGcodePlugin } from "./ImageToGcodePlugin";
 
 export const IMAGE_TO_GCODE_PLUGIN_ID = "io.millo.image-to-gcode";
@@ -14,10 +15,8 @@ interface ImageToGcodePluginOptions {
 export function createImageToGcodePlugin(
   options: ImageToGcodePluginOptions = {},
 ): InMemoryPluginModule {
-  return {
-    manifest: {
-      manifestVersion: PLUGIN_MANIFEST_VERSION,
-      apiVersion: PLUGIN_API_VERSION,
+  return definePlugin({
+    manifest: createPluginManifest({
       id: IMAGE_TO_GCODE_PLUGIN_ID,
       name: "Image to G-code",
       version: "0.1.0",
@@ -25,7 +24,7 @@ export function createImageToGcodePlugin(
         required: ["ui.contribute", "jobs.create"],
         optional: [],
       },
-    },
+    }),
     activate(context) {
       if (!context.ui || !context.jobs) {
         throw new Error("Image to G-code requires UI and jobs.create capabilities");
@@ -38,5 +37,5 @@ export function createImageToGcodePlugin(
         render: () => <ImageToGcodePlugin initialOpen={options.initialOpen} jobs={jobs} />,
       });
     },
-  };
+  });
 }

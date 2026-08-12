@@ -10,9 +10,10 @@ use millo_controller::{
 use millo_domain::{
     CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot, DeviceInspection,
     HardwareInspection, HardwareProfile, JogPadStepOutcome, JogPadStepRequest, MachineMode,
-    OperatorConfirmation, OverrideAdjustment, Position, RapidOverrideTarget, ResetChallenge,
-    ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest, StepJogReceipt, StepJogRequest,
-    TestJogPreparation, WorkAxis, WorkCoordinateSystem, WorkZeroOutcome, WorkZeroRequest,
+    OperatorConfirmation, OverrideAdjustment, Position, ProbeWorkflowMode, RapidOverrideTarget,
+    ResetChallenge, ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest, StepJogReceipt,
+    StepJogRequest, TestJogPreparation, WorkAxis, WorkCoordinateSystem, WorkZeroOutcome,
+    WorkZeroRequest, ZProbeOutcome, ZProbeRequest, ZProbeSettings,
 };
 use millo_dry_run::{
     DryRunLineKind, DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy,
@@ -23,6 +24,10 @@ use millo_grbl::{
     MAX_STEP_JOG_DISTANCE_MM, MAX_STEP_JOG_FEED_MM_PER_MIN, MIN_STEP_JOG_DISTANCE_MM,
     MIN_STEP_JOG_FEED_MM_PER_MIN, active_work_coordinate_system, build_device_inspection,
     work_coordinate_parameter,
+};
+use millo_heightmap::{
+    Heightmap, HeightmapError, HeightmapOperationSnapshot, HeightmapOperationState,
+    HeightmapStartRequest, HeightmapTravelLimits, plan_heightmap,
 };
 use millo_readiness::assess;
 use millo_run::program_fingerprint;
@@ -90,6 +95,40 @@ pub enum ArbiterError {
     UnlockConfirmationRequired,
     #[error("work zero verification failed: {0}")]
     WorkZeroVerification(String),
+    #[error("Z probe requires confirmation that the plate is secured and the spindle is stopped")]
+    ZProbeConfirmationRequired,
+    #[error("the selected machine profile does not declare an installed probe")]
+    ZProbeNotInstalled,
+    #[error("Z probe work-zero mode is disabled in the selected machine profile")]
+    ZProbeDisabled,
+    #[error("probe input P is already active; open the circuit before probing")]
+    ZProbeInputAlreadyActive,
+    #[error("invalid Z probe settings: {0}")]
+    InvalidZProbeSettings(&'static str),
+    #[error("Z probe result could not be verified: {0}")]
+    ZProbeVerification(String),
+    #[error("Z probe retract did not return to Idle within {0} ms")]
+    ZProbeRetractTimeout(u64),
+    #[error("Z probe was interrupted by controller reset")]
+    ZProbeReset,
+    #[error(transparent)]
+    Heightmap(#[from] HeightmapError),
+    #[error("heightmap requires confirmation that the entire perimeter is clear and reachable")]
+    HeightmapConfirmationRequired,
+    #[error("heightmap mode is not selected in the machine profile")]
+    HeightmapModeDisabled,
+    #[error("a fixed contact plate must cover every probing point")]
+    HeightmapContactUnavailable,
+    #[error("another machine operation is active")]
+    MachineOperationBusy,
+    #[error("heightmap operation is not running")]
+    HeightmapOperationUnavailable,
+    #[error("prepared heightmap operation is unavailable")]
+    PreparedHeightmapUnavailable,
+    #[error("prepared heightmap {expected} does not match active preparation {actual}")]
+    PreparedHeightmapMismatch { expected: u64, actual: u64 },
+    #[error("heightmap probing failed: {0}")]
+    HeightmapProbe(String),
     #[error("current work position is unavailable")]
     WorkPositionUnavailable,
     #[error("raise work Z above zero before returning {0:?} to zero")]
@@ -174,6 +213,7 @@ pub struct CommandArbiter {
     requests: mpsc::Sender<Request>,
     snapshots: watch::Receiver<ControllerSnapshot>,
     sender_snapshots: watch::Receiver<SenderSnapshot>,
+    heightmap_snapshots: watch::Receiver<HeightmapOperationSnapshot>,
 }
 
 impl CommandArbiter {
@@ -202,6 +242,8 @@ impl CommandArbiter {
         let (requests, request_rx) = mpsc::channel(REQUEST_CAPACITY);
         let (snapshot_tx, snapshots) = watch::channel(initial_snapshot);
         let (sender_snapshot_tx, sender_snapshots) = watch::channel(sender.snapshot());
+        let (heightmap_snapshot_tx, heightmap_snapshots) =
+            watch::channel(HeightmapOperationSnapshot::default());
         let actor = ActorState {
             controller,
             config,
@@ -213,8 +255,13 @@ impl CommandArbiter {
             first_cut: FirstCutGate::default(),
             program_check: ProgramCheckGate::default(),
             pending_program_check: None,
+            active_z_probe: None,
+            prepared_heightmap: None,
+            active_heightmap: None,
+            heightmap_sequence: 0,
             snapshots: snapshot_tx,
             sender_snapshots: sender_snapshot_tx,
+            heightmap_snapshots: heightmap_snapshot_tx,
         };
         let worker = run_actor(actor, request_rx);
 
@@ -223,6 +270,7 @@ impl CommandArbiter {
                 requests,
                 snapshots,
                 sender_snapshots,
+                heightmap_snapshots,
             },
             worker,
         )
@@ -242,6 +290,14 @@ impl CommandArbiter {
 
     pub fn subscribe_sender(&self) -> watch::Receiver<SenderSnapshot> {
         self.sender_snapshots.clone()
+    }
+
+    pub fn heightmap_snapshot(&self) -> HeightmapOperationSnapshot {
+        self.heightmap_snapshots.borrow().clone()
+    }
+
+    pub fn subscribe_heightmap(&self) -> watch::Receiver<HeightmapOperationSnapshot> {
+        self.heightmap_snapshots.clone()
     }
 
     pub async fn replace_transport(
@@ -566,6 +622,71 @@ impl CommandArbiter {
             .await
     }
 
+    pub async fn probe_z(&self, request: ZProbeRequest) -> Result<ZProbeOutcome, ArbiterError> {
+        self.call(|response| Request::ProbeZ { request, response })
+            .await
+    }
+
+    #[cfg(test)]
+    async fn start_heightmap(
+        &self,
+        request: HeightmapStartRequest,
+    ) -> Result<HeightmapOperationSnapshot, ArbiterError> {
+        let prepared = self.prepare_heightmap(request).await?;
+        match self
+            .commit_prepared_heightmap(prepared.operation_sequence)
+            .await
+        {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => {
+                let _ = self
+                    .discard_prepared_heightmap(prepared.operation_sequence)
+                    .await;
+                Err(error)
+            }
+        }
+    }
+
+    pub async fn prepare_heightmap(
+        &self,
+        request: HeightmapStartRequest,
+    ) -> Result<HeightmapOperationSnapshot, ArbiterError> {
+        self.call(|response| Request::PrepareHeightmap { request, response })
+            .await
+    }
+
+    pub async fn commit_prepared_heightmap(
+        &self,
+        operation_sequence: u64,
+    ) -> Result<HeightmapOperationSnapshot, ArbiterError> {
+        self.call(|response| Request::CommitPreparedHeightmap {
+            operation_sequence,
+            response,
+        })
+        .await
+    }
+
+    pub async fn discard_prepared_heightmap(
+        &self,
+        operation_sequence: u64,
+    ) -> Result<(), ArbiterError> {
+        self.call(|response| Request::DiscardPreparedHeightmap {
+            operation_sequence,
+            response,
+        })
+        .await
+    }
+
+    pub async fn pause_heightmap(&self) -> Result<HeightmapOperationSnapshot, ArbiterError> {
+        self.call(|response| Request::PauseHeightmap { response })
+            .await
+    }
+
+    pub async fn resume_heightmap(&self) -> Result<HeightmapOperationSnapshot, ArbiterError> {
+        self.call(|response| Request::ResumeHeightmap { response })
+            .await
+    }
+
     pub async fn start_dry_run(&self, plan: DryRunPlan) -> Result<SenderSnapshot, ArbiterError> {
         self.call(|response| Request::StartDryRun { plan, response })
             .await
@@ -741,6 +862,28 @@ enum Request {
         request: ReturnToWorkZeroRequest,
         response: oneshot::Sender<Result<ReturnToWorkZeroOutcome, ArbiterError>>,
     },
+    ProbeZ {
+        request: ZProbeRequest,
+        response: oneshot::Sender<Result<ZProbeOutcome, ArbiterError>>,
+    },
+    PrepareHeightmap {
+        request: HeightmapStartRequest,
+        response: oneshot::Sender<Result<HeightmapOperationSnapshot, ArbiterError>>,
+    },
+    CommitPreparedHeightmap {
+        operation_sequence: u64,
+        response: oneshot::Sender<Result<HeightmapOperationSnapshot, ArbiterError>>,
+    },
+    DiscardPreparedHeightmap {
+        operation_sequence: u64,
+        response: oneshot::Sender<Result<(), ArbiterError>>,
+    },
+    PauseHeightmap {
+        response: oneshot::Sender<Result<HeightmapOperationSnapshot, ArbiterError>>,
+    },
+    ResumeHeightmap {
+        response: oneshot::Sender<Result<HeightmapOperationSnapshot, ArbiterError>>,
+    },
     StartDryRun {
         plan: DryRunPlan,
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
@@ -775,8 +918,49 @@ struct ActorState {
     first_cut: FirstCutGate,
     program_check: ProgramCheckGate,
     pending_program_check: Option<ProgramCheckBinding>,
+    active_z_probe: Option<ActiveZProbe>,
+    prepared_heightmap: Option<ActiveHeightmap>,
+    active_heightmap: Option<ActiveHeightmap>,
+    heightmap_sequence: u64,
     snapshots: watch::Sender<ControllerSnapshot>,
     sender_snapshots: watch::Sender<SenderSnapshot>,
+    heightmap_snapshots: watch::Sender<HeightmapOperationSnapshot>,
+}
+
+struct ActiveZProbe {
+    request: ZProbeRequest,
+    coordinate_system: WorkCoordinateSystem,
+    restore_modal: String,
+    command: String,
+    response: oneshot::Sender<Result<ZProbeOutcome, ArbiterError>>,
+}
+
+struct StartedZProbe {
+    request: ZProbeRequest,
+    coordinate_system: WorkCoordinateSystem,
+    restore_modal: String,
+    command: String,
+}
+
+struct ActiveHeightmap {
+    map: Heightmap,
+    coordinate_system: WorkCoordinateSystem,
+    restore_modal: String,
+    next_sequence: usize,
+    phase: HeightmapPhase,
+    paused: bool,
+    operation_sequence: u64,
+}
+
+enum HeightmapPhase {
+    Raise,
+    WaitForRaise,
+    MoveXy,
+    WaitForXy,
+    Probe,
+    PollProbe { command: String },
+    RecordProbe,
+    Finalize,
 }
 
 async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>) {
@@ -791,14 +975,18 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                 let Some(request) = request else {
                     break;
                 };
-                handle_request(request, &mut actor).await;
+                if machine_operation_active(&actor) && !request_allowed_during_probe(&request) {
+                    reject_request_during_machine_operation(request);
+                } else {
+                    handle_request(request, &mut actor).await;
+                }
             }
             _ = ticker.tick() => {
                 if matches!(
                     actor.controller.snapshot().connection,
                     ConnectionState::Connected | ConnectionState::Recovering
                 ) {
-                    if actor.sender.has_in_flight()
+                    if (actor.sender.has_in_flight() || machine_operation_active(&actor))
                         && actor.controller.snapshot().connection == ConnectionState::Connected
                     {
                         if let Err(error) = actor.controller.request_interleaved_status().await {
@@ -858,6 +1046,12 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                 )
                 .await;
             }
+            _ = tokio::task::yield_now(), if actor.active_z_probe.is_some() => {
+                poll_active_z_probe(&mut actor).await;
+            }
+            _ = tokio::task::yield_now(), if actor.active_heightmap.is_some() => {
+                poll_active_heightmap(&mut actor).await;
+            }
         }
     }
 }
@@ -874,8 +1068,13 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         first_cut,
         program_check,
         pending_program_check,
+        active_z_probe,
+        prepared_heightmap,
+        active_heightmap,
+        heightmap_sequence,
         snapshots,
         sender_snapshots,
+        heightmap_snapshots,
     } = actor;
     match request {
         Request::ReplaceTransport {
@@ -1186,7 +1385,11 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 program_check.invalidate();
                 *pending_program_check = None;
             }
-            let controller_result = if command == RealtimeCommand::Status && sender.has_in_flight()
+            let controller_result = if command == RealtimeCommand::Status
+                && (sender.has_in_flight()
+                    || active_z_probe.is_some()
+                    || prepared_heightmap.is_some()
+                    || active_heightmap.is_some())
             {
                 controller
                     .request_interleaved_status()
@@ -1197,6 +1400,13 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             };
             match &controller_result {
                 Ok(_) if command == RealtimeCommand::SoftReset => {
+                    finish_active_z_probe(active_z_probe, Err(ArbiterError::ZProbeReset));
+                    *prepared_heightmap = None;
+                    cancel_active_heightmap(
+                        active_heightmap,
+                        heightmap_snapshots,
+                        "Controller reset",
+                    );
                     cancel_active_sender(sender, sender_snapshots);
                 }
                 Ok(_)
@@ -1248,7 +1458,16 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                     let controller_result =
                         controller.send_realtime(RealtimeCommand::SoftReset).await;
                     match &controller_result {
-                        Ok(_) => cancel_active_sender(sender, sender_snapshots),
+                        Ok(_) => {
+                            finish_active_z_probe(active_z_probe, Err(ArbiterError::ZProbeReset));
+                            *prepared_heightmap = None;
+                            cancel_active_heightmap(
+                                active_heightmap,
+                                heightmap_snapshots,
+                                "Controller reset",
+                            );
+                            cancel_active_sender(sender, sender_snapshots)
+                        }
                         Err(error) => {
                             fail_and_quarantine_physical_sender(
                                 controller,
@@ -1331,6 +1550,145 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             invalidate_authorizations(safety, first_cut);
             let result = execute_return_to_work_zero(controller, hardware_profile, request).await;
             publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::ProbeZ { request, response } => {
+            invalidate_authorizations(safety, first_cut);
+            let result = if active_z_probe.is_some()
+                || prepared_heightmap.is_some()
+                || active_heightmap.is_some()
+            {
+                Err(ArbiterError::Controller(
+                    ControllerError::ProgramResponseState("a probe operation is already active"),
+                ))
+            } else {
+                begin_z_probe(controller, hardware_profile, request).await
+            };
+            match result {
+                Ok(started) => {
+                    *active_z_probe = Some(ActiveZProbe {
+                        request: started.request,
+                        coordinate_system: started.coordinate_system,
+                        restore_modal: started.restore_modal,
+                        command: started.command,
+                        response,
+                    });
+                    publish(snapshots, controller);
+                    return;
+                }
+                Err(error) => {
+                    let _ = response.send(Err(error));
+                }
+            }
+            publish(snapshots, controller);
+        }
+        Request::PrepareHeightmap { request, response } => {
+            invalidate_authorizations(safety, first_cut);
+            let sender_busy = !matches!(
+                sender.snapshot().state,
+                SenderState::Idle
+                    | SenderState::Completed
+                    | SenderState::Failed
+                    | SenderState::Cancelled
+            );
+            let result = if active_z_probe.is_some()
+                || prepared_heightmap.is_some()
+                || active_heightmap.is_some()
+                || sender_busy
+            {
+                Err(ArbiterError::MachineOperationBusy)
+            } else {
+                *heightmap_sequence = heightmap_sequence.saturating_add(1);
+                begin_heightmap(controller, hardware_profile, request, *heightmap_sequence).await
+            };
+            match result {
+                Ok(active) => {
+                    let snapshot = heightmap_operation_snapshot(&active);
+                    *prepared_heightmap = Some(active);
+                    let _ = response.send(Ok(snapshot));
+                }
+                Err(error) => {
+                    let _ = response.send(Err(error));
+                }
+            }
+            publish(snapshots, controller);
+        }
+        Request::CommitPreparedHeightmap {
+            operation_sequence,
+            response,
+        } => {
+            let result = match prepared_heightmap.as_ref() {
+                Some(prepared) if prepared.operation_sequence != operation_sequence => {
+                    Err(ArbiterError::PreparedHeightmapMismatch {
+                        expected: operation_sequence,
+                        actual: prepared.operation_sequence,
+                    })
+                }
+                Some(_) => match prepared_heightmap.take() {
+                    Some(active) => {
+                        let snapshot = heightmap_operation_snapshot(&active);
+                        *active_heightmap = Some(active);
+                        let _ = heightmap_snapshots.send(snapshot.clone());
+                        Ok(snapshot)
+                    }
+                    None => Err(ArbiterError::PreparedHeightmapUnavailable),
+                },
+                None => Err(ArbiterError::PreparedHeightmapUnavailable),
+            };
+            let _ = response.send(result);
+        }
+        Request::DiscardPreparedHeightmap {
+            operation_sequence,
+            response,
+        } => {
+            let result = match prepared_heightmap.as_ref() {
+                Some(prepared) if prepared.operation_sequence != operation_sequence => {
+                    Err(ArbiterError::PreparedHeightmapMismatch {
+                        expected: operation_sequence,
+                        actual: prepared.operation_sequence,
+                    })
+                }
+                Some(_) => {
+                    *prepared_heightmap = None;
+                    Ok(())
+                }
+                None => Err(ArbiterError::PreparedHeightmapUnavailable),
+            };
+            let _ = response.send(result);
+        }
+        Request::PauseHeightmap { response } => {
+            let result = async {
+                let active = active_heightmap
+                    .as_mut()
+                    .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+                controller.send_realtime(RealtimeCommand::FeedHold).await?;
+                active.paused = true;
+                let snapshot = heightmap_operation_snapshot(active);
+                let _ = heightmap_snapshots.send(snapshot.clone());
+                Ok(snapshot)
+            }
+            .await;
+            let _ = response.send(result);
+        }
+        Request::ResumeHeightmap { response } => {
+            let result = async {
+                let active = active_heightmap
+                    .as_mut()
+                    .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+                let state = controller.refresh_status().await?;
+                if state.machine.mode == MachineMode::Hold {
+                    controller
+                        .send_realtime(RealtimeCommand::CycleStart)
+                        .await?;
+                } else if state.machine.mode != MachineMode::Idle {
+                    ensure_stable_idle(&state)?;
+                }
+                active.paused = false;
+                let snapshot = heightmap_operation_snapshot(active);
+                let _ = heightmap_snapshots.send(snapshot.clone());
+                Ok(snapshot)
+            }
+            .await;
             let _ = response.send(result);
         }
         Request::StartDryRun { plan, response } => {
@@ -2214,6 +2572,740 @@ async fn execute_return_to_work_zero(
     })
 }
 
+async fn begin_z_probe(
+    controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
+    request: ZProbeRequest,
+) -> Result<StartedZProbe, ArbiterError> {
+    if !request.setup_confirmed {
+        return Err(ArbiterError::ZProbeConfirmationRequired);
+    }
+    if !hardware_profile.probe_installed {
+        return Err(ArbiterError::ZProbeNotInstalled);
+    }
+    if request.settings.mode != ProbeWorkflowMode::WorkZero {
+        return Err(ArbiterError::ZProbeDisabled);
+    }
+    validate_z_probe_settings(request.settings)?;
+
+    let before = controller.refresh_status().await?;
+    ensure_stable_idle(&before)?;
+    if before.machine.pins.as_ref().is_some_and(|pins| pins.probe) {
+        return Err(ArbiterError::ZProbeInputAlreadyActive);
+    }
+
+    let modal_response = controller
+        .query_device(millo_controller::DeviceQuery::ModalState)
+        .await?;
+    let modal = build_device_inspection(vec![modal_response]);
+    let coordinate_system = active_work_coordinate_system(&modal.modal_state)
+        .ok_or(ArbiterError::ActiveWorkCoordinateSystemUnavailable)?;
+    let restore_modal = restore_probe_modal_command(&modal.modal_state);
+
+    ensure_stable_idle(&controller.snapshot())?;
+    let (command, _) = controller
+        .begin_z_probe(
+            request.settings.max_travel_mm,
+            request.settings.probe_feed_mm_per_min,
+        )
+        .await?;
+    Ok(StartedZProbe {
+        request,
+        coordinate_system,
+        restore_modal,
+        command,
+    })
+}
+
+async fn begin_heightmap(
+    controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
+    request: HeightmapStartRequest,
+    operation_sequence: u64,
+) -> Result<ActiveHeightmap, ArbiterError> {
+    if !request.setup_confirmed {
+        return Err(ArbiterError::HeightmapConfirmationRequired);
+    }
+    if !hardware_profile.probe_installed {
+        return Err(ArbiterError::ZProbeNotInstalled);
+    }
+    if hardware_profile.probe_mode != ProbeWorkflowMode::Heightmap {
+        return Err(ArbiterError::HeightmapModeDisabled);
+    }
+    if !request.contact_available_at_every_point {
+        return Err(ArbiterError::HeightmapContactUnavailable);
+    }
+    let travel = hardware_profile
+        .travel_mm
+        .map(|travel| HeightmapTravelLimits {
+            x_mm: travel.x,
+            y_mm: travel.y,
+        });
+    if hardware_profile
+        .travel_mm
+        .is_some_and(|travel| request.plan.clearance_z_mm > travel.z)
+    {
+        return Err(HeightmapError::ExceedsTravel {
+            axis: "Z",
+            requested: request.plan.clearance_z_mm,
+            maximum: hardware_profile.travel_mm.map_or(0.0, |travel| travel.z),
+        }
+        .into());
+    }
+    let map = Heightmap::new(plan_heightmap(request.plan, travel)?);
+    let before = controller.refresh_status().await?;
+    ensure_stable_idle(&before)?;
+    if before.machine.pins.as_ref().is_some_and(|pins| pins.probe) {
+        return Err(ArbiterError::ZProbeInputAlreadyActive);
+    }
+    let modal_response = controller
+        .query_device(millo_controller::DeviceQuery::ModalState)
+        .await?;
+    let modal = build_device_inspection(vec![modal_response]);
+    let coordinate_system = active_work_coordinate_system(&modal.modal_state)
+        .ok_or(ArbiterError::ActiveWorkCoordinateSystemUnavailable)?;
+    Ok(ActiveHeightmap {
+        map,
+        coordinate_system,
+        restore_modal: restore_probe_modal_command(&modal.modal_state),
+        next_sequence: 0,
+        phase: HeightmapPhase::Raise,
+        paused: false,
+        operation_sequence,
+    })
+}
+
+fn heightmap_operation_snapshot(active: &ActiveHeightmap) -> HeightmapOperationSnapshot {
+    let mut snapshot =
+        HeightmapOperationSnapshot::running(active.operation_sequence, active.map.clone());
+    snapshot.state = if active.paused {
+        HeightmapOperationState::Paused
+    } else {
+        HeightmapOperationState::Running
+    };
+    snapshot.current_sequence =
+        (active.next_sequence < active.map.plan.points.len()).then_some(active.next_sequence);
+    snapshot
+}
+
+fn cancel_active_heightmap(
+    active: &mut Option<ActiveHeightmap>,
+    snapshots: &watch::Sender<HeightmapOperationSnapshot>,
+    reason: &str,
+) {
+    if let Some(active) = active.take() {
+        let mut snapshot = heightmap_operation_snapshot(&active);
+        snapshot.state = HeightmapOperationState::Cancelled;
+        snapshot.current_sequence = None;
+        snapshot.error = Some(reason.to_owned());
+        let _ = snapshots.send(snapshot);
+    }
+}
+
+async fn poll_active_heightmap(actor: &mut ActorState) {
+    if actor
+        .active_heightmap
+        .as_ref()
+        .is_none_or(|active| active.paused)
+    {
+        return;
+    }
+    if let Err(error) = execute_heightmap_phase(actor).await {
+        if let Some(active) = actor.active_heightmap.take() {
+            let cleanup_error = cleanup_failed_heightmap(&mut actor.controller, &active).await;
+            let mut snapshot = heightmap_operation_snapshot(&active);
+            snapshot.state = HeightmapOperationState::Failed;
+            snapshot.current_sequence = None;
+            snapshot.error = Some(match cleanup_error {
+                Some(cleanup) => format!("{error}; safe-Z cleanup was incomplete: {cleanup}"),
+                None => error.to_string(),
+            });
+            let _ = actor.heightmap_snapshots.send(snapshot);
+        }
+        publish(&actor.snapshots, &actor.controller);
+    }
+}
+
+async fn cleanup_failed_heightmap(
+    controller: &mut Controller<BoxedTransport>,
+    active: &ActiveHeightmap,
+) -> Option<String> {
+    let mut failures = Vec::new();
+    let snapshot = controller.snapshot();
+    if snapshot.connection == ConnectionState::Connected
+        && snapshot.machine.mode == MachineMode::Idle
+    {
+        let request = active.map.plan.request;
+        let raise = controller
+            .move_heightmap_z(request.clearance_z_mm, request.retract_feed_mm_per_min)
+            .await;
+        match raise {
+            Ok(_) => {
+                if let Err(error) = wait_for_heightmap_cleanup_idle(controller, request).await {
+                    failures.push(format!("safe Z settle: {error}"));
+                }
+            }
+            Err(error) => failures.push(format!("safe Z: {error}")),
+        }
+    }
+    if controller.snapshot().connection == ConnectionState::Connected
+        && let Err(error) = controller.restore_modal_state(&active.restore_modal).await
+    {
+        failures.push(format!("modal restore: {error}"));
+    }
+    (!failures.is_empty()).then(|| failures.join(", "))
+}
+
+async fn wait_for_heightmap_cleanup_idle(
+    controller: &mut Controller<BoxedTransport>,
+    request: millo_heightmap::HeightmapPlanRequest,
+) -> Result<(), ArbiterError> {
+    let timeout = Duration::from_secs_f64(
+        request.clearance_z_mm / request.retract_feed_mm_per_min * 60.0 + 3.0,
+    );
+    let started = Instant::now();
+    loop {
+        let snapshot = controller.refresh_status().await?;
+        match snapshot.machine.mode {
+            MachineMode::Idle => return Ok(()),
+            MachineMode::Jog if started.elapsed() < timeout => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            MachineMode::Jog => {
+                return Err(ArbiterError::ZProbeRetractTimeout(
+                    timeout.as_millis().try_into().unwrap_or(u64::MAX),
+                ));
+            }
+            _ => ensure_stable_idle(&snapshot)?,
+        }
+    }
+}
+
+async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterError> {
+    let phase = actor
+        .active_heightmap
+        .as_ref()
+        .map(|active| match &active.phase {
+            HeightmapPhase::Raise => HeightmapPhase::Raise,
+            HeightmapPhase::WaitForRaise => HeightmapPhase::WaitForRaise,
+            HeightmapPhase::MoveXy => HeightmapPhase::MoveXy,
+            HeightmapPhase::WaitForXy => HeightmapPhase::WaitForXy,
+            HeightmapPhase::Probe => HeightmapPhase::Probe,
+            HeightmapPhase::PollProbe { command } => HeightmapPhase::PollProbe {
+                command: command.clone(),
+            },
+            HeightmapPhase::RecordProbe => HeightmapPhase::RecordProbe,
+            HeightmapPhase::Finalize => HeightmapPhase::Finalize,
+        })
+        .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+    match phase {
+        HeightmapPhase::Raise => {
+            let request = actor
+                .active_heightmap
+                .as_ref()
+                .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                .map
+                .plan
+                .request;
+            actor
+                .controller
+                .move_heightmap_z(request.clearance_z_mm, request.retract_feed_mm_per_min)
+                .await?;
+            actor
+                .active_heightmap
+                .as_mut()
+                .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                .phase = HeightmapPhase::WaitForRaise;
+        }
+        HeightmapPhase::WaitForRaise => {
+            let snapshot = actor.controller.refresh_status().await?;
+            match snapshot.machine.mode {
+                MachineMode::Idle => {
+                    let active = actor
+                        .active_heightmap
+                        .as_mut()
+                        .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+                    active.phase = if active.next_sequence >= active.map.plan.points.len() {
+                        HeightmapPhase::Finalize
+                    } else {
+                        HeightmapPhase::MoveXy
+                    };
+                }
+                MachineMode::Jog => {}
+                MachineMode::Hold => {
+                    actor
+                        .active_heightmap
+                        .as_mut()
+                        .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                        .paused = true
+                }
+                _ => ensure_stable_idle(&snapshot)?,
+            }
+        }
+        HeightmapPhase::MoveXy => {
+            let active = actor
+                .active_heightmap
+                .as_ref()
+                .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+            let point = *active
+                .map
+                .plan
+                .points
+                .get(active.next_sequence)
+                .ok_or(HeightmapError::UnknownPoint(active.next_sequence))?;
+            let feed = active.map.plan.request.travel_feed_mm_per_min;
+            actor
+                .controller
+                .move_heightmap_xy(point.x_mm, point.y_mm, feed)
+                .await?;
+            actor
+                .active_heightmap
+                .as_mut()
+                .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                .phase = HeightmapPhase::WaitForXy;
+        }
+        HeightmapPhase::WaitForXy => {
+            let snapshot = actor.controller.refresh_status().await?;
+            match snapshot.machine.mode {
+                MachineMode::Idle => {
+                    actor
+                        .active_heightmap
+                        .as_mut()
+                        .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                        .phase = HeightmapPhase::Probe
+                }
+                MachineMode::Jog => {}
+                MachineMode::Hold => {
+                    actor
+                        .active_heightmap
+                        .as_mut()
+                        .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                        .paused = true
+                }
+                _ => ensure_stable_idle(&snapshot)?,
+            }
+        }
+        HeightmapPhase::Probe => {
+            let request = actor
+                .active_heightmap
+                .as_ref()
+                .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                .map
+                .plan
+                .request;
+            let status = actor.controller.refresh_status().await?;
+            ensure_stable_idle(&status)?;
+            if status.machine.pins.as_ref().is_some_and(|pins| pins.probe) {
+                return Err(ArbiterError::ZProbeInputAlreadyActive);
+            }
+            let (command, _) = actor
+                .controller
+                .begin_z_probe(request.max_probe_depth_mm, request.probe_feed_mm_per_min)
+                .await?;
+            actor
+                .active_heightmap
+                .as_mut()
+                .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                .phase = HeightmapPhase::PollProbe { command };
+        }
+        HeightmapPhase::PollProbe { command } => {
+            match actor
+                .controller
+                .poll_z_probe(&command, SENDER_RESPONSE_SLICE)
+                .await?
+            {
+                ProgramResponsePoll::Pending => {}
+                ProgramResponsePoll::StatusObserved => publish(&actor.snapshots, &actor.controller),
+                ProgramResponsePoll::Terminal(_) => {
+                    actor
+                        .active_heightmap
+                        .as_mut()
+                        .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                        .phase = HeightmapPhase::RecordProbe
+                }
+            }
+        }
+        HeightmapPhase::RecordProbe => {
+            let parameters = query_parameters(&mut actor.controller).await?;
+            let contact = parse_probe_position(&parameters)?;
+            let active = actor
+                .active_heightmap
+                .as_mut()
+                .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+            let contact_work_z =
+                derive_probe_work_z(&parameters, active.coordinate_system, contact)?;
+            let surface_z = contact_work_z - active.map.plan.request.contact_offset_mm;
+            active
+                .map
+                .record_sample(active.next_sequence, surface_z, true)?;
+            active.next_sequence += 1;
+            active.phase = HeightmapPhase::Raise;
+            let _ = actor
+                .heightmap_snapshots
+                .send(heightmap_operation_snapshot(active));
+        }
+        HeightmapPhase::Finalize => {
+            let restore = actor
+                .active_heightmap
+                .as_ref()
+                .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                .restore_modal
+                .clone();
+            actor.controller.restore_modal_state(&restore).await?;
+            let active = actor
+                .active_heightmap
+                .take()
+                .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+            let mut snapshot = heightmap_operation_snapshot(&active);
+            snapshot.state = HeightmapOperationState::Completed;
+            snapshot.current_sequence = None;
+            let _ = actor.heightmap_snapshots.send(snapshot);
+        }
+    }
+    publish(&actor.snapshots, &actor.controller);
+    Ok(())
+}
+
+async fn complete_z_probe(
+    controller: &mut Controller<BoxedTransport>,
+    request: ZProbeRequest,
+    coordinate_system: WorkCoordinateSystem,
+    restore_modal: String,
+    probe_response: CommandResponse,
+) -> Result<ZProbeOutcome, ArbiterError> {
+    let calibration = async {
+        let parameters = query_parameters(controller).await?;
+        let contact_machine_position = parse_probe_position(&parameters)?;
+        let zero_response = controller
+            .set_work_value(
+                WorkAxis::Z,
+                coordinate_system,
+                request.settings.plate_thickness_mm,
+            )
+            .await?;
+        let offset_parameters = query_parameters(controller).await?;
+        verify_probed_work_z(
+            &offset_parameters,
+            coordinate_system,
+            contact_machine_position,
+            request.settings.plate_thickness_mm,
+        )?;
+        Ok::<_, ArbiterError>((contact_machine_position, zero_response))
+    }
+    .await;
+
+    // A successful G38.2 may leave the cutter touching the plate. Cleanup is
+    // attempted even when the subsequent PRB/offset verification fails.
+    let restore_result = controller.restore_modal_state(&restore_modal).await;
+    let retract_result = controller
+        .retract_z(
+            request.settings.retract_mm,
+            request.settings.retract_feed_mm_per_min,
+        )
+        .await;
+    let settle_result = if retract_result.is_ok() {
+        wait_for_idle_after_probe(controller, request.settings).await
+    } else {
+        Ok(controller.snapshot())
+    };
+    let (contact_machine_position, zero_response) = calibration?;
+    restore_result?;
+    let retract_response = retract_result?;
+    let snapshot = settle_result?;
+    let final_work_z = snapshot
+        .machine
+        .work_position
+        .ok_or(ArbiterError::WorkPositionUnavailable)?
+        .z;
+    let expected = request.settings.plate_thickness_mm + request.settings.retract_mm;
+    if (final_work_z - expected).abs() > 0.01 {
+        return Err(ArbiterError::ZProbeVerification(format!(
+            "expected final work Z {expected:.3} mm, read {final_work_z:.3} mm"
+        )));
+    }
+
+    Ok(ZProbeOutcome {
+        coordinate_system,
+        probe_command: probe_response.command,
+        zero_command: zero_response.command,
+        retract_command: retract_response.command,
+        contact_machine_position,
+        final_work_z,
+        snapshot,
+    })
+}
+
+fn request_allowed_during_probe(request: &Request) -> bool {
+    matches!(
+        request,
+        Request::Realtime {
+            command: RealtimeCommand::Status
+                | RealtimeCommand::FeedHold
+                | RealtimeCommand::SoftReset,
+            ..
+        } | Request::BeginSoftReset { .. }
+            | Request::ConfirmSoftReset { .. }
+            | Request::CommitPreparedHeightmap { .. }
+            | Request::DiscardPreparedHeightmap { .. }
+            | Request::PauseHeightmap { .. }
+            | Request::ResumeHeightmap { .. }
+    )
+}
+
+fn reject_request_during_machine_operation(request: Request) {
+    match request {
+        Request::ReplaceTransport { response, .. }
+        | Request::Connect { response }
+        | Request::Disconnect { response }
+        | Request::RefreshStatus { response }
+        | Request::AcknowledgeReset { response }
+        | Request::UnlockAlarm { response, .. }
+        | Request::Realtime { response, .. }
+        | Request::ConfirmSoftReset { response, .. }
+        | Request::CancelJog { response } => send_machine_operation_busy(response),
+        Request::SetHardwareProfile { response, .. }
+        | Request::BindHardwareProfile { response, .. } => send_machine_operation_busy(response),
+        Request::UpdateControllerSetting { response, .. } => send_machine_operation_busy(response),
+        Request::InspectDevice { response } => send_machine_operation_busy(response),
+        Request::PreflightRealRun { response, .. } => send_machine_operation_busy(response),
+        Request::AuthorizeFirstCut { response, .. } => send_machine_operation_busy(response),
+        Request::StartProgramRun { response, .. }
+        | Request::StartCheckRun { response, .. }
+        | Request::ResumeProgramRun { response }
+        | Request::PauseProgramRun { response }
+        | Request::AbortProgramRun { response }
+        | Request::CompleteToolChange { response, .. }
+        | Request::StartDryRun { response, .. }
+        | Request::PauseDryRun { response }
+        | Request::ResumeDryRun { response }
+        | Request::CancelDryRun { response }
+        | Request::CommitPreparedProgramRun { response, .. }
+        | Request::DiscardPreparedProgramRun { response, .. } => {
+            send_machine_operation_busy(response)
+        }
+        Request::BeginSoftReset { response } => send_machine_operation_busy(response),
+        Request::PrepareTestJog { response, .. } => send_machine_operation_busy(response),
+        Request::StepJog { response, .. } => send_machine_operation_busy(response),
+        Request::JogPadStep { response, .. } => send_machine_operation_busy(response),
+        Request::ConfigureUnhomedOperation { response } => send_machine_operation_busy(response),
+        Request::SetWorkZero { response, .. } => send_machine_operation_busy(response),
+        Request::ReturnToWorkZero { response, .. } => send_machine_operation_busy(response),
+        Request::ProbeZ { response, .. } => send_machine_operation_busy(response),
+        Request::PrepareHeightmap { response, .. }
+        | Request::CommitPreparedHeightmap { response, .. }
+        | Request::PauseHeightmap { response }
+        | Request::ResumeHeightmap { response } => send_machine_operation_busy(response),
+        Request::DiscardPreparedHeightmap { response, .. } => send_machine_operation_busy(response),
+    }
+}
+
+fn send_machine_operation_busy<T>(response: oneshot::Sender<Result<T, ArbiterError>>) {
+    let _ = response.send(Err(ArbiterError::MachineOperationBusy));
+}
+
+fn machine_operation_active(actor: &ActorState) -> bool {
+    actor.active_z_probe.is_some()
+        || actor.prepared_heightmap.is_some()
+        || actor.active_heightmap.is_some()
+}
+
+fn finish_active_z_probe(
+    active: &mut Option<ActiveZProbe>,
+    result: Result<ZProbeOutcome, ArbiterError>,
+) {
+    if let Some(active) = active.take() {
+        let _ = active.response.send(result);
+    }
+}
+
+async fn poll_active_z_probe(actor: &mut ActorState) {
+    let Some(command) = actor
+        .active_z_probe
+        .as_ref()
+        .map(|active| active.command.clone())
+    else {
+        return;
+    };
+    match actor
+        .controller
+        .poll_z_probe(&command, SENDER_RESPONSE_SLICE)
+        .await
+    {
+        Ok(ProgramResponsePoll::Pending) => {}
+        Ok(ProgramResponsePoll::StatusObserved) => {
+            publish(&actor.snapshots, &actor.controller);
+        }
+        Ok(ProgramResponsePoll::Terminal(probe_response)) => {
+            let Some(active) = actor.active_z_probe.take() else {
+                return;
+            };
+            let result = complete_z_probe(
+                &mut actor.controller,
+                active.request,
+                active.coordinate_system,
+                active.restore_modal,
+                probe_response,
+            )
+            .await;
+            let _ = active.response.send(result);
+            publish(&actor.snapshots, &actor.controller);
+        }
+        Err(error) => {
+            finish_active_z_probe(&mut actor.active_z_probe, Err(error.into()));
+            publish(&actor.snapshots, &actor.controller);
+        }
+    }
+}
+
+fn validate_z_probe_settings(settings: ZProbeSettings) -> Result<(), ArbiterError> {
+    let checks = [
+        (
+            settings.plate_thickness_mm.is_finite()
+                && (0.01..=100.0).contains(&settings.plate_thickness_mm),
+            "plate thickness must be between 0.01 and 100 mm",
+        ),
+        (
+            settings.max_travel_mm.is_finite() && (0.1..=100.0).contains(&settings.max_travel_mm),
+            "search travel must be between 0.1 and 100 mm",
+        ),
+        (
+            settings.probe_feed_mm_per_min.is_finite()
+                && (1.0..=500.0).contains(&settings.probe_feed_mm_per_min),
+            "probe feed must be between 1 and 500 mm/min",
+        ),
+        (
+            settings.retract_mm.is_finite() && (0.1..=100.0).contains(&settings.retract_mm),
+            "retract must be between 0.1 and 100 mm",
+        ),
+        (
+            settings.retract_feed_mm_per_min.is_finite()
+                && (1.0..=2_000.0).contains(&settings.retract_feed_mm_per_min),
+            "retract feed must be between 1 and 2000 mm/min",
+        ),
+    ];
+    checks
+        .into_iter()
+        .find_map(|(valid, message)| (!valid).then_some(message))
+        .map_or(Ok(()), |message| {
+            Err(ArbiterError::InvalidZProbeSettings(message))
+        })
+}
+
+async fn query_parameters(
+    controller: &mut Controller<BoxedTransport>,
+) -> Result<DeviceInspection, ArbiterError> {
+    let response = controller
+        .query_device(millo_controller::DeviceQuery::Parameters)
+        .await?;
+    Ok(build_device_inspection(vec![response]))
+}
+
+fn parse_probe_position(parameters: &DeviceInspection) -> Result<Position, ArbiterError> {
+    let raw = parameters
+        .parameters
+        .get("PRB")
+        .ok_or_else(|| ArbiterError::ZProbeVerification("$# did not return PRB".to_owned()))?;
+    let (position, success) = raw
+        .rsplit_once(':')
+        .ok_or_else(|| ArbiterError::ZProbeVerification(format!("malformed PRB value: {raw}")))?;
+    if success != "1" {
+        return Err(ArbiterError::ZProbeVerification(format!(
+            "probe cycle did not report contact: {raw}"
+        )));
+    }
+    let [x, y, z] = parse_xyz_parameter(position).ok_or_else(|| {
+        ArbiterError::ZProbeVerification(format!("malformed PRB position: {raw}"))
+    })?;
+    Ok(Position { x, y, z, a: None })
+}
+
+fn verify_probed_work_z(
+    parameters: &DeviceInspection,
+    coordinate_system: WorkCoordinateSystem,
+    contact: Position,
+    expected_work_z: f64,
+) -> Result<(), ArbiterError> {
+    let actual = derive_probe_work_z(parameters, coordinate_system, contact)?;
+    if (actual - expected_work_z).abs() > WORK_ZERO_TOLERANCE_MM {
+        return Err(ArbiterError::ZProbeVerification(format!(
+            "expected contact work Z {expected_work_z:.3} mm, derived {actual:.3} mm"
+        )));
+    }
+    Ok(())
+}
+
+fn derive_probe_work_z(
+    parameters: &DeviceInspection,
+    coordinate_system: WorkCoordinateSystem,
+    contact: Position,
+) -> Result<f64, ArbiterError> {
+    let parameter_name = work_coordinate_parameter(coordinate_system);
+    let offset = parameters
+        .parameters
+        .get(parameter_name)
+        .and_then(|value| parse_xyz_parameter(value))
+        .ok_or_else(|| {
+            ArbiterError::ZProbeVerification(format!(
+                "$# did not return a valid {parameter_name} offset"
+            ))
+        })?;
+    let g92 = parameters
+        .parameters
+        .get("G92")
+        .and_then(|value| parse_xyz_parameter(value))
+        .unwrap_or([0.0; 3]);
+    let tlo = parameters
+        .parameters
+        .get("TLO")
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    Ok(contact.z - offset[2] - g92[2] - tlo)
+}
+
+fn restore_probe_modal_command(modal: &[String]) -> String {
+    let units = if modal.iter().any(|word| word == "G20") {
+        "G20"
+    } else {
+        "G21"
+    };
+    let distance = if modal.iter().any(|word| word == "G91") {
+        "G91"
+    } else {
+        "G90"
+    };
+    let feed = if modal.iter().any(|word| word == "G93") {
+        "G93"
+    } else {
+        "G94"
+    };
+    format!("G0 {units} {distance} {feed}")
+}
+
+async fn wait_for_idle_after_probe(
+    controller: &mut Controller<BoxedTransport>,
+    settings: ZProbeSettings,
+) -> Result<ControllerSnapshot, ArbiterError> {
+    let timeout = Duration::from_secs_f64(
+        settings.retract_mm / settings.retract_feed_mm_per_min * 60.0 + 3.0,
+    );
+    let started = Instant::now();
+    loop {
+        let snapshot = controller.refresh_status().await?;
+        match snapshot.machine.mode {
+            MachineMode::Idle => return Ok(snapshot),
+            MachineMode::Jog if started.elapsed() < timeout => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            MachineMode::Jog => {
+                return Err(ArbiterError::ZProbeRetractTimeout(
+                    timeout.as_millis().try_into().unwrap_or(u64::MAX),
+                ));
+            }
+            _ => ensure_stable_idle(&snapshot)?,
+        }
+    }
+}
+
 fn work_axis_to_jog_axis(axis: WorkAxis) -> millo_domain::JogAxis {
     match axis {
         WorkAxis::X => millo_domain::JogAxis::X,
@@ -2639,6 +3731,41 @@ mod tests {
         }
     }
 
+    fn z_probe_request() -> ZProbeRequest {
+        ZProbeRequest {
+            settings: ZProbeSettings {
+                mode: ProbeWorkflowMode::WorkZero,
+                plate_thickness_mm: 19.1,
+                max_travel_mm: 10.0,
+                probe_feed_mm_per_min: 25.0,
+                retract_mm: 1.0,
+                retract_feed_mm_per_min: 1_000.0,
+            },
+            setup_confirmed: true,
+        }
+    }
+
+    fn heightmap_request() -> HeightmapStartRequest {
+        HeightmapStartRequest {
+            plan: millo_heightmap::HeightmapPlanRequest {
+                origin_x_mm: 10.0,
+                origin_y_mm: 20.0,
+                width_mm: 2.0,
+                height_mm: 2.0,
+                columns: 2,
+                rows: 2,
+                clearance_z_mm: 2.0,
+                max_probe_depth_mm: 2.0,
+                probe_feed_mm_per_min: 100.0,
+                travel_feed_mm_per_min: 1_000.0,
+                retract_feed_mm_per_min: 1_000.0,
+                ..millo_heightmap::HeightmapPlanRequest::default()
+            },
+            setup_confirmed: true,
+            contact_available_at_every_point: true,
+        }
+    }
+
     fn dry_run_plan(source: &str) -> DryRunPlan {
         let program = parsed_program(source);
         build_dry_run_plan(&program).unwrap()
@@ -2761,6 +3888,24 @@ mod tests {
         })
         .await
         .unwrap()
+    }
+
+    async fn wait_for_heightmap(
+        arbiter: &CommandArbiter,
+        expected: HeightmapOperationState,
+    ) -> HeightmapOperationSnapshot {
+        let mut snapshots = arbiter.subscribe_heightmap();
+        for _ in 0..2_000 {
+            let snapshot = snapshots.borrow_and_update().clone();
+            if snapshot.state == expected {
+                return snapshot;
+            }
+            tokio::select! {
+                changed = snapshots.changed() => changed.unwrap(),
+                _ = tokio::time::sleep(Duration::from_millis(5)) => {}
+            }
+        }
+        panic!("heightmap did not reach {expected:?}");
     }
 
     #[tokio::test]
@@ -3693,6 +4838,448 @@ mod tests {
                 .writes()
                 .contains(&b"$J=G90 G21 Z0.000 F100.000\n".to_vec())
         );
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"G10 L20"))
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn z_probe_sets_contact_height_retracts_and_verifies_final_work_z() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:10.000,20.000,10.000|WPos:10.000,20.000,10.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(50),
+                failures_before_recovery: 2,
+            },
+            profile,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let outcome = arbiter.probe_z(z_probe_request()).await.unwrap();
+
+        assert_eq!(outcome.coordinate_system, WorkCoordinateSystem::G54);
+        assert_eq!(outcome.contact_machine_position.z, 9.0);
+        assert!((outcome.final_work_z - 20.1).abs() <= 0.01);
+        assert_eq!(outcome.probe_command, "G91 G21 G94 G38.2 Z-10.000 F25.000");
+        assert_eq!(outcome.zero_command, "G10 L20 P1 Z19.100");
+        assert_eq!(outcome.retract_command, "$J=G91 G21 Z1.000 F1000.000");
+        assert!(control.writes().contains(&b"G0 G21 G90 G94\n".to_vec()));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn prepared_heightmap_does_not_move_until_committed_and_can_be_discarded() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(100),
+                failures_before_recovery: 2,
+            },
+            profile,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let prepared = arbiter
+            .prepare_heightmap(heightmap_request())
+            .await
+            .unwrap();
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
+
+        assert_eq!(prepared.state, HeightmapOperationState::Running);
+        assert_eq!(
+            arbiter.heightmap_snapshot().state,
+            HeightmapOperationState::Idle
+        );
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| { write.starts_with(b"$J=") || write.starts_with(b"G38.") })
+        );
+
+        assert!(matches!(
+            arbiter
+                .commit_prepared_heightmap(prepared.operation_sequence + 1)
+                .await,
+            Err(ArbiterError::PreparedHeightmapMismatch { .. })
+        ));
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| { write.starts_with(b"$J=") || write.starts_with(b"G38.") })
+        );
+
+        arbiter
+            .discard_prepared_heightmap(prepared.operation_sequence)
+            .await
+            .unwrap();
+        assert_eq!(
+            arbiter.heightmap_snapshot().state,
+            HeightmapOperationState::Idle
+        );
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| { write.starts_with(b"$J=") || write.starts_with(b"G38.") })
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn heightmap_probes_a_serpentine_grid_without_mutating_work_zero() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(100),
+                failures_before_recovery: 2,
+            },
+            profile,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        arbiter.start_heightmap(heightmap_request()).await.unwrap();
+
+        let completed = wait_for_heightmap(&arbiter, HeightmapOperationState::Completed).await;
+        assert_eq!(completed.progress.measured, 4);
+        assert_eq!(completed.progress.triggered, 4);
+        assert!(completed.progress.complete);
+        let writes = control.writes();
+        let xy_moves = writes
+            .iter()
+            .filter(|write| write.starts_with(b"$J=G90 G21 X"))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            xy_moves,
+            vec![
+                b"$J=G90 G21 X10.000 Y20.000 F1000.000\n".to_vec(),
+                b"$J=G90 G21 X12.000 Y20.000 F1000.000\n".to_vec(),
+                b"$J=G90 G21 X12.000 Y22.000 F1000.000\n".to_vec(),
+                b"$J=G90 G21 X10.000 Y22.000 F1000.000\n".to_vec(),
+            ]
+        );
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|write| write.starts_with(b"G91 G21 G94 G38.2"))
+                .count(),
+            4
+        );
+        assert!(!writes.iter().any(|write| write.starts_with(b"G10 L20")));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn heightmap_failure_after_contact_attempts_safe_z_and_modal_cleanup() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        control.set_probe_delay(20);
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(100),
+                failures_before_recovery: 2,
+            },
+            profile,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        arbiter.start_heightmap(heightmap_request()).await.unwrap();
+        control.queue_query_error(20);
+
+        let failed = wait_for_heightmap(&arbiter, HeightmapOperationState::Failed).await;
+        assert_eq!(failed.progress.measured, 0);
+        let writes = control.writes();
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|write| write.starts_with(b"$J=G90 G21 Z2.000"))
+                .count(),
+            2,
+        );
+        assert_eq!(writes.last(), Some(&b"G0 G21 G90 G94\n".to_vec()));
+        assert!(!writes.iter().any(|write| write.starts_with(b"G10 L20")));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn soft_reset_cancels_heightmap_before_another_probe_point() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        control.set_probe_delay(100);
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(100),
+                failures_before_recovery: 2,
+            },
+            profile,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        arbiter.start_heightmap(heightmap_request()).await.unwrap();
+        tokio::task::yield_now().await;
+        arbiter
+            .send_realtime(RealtimeCommand::SoftReset)
+            .await
+            .unwrap();
+
+        let cancelled = wait_for_heightmap(&arbiter, HeightmapOperationState::Cancelled).await;
+        assert_eq!(cancelled.current_sequence, None);
+        assert!(
+            cancelled
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("reset"))
+        );
+        assert!(
+            control
+                .writes()
+                .iter()
+                .filter(|write| write.starts_with(b"G91 G21 G94 G38.2"))
+                .count()
+                <= 1
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn z_probe_blocks_motion_when_probe_input_is_already_active() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:0,0|Pn:P>",
+        );
+        let control = transport.control();
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        let (arbiter, worker) =
+            CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let error = arbiter.probe_z(z_probe_request()).await.unwrap_err();
+
+        assert!(matches!(error, ArbiterError::ZProbeInputAlreadyActive));
+        assert_eq!(control.writes(), vec![b"?".to_vec()]);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn z_probe_requires_an_installed_probe_before_any_controller_io() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let error = arbiter.probe_z(z_probe_request()).await.unwrap_err();
+
+        assert!(matches!(error, ArbiterError::ZProbeNotInstalled));
+        assert!(control.writes().is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn z_probe_requires_work_zero_mode_before_any_controller_io() {
+        let transport = MockTransport::default();
+        let control = transport.control();
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        let (arbiter, worker) =
+            CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        let mut request = z_probe_request();
+        request.settings.mode = ProbeWorkflowMode::Off;
+
+        let error = arbiter.probe_z(request).await.unwrap_err();
+
+        assert!(matches!(error, ArbiterError::ZProbeDisabled));
+        assert!(control.writes().is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn z_probe_miss_raises_alarm_without_writing_a_work_offset() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(None);
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        let (arbiter, worker) =
+            CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let error = arbiter.probe_z(z_probe_request()).await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArbiterError::Controller(ControllerError::CommandRejected {
+                completion: CommandCompletion::Alarm,
+                code: Some(5),
+                ..
+            })
+        ));
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"G10 "))
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn soft_reset_preempts_a_probe_wait_and_prevents_offset_write() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_delay(50);
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        let (arbiter, worker) =
+            CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let probe_actor = arbiter.clone();
+        let probe_task = tokio::spawn(async move { probe_actor.probe_z(z_probe_request()).await });
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        let challenge = arbiter.request_soft_reset().await.unwrap();
+        arbiter.confirm_soft_reset(challenge.id).await.unwrap();
+
+        assert!(matches!(
+            probe_task.await.unwrap(),
+            Err(ArbiterError::ZProbeReset)
+        ));
+        assert!(control.writes().contains(&b"\x18".to_vec()));
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"G10 "))
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn machine_commands_are_rejected_instead_of_replayed_after_probe() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:10.000,20.000,10.000|WPos:10.000,20.000,10.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        control.set_probe_delay(100);
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(100),
+                failures_before_recovery: 2,
+            },
+            profile,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let probe_arbiter = arbiter.clone();
+        let probe = tokio::spawn(async move { probe_arbiter.probe_z(z_probe_request()).await });
+        for _ in 0..100 {
+            if control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"G91 G21 G94 G38.2"))
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        let error = arbiter
+            .set_work_zero(work_zero_request(WorkAxis::X, true))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, ArbiterError::MachineOperationBusy));
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"G10 L20"))
+        );
+
+        arbiter
+            .send_realtime(RealtimeCommand::SoftReset)
+            .await
+            .unwrap();
+        assert!(matches!(
+            probe.await.unwrap(),
+            Err(ArbiterError::ZProbeReset)
+        ));
+        for _ in 0..10 {
+            tokio::task::yield_now().await;
+        }
         assert!(
             !control
                 .writes()

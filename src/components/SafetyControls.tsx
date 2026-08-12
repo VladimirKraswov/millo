@@ -33,6 +33,7 @@ interface SafetyControlsProps {
   onOpenMotionSettings: () => void;
   maxJogDistanceMm: number;
   maxJogFeedMmPerMin: number;
+  useProbeForZ: boolean;
 }
 
 const secondsRemaining = (deadline: number | undefined, now: number): number =>
@@ -51,6 +52,7 @@ export function SafetyControls({
   onOpenMotionSettings,
   maxJogDistanceMm,
   maxJogFeedMmPerMin,
+  useProbeForZ,
 }: SafetyControlsProps) {
   const [busy, setBusy] = useState(false);
   const [holdPending, setHoldPending] = useState(false);
@@ -194,7 +196,11 @@ export function SafetyControls({
           openControllerMotionSettings: onOpenMotionSettings,
           maxJogDistanceMm,
           maxJogFeedMmPerMin,
+          useProbeForZ,
         }}
+        onExtensionError={(contributionId, error) =>
+          onError(`Plugin UI ${contributionId}: ${String(error)}`)
+        }
         registry={extensionRegistry}
         slot={uiSlots.controlMachine}
       />
@@ -216,7 +222,11 @@ export function SafetyControls({
             openControllerMotionSettings: onOpenMotionSettings,
             maxJogDistanceMm,
             maxJogFeedMmPerMin,
+            useProbeForZ,
           }}
+          onExtensionError={(contributionId, error) =>
+            onError(`Plugin UI ${contributionId}: ${String(error)}`)
+          }
           registry={extensionRegistry}
           slot={uiSlots.controlCoordinates}
         />

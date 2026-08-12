@@ -8,8 +8,10 @@ import {
 } from "../platform/extensions/UiExtensionRegistry";
 
 export function WorkspaceToolsMenu({
+  onExtensionError,
   registry,
 }: {
+  readonly onExtensionError?: (contributionId: string, error: unknown) => void;
   readonly registry: UiExtensionRegistry;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -60,7 +62,11 @@ export function WorkspaceToolsMenu({
         role="menu"
       >
         <span>Новое задание</span>
-        <UiExtensionSlot registry={registry} slot={uiSlots.workspaceTools} />
+        <UiExtensionSlot
+          onExtensionError={onExtensionError}
+          registry={registry}
+          slot={uiSlots.workspaceTools}
+        />
       </div>
     </div>
   );

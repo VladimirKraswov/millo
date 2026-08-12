@@ -44,6 +44,7 @@ export function registerCoreUiExtensions(registry: UiExtensionRegistry): void {
         onError={context.reportError}
         onSnapshot={context.updateSnapshot}
         snapshot={context.snapshot}
+        useProbeForZ={context.useProbeForZ}
       />,
     },
   });

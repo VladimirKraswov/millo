@@ -70,5 +70,8 @@ describe("PluginManifest v1", () => {
     expect(() =>
       validatePluginManifest({ ...validManifest, version: "latest" }),
     ).toThrow("semantic versioning");
+    expect(() =>
+      validatePluginManifest({ ...validManifest, name: "x".repeat(101) }),
+    ).toThrow("name must not exceed");
   });
 });

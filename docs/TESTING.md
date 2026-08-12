@@ -7,6 +7,16 @@ The standard local gate is:
 npm run verify
 ```
 
+`npm run test:architecture` enforces frontend dependency direction: Tauri stays
+in API/gateway adapters, and production plugin code reaches host services only
+through `src/plugin-sdk`. `npm run test:dependencies` is the explicit npm
+supply-chain gate; `cargo audit` is run for release review because RustSec
+reports target-specific and maintenance warnings requiring human triage.
+Production build runs `test:bundle`: the initial application chunk is limited to
+500 KiB and every lazy chunk to 600 KiB. Toolpath and Heightmap Three.js scenes
+must stay lazy; importing either scene eagerly breaks this budget instead of
+quietly slowing every startup.
+
 It runs TypeScript type checking, all Rust workspace tests, the production Vite
 build, Rust formatting checks, and Clippy with warnings denied.
 
@@ -99,6 +109,13 @@ generated boundary-check G-code, bind grants to a package digest, and clear old
 trust after an update. UI tests mount workspace buttons and one grouped machine
 panel from declarations, deny commands without their capability, and prove that
 disposing registrations removes all contributed UI.
+They also prove transactional disk failure leaves in-memory state unchanged,
+backup recovery repairs a corrupt primary, action capability cannot exceed the
+command declaration, field metadata/text and generated file names are bounded,
+and one execution fence prevents grant/digest mutation during an invocation.
+Trusted SDK tests cover definition-time manifests, work-coordinate proxies, and
+the architecture import boundary. Bootstrap tests also require idempotent host
+shutdown to deactivate every loaded plugin exactly once.
 Use `/?fixture=plugins` for deterministic desktop/mobile manager screenshots;
 the fixture has no Tauri gateway and cannot execute or persist a command.
 
@@ -739,3 +756,52 @@ without additional writes. The Y run accepted `$J=G91 G21 Y0.100 F10.000`,
 returned to `Idle`, and measured X `+0.000`, Y `+0.100`, Z `+0.000 mm`. Only
 after that succeeded, the Z run accepted `$J=G91 G21 Z0.100 F10.000`, returned
 to `Idle`, and measured X `+0.000`, Y `+0.000`, Z `+0.100 mm`.
+
+## Contact probe regression
+
+The typed Z-probe suite is hardware-free. Mock GRBL models a configurable
+contact distance, emits `PRB:...:1`, updates the active WCS after `G10 L20`, and
+reports the bounded `$J=` retract through `Jog` back to `Idle`. Tests assert the
+exact probe/offset/retract commands, the contact machine position, final work Z,
+and neutral `G0 G21 G90 G94` restoration. A delayed-response fixture proves
+that confirmed Soft Reset preempts the probe and prevents any later `G10`.
+Separate cases prove that an already
+active `Pn:P` or an uninstalled profile probe performs no probe movement. UI
+tests cover the stable clickable lamp, measured-thickness validation, live
+closed-input warning, final Z calculation, and the manual-Z lockout when
+`useForWorkZero` is enabled. An actor regression also proves that a direct
+typed request cannot start probing while that preference is disabled.
+An actor concurrency fixture starts a delayed contact, submits Work Zero while
+the probe is active, and asserts an immediate `MachineOperationBusy`, no `G10`,
+and no delayed replay after Soft Reset.
+
+Automated tests never execute `G38.2` on a physical transport. The first real
+contact test must start with a measured plate, stationary spindle, open input,
+short search distance, low feed, and the operator at the machine.
+
+## Heightmap regression
+
+`millo-heightmap` tests bounded serpentine planning, grid spacing, duration,
+bilinear interpolation across serpentine storage, probe misses, direct/fixed
+contact semantics, JSON round trips, atomic active-map replacement, and restart
+disarming. Domain fixtures preserve legacy `useForWorkZero` profiles while an
+explicit new mode wins.
+
+Command-actor tests execute a 2 x 2 map on Mock GRBL, assert exact XY order and
+four contacts, and prove no `G10 L20` is written. Failure after a delayed contact
+must attempt a second absolute safe-Z command and restore modal state. A Soft
+Reset fixture cancels before another probe point. A durable-start regression
+holds an operation after `prepare_heightmap`, yields the actor repeatedly, and
+asserts that neither `$J` nor `G38.2` appears and the public operation remains
+Idle. It then discards the exact operation sequence and proves that no motion was
+published. Production Tauri persists the pending surface session between this
+prepare phase and the matching commit, so fast mock runs cannot outrun their
+first durable checkpoint.
+
+Vitest covers auto-perimeter margins, density independent from display
+interpolation, readable serpentine matrix ordering, machine-travel validation,
+real coordinate headers, explicit empty cells, and a stable low-to-high color
+scale. Visual verification uses `/?fixture=heightmap` at wide and 820 px
+viewports. It must show one perimeter, program motion outside it in red, probe
+points, a nonblank colored mesh, and a numeric view with absolute Z plus delta;
+`NaN` is never accepted.

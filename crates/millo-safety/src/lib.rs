@@ -191,7 +191,8 @@ fn duration_ms(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use millo_domain::{
-        DeviceInspection, HardwareProfile, MachineState, ReadinessReport, SpindleControl,
+        DeviceInspection, HardwareProfile, MachineState, ProbeWorkflowMode, ReadinessReport,
+        SpindleControl,
     };
 
     use super::*;
@@ -221,6 +222,7 @@ mod tests {
                     homing_installed: false,
                     limit_switches_installed: false,
                     probe_installed: false,
+                    probe_mode: ProbeWorkflowMode::Off,
                     emergency_stop_installed: false,
                 },
                 test_jog_ready: true,

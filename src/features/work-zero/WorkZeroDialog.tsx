@@ -15,6 +15,7 @@ interface WorkZeroDialogProps {
   readonly open: boolean;
   readonly position?: Position;
   readonly snapshot: ControllerSnapshot;
+  readonly useProbeForZ?: boolean;
 }
 
 const formatAxis = (value: number | undefined): string =>
@@ -31,6 +32,7 @@ export function WorkZeroDialog({
   open,
   position,
   snapshot,
+  useProbeForZ = false,
 }: WorkZeroDialogProps) {
   if (!open) return null;
 
@@ -67,6 +69,7 @@ export function WorkZeroDialog({
             onError={onError}
             onSnapshot={onSnapshot}
             snapshot={snapshot}
+            useProbeForZ={useProbeForZ}
           />
         </div>
       </section>

@@ -8,8 +8,10 @@ until they are read from the controller or measured before cutting.
 - Controller protocol: GRBL.
 - Motion: three axes, X/Y/Z.
 - Tool: milling spindle switched manually by the operator.
-- Probe: no sensor is installed or connected. A touch sensor may be added later
-  for Z calibration and heightmap probing.
+- Probe: a contact plate is connected to the controller's A5/GND input. The
+  operator confirmed the stationary open/closed `Pn:P` transition. The plate
+  is approximately `19.1 mm`, but its exact thickness remains unverified until
+  measured with calipers and entered in the selected machine profile.
 - Homing: not installed.
 - Limit switches: not installed.
 - Physical emergency stop: not installed.
@@ -66,9 +68,11 @@ until they are read from the controller or measured before cutting.
   running. Air run rejects those words. Both modes block coolant, probing, M6,
   machine/reference-coordinate moves, and coordinate mutation before an opaque
   plan can be created.
-- Probe, `$H`, and heightmap motion must remain unavailable while their physical
-  hardware is absent. A future probe slice must first validate wiring, polarity,
-  input transitions, and a stationary spindle before enabling a probing cycle.
+- `$H` remains unavailable while homing hardware is absent. One typed Z contact
+  cycle and bounded multi-point heightmap probing are available from the same
+  probe dialog. A heightmap survives application restart, but this unhomed
+  machine cannot prove that stock or XY/Z work zero remained fixed; recovered
+  maps therefore stay disarmed until the operator confirms the setup.
 
 ## Values to collect before motion
 
@@ -76,7 +80,80 @@ Device Inspector captures `$I`, `$$`, `$G`, and `$#`. Before milling, the operat
 and Millo must review axis steps, direction, acceleration, maximum rate, travel,
 hard/soft limits, homing flags, status-mask behavior, units, and active WCS.
 Workpiece, cutter, feeds, and safe Z will be configured before a dry run. Probe
-geometry cannot be configured or trusted until a sensor exists.
+geometry cannot be trusted until the touch-plate thickness is measured.
+
+## Probe input visibility
+
+The operator shell always mounts a compact `Щуп` button beside the GRBL mode. It
+reads only the reconciled realtime `Pn:P` bit from `ControllerSnapshot`: lit
+means GRBL currently reports the probe input triggered; unlit means the input is
+open; a dim lamp means there is no current connected snapshot. The visible label
+and dimensions do not change between states, so a contact transition cannot
+shift the machine header. Clicking it opens the per-machine probe settings and
+typed Z contact operation; the lamp state itself grants no motion capability.
+
+## Z contact plate procedure
+
+The selected profile stores plate thickness, maximum downward search, contact
+feed, retract distance, retract feed, and a typed Off / Work Zero / Heightmap
+mode. A zero thickness means "not measured" and blocks one-point contact
+motion. Selecting Work Zero changes the ordinary work-zero UI: the combined
+action writes X/Y only, manual `Z=0` is disabled with the label "Z задаётся
+щупом", and the typed contact action becomes available. Disabling it restores
+manual Z zero and disables contact motion without disabling electrical `Pn:P`
+visibility. The mode can be saved without a measured plate thickness. Heightmap
+mode never silently reuses this portable plate thickness: direct conductive
+stock uses zero offset, while a fixed plate must explicitly cover the whole map
+area and has its own offset.
+
+One click after the compact setup confirmation executes this actor-owned
+sequence:
+
+1. Read a fresh status and require connected, stable `Idle`, no alarm/reset,
+   an installed probe profile, and an open `P` input.
+2. Read `$G`, bind the operation to the active G54-G59, and retain the original
+   unit, distance, and feed modes.
+3. Send metric incremental `G38.2 Z-... F...` with a timeout derived from search
+   distance/feed plus five seconds. The ordinary two-second command timeout is
+   unchanged for every other command. The actor polls that response in short
+   slices, so realtime status, Hold, and confirmed Soft Reset remain available;
+   every non-realtime request is queued until probing has finished.
+4. Read `$#`, require `PRB:...:1`, then write `G10 L20 Pn Z<thickness>` and read
+   `$#` again to verify the resulting contact work coordinate.
+5. Leave probe motion mode with `G0`, restore the original G20/G21, G90/G91, and
+   G93/G94 state, issue a bounded incremental `$J=` retract, and poll until
+   fresh `Idle`. The expected final work Z is `plate thickness + retract`.
+
+The UI cannot send a raw probe line or choose a different WCS. A plate already
+touching the cutter blocks the cycle before motion. `ALARM:5` or any missing
+contact evidence leaves Z unchanged and requires normal controller recovery.
+While contact is moving, the dialog replaces Save with `Остановить касание`;
+that action sends Hold and then consumes a fresh two-stage Soft Reset challenge.
+This implementation is covered against Mock GRBL; no physical `G38.2` was sent
+while adding the feature.
+
+## Heightmap procedure
+
+Heightmap setup is bound to the current mounted workpiece, not to the reusable
+machine profile. `Авто по заданию` takes the loaded program XY bounds and adds
+the chosen margin; manual X/Y origin and width/height remain available. Red
+program segments in the preview are outside the perimeter and block probing.
+Density presets target approximately 20, 10, or 5 mm spacing, with bounded
+custom X/Y point counts. A separate interpolation grid changes only the surface
+rendering, never the number of physical contacts.
+
+For each serpentine point the command actor requires connected stable Idle and
+an open probe input, raises to absolute work clearance Z, moves absolute work
+XY, executes bounded `G38.2`, reads `$#`, derives the active-WCS surface Z, and
+raises before continuing. It never writes `G10`. Hold pauses the operation;
+Resume continues; confirmed Soft Reset cancels it. A post-contact failure makes
+a best-effort safe-Z raise and modal restoration.
+
+`surface-session.json` atomically checkpoints the pending operation beside the
+last completed active map. Only all successful contacts replace active data.
+On restart the numeric matrix and 3D mesh can be inspected, but compensation is
+disarmed until the operator confirms unchanged stock and work zero. With no
+homing or limits, a power loss still requires manual coordinate restoration.
 
 The Program preflight now collects a second fresh status after Inspector and
 combines motion-critical readiness with the strict motion-only file policy. A

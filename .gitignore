@@ -10,3 +10,4 @@ site/data/
 site/.env
 __pycache__/
 *.py[cod]
+tmp/

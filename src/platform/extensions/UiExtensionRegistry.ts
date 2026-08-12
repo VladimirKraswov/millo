@@ -28,6 +28,7 @@ export interface UiHostContext {
   readonly openControllerMotionSettings: () => void;
   readonly maxJogDistanceMm: number;
   readonly maxJogFeedMmPerMin: number;
+  readonly useProbeForZ: boolean;
 }
 
 export type UiExtension =

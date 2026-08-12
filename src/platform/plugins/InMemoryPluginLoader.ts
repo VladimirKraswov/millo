@@ -6,6 +6,7 @@ import type {
   UiSlotId,
 } from "../extensions/UiExtensionRegistry";
 import type { MachineCommandGateway } from "../machine/MachineCommandGateway";
+import type { WorkCoordinateGateway } from "../machine/WorkCoordinateGateway";
 import type { JobCreationCapability } from "../jobs/JobCreationService";
 import type {
   GeneratedJob,
@@ -25,6 +26,10 @@ import type {
 import type {
   JogPadStepOutcome,
   JogPadStepRequest,
+  ReturnToWorkZeroOutcome,
+  ReturnToWorkZeroRequest,
+  WorkZeroOutcome,
+  WorkZeroRequest,
 } from "../../shared/machine";
 import { CapabilityGrantStore } from "./CapabilityGrantStore";
 import {
@@ -55,6 +60,11 @@ export interface PluginMachineReadCapability {
   subscribe(listener: MachineStateListener): () => void;
 }
 
+export interface PluginMachineCoordinatesCapability {
+  setZero(request: WorkZeroRequest): Promise<WorkZeroOutcome>;
+  returnToZero(request: ReturnToWorkZeroRequest): Promise<ReturnToWorkZeroOutcome>;
+}
+
 export interface PluginJobsCapability {
   generateImage(request: ImageJobRequest): Promise<GeneratedImageJob>;
   generateSurfacing(request: SurfacingJobRequest): Promise<GeneratedSurfacingJob>;
@@ -74,6 +84,7 @@ export interface PluginActivationContext {
   readonly ui?: PluginUiCapability;
   readonly machineRead?: PluginMachineReadCapability;
   readonly machineJog?: PluginMachineJogCapability;
+  readonly machineCoordinates?: PluginMachineCoordinatesCapability;
   readonly jobs?: PluginJobsCapability;
   readonly tools?: PluginToolsCapability;
 }
@@ -108,6 +119,7 @@ interface InMemoryPluginLoaderOptions {
   readonly uiRegistry: UiExtensionRegistry;
   readonly machineCommands?: MachineCommandGateway;
   readonly machineState?: MachineStateSource;
+  readonly workCoordinates?: WorkCoordinateGateway;
   readonly jobs?: JobCreationCapability;
   readonly tools?: ToolLibraryService;
   readonly grants?: CapabilityGrantStore;
@@ -125,6 +137,7 @@ export class InMemoryPluginLoader {
   private readonly uiRegistry: UiExtensionRegistry;
   private readonly machineCommands?: MachineCommandGateway;
   private readonly machineState?: MachineStateSource;
+  private readonly workCoordinates?: WorkCoordinateGateway;
   private readonly jobs?: JobCreationCapability;
   private readonly tools?: ToolLibraryService;
   private readonly grants: CapabilityGrantStore;
@@ -136,6 +149,7 @@ export class InMemoryPluginLoader {
     this.uiRegistry = options.uiRegistry;
     this.machineCommands = options.machineCommands;
     this.machineState = options.machineState;
+    this.workCoordinates = options.workCoordinates;
     this.jobs = options.jobs;
     this.tools = options.tools;
     this.grants = options.grants ?? new CapabilityGrantStore();
@@ -259,6 +273,19 @@ export class InMemoryPluginLoader {
     return true;
   }
 
+  async unloadAll(): Promise<void> {
+    const pluginIds = new Set([...this.loading.keys(), ...this.active.keys()]);
+    const outcomes = await Promise.allSettled(
+      [...pluginIds].map((pluginId) => this.unload(pluginId)),
+    );
+    const failures = outcomes
+      .filter((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected")
+      .map((outcome) => outcome.reason);
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "one or more plugins failed to unload");
+    }
+  }
+
   list(): readonly PluginLoadResult[] {
     return [...this.active.values()].map(
       ({ manifest, grantedCapabilities, deniedOptionalCapabilities }) => ({
@@ -277,6 +304,8 @@ export class InMemoryPluginLoader {
         return this.machineCommands !== undefined;
       case "machine.read":
         return this.machineState !== undefined;
+      case "machine.coordinates":
+        return this.workCoordinates !== undefined;
       case "jobs.create":
         return this.jobs !== undefined;
       case "tools.read":
@@ -307,6 +336,19 @@ export class InMemoryPluginLoader {
             },
           })
         : undefined;
+    const machineCoordinates =
+      hasCapability("machine.coordinates") && this.workCoordinates
+        ? Object.freeze({
+            setZero: async (request: WorkZeroRequest) => {
+              resources.assertOpen();
+              return this.workCoordinates!.setZero(request);
+            },
+            returnToZero: async (request: ReturnToWorkZeroRequest) => {
+              resources.assertOpen();
+              return this.workCoordinates!.returnToZero(request);
+            },
+          })
+        : undefined;
     const jobs =
       hasCapability("jobs.create") && this.jobs
         ? Object.freeze({
@@ -322,11 +364,11 @@ export class InMemoryPluginLoader {
               resources.assertOpen();
               return job;
             },
-            open: (job: GeneratedImageJob) => {
+            open: (job: GeneratedJob) => {
               resources.assertOpen();
               this.jobs!.open(job);
             },
-            save: async (job: GeneratedImageJob) => {
+            save: async (job: GeneratedJob) => {
               resources.assertOpen();
               const outcome = await this.jobs!.save(job);
               resources.assertOpen();
@@ -358,6 +400,7 @@ export class InMemoryPluginLoader {
       ui,
       machineRead,
       machineJog,
+      machineCoordinates,
       jobs,
       tools,
     });

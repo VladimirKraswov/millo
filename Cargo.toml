@@ -9,6 +9,7 @@ members = [
   "crates/millo-domain",
   "crates/millo-gcode",
   "crates/millo-grbl",
+  "crates/millo-heightmap",
   "crates/millo-mock",
   "crates/millo-journal",
   "crates/millo-profile",

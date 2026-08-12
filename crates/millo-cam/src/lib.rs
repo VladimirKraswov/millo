@@ -807,9 +807,10 @@ fn png_geometry(
     config.corner_threshold = settings.trace_corner_threshold_degrees;
     config.length_threshold = settings.trace_segment_length_px;
     config.path_precision = Some(3);
-    let vector_svg = vtracer::convert(trace_image, config)
-        .map_err(ImageJobError::InvalidPng)?
-        .to_string();
+    let vector_svg = config
+        .build()
+        .and_then(|pipeline| pipeline.to_svg(&trace_image))
+        .map_err(|error| ImageJobError::InvalidPng(error.to_string()))?;
     if vector_svg.len() > MAX_VECTOR_SVG_BYTES {
         return Err(ImageJobError::VectorSvgTooLarge {
             max_bytes: MAX_VECTOR_SVG_BYTES,

@@ -4,7 +4,7 @@ use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
     ControllerSnapshot, DeviceInspection, HardwareProfile, MachineMode, MachineTravel, Position,
-    SpindleControl,
+    ProbeWorkflowMode, SpindleControl,
 };
 use millo_dry_run::ProgramExecutionOptions;
 use millo_gcode::{GcodeProgram, ProgramParseRequest, parse_program};
@@ -418,6 +418,7 @@ fn hardware_profile() -> HardwareProfile {
         homing_installed: false,
         limit_switches_installed: false,
         probe_installed: false,
+        probe_mode: ProbeWorkflowMode::Off,
         emergency_stop_installed: false,
     }
 }

@@ -29,6 +29,7 @@ interface MachineProfilesProps {
 const copyDraft = (draft: MachineProfileDraft): MachineProfileDraft => ({
   ...draft,
   travelMm: { ...draft.travelMm },
+  probeSettings: { ...draft.probeSettings },
   connection: draft.connection
     ? {
         ...draft.connection,

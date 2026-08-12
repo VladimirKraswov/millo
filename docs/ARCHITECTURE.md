@@ -176,6 +176,14 @@ the physical-run operator pause state while GRBL is in Check.
   a run sequence but dispatch is disabled. Tauri arms and syncs recovery first;
   only a matching commit releases the source FIFO. Persistence failure discards
   the prepared sender without writing a G-code block.
+- Heightmap Start uses the same durable-start shape. `prepare_heightmap` performs
+  bounded-plan, fresh-Idle, probe-input, WCS and modal checks but does not publish
+  an active operation or send `$J`/`G38.2`. Tauri atomically creates the pending
+  workpiece session, then commits the exact operation sequence. A failed write
+  discards the preparation; Reset may preempt either phase. While prepared, the
+  actor rejects every ordinary machine command with typed Busy, so no motion can
+  invalidate the evidence between validation and commit or execute later by
+  surprise.
 - Recovery planning is pure and motion-free. It reparses the stored source,
   verifies its fingerprint, and creates one of two explicit programs. Proven
   continuity plus `Ln:` rewinds to the latest preceding rapid at clearance;
@@ -297,6 +305,18 @@ does not schedule or execute controller I/O.
   draft; processed export joins normalized executable rows and resolves `/`
   rows through the active block-delete policy. It is not a geometric or
   heightmap transform. See ADR 0049.
+- Heightmap probing is a first-party command-actor workflow, not plugin code.
+  It uses a bounded serpentine plan and watch snapshots so UI subscriptions,
+  persistence, Hold, Resume, and Reset cannot interleave raw serial lines. Its
+  atomic `surface-session.json` belongs to the mounted workpiece and retains a
+  pending replacement beside the last complete map. The profile stores only
+  probe hardware/settings and the Off / Work Zero / Heightmap mode. See ADR
+  0052.
+- Heightmap rendering has no machine capability. A pure model derives the
+  auto-perimeter, physical spacing, matrix, and color scale; Three.js consumes
+  immutable map/program DTOs for one perimeter, probe points, outside-path
+  warnings, and the interpolated mesh. Render-grid resolution cannot add
+  physical contacts.
 - `programLineTableModel` computes a fixed-height overscanned window, and the
   React table mounts only that slice. The full line count is represented by a
   spacer inside a bounded desktop/mobile viewport.
@@ -774,6 +794,14 @@ Returning to an existing zero uses a distinct boundary:
   source, SHA-256 package identity, explicit grants, bounded evaluation, and an
   atomic persistent store. The runtime registers no filesystem, network,
   serial, sender, Tauri, DOM, module-import, or `eval` API.
+- First-party plugin source imports its host contract only from
+  `src/plugin-sdk`. The architecture gate rejects production plugin imports of
+  loader/extension internals, Tauri, or the application API. The SDK validates
+  manifests at definition time and exposes the same capability names as the
+  external runtime, including guarded work-coordinate operations.
+- Plugin UI contributions render behind per-contribution React error boundaries.
+  A throwing plugin panel is removed from that render subtree instead of
+  unmounting the CNC App Shell or safety controls.
 - An external command returns exactly one typed action. `createProgram` is
   reparsed by `millo-gcode` and published as an ordinary Program job. `jog`,
   `setZero`, and `returnZero` require a fresh operator confirmation and then
@@ -784,11 +812,19 @@ Returning to an existing zero uses a distinct boundary:
   package digest; any source or manifest update creates a new digest, clears
   grants, and disables execution. Bundled operator macros use this same runtime
   and public package format.
+- External store mutation is transactional: candidate state is atomically
+  persisted before becoming visible in memory, corrupt primary data can recover
+  from `.bak`, and package count/bytes are bounded. One backend execution fence
+  serializes install/update/enable/delete against command execution, closing the
+  digest/grant time-of-check/time-of-use window before a typed machine action.
 - `bootstrapPluginHost` is the application composition root for the UI registry,
   machine/job stores, and in-memory loader. It registers core UI and activates
   only modules explicitly linked and granted by the host. Image-to-G-code and
   spoilboard surfacing remain linked first-party plugins, while external script
   packages are explicitly imported and reviewed in their own manager.
+- `PluginHost.dispose()` is the idempotent composition-root shutdown: it unloads
+  every active module, cancels modules still activating, and closes their
+  resource scopes when React unmounts.
 - React reads the shared machine store through `useSyncExternalStore`. Typed
   command results publish back to that store instead of maintaining a second
   component-owned controller snapshot.
@@ -800,7 +836,9 @@ Returning to an existing zero uses a distinct boundary:
   `docs/decisions/0011-versioned-plugin-manifest.md`, plus
   `docs/decisions/0012-machine-read-capability.md` and
   `docs/decisions/0013-plugin-host-bootstrap.md` for the linked host, and
-  `docs/decisions/0050-sandboxed-external-plugins.md` for external code.
+  `docs/decisions/0050-sandboxed-external-plugins.md` for external code. The
+  stable separation between both tiers is recorded in
+  `docs/decisions/0053-two-tier-plugin-contract.md`.
 
 ## Near-term sequence
 

@@ -18,12 +18,19 @@ import type {
   TransportDescriptor,
   WorkZeroOutcome,
   WorkZeroRequest,
+  ZProbeOutcome,
+  ZProbeRequest,
 } from "../shared/machine";
 import type {
   ConnectOutcome,
   ControllerSettingEditRequest,
   ControllerSettingsState,
 } from "../shared/settings";
+import type {
+  HeightmapOperationSnapshot,
+  HeightmapStartRequest,
+  SurfaceSession,
+} from "../shared/heightmap";
 
 export const isDesktopRuntime = (): boolean => "__TAURI_INTERNALS__" in window;
 
@@ -122,6 +129,46 @@ export const returnToWorkZero = (
   request: ReturnToWorkZeroRequest,
 ): Promise<ReturnToWorkZeroOutcome> =>
   invoke<ReturnToWorkZeroOutcome>("return_to_work_zero", { request });
+
+export const runZProbe = (request: ZProbeRequest): Promise<ZProbeOutcome> =>
+  invoke<ZProbeOutcome>("probe_z", { request });
+
+export const getSurfaceSession = (): Promise<SurfaceSession> =>
+  invoke<SurfaceSession>("surface_session");
+
+export const getHeightmapSnapshot = (): Promise<HeightmapOperationSnapshot> =>
+  invoke<HeightmapOperationSnapshot>("heightmap_snapshot");
+
+export const startHeightmap = (
+  request: HeightmapStartRequest,
+  machineProfileId: string,
+): Promise<HeightmapOperationSnapshot> =>
+  invoke<HeightmapOperationSnapshot>("start_heightmap", { request, machineProfileId });
+
+export const pauseHeightmap = (): Promise<HeightmapOperationSnapshot> =>
+  invoke<HeightmapOperationSnapshot>("pause_heightmap");
+
+export const resumeHeightmap = (): Promise<HeightmapOperationSnapshot> =>
+  invoke<HeightmapOperationSnapshot>("resume_heightmap");
+
+export const setHeightmapApplication = (
+  enabled: boolean,
+  setupConfirmed: boolean,
+): Promise<SurfaceSession> =>
+  invoke<SurfaceSession>("set_heightmap_application", { enabled, setupConfirmed });
+
+export const clearSurfaceSession = (): Promise<SurfaceSession> =>
+  invoke<SurfaceSession>("clear_surface_session");
+
+export const onHeightmapState = (
+  handler: (snapshot: HeightmapOperationSnapshot) => void,
+): Promise<UnlistenFn> =>
+  listen<HeightmapOperationSnapshot>("heightmap-state", (event) => handler(event.payload));
+
+export const onSurfaceSession = (
+  handler: (session: SurfaceSession) => void,
+): Promise<UnlistenFn> =>
+  listen<SurfaceSession>("surface-session", (event) => handler(event.payload));
 
 export const cancelJog = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("cancel_jog");

@@ -116,6 +116,47 @@ pub fn encode_return_to_work_zero(
     ))
 }
 
+pub fn encode_heightmap_xy_jog(
+    x_mm: f64,
+    y_mm: f64,
+    feed_mm_per_min: f64,
+) -> Result<String, JogValidationError> {
+    if !x_mm.is_finite() || !y_mm.is_finite() {
+        return Err(JogValidationError::InvalidDistance);
+    }
+    if !feed_mm_per_min.is_finite() {
+        return Err(JogValidationError::InvalidFeed);
+    }
+    if !(MIN_STEP_JOG_FEED_MM_PER_MIN..=MAX_STEP_JOG_FEED_MM_PER_MIN).contains(&feed_mm_per_min) {
+        return Err(JogValidationError::FeedOutOfRange {
+            min_mm_per_min: MIN_STEP_JOG_FEED_MM_PER_MIN,
+            max_mm_per_min: MAX_STEP_JOG_FEED_MM_PER_MIN,
+        });
+    }
+    Ok(format!(
+        "$J=G90 G21 X{x_mm:.3} Y{y_mm:.3} F{feed_mm_per_min:.3}"
+    ))
+}
+
+pub fn encode_heightmap_z_jog(
+    z_mm: f64,
+    feed_mm_per_min: f64,
+) -> Result<String, JogValidationError> {
+    if !z_mm.is_finite() {
+        return Err(JogValidationError::InvalidDistance);
+    }
+    if !feed_mm_per_min.is_finite() {
+        return Err(JogValidationError::InvalidFeed);
+    }
+    if !(MIN_STEP_JOG_FEED_MM_PER_MIN..=MAX_STEP_JOG_FEED_MM_PER_MIN).contains(&feed_mm_per_min) {
+        return Err(JogValidationError::FeedOutOfRange {
+            min_mm_per_min: MIN_STEP_JOG_FEED_MM_PER_MIN,
+            max_mm_per_min: MAX_STEP_JOG_FEED_MM_PER_MIN,
+        });
+    }
+    Ok(format!("$J=G90 G21 Z{z_mm:.3} F{feed_mm_per_min:.3}"))
+}
+
 pub fn active_work_coordinate_system(modal_state: &[String]) -> Option<WorkCoordinateSystem> {
     modal_state.iter().find_map(|word| match word.as_str() {
         "G54" => Some(WorkCoordinateSystem::G54),
@@ -134,15 +175,41 @@ pub fn encode_set_work_zero(axis: WorkAxis, coordinate_system: WorkCoordinateSys
         WorkAxis::Y => 'Y',
         WorkAxis::Z => 'Z',
     };
-    let parameter = match coordinate_system {
+    let parameter = coordinate_system_parameter(coordinate_system);
+    format!("G10 L20 P{parameter} {axis}0")
+}
+
+pub fn encode_set_work_value(
+    axis: WorkAxis,
+    coordinate_system: WorkCoordinateSystem,
+    value_mm: f64,
+) -> String {
+    let axis = match axis {
+        WorkAxis::X => 'X',
+        WorkAxis::Y => 'Y',
+        WorkAxis::Z => 'Z',
+    };
+    let parameter = coordinate_system_parameter(coordinate_system);
+    format!("G10 L20 P{parameter} {axis}{value_mm:.3}")
+}
+
+const fn coordinate_system_parameter(coordinate_system: WorkCoordinateSystem) -> u8 {
+    match coordinate_system {
         WorkCoordinateSystem::G54 => 1,
         WorkCoordinateSystem::G55 => 2,
         WorkCoordinateSystem::G56 => 3,
         WorkCoordinateSystem::G57 => 4,
         WorkCoordinateSystem::G58 => 5,
         WorkCoordinateSystem::G59 => 6,
-    };
-    format!("G10 L20 P{parameter} {axis}0")
+    }
+}
+
+pub fn encode_z_probe(max_travel_mm: f64, feed_mm_per_min: f64) -> String {
+    format!("G91 G21 G94 G38.2 Z-{max_travel_mm:.3} F{feed_mm_per_min:.3}")
+}
+
+pub fn encode_z_retract(distance_mm: f64, feed_mm_per_min: f64) -> String {
+    format!("$J=G91 G21 Z{distance_mm:.3} F{feed_mm_per_min:.3}")
 }
 
 pub const fn work_coordinate_parameter(coordinate_system: WorkCoordinateSystem) -> &'static str {
@@ -561,6 +628,32 @@ mod tests {
     }
 
     #[test]
+    fn encodes_guarded_z_probe_offset_and_retract_commands() {
+        assert_eq!(
+            encode_z_probe(10.0, 25.0),
+            "G91 G21 G94 G38.2 Z-10.000 F25.000"
+        );
+        assert_eq!(
+            encode_set_work_value(WorkAxis::Z, WorkCoordinateSystem::G54, 19.1),
+            "G10 L20 P1 Z19.100"
+        );
+        assert_eq!(encode_z_retract(3.0, 100.0), "$J=G91 G21 Z3.000 F100.000");
+    }
+
+    #[test]
+    fn encodes_bounded_absolute_heightmap_moves() {
+        assert_eq!(
+            encode_heightmap_xy_jog(12.5, -3.25, 300.0).unwrap(),
+            "$J=G90 G21 X12.500 Y-3.250 F300.000"
+        );
+        assert_eq!(
+            encode_heightmap_z_jog(2.0, 100.0).unwrap(),
+            "$J=G90 G21 Z2.000 F100.000"
+        );
+        assert!(encode_heightmap_z_jog(f64::NAN, 100.0).is_err());
+    }
+
+    #[test]
     fn builds_device_inspection_from_grbl_queries() {
         let responses = vec![
             response("$I", &["[VER:1.1h.20240101:Millo Mock]", "[OPT:V,15,128]"]),
@@ -684,6 +777,15 @@ mod tests {
             }),
             Err(JogValidationError::FeedOutOfRange { .. })
         ));
+    }
+
+    #[test]
+    fn encodes_bounded_absolute_xy_heightmap_jog() {
+        assert_eq!(
+            encode_heightmap_xy_jog(12.5, -3.25, 300.0).unwrap(),
+            "$J=G90 G21 X12.500 Y-3.250 F300.000"
+        );
+        assert!(encode_heightmap_xy_jog(f64::NAN, 0.0, 300.0).is_err());
     }
 
     #[test]

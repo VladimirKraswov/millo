@@ -11,7 +11,7 @@ import {
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
 import { createPortal } from "react-dom";
 
-import type { PluginJobsCapability } from "../../platform/plugins/InMemoryPluginLoader";
+import type { PluginJobsCapability } from "../../plugin-sdk";
 import {
   defaultImageJobSettings,
   type GeneratedImageJob,

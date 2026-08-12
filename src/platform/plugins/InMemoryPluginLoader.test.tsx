@@ -13,6 +13,7 @@ import {
   uiSlots,
 } from "../extensions/UiExtensionRegistry";
 import type { MachineCommandGateway } from "../machine/MachineCommandGateway";
+import type { WorkCoordinateGateway } from "../machine/WorkCoordinateGateway";
 import { MachineSnapshotStore } from "../machine/MachineStateSource";
 import type { JobCreationCapability } from "../jobs/JobCreationService";
 import type { ToolLibraryGateway } from "../tooling/ToolLibraryGateway";
@@ -20,6 +21,7 @@ import { ToolLibraryService } from "../tooling/ToolLibraryService";
 import type {
   PluginActivationContext,
   PluginMachineJogCapability,
+  PluginMachineCoordinatesCapability,
   PluginMachineReadCapability,
   PluginToolsCapability,
 } from "./InMemoryPluginLoader";
@@ -161,6 +163,35 @@ describe("InMemoryPluginLoader", () => {
     expect(jogPadStep).toHaveBeenCalledWith(request);
   });
 
+  it("delegates granted work-coordinate operations and closes them on unload", async () => {
+    const pluginId = "dev.millo.coordinates-fixture";
+    const setZero = vi.fn(async () => ({}) as never);
+    const returnToZero = vi.fn(async () => ({}) as never);
+    const workCoordinates: WorkCoordinateGateway = { setZero, returnToZero };
+    const loader = new InMemoryPluginLoader({
+      uiRegistry: createUiExtensionRegistry(),
+      workCoordinates,
+      grants: new CapabilityGrantStore([
+        { pluginId, capabilities: ["machine.coordinates"] },
+      ]),
+    });
+    let coordinates: PluginMachineCoordinatesCapability | undefined;
+    const plugin = moduleWith(pluginId, ["machine.coordinates"], (context) => {
+      coordinates = context.machineCoordinates;
+    });
+    const zeroRequest = { axis: "z", positionConfirmed: true } as const;
+    const returnRequest = { axis: "z", feedMmPerMin: 100 } as const;
+
+    await loader.load(plugin);
+    await coordinates?.setZero(zeroRequest);
+    await coordinates?.returnToZero(returnRequest);
+    expect(setZero).toHaveBeenCalledWith(zeroRequest);
+    expect(returnToZero).toHaveBeenCalledWith(returnRequest);
+
+    await loader.unload(pluginId);
+    await expect(coordinates?.setZero(zeroRequest)).rejects.toThrow("no longer active");
+  });
+
   it("exposes immutable current state and future updates when granted", async () => {
     const pluginId = "dev.millo.observer";
     const machineState = new MachineSnapshotStore(controllerSnapshot(1));
@@ -294,6 +325,35 @@ describe("InMemoryPluginLoader", () => {
       `plugin was unloaded during activation: ${pluginId}`,
     );
     expect(deactivate).toHaveBeenCalledOnce();
+    expect(loader.list()).toEqual([]);
+  });
+
+  it("unloadAll closes both active and still-loading plugins", async () => {
+    const activeId = "dev.millo.active-for-shutdown";
+    const loadingId = "dev.millo.loading-for-shutdown";
+    const activeDeactivate = vi.fn();
+    const loadingDeactivate = vi.fn();
+    let finishActivation: (() => void) | undefined;
+    const loader = new InMemoryPluginLoader({
+      uiRegistry: createUiExtensionRegistry(),
+    });
+    await loader.load(moduleWith(activeId, [], () => activeDeactivate));
+    const loading = loader.load(
+      moduleWith(
+        loadingId,
+        [],
+        () =>
+          new Promise<() => void>((resolve) => {
+            finishActivation = () => resolve(loadingDeactivate);
+          }),
+      ),
+    );
+
+    await loader.unloadAll();
+    expect(activeDeactivate).toHaveBeenCalledOnce();
+    finishActivation?.();
+    await expect(loading).rejects.toThrow("unloaded during activation");
+    expect(loadingDeactivate).toHaveBeenCalledOnce();
     expect(loader.list()).toEqual([]);
   });
 

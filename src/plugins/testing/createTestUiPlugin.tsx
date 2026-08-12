@@ -1,13 +1,11 @@
 import { CORE_JOG_PAD_CONTRIBUTION } from "../../app/registerCoreUiExtensions";
-import { uiSlots } from "../../platform/extensions/UiExtensionRegistry";
-import type {
-  InMemoryPluginModule,
-  PluginActivationContext,
-} from "../../platform/plugins/InMemoryPluginLoader";
 import {
-  PLUGIN_API_VERSION,
-  PLUGIN_MANIFEST_VERSION,
-} from "../../platform/plugins/PluginManifest";
+  createPluginManifest,
+  definePlugin,
+  type InMemoryPluginModule,
+  type PluginActivationContext,
+  uiSlots,
+} from "../../plugin-sdk";
 
 export const TEST_PLUGIN_ID = "dev.millo.fixture";
 
@@ -26,10 +24,8 @@ export function createTestUiPlugin(): {
     deactivations: 0,
     machineJogGranted: false,
   };
-  const plugin: InMemoryPluginModule = {
-    manifest: {
-      manifestVersion: PLUGIN_MANIFEST_VERSION,
-      apiVersion: PLUGIN_API_VERSION,
+  const plugin: InMemoryPluginModule = definePlugin({
+    manifest: createPluginManifest({
       id: TEST_PLUGIN_ID,
       name: "Millo fixture UI",
       version: "0.1.0",
@@ -37,7 +33,7 @@ export function createTestUiPlugin(): {
         required: ["ui.contribute"],
         optional: ["machine.jog"],
       },
-    },
+    }),
     activate(context: PluginActivationContext) {
       observations.activations += 1;
       observations.machineJogGranted = context.hasCapability("machine.jog");
@@ -56,7 +52,7 @@ export function createTestUiPlugin(): {
         observations.deactivations += 1;
       };
     },
-  };
+  });
 
   return { plugin, observations };
 }

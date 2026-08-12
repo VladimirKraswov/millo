@@ -18,7 +18,7 @@ import { createPortal } from "react-dom";
 import type {
   PluginJobsCapability,
   PluginToolsCapability,
-} from "../../platform/plugins/InMemoryPluginLoader";
+} from "../../plugin-sdk";
 import type {
   GeneratedSurfacingJob,
   SurfacingJobSettings,

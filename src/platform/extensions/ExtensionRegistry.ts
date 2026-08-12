@@ -108,6 +108,16 @@ export class ExtensionRegistry<TSlot extends string, TExtension> {
     if (contribution.replaces?.includes(contribution.id)) {
       throw new Error("extension contribution cannot replace itself");
     }
+    if (contribution.replaces && new Set(contribution.replaces).size !== contribution.replaces.length) {
+      throw new Error("extension contribution replacements contain duplicates");
+    }
+    if (
+      contribution.replaces?.some(
+        (replacement) => typeof replacement !== "string" || !replacement.trim(),
+      )
+    ) {
+      throw new Error("extension replacement ids must be non-empty strings");
+    }
   }
 
   private changed(): void {

@@ -1,4 +1,13 @@
-import type { MachineTravel, SpindleControl } from "./machine";
+import type { MachineTravel, SpindleControl, ZProbeSettings } from "./machine";
+
+export const defaultZProbeSettings = (): ZProbeSettings => ({
+  mode: "off",
+  plateThicknessMm: 0,
+  maxTravelMm: 10,
+  probeFeedMmPerMin: 25,
+  retractMm: 3,
+  retractFeedMmPerMin: 100,
+});
 
 export interface MachineConnectionPreset {
   transportId: string;
@@ -27,6 +36,7 @@ export interface MachineProfileDraft {
   homingInstalled: boolean;
   limitSwitchesInstalled: boolean;
   probeInstalled: boolean;
+  probeSettings: ZProbeSettings;
   emergencyStopInstalled: boolean;
   connection?: MachineConnectionPreset;
   detectedController?: DetectedController;
@@ -48,6 +58,7 @@ export interface MachineLocalSettingsUpdate {
   homingInstalled: boolean;
   limitSwitchesInstalled: boolean;
   probeInstalled: boolean;
+  probeSettings: ZProbeSettings;
   emergencyStopInstalled: boolean;
 }
 

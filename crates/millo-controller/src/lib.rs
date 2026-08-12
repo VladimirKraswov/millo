@@ -9,7 +9,9 @@ use millo_domain::{
 use millo_dry_run::DryRunLine;
 use millo_grbl::{
     IncomingLine, JogValidationError, StatusParseError, build_device_inspection,
-    encode_return_to_work_zero, encode_set_work_zero, encode_step_jog, parse_incoming_line,
+    encode_heightmap_xy_jog, encode_heightmap_z_jog, encode_return_to_work_zero,
+    encode_set_work_value, encode_set_work_zero, encode_step_jog, encode_z_probe, encode_z_retract,
+    parse_incoming_line,
 };
 use millo_settings::ValidatedSettingWrite;
 use millo_transport::{Transport, TransportError};
@@ -169,7 +171,9 @@ pub struct Controller<T> {
 
 struct PendingProgramResponse {
     command: String,
+    started_at: Instant,
     last_activity_at: Instant,
+    absolute_timeout: Option<Duration>,
     lines: Vec<String>,
 }
 
@@ -361,11 +365,76 @@ impl<T: Transport> Controller<T> {
         self.execute_acknowledged_line(&command).await
     }
 
+    pub async fn begin_z_probe(
+        &mut self,
+        max_travel_mm: f64,
+        feed_mm_per_min: f64,
+    ) -> Result<(String, Duration), ControllerError> {
+        let command = encode_z_probe(max_travel_mm, feed_mm_per_min);
+        let motion = Duration::from_secs_f64(max_travel_mm / feed_mm_per_min * 60.0);
+        let timeout = motion + Duration::from_secs(5);
+        self.begin_extended_command(&command, timeout).await?;
+        Ok((command, timeout))
+    }
+
+    pub async fn poll_z_probe(
+        &mut self,
+        command: &str,
+        wait: Duration,
+    ) -> Result<ProgramResponsePoll, ControllerError> {
+        self.poll_pending_response(command, wait).await
+    }
+
+    pub async fn set_work_value(
+        &mut self,
+        axis: WorkAxis,
+        coordinate_system: WorkCoordinateSystem,
+        value_mm: f64,
+    ) -> Result<CommandResponse, ControllerError> {
+        let command = encode_set_work_value(axis, coordinate_system, value_mm);
+        self.execute_acknowledged_line(&command).await
+    }
+
+    pub async fn restore_modal_state(
+        &mut self,
+        command: &str,
+    ) -> Result<CommandResponse, ControllerError> {
+        self.execute_acknowledged_line(command).await
+    }
+
+    pub async fn retract_z(
+        &mut self,
+        distance_mm: f64,
+        feed_mm_per_min: f64,
+    ) -> Result<CommandResponse, ControllerError> {
+        let command = encode_z_retract(distance_mm, feed_mm_per_min);
+        self.execute_acknowledged_line(&command).await
+    }
+
     pub async fn return_to_work_zero(
         &mut self,
         request: ReturnToWorkZeroRequest,
     ) -> Result<CommandResponse, ControllerError> {
         let command = encode_return_to_work_zero(request)?;
+        self.execute_acknowledged_line(&command).await
+    }
+
+    pub async fn move_heightmap_xy(
+        &mut self,
+        x_mm: f64,
+        y_mm: f64,
+        feed_mm_per_min: f64,
+    ) -> Result<CommandResponse, ControllerError> {
+        let command = encode_heightmap_xy_jog(x_mm, y_mm, feed_mm_per_min)?;
+        self.execute_acknowledged_line(&command).await
+    }
+
+    pub async fn move_heightmap_z(
+        &mut self,
+        z_mm: f64,
+        feed_mm_per_min: f64,
+    ) -> Result<CommandResponse, ControllerError> {
+        let command = encode_heightmap_z_jog(z_mm, feed_mm_per_min)?;
         self.execute_acknowledged_line(&command).await
     }
 
@@ -470,22 +539,87 @@ impl<T: Transport> Controller<T> {
                 });
             }
         } else {
+            let now = Instant::now();
             self.pending_program_response = Some(PendingProgramResponse {
                 command: command.to_owned(),
-                last_activity_at: Instant::now(),
+                started_at: now,
+                last_activity_at: now,
+                absolute_timeout: None,
                 lines: Vec::new(),
             });
         }
 
-        let elapsed = self
-            .pending_program_response
-            .as_ref()
-            .ok_or(ControllerError::ProgramResponseState(
-                "pending response disappeared before polling",
-            ))?
-            .last_activity_at
-            .elapsed();
-        let Some(remaining) = self.config.command_timeout.checked_sub(elapsed) else {
+        self.poll_pending_response(command, wait).await
+    }
+
+    async fn begin_extended_command(
+        &mut self,
+        command: &str,
+        timeout: Duration,
+    ) -> Result<(), ControllerError> {
+        if self.snapshot.connection != ConnectionState::Connected {
+            return Err(ControllerError::NotReady(self.snapshot.connection));
+        }
+        if self.pending_program_response.is_some() {
+            return Err(ControllerError::ProgramResponseState(
+                "another command response is already pending",
+            ));
+        }
+        let write_result = tokio::time::timeout(
+            self.config.command_timeout,
+            self.transport.write(format!("{command}\n").as_bytes()),
+        )
+        .await;
+        if let Err(error) = match write_result {
+            Ok(result) => result.map_err(ControllerError::from),
+            Err(_) => Err(ControllerError::CommandTimeout {
+                timeout_ms: duration_ms(self.config.command_timeout),
+            }),
+        } {
+            self.record_poll_failure(&error);
+            return Err(error);
+        }
+        let now = Instant::now();
+        self.pending_program_response = Some(PendingProgramResponse {
+            command: command.to_owned(),
+            started_at: now,
+            last_activity_at: now,
+            absolute_timeout: Some(timeout),
+            lines: Vec::new(),
+        });
+        Ok(())
+    }
+
+    async fn poll_pending_response(
+        &mut self,
+        command: &str,
+        wait: Duration,
+    ) -> Result<ProgramResponsePoll, ControllerError> {
+        if self.snapshot.connection != ConnectionState::Connected {
+            return Err(ControllerError::NotReady(self.snapshot.connection));
+        }
+        let pending =
+            self.pending_program_response
+                .as_ref()
+                .ok_or(ControllerError::ProgramResponseState(
+                    "response polling started without a pending command",
+                ))?;
+        if pending.command != command {
+            return Err(ControllerError::ProgramResponseMismatch {
+                pending: pending.command.clone(),
+                requested: command.to_owned(),
+            });
+        }
+
+        let (elapsed, timeout) = if let Some(timeout) = pending.absolute_timeout {
+            (pending.started_at.elapsed(), timeout)
+        } else {
+            (
+                pending.last_activity_at.elapsed(),
+                self.config.command_timeout,
+            )
+        };
+        let Some(remaining) = timeout.checked_sub(elapsed) else {
             return Err(self.fail_program_response_timeout());
         };
         let read_wait = wait.min(remaining);
@@ -502,7 +636,10 @@ impl<T: Transport> Controller<T> {
                     .pending_program_response
                     .as_ref()
                     .is_some_and(|pending| {
-                        pending.last_activity_at.elapsed() >= self.config.command_timeout
+                        pending.absolute_timeout.map_or_else(
+                            || pending.last_activity_at.elapsed() >= self.config.command_timeout,
+                            |timeout| pending.started_at.elapsed() >= timeout,
+                        )
                     })
                 {
                     return Err(self.fail_program_response_timeout());
@@ -640,9 +777,13 @@ impl<T: Transport> Controller<T> {
     }
 
     fn fail_program_response_timeout(&mut self) -> ControllerError {
-        self.pending_program_response = None;
+        let timeout = self
+            .pending_program_response
+            .take()
+            .and_then(|pending| pending.absolute_timeout)
+            .unwrap_or(self.config.command_timeout);
         let error = ControllerError::CommandTimeout {
-            timeout_ms: duration_ms(self.config.command_timeout),
+            timeout_ms: duration_ms(timeout),
         };
         self.record_poll_failure(&error);
         error

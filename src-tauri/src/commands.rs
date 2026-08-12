@@ -20,6 +20,7 @@ use millo_domain::{
     JogPadStepOutcome, JogPadStepRequest, OperatorConfirmation, OverrideAdjustment,
     RapidOverrideTarget, ResetChallenge, ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest,
     StepJogReceipt, StepJogRequest, TestJogPreparation, WorkAxis, WorkZeroOutcome, WorkZeroRequest,
+    ZProbeOutcome, ZProbeRequest,
 };
 use millo_dry_run::{
     DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy, build_dry_run_plan,
@@ -28,6 +29,10 @@ use millo_dry_run::{
 use millo_gcode::{
     GcodeProgram, ProgramParseOptions, ProgramParseRequest, parse_program,
     parse_program_with_options,
+};
+use millo_heightmap::{
+    HeightmapOperationSnapshot, HeightmapOperationState, HeightmapStartRequest, SurfaceSession,
+    SurfaceSessionStore,
 };
 use millo_journal::{RunJournal, RunJournalEntry};
 use millo_mock::{MockControl, MockTransport};
@@ -72,6 +77,15 @@ use tokio::{
 
 const MOCK_TRANSPORT_ID: &str = "mock";
 const SERIAL_TRANSPORT_PREFIX: &str = "serial:";
+
+fn unix_time_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -276,20 +290,17 @@ pub struct AppState {
     run_journal: Arc<StdMutex<RunJournal>>,
     program_recovery: Arc<StdMutex<ProgramRecoveryStore>>,
     script_plugins: Mutex<ScriptPluginStore>,
+    script_execution: Mutex<()>,
+    surface_session: Arc<StdMutex<SurfaceSessionStore>>,
 }
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self::from_profile_store(
-            MachineProfileStore::in_memory(),
-            ToolLibraryStore::in_memory(),
-            None,
-            RunJournal::in_memory(),
-            ProgramRecoveryStore::in_memory(),
-            ScriptPluginStore::in_memory().expect("bundled script plugin must be valid"),
-            AuditLog::in_memory(),
-        )
-    }
+struct PersistentStores {
+    profiles: MachineProfileStore,
+    tools: ToolLibraryStore,
+    run_journal: RunJournal,
+    program_recovery: ProgramRecoveryStore,
+    script_plugins: ScriptPluginStore,
+    surface_session: SurfaceSessionStore,
 }
 
 impl AppState {
@@ -308,6 +319,9 @@ impl AppState {
         let script_plugins_path = profile_path
             .parent()
             .map(|parent| parent.join("script-plugins.json"));
+        let surface_session_path = profile_path
+            .parent()
+            .map(|parent| parent.join("surface-session.json"));
         let audit = match profile_path
             .parent()
             .map(|parent| AuditLog::persistent(parent.join("logs")))
@@ -357,13 +371,21 @@ impl AppState {
                 ScriptPluginStore::in_memory().map_err(|error| error.to_string())?
             }
         };
-        let state = Self::from_profile_store(
-            profiles,
-            tools,
+        let surface_session = surface_session_path
+            .map(SurfaceSessionStore::load)
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_else(SurfaceSessionStore::in_memory);
+        let state = Self::from_stores(
+            PersistentStores {
+                profiles,
+                tools,
+                run_journal: journal,
+                program_recovery: recovery,
+                script_plugins,
+                surface_session,
+            },
             settings_root,
-            journal,
-            recovery,
-            script_plugins,
             audit,
         );
         state.audit.record(
@@ -376,19 +398,16 @@ impl AppState {
         Ok(state)
     }
 
-    fn from_profile_store(
-        profiles: MachineProfileStore,
-        tools: ToolLibraryStore,
+    fn from_stores(
+        stores: PersistentStores,
         settings_root: Option<PathBuf>,
-        run_journal: RunJournal,
-        program_recovery: ProgramRecoveryStore,
-        script_plugins: ScriptPluginStore,
         audit: AuditLog,
     ) -> Self {
         let initial = ResolvedTransport::mock();
         let descriptor = initial.descriptor;
         let mock = initial.mock;
-        let hardware_profile = profiles
+        let hardware_profile = stores
+            .profiles
             .state()
             .selected()
             .map(|profile| profile.hardware_profile())
@@ -404,17 +423,19 @@ impl AppState {
         Self {
             arbiter,
             audit,
-            profiles: Mutex::new(profiles),
-            tools: Mutex::new(tools),
+            profiles: Mutex::new(stores.profiles),
+            tools: Mutex::new(stores.tools),
             active_transport: Mutex::new(descriptor),
             mock: Mutex::new(mock),
             transition_lock: Mutex::new(()),
             event_task: Mutex::new(None),
             settings_root,
             settings_session: Mutex::new(None),
-            run_journal: Arc::new(StdMutex::new(run_journal)),
-            program_recovery: Arc::new(StdMutex::new(program_recovery)),
-            script_plugins: Mutex::new(script_plugins),
+            run_journal: Arc::new(StdMutex::new(stores.run_journal)),
+            program_recovery: Arc::new(StdMutex::new(stores.program_recovery)),
+            script_plugins: Mutex::new(stores.script_plugins),
+            script_execution: Mutex::new(()),
+            surface_session: Arc::new(StdMutex::new(stores.surface_session)),
         }
     }
 
@@ -426,12 +447,14 @@ impl AppState {
 
         let mut snapshots = self.arbiter.subscribe();
         let mut sender_snapshots = self.arbiter.subscribe_sender();
+        let mut heightmap_snapshots = self.arbiter.subscribe_heightmap();
         let persistence_sender = start_run_persistence_worker(
             Arc::clone(&self.run_journal),
             Arc::clone(&self.program_recovery),
             self.audit.clone(),
         );
         let audit = self.audit.clone();
+        let surface_session = Arc::clone(&self.surface_session);
         *event_task = Some(tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -509,6 +532,78 @@ impl AppState {
                                 "Sender journal worker stopped unexpectedly",
                                 Value::Null,
                             );
+                        }
+                    }
+                    changed = heightmap_snapshots.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let snapshot = heightmap_snapshots.borrow_and_update().clone();
+                        let now = unix_time_ms();
+                        let session = match surface_session.lock() {
+                            Ok(mut store) => {
+                                let result = match snapshot.state {
+                                    HeightmapOperationState::Idle => Ok(store.session()),
+                                    HeightmapOperationState::Completed => store
+                                        .checkpoint(snapshot.clone(), now)
+                                        .and_then(|_| store.activate_completed(snapshot.operation_sequence, now)),
+                                    _ => store.checkpoint(snapshot.clone(), now),
+                                };
+                                match result {
+                                    Ok(session) => Some(session),
+                                    Err(error) => {
+                                        audit.record(
+                                            AuditLevel::Critical,
+                                            AuditCategory::Storage,
+                                            "storage.heightmap_checkpoint_failed",
+                                            error.to_string(),
+                                            json!({ "operationSequence": snapshot.operation_sequence }),
+                                        );
+                                        None
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                audit.record(
+                                    AuditLevel::Critical,
+                                    AuditCategory::Storage,
+                                    "storage.heightmap_lock_poisoned",
+                                    error.to_string(),
+                                    json!({ "operationSequence": snapshot.operation_sequence }),
+                                );
+                                None
+                            }
+                        };
+                        audit.record(
+                            if snapshot.state == HeightmapOperationState::Failed {
+                                AuditLevel::Error
+                            } else {
+                                AuditLevel::Info
+                            },
+                            AuditCategory::Controller,
+                            "heightmap.snapshot",
+                            format!("Heightmap {:?}: {}/{}", snapshot.state, snapshot.progress.measured, snapshot.progress.total),
+                            serde_json::to_value(&snapshot).unwrap_or(Value::Null),
+                        );
+                        if let Err(error) = app.emit("heightmap-state", snapshot) {
+                            audit.record(
+                                AuditLevel::Error,
+                                AuditCategory::Ui,
+                                "ui.heightmap_state_emit_failed",
+                                error.to_string(),
+                                Value::Null,
+                            );
+                        }
+                        if let Some(session) = session {
+                            if let Err(error) = app.emit("surface-session", session) {
+                                audit.record(
+                                    AuditLevel::Error,
+                                    AuditCategory::Ui,
+                                    "ui.surface_session_emit_failed",
+                                    error.to_string(),
+                                    Value::Null,
+                                );
+                            }
                         }
                     }
                 }
@@ -1955,6 +2050,172 @@ pub async fn set_work_zero(
 }
 
 #[tauri::command]
+pub async fn probe_z(
+    request: ZProbeRequest,
+    state: State<'_, AppState>,
+) -> Result<ZProbeOutcome, String> {
+    let context = serde_json::to_value(request).unwrap_or(Value::Null);
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        state
+            .arbiter
+            .probe_z(request)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Controller,
+        "controller.z_probe",
+        "Guarded Z probe completed and verified",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn surface_session(state: State<'_, AppState>) -> Result<SurfaceSession, String> {
+    state
+        .surface_session
+        .lock()
+        .map(|store| store.session())
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn heightmap_snapshot(
+    state: State<'_, AppState>,
+) -> Result<HeightmapOperationSnapshot, String> {
+    Ok(state.arbiter.heightmap_snapshot())
+}
+
+#[tauri::command]
+pub async fn start_heightmap(
+    request: HeightmapStartRequest,
+    machine_profile_id: String,
+    state: State<'_, AppState>,
+) -> Result<HeightmapOperationSnapshot, String> {
+    ensure_machine_bound(&state).await?;
+    let selected = state
+        .profiles
+        .lock()
+        .await
+        .state()
+        .selected_profile_id
+        .ok_or_else(|| "select a machine profile before probing".to_owned())?;
+    if selected != machine_profile_id {
+        return Err("heightmap machine profile does not match the selected machine".to_owned());
+    }
+    let prepared = state
+        .arbiter
+        .prepare_heightmap(request)
+        .await
+        .map_err(|error| error.to_string())?;
+    let persisted = state
+        .surface_session
+        .lock()
+        .map_err(|error| error.to_string())
+        .and_then(|mut store| {
+            store
+                .begin(machine_profile_id, prepared.clone(), unix_time_ms())
+                .map_err(|error| error.to_string())
+        });
+    if let Err(error) = persisted {
+        let cleanup = state
+            .arbiter
+            .discard_prepared_heightmap(prepared.operation_sequence)
+            .await;
+        return Err(match cleanup {
+            Ok(()) => error,
+            Err(cleanup) => format!("{error}; prepared heightmap cleanup also failed: {cleanup}"),
+        });
+    }
+
+    match state
+        .arbiter
+        .commit_prepared_heightmap(prepared.operation_sequence)
+        .await
+    {
+        Ok(snapshot) => Ok(snapshot),
+        Err(error) => {
+            let actor_cleanup = state
+                .arbiter
+                .discard_prepared_heightmap(prepared.operation_sequence)
+                .await;
+            let mut details = vec![error.to_string()];
+            match actor_cleanup {
+                Ok(()) => {
+                    if let Err(cleanup) = state
+                        .surface_session
+                        .lock()
+                        .map_err(|lock_error| lock_error.to_string())?
+                        .discard_pending()
+                    {
+                        details.push(format!("storage cleanup failed: {cleanup}"));
+                    }
+                }
+                Err(cleanup) => {
+                    details.push(format!("actor cleanup failed: {cleanup}"));
+                    details.push(
+                        "the durable pending surface session was retained because commit outcome is uncertain"
+                            .to_owned(),
+                    );
+                }
+            }
+            Err(details.join("; "))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn pause_heightmap(
+    state: State<'_, AppState>,
+) -> Result<HeightmapOperationSnapshot, String> {
+    state
+        .arbiter
+        .pause_heightmap()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn resume_heightmap(
+    state: State<'_, AppState>,
+) -> Result<HeightmapOperationSnapshot, String> {
+    state
+        .arbiter
+        .resume_heightmap()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_heightmap_application(
+    enabled: bool,
+    setup_confirmed: bool,
+    state: State<'_, AppState>,
+) -> Result<SurfaceSession, String> {
+    state
+        .surface_session
+        .lock()
+        .map_err(|error| error.to_string())?
+        .set_application_enabled(enabled, setup_confirmed)
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn clear_surface_session(state: State<'_, AppState>) -> Result<SurfaceSession, String> {
+    let mut store = state
+        .surface_session
+        .lock()
+        .map_err(|error| error.to_string())?;
+    store.discard_pending().map_err(|error| error.to_string())?;
+    store.forget_active().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn return_to_work_zero(
     request: ReturnToWorkZeroRequest,
     state: State<'_, AppState>,
@@ -2024,6 +2285,7 @@ pub async fn import_script_plugin(
         .await
         .map_err(|error| format!("plugin import task failed: {error}"))?
         .map_err(|error| error.to_string())?;
+    let _execution = state.script_execution.lock().await;
     let installed = state
         .script_plugins
         .lock()
@@ -2050,6 +2312,7 @@ pub async fn save_script_plugin(
     state: State<'_, AppState>,
 ) -> Result<InstalledScriptPlugin, String> {
     let package = parse_package(&request.package_json).map_err(|error| error.to_string())?;
+    let _execution = state.script_execution.lock().await;
     let installed = state
         .script_plugins
         .lock()
@@ -2076,6 +2339,7 @@ pub async fn export_script_plugin(
     state: State<'_, AppState>,
 ) -> Result<Option<String>, String> {
     let package = {
+        let _execution = state.script_execution.lock().await;
         let store = state.script_plugins.lock().await;
         let installed = store
             .get(&request.plugin_id)
@@ -2126,6 +2390,7 @@ pub async fn configure_script_plugin(
     request: ScriptPluginEnableRequest,
     state: State<'_, AppState>,
 ) -> Result<InstalledScriptPlugin, String> {
+    let _execution = state.script_execution.lock().await;
     let installed = state
         .script_plugins
         .lock()
@@ -2164,6 +2429,7 @@ pub async fn delete_script_plugin(
     request: ScriptPluginDeleteRequest,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
+    let _execution = state.script_execution.lock().await;
     let removed = state
         .script_plugins
         .lock()
@@ -2187,6 +2453,7 @@ pub async fn execute_script_plugin(
     request: ScriptPluginExecutionRequest,
     state: State<'_, AppState>,
 ) -> Result<ScriptPluginExecutionOutcome, String> {
+    let _execution = state.script_execution.lock().await;
     let installed = {
         let store = state.script_plugins.lock().await;
         store
@@ -3676,6 +3943,7 @@ mod tests {
             homing_installed: false,
             limit_switches_installed: false,
             probe_installed: false,
+            probe_settings: millo_domain::ZProbeSettings::default(),
             emergency_stop_installed: false,
             connection: Some(MachineConnectionPreset {
                 transport_id: "serial:/dev/cu.test".to_owned(),

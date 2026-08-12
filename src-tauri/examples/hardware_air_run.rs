@@ -3,8 +3,8 @@ use std::{error::Error, fs, io, path::PathBuf, time::Duration};
 use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
-    DeviceInspection, HardwareProfile, MachineMode, MachineTravel, Position, SpindleControl,
-    WorkAxis, WorkZeroRequest,
+    DeviceInspection, HardwareProfile, MachineMode, MachineTravel, Position, ProbeWorkflowMode,
+    SpindleControl, WorkAxis, WorkZeroRequest,
 };
 use millo_gcode::{GcodeProgram, ProgramParseRequest, parse_program};
 use millo_run::{FirstCutConfirmation, ProgramRunIntent, RunPreflightLevel};
@@ -387,6 +387,7 @@ fn hardware_profile() -> HardwareProfile {
         homing_installed: false,
         limit_switches_installed: false,
         probe_installed: false,
+        probe_mode: ProbeWorkflowMode::Off,
         emergency_stop_installed: false,
     }
 }

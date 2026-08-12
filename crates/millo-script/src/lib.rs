@@ -5,7 +5,7 @@ use std::{
 };
 
 use millo_gcode::{GcodeProgram, ProgramParseRequest, parse_program};
-use millo_storage::write_atomically;
+use millo_storage::{backup_path, write_atomically};
 use rhai::{Dynamic, Engine, Scope};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,6 +16,10 @@ pub const SCRIPT_PACKAGE_VERSION: u16 = 1;
 pub const SCRIPT_API_VERSION: u16 = 1;
 pub const MAX_SCRIPT_BYTES: usize = 256 * 1024;
 pub const MAX_PLUGIN_COMMANDS: usize = 64;
+pub const MAX_INSTALLED_PLUGINS: usize = 128;
+const MAX_PLUGIN_STORE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_COMMAND_FIELDS: usize = 32;
+const MAX_FIELD_TEXT_BYTES: usize = 4 * 1024;
 const STORE_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -282,6 +286,11 @@ pub fn validate_package(package: &ScriptPluginPackage) -> Result<(), ScriptPlugi
             "capability is both required and optional: {duplicate:?}"
         )));
     }
+    if !required.contains(&ScriptCapability::UiContribute) {
+        return Err(ScriptPluginError::InvalidPackage(
+            "ui.contribute must be a required capability for command plugins".to_owned(),
+        ));
+    }
     let declared = required.union(&optional).copied().collect::<BTreeSet<_>>();
     let mut command_ids = BTreeSet::new();
     for command in &package.commands {
@@ -294,17 +303,17 @@ pub fn validate_package(package: &ScriptPluginPackage) -> Result<(), ScriptPlugi
         validate_text("command title", &command.title, 100)?;
         validate_text("command description", &command.description, 500)?;
         validate_text("command icon", &command.icon, 64)?;
-        if !command
-            .required_capabilities
-            .iter()
-            .all(|capability| declared.contains(capability))
-        {
+        let command_capabilities = capability_set(
+            &command.required_capabilities,
+            &format!("command {} required", command.id),
+        )?;
+        if !command_capabilities.is_subset(&declared) {
             return Err(ScriptPluginError::InvalidPackage(format!(
                 "command {} requests an undeclared capability",
                 command.id
             )));
         }
-        if command.fields.len() > 32 {
+        if command.fields.len() > MAX_COMMAND_FIELDS {
             return Err(ScriptPluginError::InvalidPackage(format!(
                 "command {} has too many fields",
                 command.id
@@ -322,8 +331,9 @@ pub fn validate_package(package: &ScriptPluginPackage) -> Result<(), ScriptPlugi
             if let Some(unit) = &field.unit {
                 validate_text("field unit", unit, 24)?;
             }
-            if let (Some(min), Some(max)) = (field.min, field.max)
-                && (!min.is_finite() || !max.is_finite() || min > max)
+            if field.min.is_some_and(|value| !value.is_finite())
+                || field.max.is_some_and(|value| !value.is_finite())
+                || matches!((field.min, field.max), (Some(min), Some(max)) if min > max)
             {
                 return Err(ScriptPluginError::InvalidPackage(format!(
                     "field {} has invalid bounds",
@@ -336,6 +346,14 @@ pub fn validate_package(package: &ScriptPluginPackage) -> Result<(), ScriptPlugi
             {
                 return Err(ScriptPluginError::InvalidPackage(format!(
                     "field {} has an invalid step",
+                    field.id
+                )));
+            }
+            if field.kind != ScriptFieldKind::Number
+                && (field.min.is_some() || field.max.is_some() || field.step.is_some())
+            {
+                return Err(ScriptPluginError::InvalidPackage(format!(
+                    "field {} has numeric constraints but is not a number",
                     field.id
                 )));
             }
@@ -391,6 +409,14 @@ impl ScriptRuntime {
         let action: ScriptAction = rhai::serde::from_dynamic(&result)
             .map_err(|error| ScriptPluginError::InvalidAction(error.to_string()))?;
         validate_action(&action)?;
+        if let Some(capability) = action_capability(&action)
+            && !command.required_capabilities.contains(&capability)
+        {
+            return Err(ScriptPluginError::InvalidAction(format!(
+                "command {} returned an action without declaring {capability:?}",
+                command.id
+            )));
+        }
         Ok(action)
     }
 
@@ -456,20 +482,21 @@ impl ScriptPluginStore {
 
     pub fn load(path: impl Into<PathBuf>) -> Result<Self, ScriptPluginError> {
         let path = path.into();
-        let plugins = match fs::read(&path) {
-            Ok(bytes) => {
-                let file: ScriptPluginStoreFile = serde_json::from_slice(&bytes)?;
-                if file.version != STORE_VERSION {
-                    return Err(ScriptPluginError::Storage(format!(
-                        "unsupported plugin store version: {}",
-                        file.version
-                    )));
-                }
-                file.plugins
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(error) => return Err(ScriptPluginError::Storage(error.to_string())),
+        let backup = backup_path(&path);
+        let (plugins, recovered) = match read_store_file(&path) {
+            Ok(Some(file)) => (file.plugins, false),
+            Ok(None) => match read_store_file(&backup)? {
+                Some(file) => (file.plugins, true),
+                None => (Vec::new(), false),
+            },
+            Err(primary_error) => match read_store_file(&backup) {
+                Ok(Some(file)) => (file.plugins, true),
+                Ok(None) | Err(_) => return Err(primary_error),
+            },
         };
+        if recovered {
+            remove_file_if_present(&path)?;
+        }
         Self::with_plugins(Some(path), plugins)
     }
 
@@ -478,6 +505,11 @@ impl ScriptPluginStore {
         plugins: Vec<InstalledScriptPlugin>,
     ) -> Result<Self, ScriptPluginError> {
         let mut installed = BTreeMap::new();
+        if plugins.len() > MAX_INSTALLED_PLUGINS {
+            return Err(ScriptPluginError::Storage(format!(
+                "plugin store exceeds the {MAX_INSTALLED_PLUGINS} package limit"
+            )));
+        }
         for plugin in plugins {
             validate_installed_plugin(&plugin)?;
             let id = plugin.package.manifest.id.clone();
@@ -491,7 +523,7 @@ impl ScriptPluginStore {
             path,
             plugins: installed,
         };
-        store.install_bundled(default_macro_package())?;
+        store.install_bundled(default_macro_package()?)?;
         Ok(store)
     }
 
@@ -517,6 +549,13 @@ impl ScriptPluginStore {
                 "bundled plugin ids are reserved".to_owned(),
             ));
         }
+        if !self.plugins.contains_key(&package.manifest.id)
+            && self.plugins.len() >= MAX_INSTALLED_PLUGINS
+        {
+            return Err(ScriptPluginError::Storage(format!(
+                "plugin store reached the {MAX_INSTALLED_PLUGINS} package limit"
+            )));
+        }
         let digest = package_digest(&package)?;
         let installed = InstalledScriptPlugin {
             package,
@@ -525,9 +564,9 @@ impl ScriptPluginStore {
             bundled: false,
             granted_capabilities: Vec::new(),
         };
-        self.plugins
-            .insert(installed.package.manifest.id.clone(), installed.clone());
-        self.persist()?;
+        let mut candidate = self.plugins.clone();
+        candidate.insert(installed.package.manifest.id.clone(), installed.clone());
+        self.commit(candidate)?;
         Ok(installed)
     }
 
@@ -538,8 +577,8 @@ impl ScriptPluginStore {
         enabled: bool,
         grants: Vec<ScriptCapability>,
     ) -> Result<InstalledScriptPlugin, ScriptPluginError> {
-        let plugin = self
-            .plugins
+        let mut candidate = self.plugins.clone();
+        let plugin = candidate
             .get_mut(id)
             .ok_or_else(|| ScriptPluginError::NotInstalled(id.to_owned()))?;
         if plugin.digest != digest {
@@ -576,7 +615,7 @@ impl ScriptPluginStore {
         plugin.enabled = enabled;
         plugin.granted_capabilities = granted.into_iter().collect();
         let result = plugin.clone();
-        self.persist()?;
+        self.commit(candidate)?;
         Ok(result)
     }
 
@@ -586,9 +625,10 @@ impl ScriptPluginStore {
                 "bundled plugins cannot be deleted".to_owned(),
             ));
         }
-        let removed = self.plugins.remove(id).is_some();
+        let mut candidate = self.plugins.clone();
+        let removed = candidate.remove(id).is_some();
         if removed {
-            self.persist()?;
+            self.commit(candidate)?;
         }
         Ok(removed)
     }
@@ -598,10 +638,22 @@ impl ScriptPluginStore {
         let digest = package_digest(&package)?;
         let id = package.manifest.id.clone();
         let required = package.manifest.capabilities.required.clone();
-        match self.plugins.get(&id) {
-            Some(existing) if existing.digest == digest => {}
+        let mut candidate = self.plugins.clone();
+        match candidate.get(&id) {
+            Some(existing) if existing.digest == digest => {
+                candidate.insert(
+                    id,
+                    InstalledScriptPlugin {
+                        package,
+                        digest,
+                        enabled: existing.enabled,
+                        bundled: true,
+                        granted_capabilities: existing.granted_capabilities.clone(),
+                    },
+                );
+            }
             Some(existing) => {
-                self.plugins.insert(
+                candidate.insert(
                     id,
                     InstalledScriptPlugin {
                         package,
@@ -613,7 +665,7 @@ impl ScriptPluginStore {
                 );
             }
             None => {
-                self.plugins.insert(
+                candidate.insert(
                     id,
                     InstalledScriptPlugin {
                         package,
@@ -625,16 +677,28 @@ impl ScriptPluginStore {
                 );
             }
         }
-        self.persist()
+        self.commit(candidate)
     }
 
-    fn persist(&self) -> Result<(), ScriptPluginError> {
+    fn commit(
+        &mut self,
+        candidate: BTreeMap<String, InstalledScriptPlugin>,
+    ) -> Result<(), ScriptPluginError> {
+        self.persist(&candidate)?;
+        self.plugins = candidate;
+        Ok(())
+    }
+
+    fn persist(
+        &self,
+        plugins: &BTreeMap<String, InstalledScriptPlugin>,
+    ) -> Result<(), ScriptPluginError> {
         let Some(path) = &self.path else {
             return Ok(());
         };
         let file = ScriptPluginStoreFile {
             version: STORE_VERSION,
-            plugins: self.list(),
+            plugins: plugins.values().cloned().collect(),
         };
         let bytes = serde_json::to_vec_pretty(&file)?;
         write_atomically(path, &bytes)
@@ -687,9 +751,9 @@ fn validate_installed_plugin(plugin: &InstalledScriptPlugin) -> Result<(), Scrip
     Ok(())
 }
 
-pub fn default_macro_package() -> ScriptPluginPackage {
+pub fn default_macro_package() -> Result<ScriptPluginPackage, ScriptPluginError> {
     serde_json::from_str(include_str!("../defaults/operator-macros.millo-plugin"))
-        .expect("bundled operator macro package must be valid JSON")
+        .map_err(ScriptPluginError::from)
 }
 
 pub fn read_package(path: &Path) -> Result<ScriptPluginPackage, ScriptPluginError> {
@@ -710,7 +774,17 @@ fn validate_action(action: &ScriptAction) -> Result<(), ScriptPluginError> {
             source_name,
             source,
         } => {
-            validate_text("generated source name", source_name, 240)?;
+            validate_action_text("generated source name", source_name, 240)?;
+            if Path::new(source_name)
+                .file_name()
+                .and_then(|value| value.to_str())
+                != Some(source_name.as_str())
+                || source_name.chars().any(char::is_control)
+            {
+                return Err(ScriptPluginError::InvalidAction(
+                    "generated source name must be a plain file name".to_owned(),
+                ));
+            }
             if source.len() > millo_gcode::MAX_SOURCE_BYTES || source.trim().is_empty() {
                 return Err(ScriptPluginError::InvalidAction(
                     "generated G-code is empty or too large".to_owned(),
@@ -734,8 +808,8 @@ fn validate_action(action: &ScriptAction) -> Result<(), ScriptPluginError> {
         } => validate_feed(*feed_mm_per_min)?,
         ScriptAction::SetZero { .. } => {}
         ScriptAction::Notice { title, message, .. } => {
-            validate_text("notice title", title, 100)?;
-            validate_text("notice message", message, 1_000)?;
+            validate_action_text("notice title", title, 100)?;
+            validate_action_text("notice message", message, 1_000)?;
         }
     }
     Ok(())
@@ -797,11 +871,16 @@ fn validate_field_value(
                 field.id
             )));
         }
-        ScriptFieldKind::Text if !value.is_string() => {
-            return Err(ScriptPluginError::InvalidAction(format!(
-                "field {} must be text",
-                field.id
-            )));
+        ScriptFieldKind::Text => {
+            let text = value.as_str().ok_or_else(|| {
+                ScriptPluginError::InvalidAction(format!("field {} must be text", field.id))
+            })?;
+            if text.len() > MAX_FIELD_TEXT_BYTES {
+                return Err(ScriptPluginError::InvalidAction(format!(
+                    "field {} exceeds {MAX_FIELD_TEXT_BYTES} bytes",
+                    field.id
+                )));
+            }
         }
         _ => {}
     }
@@ -833,6 +912,15 @@ fn capability_set(
 fn validate_text(label: &str, value: &str, max: usize) -> Result<(), ScriptPluginError> {
     if value.trim() != value || value.is_empty() || value.len() > max {
         return Err(ScriptPluginError::InvalidPackage(format!(
+            "{label} must be a non-empty trimmed string up to {max} bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_action_text(label: &str, value: &str, max: usize) -> Result<(), ScriptPluginError> {
+    if value.trim() != value || value.is_empty() || value.len() > max {
+        return Err(ScriptPluginError::InvalidAction(format!(
             "{label} must be a non-empty trimmed string up to {max} bytes"
         )));
     }
@@ -871,13 +959,52 @@ fn valid_semver(value: &str) -> bool {
     )
 }
 
+fn read_store_file(path: &Path) -> Result<Option<ScriptPluginStoreFile>, ScriptPluginError> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(ScriptPluginError::Storage(error.to_string())),
+    };
+    if metadata.len() > MAX_PLUGIN_STORE_BYTES {
+        return Err(ScriptPluginError::Storage(format!(
+            "plugin store exceeds {MAX_PLUGIN_STORE_BYTES} bytes"
+        )));
+    }
+    let bytes = fs::read(path).map_err(|error| ScriptPluginError::Storage(error.to_string()))?;
+    let file: ScriptPluginStoreFile = serde_json::from_slice(&bytes)
+        .map_err(|error| ScriptPluginError::Storage(error.to_string()))?;
+    if file.version != STORE_VERSION {
+        return Err(ScriptPluginError::Storage(format!(
+            "unsupported plugin store version: {}",
+            file.version
+        )));
+    }
+    Ok(Some(file))
+}
+
+fn remove_file_if_present(path: &Path) -> Result<(), ScriptPluginError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(ScriptPluginError::Storage(error.to_string())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs,
+        sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
     use super::*;
+
+    static TEST_ID: AtomicU64 = AtomicU64::new(1);
 
     #[test]
     fn bundled_macros_compile_and_create_a_parseable_boundary_job() {
-        let package = default_macro_package();
+        let package = default_macro_package().unwrap();
         validate_package(&package).unwrap();
         let action = ScriptRuntime::execute(
             &package,
@@ -902,7 +1029,7 @@ mod tests {
 
     #[test]
     fn runtime_rejects_an_unbounded_script() {
-        let mut package = default_macro_package();
+        let mut package = default_macro_package().unwrap();
         package.source = "fn run(command, input, machine) { loop {} }".to_owned();
         let error = ScriptRuntime::execute(
             &package,
@@ -919,7 +1046,7 @@ mod tests {
     #[test]
     fn external_package_is_disabled_and_loses_old_grants_after_update() {
         let mut store = ScriptPluginStore::in_memory().unwrap();
-        let mut package = default_macro_package();
+        let mut package = default_macro_package().unwrap();
         package.manifest.id = "community.example".to_owned();
         package.manifest.name = "Example".to_owned();
         let installed = store.install_external(package.clone()).unwrap();
@@ -959,7 +1086,7 @@ mod tests {
 
     #[test]
     fn input_schema_is_enforced_before_script_execution() {
-        let package = default_macro_package();
+        let package = default_macro_package().unwrap();
         let error = ScriptRuntime::execute(
             &package,
             "raise-z",
@@ -973,7 +1100,7 @@ mod tests {
 
     #[test]
     fn dynamic_eval_is_not_available_to_external_scripts() {
-        let mut package = default_macro_package();
+        let mut package = default_macro_package().unwrap();
         package.source = "fn run(command, input, machine) { eval(\"40 + 2\") }".to_owned();
         let error = validate_package(&package).unwrap_err();
 
@@ -982,7 +1109,7 @@ mod tests {
 
     #[test]
     fn stored_package_integrity_is_checked_before_it_can_be_enabled() {
-        let package = default_macro_package();
+        let package = default_macro_package().unwrap();
         let error = ScriptPluginStore::with_plugins(
             None,
             vec![InstalledScriptPlugin {
@@ -996,5 +1123,150 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("stored digest does not match"));
+    }
+
+    #[test]
+    fn package_rejects_hidden_authority_and_invalid_field_metadata() {
+        let mut package = default_macro_package().unwrap();
+        package.manifest.capabilities.required = vec![ScriptCapability::JobsCreate];
+        assert!(
+            validate_package(&package)
+                .unwrap_err()
+                .to_string()
+                .contains("ui.contribute")
+        );
+
+        let mut package = default_macro_package().unwrap();
+        package.commands[0].required_capabilities =
+            vec![ScriptCapability::JobsCreate, ScriptCapability::JobsCreate];
+        assert!(
+            validate_package(&package)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicates")
+        );
+
+        let mut package = default_macro_package().unwrap();
+        package.commands[0].fields[0].min = Some(f64::NAN);
+        assert!(
+            validate_package(&package)
+                .unwrap_err()
+                .to_string()
+                .contains("invalid bounds")
+        );
+    }
+
+    #[test]
+    fn runtime_rejects_path_like_job_names_and_oversized_text_input() {
+        let mut package = default_macro_package().unwrap();
+        package.source = r#"fn run(command, input, machine) {
+            #{ kind: "createProgram", sourceName: "../outside.nc", source: "G21\nM30" }
+        }"#
+        .to_owned();
+        let error = ScriptRuntime::execute(
+            &package,
+            "boundary-check",
+            serde_json::json!({}),
+            Value::Null,
+        )
+        .unwrap_err();
+        assert!(matches!(error, ScriptPluginError::InvalidAction(_)));
+        assert!(error.to_string().contains("plain file name"));
+
+        let mut package = default_macro_package().unwrap();
+        package.commands[0].fields = vec![ScriptCommandField {
+            id: "note".to_owned(),
+            label: "Note".to_owned(),
+            kind: ScriptFieldKind::Text,
+            default_value: Value::String("ok".to_owned()),
+            min: None,
+            max: None,
+            step: None,
+            unit: None,
+        }];
+        let error = ScriptRuntime::execute(
+            &package,
+            "boundary-check",
+            serde_json::json!({ "note": "x".repeat(MAX_FIELD_TEXT_BYTES + 1) }),
+            Value::Null,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("exceeds"));
+    }
+
+    #[test]
+    fn runtime_requires_the_command_to_declare_its_returned_action_capability() {
+        let mut package = default_macro_package().unwrap();
+        package.commands[1].required_capabilities.clear();
+        let error = ScriptRuntime::execute(
+            &package,
+            "raise-z",
+            serde_json::json!({ "distanceMm": 1.0, "feedMmPerMin": 100.0 }),
+            Value::Null,
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, ScriptPluginError::InvalidAction(_)));
+        assert!(error.to_string().contains("MachineJog"));
+    }
+
+    #[test]
+    fn persistent_store_recovers_from_backup_and_keeps_grants_transactional() {
+        let path = test_path("recovery");
+        let mut store = ScriptPluginStore::load(&path).unwrap();
+        let mut package = default_macro_package().unwrap();
+        package.manifest.id = "community.recovery".to_owned();
+        package.manifest.name = "Recovery".to_owned();
+        let first = store.install_external(package.clone()).unwrap();
+        package.manifest.version = "1.0.1".to_owned();
+        store.install_external(package).unwrap();
+        fs::write(&path, b"corrupt primary").unwrap();
+
+        let recovered = ScriptPluginStore::load(&path).unwrap();
+        assert_eq!(
+            recovered.get("community.recovery").unwrap().digest,
+            first.digest
+        );
+
+        let blocked_path = test_path("transactional");
+        let mut blocked = ScriptPluginStore::load(&blocked_path).unwrap();
+        let blocked_parent = blocked_path.parent().unwrap();
+        let _ = fs::remove_file(&blocked_path);
+        let _ = fs::remove_file(backup_path(&blocked_path));
+        fs::remove_dir(blocked_parent).unwrap();
+        fs::write(blocked_parent, b"file blocks directory creation").unwrap();
+        let mut package = default_macro_package().unwrap();
+        package.manifest.id = "community.transactional".to_owned();
+        package.manifest.name = "Transactional".to_owned();
+        assert!(matches!(
+            blocked.install_external(package),
+            Err(ScriptPluginError::Storage(_))
+        ));
+        assert!(blocked.get("community.transactional").is_none());
+
+        cleanup(&path);
+        let _ = fs::remove_file(blocked_parent);
+    }
+
+    fn test_path(label: &str) -> PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir()
+            .join(format!(
+                "millo-script-{}-{timestamp}-{}",
+                std::process::id(),
+                TEST_ID.fetch_add(1, Ordering::Relaxed)
+            ))
+            .join(format!("{label}.json"))
+    }
+
+    fn cleanup(path: &Path) {
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(backup_path(path));
+        if let Some(parent) = path.parent() {
+            let _ = fs::remove_dir_all(parent);
+        }
     }
 }

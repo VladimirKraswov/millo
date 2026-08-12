@@ -13,7 +13,7 @@ millo-tooling = { path = "../millo-tooling" }
 serde.workspace = true
 thiserror.workspace = true
 usvg = { version = "=0.45.1", default-features = false }
-vtracer = "=0.6.5"
+vtracer = "=1.0.0-alpha.3"
 
 [dev-dependencies]
 image = { version = "=0.25.8", default-features = false, features = ["png"] }

@@ -97,8 +97,20 @@ G54-G59 system to the matching `G10 L20 Pn` command, reads `$#`, and checks both
 the selected offset and final work position before reporting success. React
 cannot choose `Pn`, format a line, or reuse the confirmation. This operation has
 been verified against Mock GRBL only; no work-zero write was sent to the physical
-machine in this slice. The probe is not installed or connected, so probing and
-heightmap motion remain unavailable.
+machine in this slice.
+
+Probe operation is now one core workflow rather than an optional UI plugin.
+Profiles choose Off, one-point Z Work Zero, or Heightmap mode. Heightmap probing
+uses an actor-owned bounded serpentine plan, preserves the active WCS, records
+`PRB` without mutating `G10`, and keeps Hold/Reset available between short state
+machine steps. A durable prepare/persist/commit barrier prevents the first
+heightmap movement until its pending session is on disk. The current workpiece
+map is checkpointed in a separate atomic `surface-session.json`; a partial
+replacement never overwrites the preceding completed map, and restart always
+requires fixture/work-zero reconfirmation.
+The map workspace provides automatic program bounds with margin, physical grid
+density, perimeter validation, coordinate-labelled values, and a Three.js
+low-to-high surface view. See [ADR 0052](docs/decisions/0052-workpiece-heightmap-session.md).
 
 Returning to an existing work zero is a different typed motion command. The
 actor emits one absolute `$J=G90 G21 <axis>0` only after fresh `Idle`, `$G`,
@@ -343,6 +355,8 @@ old grants. Scripts run with operation/memory/depth bounds and no serial,
 sender, Tauri, DOM, filesystem, network, module import, or dynamic-eval API.
 They may return only a typed job, guarded jog/work-zero request, or notice. See
 [External plugins and macros](docs/EXTERNAL_PLUGINS.md) and
+[Plugin development guide](docs/PLUGIN_DEVELOPMENT.md) describe the two plugin
+levels, stable SDK imports, capability lifecycle, package schema and tests. See
 [ADR 0050](docs/decisions/0050-sandboxed-external-plugins.md).
 
 The default `Операторские макросы` package is enabled on first start and uses
@@ -520,7 +534,9 @@ The job-centered run flow and contextual action priority are recorded in
 selected-line compilation is recorded in
 [ADR 0048](docs/decisions/0048-safe-selected-line-start.md), and the separate
 draft/parse/apply editor boundary in
-[ADR 0049](docs/decisions/0049-safe-program-editor.md). The
+[ADR 0049](docs/decisions/0049-safe-program-editor.md). The separation between
+trusted React plugins and imported Rhai packages is recorded in
+[ADR 0053](docs/decisions/0053-two-tier-plugin-contract.md). The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).
 

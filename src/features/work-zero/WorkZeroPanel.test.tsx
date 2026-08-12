@@ -34,4 +34,27 @@ describe("WorkZeroPanel", () => {
     expect(markup).toContain("Вернуться к сохранённому нулю");
     expect(markup).toContain("К Z0");
   });
+
+  it("keeps manual Z zero out of the combined action when probe mode is enabled", () => {
+    const markup = renderToStaticMarkup(
+      <WorkZeroPanel
+        desktopRuntime
+        gateway={{
+          returnToZero: async () => { throw new Error("not used"); },
+          setZero: async () => { throw new Error("not used"); },
+        }}
+        onError={() => undefined}
+        onSnapshot={() => undefined}
+        snapshot={{
+          ...emptySnapshot,
+          connection: "connected",
+          machine: { ...emptySnapshot.machine, mode: "idle", reportedMode: "Idle" },
+        }}
+        useProbeForZ
+      />,
+    );
+
+    expect(markup).toContain("Установить XY = 0");
+    expect(markup).toContain("Z задаётся щупом");
+  });
 });
