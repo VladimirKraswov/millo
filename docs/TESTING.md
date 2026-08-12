@@ -427,15 +427,19 @@ additional two steps are the typed M5/M9 shutdown epilogue before M30.
   corrupt primary from backup, and hide completed jobs.
 - Planner fixtures rewind an interruption to a prior clearance rapid, restore
   WCS/modal/tool/spindle state, omit already-finished geometry, reject safe Z
-  below the program envelope, and block recovery when GRBL did not provide
-  `Ln:` execution telemetry.
+  below the program envelope, and limit missing-`Ln:` recovery to a full restart
+  that includes all original geometry.
 - Actor fixtures prove a prepared physical run emits no `N` block before a
   matching commit and that mismatch/discard remains motion-free. Store fixtures
   prove a failed run stays available only for the matching machine fingerprint,
   while completed runs disappear.
-- React model tests require all five recovery confirmations, finite Safe Z at or
-  above the parser envelope, and atomic busy-state consumption. The recovery
-  fixture is inspected at desktop and 390 x 844: banner, restart XYZ, checklist,
+- Link-loss fixtures prove an active Air/Cut sender becomes terminal, the actor
+  closes the controller session, no further `N` block is written, and an
+  explicit reconnect cannot revive the failed FIFO.
+- React model tests require all six recovery confirmations, finite Safe Z at or
+  above the parser envelope, availability of the selected strategy, and atomic
+  busy-state consumption. The recovery fixture is inspected at desktop and
+  390 x 844: conservative default, continuity choices, banner, checklist,
   disabled/enabled action, low-Safe-Z rejection, and browser console.
 
 ### Hardware Air-run fixture

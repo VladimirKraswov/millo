@@ -12,6 +12,8 @@ import type {
   ProgramRecoveryCandidate,
   ProgramRecoveryPackage,
   ProgramRecoveryPreparationRequest,
+  RecoveryContinuity,
+  RecoveryInterruptionKind,
 } from "../../shared/recovery";
 import {
   canPrepareRecovery,
@@ -46,6 +48,11 @@ const checklist: ReadonlyArray<{
     detail: "Активная G54-G59 снова совпадает с нулём исходной программы.",
   },
   {
+    key: "motionPowerRestored",
+    title: "Силовая часть и позиция проверены",
+    detail: "Драйверы осей запитаны, а фактическая позиция не взята из одного только GRBL.",
+  },
+  {
     key: "restartPointInspected",
     title: "Точка возврата проверена",
     detail: "Положение и повторяемый участок сверены с заготовкой и preview.",
@@ -59,6 +66,39 @@ const checklist: ReadonlyArray<{
     key: "powerControlReachable",
     title: "Питание доступно",
     detail: "Станок и шпиндель можно немедленно обесточить рукой.",
+  },
+];
+
+const interruptionLabels: Record<RecoveryInterruptionKind, string> = {
+  hostStopped: "Приложение или компьютер остановились во время выполнения",
+  controllerDisconnected: "Связь с контроллером пропала во время выполнения",
+  controllerReset: "Контроллер перезапустился во время выполнения",
+  controllerUnresponsive: "Контроллер перестал отвечать во время выполнения",
+  controllerAlarm: "Контроллер остановился с ALARM",
+  programRejected: "GRBL отклонил исполняемый блок",
+  operatorStopped: "Выполнение было остановлено оператором",
+  unknown: "Причина остановки не доказана",
+};
+
+const continuityOptions: ReadonlyArray<{
+  value: RecoveryContinuity;
+  title: string;
+  detail: string;
+}> = [
+  {
+    value: "motionPowerLostOrUnknown",
+    title: "Силовая часть отключалась или не уверен",
+    detail: "Безопасный вариант: начать программу с начала после восстановления XYZ-ноля.",
+  },
+  {
+    value: "controllerInterrupted",
+    title: "Станок и контроллер отключились",
+    detail: "Использовать последний физический Ln и повторить участок с clearance rapid.",
+  },
+  {
+    value: "hostInterruptedMachinePowered",
+    title: "Отключился только ПК или приложение",
+    detail: "Станок, драйверы и контроллер непрерывно оставались под питанием.",
   },
 ];
 
@@ -137,109 +177,155 @@ export function ProgramRecoveryDialog({
           </button>
         </header>
 
-        <div className={`recovery-evidence${candidate.ready ? "" : " is-blocked"}`}>
-          {candidate.ready ? (
-            <History aria-hidden="true" size={20} />
-          ) : (
-            <ShieldAlert aria-hidden="true" size={20} />
-          )}
-          <div>
-            <strong>{candidate.sourceName}</strong>
-            <span>{candidate.detail}</span>
-          </div>
-          <dl>
+        <div className="recovery-dialog-body">
+          <div className={`recovery-evidence${candidate.ready ? "" : " is-blocked"}`}>
+            {candidate.ready ? (
+              <History aria-hidden="true" size={20} />
+            ) : (
+              <ShieldAlert aria-hidden="true" size={20} />
+            )}
             <div>
-              <dt>GRBL Ln</dt>
-              <dd>{candidate.executingSourceLine ?? "нет"}</dd>
+              <strong>{candidate.sourceName}</strong>
+              <span>{interruptionLabels[candidate.interruption]}</span>
+              <small>{candidate.detail}</small>
             </div>
-            <div>
-              <dt>Restart</dt>
-              <dd>{candidate.restartSourceLine ?? "blocked"}</dd>
-            </div>
-            <div>
-              <dt>Accepted</dt>
-              <dd>{candidate.acknowledgedLines}</dd>
-            </div>
-            {candidate.restartPosition && (
-              <div className="recovery-restart-position">
-                <dt>Restart XYZ</dt>
+            <dl>
+              <div>
+                <dt>GRBL Ln</dt>
+                <dd>{candidate.executingSourceLine ?? "нет"}</dd>
+              </div>
+              <div>
+                <dt>Restart</dt>
                 <dd>
-                  {candidate.restartPosition.x.toFixed(3)} ·{" "}
-                  {candidate.restartPosition.y.toFixed(3)} ·{" "}
-                  {candidate.restartPosition.z.toFixed(3)}
+                  {candidate.checkpointRestartAvailable
+                    ? candidate.restartSourceLine
+                    : "полный"}
                 </dd>
               </div>
-            )}
-          </dl>
-        </div>
+              <div>
+                <dt>Accepted</dt>
+                <dd>{candidate.acknowledgedLines}</dd>
+              </div>
+              {candidate.restartPosition && (
+                <div className="recovery-restart-position">
+                  <dt>Restart XYZ</dt>
+                  <dd>
+                    {candidate.restartPosition.x.toFixed(3)} ·{" "}
+                    {candidate.restartPosition.y.toFixed(3)} ·{" "}
+                    {candidate.restartPosition.z.toFixed(3)}
+                  </dd>
+                </div>
+              )}
+            </dl>
+          </div>
 
-        {candidate.ready ? (
-          <>
-            <div className="recovery-warning">
-              <CircleAlert aria-hidden="true" size={17} />
-              <p>
-                Это новый запуск с более ранней безопасной точки. Уже обработанный
-                участок будет пройден повторно; автоматического движения сейчас нет.
-              </p>
-            </div>
-            <label className="recovery-safe-z">
-              <span>
-                <strong>Safe Z</strong>
-                <small>
-                  Не ниже {candidate.minimumSafeZMm?.toFixed(3) ?? "?"} mm
-                </small>
-              </span>
-              <span>
-                <input
-                  disabled={busy}
-                  min={candidate.minimumSafeZMm}
-                  onChange={(event) =>
-                    setRequest((current) => ({
-                      ...current,
-                      safeZMm: Number(event.target.value),
-                    }))
-                  }
-                  step="0.1"
-                  type="number"
-                  value={request.safeZMm}
-                />
-                <code>mm</code>
-              </span>
-            </label>
-            <div className="recovery-checklist">
-              {checklist.map((item) => (
-                <label key={item.key}>
+          {candidate.ready ? (
+            <>
+              <div className="recovery-warning">
+                <CircleAlert aria-hidden="true" size={17} />
+                <p>
+                  GRBL может питаться от USB и продолжать увеличивать{" "}
+                  <code>Ln:</code>, даже если драйверы двигателей обесточены. Поэтому
+                  тип сбоя выбирается явно; при сомнении Millo начинает программу с
+                  начала.
+                </p>
+              </div>
+              <fieldset className="recovery-continuity">
+                <legend>Что оставалось под питанием</legend>
+                {continuityOptions.map((option) => {
+                  const checkpointOption =
+                    option.value !== "motionPowerLostOrUnknown";
+                  const disabled =
+                    busy ||
+                    (checkpointOption && !candidate.checkpointRestartAvailable);
+                  return (
+                    <label key={option.value}>
+                      <input
+                        checked={request.continuity === option.value}
+                        disabled={disabled}
+                        name="recovery-continuity"
+                        onChange={() =>
+                          setRequest((current) => ({
+                            ...current,
+                            continuity: option.value,
+                          }))
+                        }
+                        type="radio"
+                        value={option.value}
+                      />
+                      <span>
+                        <strong>{option.title}</strong>
+                        <small>
+                          {disabled && checkpointOption
+                            ? "Недоступно: прошивка не сохранила физический Ln."
+                            : option.detail}
+                        </small>
+                      </span>
+                    </label>
+                  );
+                })}
+              </fieldset>
+              <label className="recovery-safe-z">
+                <span>
+                  <strong>Safe Z</strong>
+                  <small>
+                    Не ниже {candidate.minimumSafeZMm?.toFixed(3) ?? "?"} mm
+                  </small>
+                </span>
+                <span>
                   <input
-                    checked={request[item.key]}
                     disabled={busy}
+                    min={candidate.minimumSafeZMm}
                     onChange={(event) =>
                       setRequest((current) => ({
                         ...current,
-                        [item.key]: event.target.checked,
+                        safeZMm: Number(event.target.value),
                       }))
                     }
-                    type="checkbox"
+                    step="0.1"
+                    type="number"
+                    value={request.safeZMm}
                   />
-                  <span aria-hidden="true"><Check size={13} /></span>
-                  <span>
-                    <strong>{item.title}</strong>
-                    <small>{item.detail}</small>
-                  </span>
-                </label>
-              ))}
+                  <code>mm</code>
+                </span>
+              </label>
+              <div className="recovery-checklist">
+                {checklist.map((item) => (
+                  <label key={item.key}>
+                    <input
+                      checked={request[item.key]}
+                      disabled={busy}
+                      onChange={(event) =>
+                        setRequest((current) => ({
+                          ...current,
+                          [item.key]: event.target.checked,
+                        }))
+                      }
+                      type="checkbox"
+                    />
+                    <span aria-hidden="true">
+                      <Check size={13} />
+                    </span>
+                    <span>
+                      <strong>{item.title}</strong>
+                      <small>{item.detail}</small>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="recovery-warning is-blocked">
+              <ShieldAlert aria-hidden="true" size={17} />
+              <p>
+                Сохранённый исходник или его fingerprint не прошёл проверку. Эта
+                запись остаётся только диагностикой и не может создать G-code.
+              </p>
             </div>
-          </>
-        ) : (
-          <div className="recovery-warning is-blocked">
-            <ShieldAlert aria-hidden="true" size={17} />
-            <p>
-              Без физического `Ln:` нельзя отличить выполненные движения от блоков,
-              которые GRBL только принял в очередь. Автоматический restart отключён.
-            </p>
-          </div>
-        )}
+          )}
 
-        {error && <p className="first-cut-error">{error}</p>}
+          {error && <p className="first-cut-error">{error}</p>}
+        </div>
         <footer>
           <button disabled={busy} onClick={() => void dismiss()} type="button">
             <X aria-hidden="true" size={14} />
@@ -253,7 +339,11 @@ export function ProgramRecoveryDialog({
               type="button"
             >
               <RotateCcw aria-hidden="true" size={15} />
-              {busy ? "Подготовка..." : "Создать recovery program"}
+              {busy
+                ? "Подготовка..."
+                : request.continuity === "motionPowerLostOrUnknown"
+                  ? "Создать полный restart"
+                  : "Создать recovery program"}
             </button>
           )}
         </footer>

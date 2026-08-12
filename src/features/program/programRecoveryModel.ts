@@ -5,7 +5,7 @@ import type {
 
 export type RecoveryConfirmationKey = Exclude<
   keyof ProgramRecoveryPreparationRequest,
-  "recoveryId" | "safeZMm"
+  "recoveryId" | "safeZMm" | "continuity"
 >;
 
 export const recoverySafeZDefault = (
@@ -17,8 +17,10 @@ export const emptyRecoveryPreparation = (
 ): ProgramRecoveryPreparationRequest => ({
   recoveryId: candidate.id,
   safeZMm: recoverySafeZDefault(candidate),
+  continuity: "motionPowerLostOrUnknown",
   machineReferenceRestored: false,
   workZeroRestored: false,
+  motionPowerRestored: false,
   restartPointInspected: false,
   pathClear: false,
   powerControlReachable: false,
@@ -30,11 +32,15 @@ export const canPrepareRecovery = (
   busy: boolean,
 ): boolean =>
   candidate.ready &&
+  (request.continuity === "motionPowerLostOrUnknown"
+    ? candidate.fullRestartAvailable
+    : candidate.checkpointRestartAvailable) &&
   !busy &&
   Number.isFinite(request.safeZMm) &&
   request.safeZMm >= (candidate.minimumSafeZMm ?? Number.POSITIVE_INFINITY) &&
   request.machineReferenceRestored &&
   request.workZeroRestored &&
+  request.motionPowerRestored &&
   request.restartPointInspected &&
   request.pathClear &&
   request.powerControlReachable;

@@ -13,7 +13,7 @@ use millo_gcode::{
     parse_program_with_options,
 };
 use millo_run::{ProgramRunIntent, program_fingerprint};
-use millo_sender::{SenderMode, SenderSnapshot, SenderState};
+use millo_sender::{SenderFailure, SenderFailureKind, SenderMode, SenderSnapshot, SenderState};
 use millo_storage::{backup_path, write_atomically};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -57,6 +57,8 @@ struct RecoveryRecord {
     total_lines: usize,
     acknowledged_lines: usize,
     executing_source_line: Option<usize>,
+    #[serde(default)]
+    failure: Option<SenderFailure>,
     start_machine_position: Option<Position>,
     start_work_position: Option<Position>,
     start_work_coordinate_offset: Option<Position>,
@@ -85,8 +87,32 @@ pub struct ProgramRecoveryCandidate {
     pub restart_source_line: Option<usize>,
     pub restart_position: Option<ProgramPoint>,
     pub minimum_safe_z_mm: Option<f64>,
+    pub checkpoint_restart_available: bool,
+    pub full_restart_available: bool,
+    pub interruption: RecoveryInterruptionKind,
     pub ready: bool,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecoveryContinuity {
+    ControllerInterrupted,
+    HostInterruptedMachinePowered,
+    MotionPowerLostOrUnknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RecoveryInterruptionKind {
+    HostStopped,
+    ControllerDisconnected,
+    ControllerReset,
+    ControllerUnresponsive,
+    ControllerAlarm,
+    ProgramRejected,
+    OperatorStopped,
+    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -94,11 +120,12 @@ pub struct ProgramRecoveryCandidate {
 pub struct ProgramRecoveryPackage {
     pub recovery_id: u64,
     pub original_source_name: String,
-    pub interrupted_source_line: usize,
+    pub interrupted_source_line: Option<usize>,
     pub restart_source_line: usize,
     pub restart_position: ProgramPoint,
     pub clearance_z_mm: f64,
     pub repeated_source_lines: usize,
+    pub continuity: RecoveryContinuity,
     pub intent: ProgramRunIntent,
     pub execution_options: ProgramExecutionOptions,
     pub request: ProgramParseRequest,
@@ -237,6 +264,7 @@ impl ProgramRecoveryStore {
             total_lines: snapshot.total_lines,
             acknowledged_lines: snapshot.acknowledged_lines,
             executing_source_line: snapshot.executing_source_line,
+            failure: snapshot.failure.clone(),
             start_machine_position: seed.start_machine_position,
             start_work_position: seed.start_work_position,
             start_work_coordinate_offset: seed.start_work_coordinate_offset,
@@ -292,6 +320,7 @@ impl ProgramRecoveryStore {
         record.updated_at_unix_ms = unix_millis(now);
         record.total_lines = snapshot.total_lines;
         record.acknowledged_lines = snapshot.acknowledged_lines;
+        record.failure = snapshot.failure.clone();
         if snapshot.executing_source_line.is_some() {
             record.executing_source_line = snapshot.executing_source_line;
         }
@@ -331,6 +360,7 @@ impl ProgramRecoveryStore {
         &mut self,
         recovery_id: u64,
         safe_z_mm: f64,
+        continuity: RecoveryContinuity,
     ) -> Result<ProgramRecoveryPackage, ProgramRecoveryError> {
         let record = self.record.as_ref().ok_or(ProgramRecoveryError::Missing)?;
         if record.id != recovery_id {
@@ -339,14 +369,21 @@ impl ProgramRecoveryStore {
                 actual: record.id,
             });
         }
-        let interrupted = record
-            .executing_source_line
-            .ok_or(ProgramRecoveryError::ExecutingLineUnavailable)?;
         let program = parse_record(record)?;
         if program_fingerprint(&program) != record.program_fingerprint {
             return Err(ProgramRecoveryError::ProgramChanged);
         }
-        let anchor = recovery_anchor(&program, interrupted)?;
+        let checkpoint_restart =
+            !matches!(continuity, RecoveryContinuity::MotionPowerLostOrUnknown);
+        let interrupted = record.executing_source_line;
+        let anchor = if checkpoint_restart {
+            recovery_anchor(
+                &program,
+                interrupted.ok_or(ProgramRecoveryError::ExecutingLineUnavailable)?,
+            )?
+        } else {
+            first_recovery_anchor(&program)?
+        };
         let minimum_safe_z = program
             .summary
             .bounds
@@ -363,7 +400,11 @@ impl ProgramRecoveryStore {
         }
         let request = ProgramParseRequest {
             source_name: recovery_source_name(record.id, &record.source_name),
-            source: build_recovery_source(record, &anchor, safe_z_mm),
+            source: if checkpoint_restart {
+                build_recovery_source(record, &anchor, safe_z_mm)
+            } else {
+                build_full_restart_source(record, &anchor, safe_z_mm)
+            },
         };
         let prepared_program = parse_program_with_options(
             request.clone(),
@@ -379,7 +420,10 @@ impl ProgramRecoveryStore {
             restart_source_line: anchor.source_line,
             restart_position: anchor.checkpoint.position,
             clearance_z_mm: safe_z_mm,
-            repeated_source_lines: interrupted.saturating_sub(anchor.source_line),
+            repeated_source_lines: interrupted
+                .map(|line| line.saturating_sub(anchor.source_line))
+                .unwrap_or(0),
+            continuity,
             intent: record.intent,
             execution_options: record.execution_options,
             request,
@@ -474,7 +518,13 @@ fn candidate_for_record(
     if record.state == SenderState::Completed {
         return Ok(None);
     }
-    let base = |ready, detail, restart: Option<RecoveryAnchor>, minimum_safe_z_mm: Option<f64>| {
+    let interruption = recovery_interruption(record);
+    let base = |ready,
+                detail,
+                restart: Option<RecoveryAnchor>,
+                minimum_safe_z_mm: Option<f64>,
+                checkpoint_restart_available,
+                full_restart_available| {
         ProgramRecoveryCandidate {
             id: record.id,
             source_name: record.source_name.clone(),
@@ -487,18 +537,12 @@ fn candidate_for_record(
             restart_source_line: restart.as_ref().map(|anchor| anchor.source_line),
             restart_position: restart.map(|anchor| anchor.checkpoint.position),
             minimum_safe_z_mm,
+            checkpoint_restart_available,
+            full_restart_available,
+            interruption,
             ready,
             detail,
         }
-    };
-    let Some(executing) = record.executing_source_line else {
-        return Ok(Some(base(
-            false,
-            "GRBL did not expose Ln execution telemetry; automatic line recovery is blocked"
-                .to_owned(),
-            None,
-            None,
-        )));
     };
     let program = parse_record(record)?;
     if program_fingerprint(&program) != record.program_fingerprint {
@@ -507,25 +551,83 @@ fn candidate_for_record(
             "Stored source fingerprint mismatch; recovery is blocked".to_owned(),
             None,
             None,
+            false,
+            false,
         )));
     }
-    let anchor = recovery_anchor(&program, executing)?;
+    let first_anchor = first_recovery_anchor(&program)?;
     let minimum_safe_z_mm = program
         .summary
         .bounds
         .map(|bounds| bounds.max.z)
-        .unwrap_or(anchor.checkpoint.position.z)
-        .max(anchor.checkpoint.position.z);
-    Ok(Some(base(
-        true,
-        format!(
-            "Restart from source line {} replays {} line(s) before the interrupted line",
-            anchor.source_line,
-            executing.saturating_sub(anchor.source_line)
-        ),
-        Some(anchor),
-        Some(minimum_safe_z_mm),
-    )))
+        .unwrap_or(first_anchor.checkpoint.position.z)
+        .max(first_anchor.checkpoint.position.z);
+    match record.executing_source_line {
+        Some(executing) => {
+            let anchor = recovery_anchor(&program, executing)?;
+            Ok(Some(base(
+                true,
+                format!(
+                    "Checkpoint restart from source line {} replays {} line(s); full restart remains available",
+                    anchor.source_line,
+                    executing.saturating_sub(anchor.source_line)
+                ),
+                Some(anchor),
+                Some(minimum_safe_z_mm),
+                true,
+                true,
+            )))
+        }
+        None => Ok(Some(base(
+            true,
+            "GRBL did not expose physical Ln telemetry; only a full program restart is available"
+                .to_owned(),
+            Some(first_anchor),
+            Some(minimum_safe_z_mm),
+            false,
+            true,
+        ))),
+    }
+}
+
+fn recovery_interruption(record: &RecoveryRecord) -> RecoveryInterruptionKind {
+    if matches!(
+        record.state,
+        SenderState::Ready
+            | SenderState::Running
+            | SenderState::Paused
+            | SenderState::ToolChange
+            | SenderState::Draining
+    ) {
+        return RecoveryInterruptionKind::HostStopped;
+    }
+    if record.state == SenderState::Cancelled {
+        return RecoveryInterruptionKind::OperatorStopped;
+    }
+    match record.failure.as_ref().map(|failure| failure.kind) {
+        Some(SenderFailureKind::Disconnected | SenderFailureKind::Transport) => {
+            RecoveryInterruptionKind::ControllerDisconnected
+        }
+        Some(SenderFailureKind::Reset) => RecoveryInterruptionKind::ControllerReset,
+        Some(SenderFailureKind::Timeout) => RecoveryInterruptionKind::ControllerUnresponsive,
+        Some(SenderFailureKind::Alarm) => RecoveryInterruptionKind::ControllerAlarm,
+        Some(SenderFailureKind::GrblError) => RecoveryInterruptionKind::ProgramRejected,
+        Some(SenderFailureKind::UnsafeState | SenderFailureKind::Internal) | None => {
+            RecoveryInterruptionKind::Unknown
+        }
+    }
+}
+
+fn first_recovery_anchor(program: &GcodeProgram) -> Result<RecoveryAnchor, ProgramRecoveryError> {
+    let checkpoint = program
+        .execution_checkpoints
+        .first()
+        .copied()
+        .ok_or(ProgramRecoveryError::CheckpointUnavailable)?;
+    Ok(RecoveryAnchor {
+        source_line: checkpoint.source_line,
+        checkpoint,
+    })
 }
 
 fn recovery_anchor(
@@ -607,6 +709,26 @@ fn build_recovery_source(
             .skip(anchor.source_line.saturating_sub(1))
             .map(str::to_owned),
     );
+    lines.join("\n")
+}
+
+fn build_full_restart_source(
+    record: &RecoveryRecord,
+    anchor: &RecoveryAnchor,
+    safe_z_mm: f64,
+) -> String {
+    let mut lines = vec![
+        format!(
+            "(Millo full recovery restart {} for {})",
+            record.id, record.source_name
+        ),
+        "M5".to_owned(),
+        "M9".to_owned(),
+        "G21 G90 G94".to_owned(),
+        wcs_word(anchor.checkpoint.work_coordinate_system).to_owned(),
+        format!("G0 Z{safe_z_mm:.4}"),
+    ];
+    lines.extend(record.source.lines().map(str::to_owned));
     lines.join("\n")
 }
 
@@ -831,10 +953,16 @@ mod tests {
             .unwrap();
 
         assert!(candidate.ready);
+        assert_eq!(
+            candidate.interruption,
+            RecoveryInterruptionKind::HostStopped
+        );
         assert_eq!(candidate.executing_source_line, Some(9));
         assert_eq!(candidate.restart_source_line, Some(7));
         assert_eq!(candidate.minimum_safe_z_mm, Some(5.0));
-        let package = store.prepare(candidate.id, 8.0).unwrap();
+        let package = store
+            .prepare(candidate.id, 8.0, RecoveryContinuity::ControllerInterrupted)
+            .unwrap();
         assert_eq!(package.restart_source_line, 7);
         assert_eq!(package.restart_position.z, 5.0);
         let recovery_lines = package.request.source.lines().collect::<Vec<_>>();
@@ -853,10 +981,20 @@ mod tests {
         assert!(package.request.source.contains("G21 G90 G91.1 G94 G17 G0"));
         assert!(package.request.source.ends_with("G1 X30\nM30"));
         assert!(!package.request.source.contains("G1 X10"));
+
+        let full_restart = store
+            .prepare(
+                candidate.id,
+                8.0,
+                RecoveryContinuity::MotionPowerLostOrUnknown,
+            )
+            .unwrap();
+        assert!(full_restart.request.source.contains("G1 X10"));
+        assert!(!full_restart.request.source.contains("G0 X10.0000 Y0.0000"));
     }
 
     #[test]
-    fn blocks_recovery_without_ln_and_rejects_unsafe_clearance() {
+    fn missing_ln_forces_full_restart_and_unsafe_clearance_stays_blocked() {
         let mut snapshot = running_snapshot();
         snapshot.executing_source_line = None;
         let mut store = ProgramRecoveryStore::in_memory();
@@ -864,11 +1002,27 @@ mod tests {
         let candidate = store
             .arm(seed(&snapshot), &snapshot, wall, Instant::now())
             .unwrap();
-        assert!(!candidate.ready);
+        assert!(candidate.ready);
+        assert!(!candidate.checkpoint_restart_available);
+        assert!(candidate.full_restart_available);
         assert!(matches!(
-            store.prepare(candidate.id, 8.0),
+            store.prepare(candidate.id, 8.0, RecoveryContinuity::ControllerInterrupted),
             Err(ProgramRecoveryError::ExecutingLineUnavailable)
         ));
+        let full_restart = store
+            .prepare(
+                candidate.id,
+                8.0,
+                RecoveryContinuity::MotionPowerLostOrUnknown,
+            )
+            .unwrap();
+        assert_eq!(
+            full_restart.continuity,
+            RecoveryContinuity::MotionPowerLostOrUnknown
+        );
+        assert_eq!(full_restart.interrupted_source_line, None);
+        assert!(full_restart.request.source.contains("G0 Z8.0000"));
+        assert!(full_restart.request.source.ends_with(SOURCE));
 
         snapshot.executing_source_line = Some(9);
         let mut clearance_store = ProgramRecoveryStore::in_memory();
@@ -876,7 +1030,7 @@ mod tests {
             .arm(seed(&snapshot), &snapshot, wall, Instant::now())
             .unwrap();
         assert!(matches!(
-            clearance_store.prepare(candidate.id, 4.0),
+            clearance_store.prepare(candidate.id, 4.0, RecoveryContinuity::ControllerInterrupted),
             Err(ProgramRecoveryError::InvalidSafeZ { .. })
         ));
     }
@@ -945,6 +1099,10 @@ mod tests {
             .unwrap();
         let mut failed = snapshot;
         failed.state = SenderState::Failed;
+        failed.failure = Some(SenderFailure::new(
+            SenderFailureKind::Disconnected,
+            "controller power disappeared",
+        ));
         store
             .observe(
                 &failed,
@@ -956,6 +1114,10 @@ mod tests {
         let offered = store.candidate().unwrap().unwrap();
         assert_eq!(offered.id, candidate.id);
         assert!(offered.ready);
+        assert_eq!(
+            offered.interruption,
+            RecoveryInterruptionKind::ControllerDisconnected
+        );
         assert!(store.machine_matches(candidate.id, "usb:1234:5678:serial"));
         assert!(!store.machine_matches(candidate.id, "usb:ffff:ffff:other"));
     }
@@ -1019,7 +1181,9 @@ mod tests {
             Err(ProgramRecoveryError::OutstandingRecovery { .. })
         ));
 
-        let package = store.prepare(candidate.id, 8.0).unwrap();
+        let package = store
+            .prepare(candidate.id, 8.0, RecoveryContinuity::ControllerInterrupted)
+            .unwrap();
         let prepared_program =
             parse_program_with_options(package.request.clone(), ProgramParseOptions::default())
                 .unwrap();
@@ -1059,7 +1223,9 @@ mod tests {
             .arm(seed(&snapshot), &snapshot, wall, Instant::now())
             .unwrap();
         store.commit_arm(parent.id).unwrap();
-        let package = store.prepare(parent.id, 8.0).unwrap();
+        let package = store
+            .prepare(parent.id, 8.0, RecoveryContinuity::ControllerInterrupted)
+            .unwrap();
         let prepared_program =
             parse_program_with_options(package.request.clone(), ProgramParseOptions::default())
                 .unwrap();
@@ -1097,7 +1263,9 @@ mod tests {
             .arm(seed(&snapshot), &snapshot, wall, Instant::now())
             .unwrap();
         store.commit_arm(parent.id).unwrap();
-        let package = store.prepare(parent.id, 8.0).unwrap();
+        let package = store
+            .prepare(parent.id, 8.0, RecoveryContinuity::ControllerInterrupted)
+            .unwrap();
         let prepared_program =
             parse_program_with_options(package.request.clone(), ProgramParseOptions::default())
                 .unwrap();

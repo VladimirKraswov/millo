@@ -604,7 +604,11 @@ export function ProgramWorkspace({
             </div>
             <div>
               <dt>Restart</dt>
-              <dd>{recoveryCandidate.restartSourceLine ?? "blocked"}</dd>
+              <dd>
+                {recoveryCandidate.checkpointRestartAvailable
+                  ? recoveryCandidate.restartSourceLine
+                  : "полный"}
+              </dd>
             </div>
           </dl>
           <button onClick={() => setRecoveryOpen(true)} type="button">

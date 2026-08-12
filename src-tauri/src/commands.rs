@@ -26,7 +26,8 @@ use millo_profile::{
     MachineProfileStore,
 };
 use millo_recovery::{
-    ProgramRecoveryCandidate, ProgramRecoveryPackage, ProgramRecoveryStore, RecoverySeed,
+    ProgramRecoveryCandidate, ProgramRecoveryPackage, ProgramRecoveryStore, RecoveryContinuity,
+    RecoverySeed,
 };
 use millo_run::{
     FirstCutConfirmation, FirstCutPreparation, ProgramRunIntent, RunPreflightReport,
@@ -320,8 +321,10 @@ pub async fn sender_run_history(
 pub struct ProgramRecoveryPreparationRequest {
     pub recovery_id: u64,
     pub safe_z_mm: f64,
+    pub continuity: RecoveryContinuity,
     pub machine_reference_restored: bool,
     pub work_zero_restored: bool,
+    pub motion_power_restored: bool,
     pub restart_point_inspected: bool,
     pub path_clear: bool,
     pub power_control_reachable: bool,
@@ -333,6 +336,7 @@ impl ProgramRecoveryPreparationRequest {
             (!self.machine_reference_restored)
                 .then_some("machine reference restored after power loss"),
             (!self.work_zero_restored).then_some("work zero restored"),
+            (!self.motion_power_restored).then_some("motion power and physical position verified"),
             (!self.restart_point_inspected).then_some("restart point inspected in preview"),
             (!self.path_clear).then_some("clearance route and repeated path are clear"),
             (!self.power_control_reachable).then_some("machine power control reachable"),
@@ -411,7 +415,7 @@ pub async fn prepare_program_recovery(
             return Err("interrupted job belongs to a different controller".to_owned());
         }
         recovery
-            .prepare(request.recovery_id, request.safe_z_mm)
+            .prepare(request.recovery_id, request.safe_z_mm, request.continuity)
             .map_err(|error| error.to_string())
     })
     .await
@@ -1866,17 +1870,20 @@ mod tests {
         let incomplete = ProgramRecoveryPreparationRequest {
             recovery_id: 1,
             safe_z_mm: 5.0,
+            continuity: RecoveryContinuity::MotionPowerLostOrUnknown,
             machine_reference_restored: false,
             work_zero_restored: false,
+            motion_power_restored: false,
             restart_point_inspected: false,
             path_clear: false,
             power_control_reachable: false,
         };
-        assert_eq!(incomplete.missing().len(), 5);
+        assert_eq!(incomplete.missing().len(), 6);
         assert!(
             ProgramRecoveryPreparationRequest {
                 machine_reference_restored: true,
                 work_zero_restored: true,
+                motion_power_restored: true,
                 restart_point_inspected: true,
                 path_clear: true,
                 power_control_reachable: true,

@@ -27,6 +27,13 @@ until they are read from the controller or measured before cutting.
   may preserve source/modal/physical-line evidence and prepare a conservative
   restart program, but the operator must manually re-establish axis reference
   and the active G54-G59 work zero before that program can be generated.
+- The controller may remain powered from USB while the motor drivers lose their
+  separate supply. GRBL's internal `MPos` and `Ln` still advance in that case,
+  so they are not proof of physical motion. Until a power/position sensor is
+  wired, the operator must select "motion power lost or unknown" and use a full
+  restart after checking physical position. If GRBL stays online for the entire
+  outage, the logical run may complete and no automatic interruption can be
+  offered; the operator must inspect and re-run the original file.
 - Approved hardware interactions are the read-only Inspector, realtime Feed
   Hold, challenge-confirmed Soft Reset, guarded single-axis step jog, and typed
   per-axis work zero while Idle. A serial real-run preflight may additionally
@@ -37,10 +44,14 @@ until they are read from the controller or measured before cutting.
   after that lease is atomically consumed.
 - The sender covers terminal responses, program pause/end, Hold/resume, reset,
   polling failure, and link loss. Physical completion requires a fresh `Idle`.
+  A stream/transport/status/realtime I/O failure during Air/Cut closes the
+  controller session and requires manual reconnect; the failed FIFO is never
+  resumed.
 - Air/Cut Start persists a machine-bound recovery record before releasing the
-  first line. A restart is offered only when GRBL supplied `Ln:` execution
-  telemetry; it rewinds and repeats work from an earlier clearance point and
-  still requires preview, Check, preflight, and first-cut authorization.
+  first line. A checkpoint restart is offered only when GRBL supplied `Ln:`
+  execution telemetry and electrical continuity is known. Otherwise only a full
+  restart from the exact source is offered. Both still require preview, Check,
+  preflight, and first-cut authorization.
 - Serial Check run may send a parser-approved program through GRBL `$C` with no
   motion. It uses one outstanding line and verifies the return to `Idle` on
   every terminal path; it is not permission for a physical Air or Cutting run.

@@ -195,14 +195,26 @@ to `active-program-recovery.json` with file and directory `fsync`; only then may
 the actor release the first G-code block. While running, Millo persists GRBL's
 optional physical `Ln:` evidence independently from buffered `ok` responses.
 After a crash, link loss, or power failure, `millo-recovery` verifies the source
-and controller, rewinds to a preceding clearance rapid, and creates a new
-M5/M9-prefixed recovery program with a reviewed Safe Z approach and restored
-WCS/modal/tool/spindle state. It never moves automatically: the generated file
-must pass preview, GRBL Check, preflight, and a new one-use authorization.
-Firmware without `Ln:` remains fail-closed because accepted queue depth cannot
-prove which motion physically executed. An unresolved record also blocks an
-unrelated physical job; it can be replaced only by the exact recovery program
-prepared from that record or by an explicit dismissal.
+and controller and asks which electrical path remained alive. A proven host-only
+or controller interruption may rewind to a preceding clearance rapid using the
+last physical `Ln:`. Loss of motion power, uncertain continuity, or firmware
+without `Ln:` permits only a full restart from the beginning after XYZ reference
+and work zero are restored. Both paths create a new M5/M9-prefixed program with
+a reviewed Safe Z; neither moves automatically. The generated file must pass
+preview, GRBL Check, preflight, and a new one-use authorization.
+
+An active physical sender treats the first stream, transport, status, or
+realtime I/O failure as a terminal interruption, closes the controller session,
+and requires an explicit reconnect. It cannot silently resume after USB returns.
+A USB-powered GRBL can,
+however, keep reporting internal motion while separate motor power is absent;
+without a wired power/position sensor software cannot detect that condition.
+Such a run may finish logically without moving, so automatic recovery cannot be
+offered until a power/position signal is wired; the original file must then be
+re-run after inspection. For detected interruptions, the recovery dialog
+defaults to the full-restart policy. An unresolved record blocks an unrelated
+physical job and can be replaced only by its exact prepared recovery program or
+by explicit dismissal.
 
 A separate serial-only Check run validates an approved file through GRBL's
 typed `$C` mode without executing motion. The actor enters only from fresh

@@ -746,11 +746,13 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                         && actor.controller.snapshot().connection == ConnectionState::Connected
                     {
                         if let Err(error) = actor.controller.request_interleaved_status().await {
-                            fail_active_sender(
+                            fail_and_quarantine_physical_sender(
+                                &mut actor.controller,
                                 &mut actor.sender,
-                                format!("controller status request failed during program run: {error}"),
+                                &error,
+                                "controller status request failed during program run",
                                 &actor.sender_snapshots,
-                            );
+                            ).await;
                         }
                     } else {
                         let lifecycle = actor.controller.lifecycle_tick().await;
@@ -763,11 +765,15 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                                 &mut actor.sender,
                                 &actor.sender_snapshots,
                             ).await,
-                            Err(error) => fail_active_sender(
-                                &mut actor.sender,
-                                format!("controller polling failed during program run: {error}"),
-                                &actor.sender_snapshots,
-                            ),
+                            Err(error) => {
+                                fail_and_quarantine_physical_sender(
+                                    &mut actor.controller,
+                                    &mut actor.sender,
+                                    &error,
+                                    "controller polling failed during program run",
+                                    &actor.sender_snapshots,
+                                ).await
+                            }
                         }
                     }
                     publish(&actor.snapshots, &actor.controller);
@@ -907,34 +913,35 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         }
         Request::RefreshStatus { response } => {
             let interleaved = sender.has_in_flight();
-            let result = if interleaved {
+            let controller_result = if interleaved {
                 controller
                     .request_interleaved_status()
                     .await
                     .map(|()| controller.snapshot())
-                    .map_err(ArbiterError::from)
             } else {
-                controller
-                    .refresh_status()
-                    .await
-                    .map_err(ArbiterError::from)
+                controller.refresh_status().await
             };
             safety.observe(&controller.snapshot(), Instant::now());
             first_cut.observe(&controller.snapshot(), Instant::now());
             program_check.observe(&controller.snapshot(), Instant::now());
-            match &result {
+            match &controller_result {
                 Ok(_) if !interleaved => {
                     reconcile_physical_sender(controller, sender, sender_snapshots).await
                 }
                 Ok(_) => {}
-                Err(error) => fail_active_sender(
-                    sender,
-                    format!("controller status failed during program run: {error}"),
-                    sender_snapshots,
-                ),
+                Err(error) => {
+                    fail_and_quarantine_physical_sender(
+                        controller,
+                        sender,
+                        error,
+                        "controller status failed during program run",
+                        sender_snapshots,
+                    )
+                    .await
+                }
             }
             publish(snapshots, controller);
-            let _ = response.send(result);
+            let _ = response.send(controller_result.map_err(ArbiterError::from));
         }
         Request::AcknowledgeReset { response } => {
             invalidate_authorizations(safety, first_cut);
@@ -1095,32 +1102,44 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             if command == RealtimeCommand::SoftReset {
                 program_check.invalidate();
                 *pending_program_check = None;
-                cancel_active_sender(sender, sender_snapshots);
             }
-            let result = if command == RealtimeCommand::Status && sender.has_in_flight() {
+            let controller_result = if command == RealtimeCommand::Status && sender.has_in_flight()
+            {
                 controller
                     .request_interleaved_status()
                     .await
                     .map(|()| controller.snapshot())
-                    .map_err(ArbiterError::from)
             } else {
-                controller
-                    .send_realtime(command)
-                    .await
-                    .map_err(ArbiterError::from)
+                controller.send_realtime(command).await
             };
-            if result.is_ok()
-                && command == RealtimeCommand::FeedHold
-                && matches!(
-                    sender.snapshot().state,
-                    SenderState::Running | SenderState::Draining
-                )
-            {
-                let _ = sender.pause();
-                publish_sender(sender_snapshots, sender);
+            match &controller_result {
+                Ok(_) if command == RealtimeCommand::SoftReset => {
+                    cancel_active_sender(sender, sender_snapshots);
+                }
+                Ok(_)
+                    if command == RealtimeCommand::FeedHold
+                        && matches!(
+                            sender.snapshot().state,
+                            SenderState::Running | SenderState::Draining
+                        ) =>
+                {
+                    let _ = sender.pause();
+                    publish_sender(sender_snapshots, sender);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    fail_and_quarantine_physical_sender(
+                        controller,
+                        sender,
+                        error,
+                        "realtime command failed during program run",
+                        sender_snapshots,
+                    )
+                    .await;
+                }
             }
             publish(snapshots, controller);
-            let _ = response.send(result);
+            let _ = response.send(controller_result.map_err(ArbiterError::from));
         }
         Request::BeginSoftReset { response } => {
             invalidate_authorizations(safety, first_cut);
@@ -1143,19 +1162,22 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                     first_cut.invalidate();
                     program_check.invalidate();
                     *pending_program_check = None;
-                    let result = controller
-                        .send_realtime(RealtimeCommand::SoftReset)
-                        .await
-                        .map_err(ArbiterError::from);
-                    match &result {
+                    let controller_result =
+                        controller.send_realtime(RealtimeCommand::SoftReset).await;
+                    match &controller_result {
                         Ok(_) => cancel_active_sender(sender, sender_snapshots),
-                        Err(error) => fail_active_sender(
-                            sender,
-                            format!("soft reset could not be delivered: {error}"),
-                            sender_snapshots,
-                        ),
+                        Err(error) => {
+                            fail_and_quarantine_physical_sender(
+                                controller,
+                                sender,
+                                error,
+                                "soft reset could not be delivered",
+                                sender_snapshots,
+                            )
+                            .await
+                        }
                     }
-                    result
+                    controller_result.map_err(ArbiterError::from)
                 }
                 Err(error) => Err(error),
             };
@@ -1611,6 +1633,9 @@ async fn reconcile_physical_sender(
                                     controller_sender_failure(&error, "program-end write failed"),
                                 );
                                 let _ = controller.abort_program_stream().await;
+                                if controller_failure_requires_manual_reconnect(&error) {
+                                    let _ = controller.disconnect().await;
+                                }
                             }
                         }
                         Err(error) => {
@@ -1631,11 +1656,14 @@ async fn reconcile_physical_sender(
     publish_sender(sender_snapshots, sender);
 }
 
-fn fail_active_sender(
+async fn fail_and_quarantine_physical_sender(
+    controller: &mut Controller<BoxedTransport>,
     sender: &mut Sender,
-    error: String,
+    error: &ControllerError,
+    context: &str,
     sender_snapshots: &watch::Sender<SenderSnapshot>,
 ) {
+    let physical_run = physical_sender_active(sender);
     if matches!(
         sender.snapshot().state,
         SenderState::Running
@@ -1643,9 +1671,35 @@ fn fail_active_sender(
             | SenderState::ToolChange
             | SenderState::Draining
     ) {
-        sender.fail(error);
+        sender.fail_with(controller_sender_failure(error, context));
         publish_sender(sender_snapshots, sender);
     }
+    if physical_run && controller_failure_requires_manual_reconnect(error) {
+        let _ = controller.disconnect().await;
+    }
+}
+
+fn physical_sender_active(sender: &Sender) -> bool {
+    matches!(
+        sender.snapshot().mode,
+        Some(millo_sender::SenderMode::AirRun | millo_sender::SenderMode::CutRun)
+    ) && matches!(
+        sender.snapshot().state,
+        SenderState::Running
+            | SenderState::Paused
+            | SenderState::ToolChange
+            | SenderState::Draining
+    )
+}
+
+fn controller_failure_requires_manual_reconnect(error: &ControllerError) -> bool {
+    matches!(
+        error,
+        ControllerError::CommandTimeout { .. }
+            | ControllerError::StatusTimeout { .. }
+            | ControllerError::Transport(_)
+            | ControllerError::NotReady(_)
+    )
 }
 
 fn controller_sender_failure(error: &ControllerError, context: &str) -> SenderFailure {
@@ -1722,6 +1776,9 @@ async fn execute_sender_step(
             );
             if physical_run {
                 let _ = controller.abort_program_stream().await;
+                if controller_failure_requires_manual_reconnect(&error) {
+                    let _ = controller.disconnect().await;
+                }
             }
             settle_program_check(controller, sender, program_check, pending_program_check).await;
             publish(snapshots, controller);
@@ -1760,6 +1817,9 @@ async fn execute_sender_step(
                 let _ = sender.acknowledge_failure(failure);
                 if physical_run {
                     let _ = controller.abort_program_stream().await;
+                    if controller_failure_requires_manual_reconnect(&error) {
+                        let _ = controller.disconnect().await;
+                    }
                 }
             }
         }
@@ -2374,12 +2434,22 @@ mod tests {
         millo_mock::MockControl,
         impl Future<Output = ()> + Send + 'static,
     ) {
+        serial_preflight_arbiter_with_poll(Duration::from_secs(60))
+    }
+
+    fn serial_preflight_arbiter_with_poll(
+        poll_interval: Duration,
+    ) -> (
+        CommandArbiter,
+        millo_mock::MockControl,
+        impl Future<Output = ()> + Send + 'static,
+    ) {
         let transport = MockTransport::default();
         let control = transport.control();
         let (arbiter, worker) = CommandArbiter::new_with_execution_target(
             Box::new(transport),
             ControllerConfig {
-                poll_interval: Duration::from_secs(60),
+                poll_interval,
                 status_timeout: Duration::from_millis(20),
                 command_timeout: Duration::from_millis(50),
                 failures_before_recovery: 2,
@@ -3864,6 +3934,7 @@ mod tests {
 
         let failed = arbiter.sender_snapshot();
         assert_eq!(failed.state, SenderState::Failed);
+        assert_eq!(arbiter.snapshot().connection, ConnectionState::Disconnected);
         assert!(
             failed
                 .last_error
@@ -4041,6 +4112,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn realtime_write_failure_quarantines_a_physical_sender() {
+        let source = "G21 G90 G94\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        control.queue_program_delay(20);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        tokio::time::sleep(Duration::from_millis(15)).await;
+        control.drop_link();
+
+        let error = arbiter.feed_hold().await.unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArbiterError::Controller(ControllerError::Transport(TransportError::NotConnected))
+        ));
+        let failed = arbiter.sender_snapshot();
+        assert_eq!(failed.state, SenderState::Failed);
+        assert_eq!(
+            failed.failure.as_ref().map(|failure| failure.kind),
+            Some(SenderFailureKind::Disconnected)
+        );
+        assert_eq!(arbiter.snapshot().connection, ConnectionState::Disconnected);
+        let writes_after_failure = control.writes();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(control.writes(), writes_after_failure);
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn physical_sender_parses_interleaved_status_while_waiting_for_ok() {
         let transport = MockTransport::default();
         let control = transport.control();
@@ -4110,7 +4211,8 @@ mod tests {
     #[tokio::test]
     async fn serial_fixture_fails_closed_on_link_drop_during_a_program_line() {
         let source = "G21 G90 G94\nG1 X2 F20";
-        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let (arbiter, control, worker) =
+            serial_preflight_arbiter_with_poll(Duration::from_millis(5));
         control.queue_program_ok();
         control.queue_program_ok();
         control.queue_program_disconnect();
@@ -4124,7 +4226,19 @@ mod tests {
         assert_eq!(failure.kind, SenderFailureKind::Disconnected);
         assert_eq!(failure.source_line, Some(1));
         assert_eq!(failure.command.as_deref(), Some("G21 G90 G94"));
-        assert_eq!(arbiter.snapshot().consecutive_failures, 1);
+        assert_eq!(arbiter.snapshot().connection, ConnectionState::Disconnected);
+        let writes_after_failure = control.writes();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(control.writes(), writes_after_failure);
+
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+        assert_eq!(arbiter.sender_snapshot().state, SenderState::Failed);
+        assert!(
+            !control.writes()[writes_after_failure.len()..]
+                .iter()
+                .any(|write| write.starts_with(b"N"))
+        );
         task.abort();
     }
 

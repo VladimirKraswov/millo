@@ -3,6 +3,21 @@ import type { SenderState } from "./dryRun";
 import type { ProgramParseRequest } from "./program";
 import type { ProgramExecutionOptions, ProgramRunIntent } from "./realRun";
 
+export type RecoveryContinuity =
+  | "controllerInterrupted"
+  | "hostInterruptedMachinePowered"
+  | "motionPowerLostOrUnknown";
+
+export type RecoveryInterruptionKind =
+  | "hostStopped"
+  | "controllerDisconnected"
+  | "controllerReset"
+  | "controllerUnresponsive"
+  | "controllerAlarm"
+  | "programRejected"
+  | "operatorStopped"
+  | "unknown";
+
 export interface ProgramRecoveryCandidate {
   readonly id: number;
   readonly sourceName: string;
@@ -15,6 +30,9 @@ export interface ProgramRecoveryCandidate {
   readonly restartSourceLine?: number;
   readonly restartPosition?: Position;
   readonly minimumSafeZMm?: number;
+  readonly checkpointRestartAvailable: boolean;
+  readonly fullRestartAvailable: boolean;
+  readonly interruption: RecoveryInterruptionKind;
   readonly ready: boolean;
   readonly detail: string;
 }
@@ -22,8 +40,10 @@ export interface ProgramRecoveryCandidate {
 export interface ProgramRecoveryPreparationRequest {
   readonly recoveryId: number;
   readonly safeZMm: number;
+  readonly continuity: RecoveryContinuity;
   readonly machineReferenceRestored: boolean;
   readonly workZeroRestored: boolean;
+  readonly motionPowerRestored: boolean;
   readonly restartPointInspected: boolean;
   readonly pathClear: boolean;
   readonly powerControlReachable: boolean;
@@ -32,11 +52,12 @@ export interface ProgramRecoveryPreparationRequest {
 export interface ProgramRecoveryPackage {
   readonly recoveryId: number;
   readonly originalSourceName: string;
-  readonly interruptedSourceLine: number;
+  readonly interruptedSourceLine?: number;
   readonly restartSourceLine: number;
   readonly restartPosition: Position;
   readonly clearanceZMm: number;
   readonly repeatedSourceLines: number;
+  readonly continuity: RecoveryContinuity;
   readonly intent: ProgramRunIntent;
   readonly executionOptions: ProgramExecutionOptions;
   readonly request: ProgramParseRequest;

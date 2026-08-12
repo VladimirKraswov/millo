@@ -80,6 +80,10 @@ impl MockControl {
             .push_back(VecDeque::from([MockRead::Disconnect]));
     }
 
+    pub fn drop_link(&self) {
+        self.lock().connected = false;
+    }
+
     pub fn queue_query_error(&self, code: u16) {
         self.lock()
             .planned_queries

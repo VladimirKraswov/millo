@@ -19,6 +19,9 @@ const candidate: ProgramRecoveryCandidate = {
   restartSourceLine: 68,
   restartPosition: { x: 10, y: 20, z: 5 },
   minimumSafeZMm: 5,
+  checkpointRestartAvailable: true,
+  fullRestartAvailable: true,
+  interruption: "controllerDisconnected",
   ready: true,
   detail: "rewind",
 };
@@ -38,6 +41,7 @@ describe("program recovery model", () => {
           ...empty,
           machineReferenceRestored: true,
           workZeroRestored: true,
+          motionPowerRestored: true,
           restartPointInspected: true,
           pathClear: true,
           powerControlReachable: true,
@@ -47,12 +51,18 @@ describe("program recovery model", () => {
     ).toBe(true);
   });
 
-  it("keeps missing Ln telemetry and low Safe Z fail-closed", () => {
-    const blocked = { ...candidate, ready: false, executingSourceLine: undefined };
+  it("keeps invalid recovery evidence and low Safe Z fail-closed", () => {
+    const blocked = {
+      ...candidate,
+      ready: false,
+      checkpointRestartAvailable: false,
+      fullRestartAvailable: false,
+    };
     const request = {
       ...emptyRecoveryPreparation(candidate),
       machineReferenceRestored: true,
       workZeroRestored: true,
+      motionPowerRestored: true,
       restartPointInspected: true,
       pathClear: true,
       powerControlReachable: true,
@@ -67,6 +77,7 @@ describe("program recovery model", () => {
       ...emptyRecoveryPreparation(candidate),
       machineReferenceRestored: true,
       workZeroRestored: true,
+      motionPowerRestored: true,
       restartPointInspected: true,
       pathClear: true,
       powerControlReachable: true,
@@ -74,5 +85,33 @@ describe("program recovery model", () => {
 
     expect(canPrepareRecovery(candidate, { ...confirmed, safeZMm: Number.NaN }, false)).toBe(false);
     expect(canPrepareRecovery(candidate, confirmed, true)).toBe(false);
+  });
+
+  it("defaults to a full restart and forbids checkpoint restart without Ln evidence", () => {
+    const noCheckpoint = {
+      ...candidate,
+      executingSourceLine: undefined,
+      restartSourceLine: undefined,
+      checkpointRestartAvailable: false,
+    };
+    const confirmed = {
+      ...emptyRecoveryPreparation(noCheckpoint),
+      machineReferenceRestored: true,
+      workZeroRestored: true,
+      motionPowerRestored: true,
+      restartPointInspected: true,
+      pathClear: true,
+      powerControlReachable: true,
+    };
+
+    expect(confirmed.continuity).toBe("motionPowerLostOrUnknown");
+    expect(canPrepareRecovery(noCheckpoint, confirmed, false)).toBe(true);
+    expect(
+      canPrepareRecovery(
+        noCheckpoint,
+        { ...confirmed, continuity: "controllerInterrupted" },
+        false,
+      ),
+    ).toBe(false);
   });
 });

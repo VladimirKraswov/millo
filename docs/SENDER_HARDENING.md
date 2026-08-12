@@ -13,7 +13,7 @@ than attempting to reproduce issue-specific workarounds.
 | [Candle #205](https://github.com/Denvi/Candle/issues/205): a 91,000-line job reportedly developed pauses with exhausted host RAM and laser burn risk | Queue-sized UI/response objects can starve streaming or memory | Immutable bounded plan, RX-byte-bounded `VecDeque`, virtualized table, O(1) snapshots | 100,000-line sender regression; peak FIFO below 32 |
 | [Candle #514](https://github.com/Denvi/Candle/issues/514): UI freeze while buffered motion continued, then spindle remained running | UI ownership and buffered motion can outlive visible application state | Rust actor owns serial independently of React; response faults request Hold + Soft Reset; normal plans issue M5/M9 and wait for fresh Idle | Delayed/fault actor fixtures; typed shutdown-tail Check 10/10 |
 | [Candle #515](https://github.com/Denvi/Candle/issues/515): M00 could not be resumed | Program barriers need explicit lifecycle state | Isolated M0 is an empty-FIFO Paused state; only typed Resume from observed Hold/Idle continues | Sender and actor Hold/Resume tests |
-| [Candle #464](https://github.com/Denvi/Candle/issues/464): request to run from an arbitrary selected line | Re-entering midway with the wrong modal/position state can crash a tool | Raw send-from-line remains absent. A separate crash-safe store requires physical `Ln:`, matching source/controller, conservative clearance rewind, operator-restored coordinates, Safe Z, preview, Check, preflight, and a new one-use authorization | Recovery planner/store/model tests; ADR 0038 |
+| [Candle #464](https://github.com/Denvi/Candle/issues/464): request to run from an arbitrary selected line | Re-entering midway with the wrong modal/position state can crash a tool | Raw send-from-line remains absent. A separate crash-safe store binds source/controller and distinguishes checkpoint restart from a conservative full restart; both require operator-restored coordinates, Safe Z, preview, Check, preflight, and a new one-use authorization | Recovery planner/store/model tests; ADR 0038 |
 | [Candle #684](https://github.com/Denvi/Candle/issues/684): tool-change workflows need controlled intervention | M6 sent as ordinary G-code cannot prove tool, Z zero, or planner drain | Host-only M6 barrier, bounded Tn, line/tool-bound confirmation, fresh Inspector and Idle before continuation | Mock actor/UI tests; physical Check fixture |
 | [Official GRBL interface](https://github.com/gnea/grbl/blob/master/doc/markdown/interface.md): push messages are not responses, character counting has an error reservation, EEPROM writes must use send-response, status should be limited, and Check mode is recommended before streaming | Naive FIFO accounting can steal responses, overflow RX, or continue buffered commands after an error | Typed frame demultiplexing; actual `[OPT] RX - 1`; status outside response FIFO; settings outside file stream; Check mode; Hold + Reset on physical stream fault | Interleaved-status tests, capacity fixtures, settings actor tests, physical Check |
 
@@ -67,7 +67,8 @@ than attempting to reproduce issue-specific workarounds.
 - Millo replaces file line numbers with source-line `N` tags on the wire and
   retains GRBL's optional `Ln:` execution report independently from `ok`.
   Recovery therefore never mistakes buffered acceptance for physical progress;
-  firmware without `Ln:` cannot produce an automatic execution checkpoint.
+  firmware without `Ln:` cannot produce a checkpoint restart, but can still
+  prepare a guarded full restart from the exact stored source.
 - Air/Cut Start is a prepared/commit transaction. The sender cannot dispatch
   until the recovery record has been written atomically and synced. Recovery
   checkpoints run off the async controller task and retain an older physical
@@ -77,6 +78,15 @@ than attempting to reproduce issue-specific workarounds.
   tool/spindle/modal restoration, and original source from a preceding
   clearance rapid. Normal parser, Check certificate, preflight, and one-use
   launch authorization apply again.
+- The first stream, transport, status, or realtime-command I/O failure during
+  physical Air/Cut execution is
+  terminal. The command actor closes the controller session, leaves the sender
+  failed, and requires an explicit reconnect; reconnect cannot redispatch the
+  old FIFO. A separate motion-power loss is not inferred from USB continuity.
+- Recovery records the observed interruption cause, but the operator explicitly
+  chooses continuity. Host-only/controller interruption plus physical `Ln:` may
+  use bounded checkpoint replay. Missing/uncertain motor power always selects a
+  full restart after physical position, machine reference, and work zero checks.
 - When a recovery program replaces its parent record, the parent remains in the
   atomic backup until the new program persists a physical `Ln:`. A commit fault,
   crash in that window, or failed/cancelled run with no physical line restores

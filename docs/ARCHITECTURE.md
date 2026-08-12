@@ -128,17 +128,18 @@ the physical-run operator pause state while GRBL is in Check.
 - `millo-recovery` persists one exact active source, its fingerprint, machine
   fingerprint, execution options, start positions, sender sequence and latest
   physical `Ln:` checkpoint. It uses the same synced temp/backup replacement.
-  Completed jobs are never offered; a missing `Ln:` produces a visible blocker.
+  Completed jobs are never offered. A missing `Ln:` disables checkpoint replay
+  but preserves a guarded full restart from the beginning.
 - Physical Start uses a prepared/commit actor boundary. The prepared sender has
   a run sequence but dispatch is disabled. Tauri arms and syncs recovery first;
   only a matching commit releases the source FIFO. Persistence failure discards
   the prepared sender without writing a G-code block.
 - Recovery planning is pure and motion-free. It reparses the stored source,
-  verifies its fingerprint, rewinds to the latest preceding rapid segment at
-  program clearance (or the first known motion), and emits a new G-code program
-  with M5/M9, absolute metric clearance moves, recorded WCS, tool/spindle state
-  when applicable, and the parser's modal checkpoint. The generated program
-  must still pass preview, GRBL Check, preflight and one-time authorization.
+  verifies its fingerprint, and creates one of two explicit programs. Proven
+  continuity plus `Ln:` rewinds to the latest preceding rapid at clearance;
+  unknown/lost motion power starts the exact source from its first checkpoint.
+  Both use M5/M9 and an operator-reviewed Safe Z. The generated program must
+  still pass preview, GRBL Check, preflight and one-time authorization.
 - Domain-specific stores still own schema validation and bounded history;
   `millo-storage` knows nothing about profiles, GRBL, sender state, or JSON.
 
