@@ -6,3 +6,7 @@ target/
 .idea/
 .vscode/
 src-tauri/gen/
+site/data/
+site/.env
+__pycache__/
+*.py[cod]

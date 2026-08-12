@@ -1,5 +1,17 @@
 # Millo
 
+> **Early alpha:** Millo has only started its development and has not been
+> thoroughly tested across CNC hardware. Begin without a tool or spindle, keep
+> machine power immediately reachable, and never leave a run unattended.
+
+Project website: [millo-cnc.ru](https://millo-cnc.ru)
+
+Source and alpha releases: [github.com/VladimirKraswov/millo](https://github.com/VladimirKraswov/millo)
+
+Public alpha limitations and operator precautions are collected in
+[`docs/ALPHA_RELEASE.md`](docs/ALPHA_RELEASE.md). The website and its moderated
+feedback API are documented in [`site/README.md`](site/README.md).
+
 Millo is a modular CNC controller application with a Rust core and a
 TypeScript user interface. The project is being built in small vertical slices;
 each slice must work end to end and remain testable without a desktop window or

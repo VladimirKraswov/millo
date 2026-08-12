@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Millo — современное модульное приложение для управления CNC на Rust. Ранняя alpha-версия." />
+    <meta name="theme-color" content="#0b1114" />
+    <title>Millo — современное управление CNC</title>
+    <link rel="icon" href="/assets/millo-mark.svg" type="image/svg+xml" />
+    <link rel="preload" href="/assets/millo-hero.jpg" as="image" type="image/jpeg" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">К содержанию</a>
+    <header class="topbar">
+      <a class="brand" href="#top" aria-label="Millo, на главную">
+        <img src="/assets/millo-mark.svg" width="36" height="36" alt="" />
+        <span>Millo</span><small>alpha</small>
+      </a>
+      <nav aria-label="Основная навигация">
+        <a href="#capabilities">Возможности</a>
+        <a href="#downloads">Скачать</a>
+        <a href="#feedback">Обратная связь</a>
+        <a href="https://github.com/VladimirKraswov/millo" rel="noreferrer">GitHub</a>
+      </nav>
+      <a class="topbar-download" href="#downloads">Скачать alpha</a>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top" aria-labelledby="hero-title">
+        <div class="hero-image" role="img" aria-label="Компактный CNC-станок выполняет точную гравировку"></div>
+        <div class="hero-shade"></div>
+        <div class="hero-content">
+          <p class="eyebrow">Rust core · Tauri · React · Three.js</p>
+          <h1 id="hero-title">Millo</h1>
+          <p class="hero-lead">Приложение для управления CNC на GRBL</p>
+          <p class="hero-copy">Millo — молодой проект с Rust-ядром и современным интерфейсом. Его цель — сделать подготовку, проверку и выполнение G-code понятнее в повседневной работе.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="#downloads">Скачать для компьютера</a>
+            <a class="button ghost" href="https://github.com/VladimirKraswov/millo" rel="noreferrer">Открыть исходный код</a>
+          </div>
+          <dl class="hero-facts">
+            <div><dt>Ядро</dt><dd>Rust</dd></div>
+            <div><dt>Контроллер</dt><dd>GRBL 1.1</dd></div>
+            <div><dt>Платформы</dt><dd>macOS · Linux</dd></div>
+          </dl>
+        </div>
+      </section>
+
+      <aside class="alpha-warning" aria-label="Предупреждение об alpha-версии">
+        <strong>Ранняя alpha</strong>
+        <p>Millo только начал развиваться. Функциональность ещё не прошла достаточное тестирование на разных станках и может привести к неожиданному движению. Начинайте без инструмента и шпинделя, держите питание станка под рукой и не оставляйте выполнение без наблюдения.</p>
+      </aside>
+
+      <section class="statement" id="capabilities">
+        <p class="section-index">01 · О проекте</p>
+        <h2>Удобный рабочий процесс без лишней сложности</h2>
+        <p>Мы хотим последовательно собрать приложение, в котором легко подключить станок, выставить рабочий ноль, проверить траекторию и выполнить программу. Частые действия остаются на виду, а подробные настройки доступны тогда, когда они нужны.</p>
+      </section>
+
+      <section class="product-scene" aria-labelledby="scene-title">
+        <div class="product-copy">
+          <p class="section-index">02 · Сильные стороны</p>
+          <h2 id="scene-title">Программа проверяется до отправки</h2>
+          <p>G-code разбирается Rust-ядром и используется для таблицы, 3D-просмотра, проверок и выполнения. Поэтому предупреждение можно связать с исходной строкой и соответствующим участком траектории.</p>
+          <ul class="feature-list">
+            <li><strong>Наглядный просмотр</strong><span>Дуги, быстрые перемещения и рабочая траектория в одной сцене.</span></li>
+            <li><strong>Контроль GRBL</strong><span>Sender учитывает буфер контроллера, ответы, остановку и восстановление.</span></li>
+            <li><strong>Модульная система</strong><span>Инструменты и плагины используют типизированные возможности ядра.</span></li>
+          </ul>
+        </div>
+        <figure>
+          <img src="/assets/millo-detail.jpg" alt="Фреза CNC гравирует сложный геометрический контур на металле" loading="lazy" />
+          <figcaption>Предварительный просмотр помогает проверить программу до запуска.</figcaption>
+        </figure>
+      </section>
+
+      <section class="architecture" aria-labelledby="architecture-title">
+        <div><p class="section-index">03 · Качество</p><h2 id="architecture-title">Rust-ядро и понятные границы модулей</h2></div>
+        <div class="architecture-flow" aria-label="Архитектурный поток Millo">
+          <span>File / CAM</span><b>→</b><span>Parser</span><b>→</b><span>Policy</span><b>→</b><span>Sender</span><b>→</b><span>GRBL</span>
+        </div>
+        <p>Интерфейс работает с типизированными командами, а последовательность общения с GRBL контролирует один Rust actor. Модули можно тестировать отдельно, а расширения получают только явно разрешённые возможности. Такой подход помогает находить ошибки раньше и развивать проект постепенно.</p>
+        <a class="text-link" href="https://github.com/VladimirKraswov/millo/tree/main/docs" rel="noreferrer">Читать техническую документацию →</a>
+      </section>
+
+      <section class="downloads" id="downloads" aria-labelledby="downloads-title">
+        <div class="downloads-heading">
+          <p class="section-index">04 · Alpha build</p><h2 id="downloads-title">Попробовать Millo</h2>
+          <p>Сборка для знакомства и аппаратных тестов. Не используйте её для необслуживаемого производства.</p>
+        </div>
+        <div class="download-options">
+          <a class="download-row" href="https://github.com/VladimirKraswov/millo/releases/download/v0.1.0-alpha.1/Millo_0.1.0_aarch64.dmg">
+            <span class="platform-mark">mac</span><span><strong>macOS</strong><small>Apple Silicon · DMG</small></span><b>Скачать ↓</b>
+          </a>
+          <a class="download-row" href="https://github.com/VladimirKraswov/millo/releases/download/v0.1.0-alpha.1/Millo_0.1.0_amd64.AppImage">
+            <span class="platform-mark">LIN</span><span><strong>Linux</strong><small>x86_64 · AppImage</small></span><b>Скачать ↓</b>
+          </a>
+          <a class="download-row secondary-download" href="https://github.com/VladimirKraswov/millo/releases/download/v0.1.0-alpha.1/Millo_0.1.0_amd64.deb">
+            <span class="platform-mark">deb</span><span><strong>Debian / Ubuntu</strong><small>x86_64 · DEB</small></span><b>Скачать ↓</b>
+          </a>
+        </div>
+        <p class="install-note">Сборки пока не подписаны. Проверяйте имя релиза и контрольные суммы на GitHub.</p>
+      </section>
+
+      <section class="community" id="feedback" aria-labelledby="feedback-title">
+        <div class="community-intro">
+          <p class="section-index">05 · Сообщество</p><h2 id="feedback-title">Скажите, где Millo мешает работать</h2>
+          <p>Нужны конкретные замечания с контекстом станка и сценария. Сообщение проверяет локальная LLM-модерация; критика продукта разрешена и полезна.</p>
+          <div class="feedback-kinds" aria-label="Типы обратной связи"><span>Ошибка</span><span>Улучшение</span><span>Пожелание</span><span>Комментарий</span></div>
+        </div>
+        <form class="feedback-form" id="feedback-form">
+          <div class="form-row">
+            <label>Ваше имя<input name="name" maxlength="40" autocomplete="name" placeholder="Как к вам обращаться" /></label>
+            <label>Тема<select name="kind"><option value="bug">Нашёл ошибку</option><option value="idea">Предлагаю улучшение</option><option value="wish">Есть пожелание</option><option value="comment">Оставлю комментарий</option></select></label>
+          </div>
+          <label>Сообщение<textarea name="body" minlength="8" maxlength="1600" required placeholder="Что делали, чего ожидали и что произошло?"></textarea></label>
+          <label class="honeypot" aria-hidden="true">Сайт<input name="website" tabindex="-1" autocomplete="off" /></label>
+          <div class="form-footer"><p>Имя и текст прошедшего проверку сообщения будут опубликованы. Исходный IP-адрес не сохраняется.</p><button class="button primary" type="submit">Отправить</button></div>
+          <output id="form-status" aria-live="polite"></output>
+        </form>
+      </section>
+
+      <section class="comments" aria-labelledby="comments-title">
+        <div class="comments-heading"><h2 id="comments-title">Последние сообщения</h2><button class="quiet-button" id="refresh-comments" type="button">Обновить</button></div>
+        <div class="comments-list" id="comments-list"><p class="empty-state">Загружаем сообщения…</p></div>
+      </section>
+
+      <section class="support" aria-labelledby="support-title">
+        <div><p class="section-index">06 · Поддержать разработку</p><h2 id="support-title">Помочь проекту расти</h2><p>Донат пойдёт на тестовое оборудование, инструменты и инфраструктуру сборок.</p></div>
+        <div class="donation"><span>Перевод на карту</span><strong id="donation-number">2200 3961 1492 4950</strong><button class="quiet-button" id="copy-donation" type="button">Скопировать номер</button></div>
+      </section>
+    </main>
+
+    <footer>
+      <div class="brand footer-brand"><img src="/assets/millo-mark.svg" width="32" height="32" alt="" /><span>Millo</span></div>
+      <p>Ранняя alpha · управление CNC требует постоянного внимания оператора.</p>
+      <div><a href="https://github.com/VladimirKraswov/millo">GitHub</a><a href="https://github.com/VladimirKraswov/millo/tree/main/docs">Документация</a></div>
+    </footer>
+  </body>
+</html>
