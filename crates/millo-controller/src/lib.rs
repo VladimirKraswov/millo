@@ -3,12 +3,13 @@ use std::time::{Duration, Instant};
 use millo_domain::{
     AlarmState, CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot,
     DeviceInspection, MachineMode, MachineState, OverrideAdjustment, Position, RapidOverrideTarget,
-    ResetNotice, StepJogReceipt, StepJogRequest, WorkAxis, WorkCoordinateSystem,
+    ResetNotice, ReturnToWorkZeroRequest, StepJogReceipt, StepJogRequest, WorkAxis,
+    WorkCoordinateSystem,
 };
 use millo_dry_run::DryRunLine;
 use millo_grbl::{
     IncomingLine, JogValidationError, StatusParseError, build_device_inspection,
-    encode_set_work_zero, encode_step_jog, parse_incoming_line,
+    encode_return_to_work_zero, encode_set_work_zero, encode_step_jog, parse_incoming_line,
 };
 use millo_settings::ValidatedSettingWrite;
 use millo_transport::{Transport, TransportError};
@@ -357,6 +358,14 @@ impl<T: Transport> Controller<T> {
         coordinate_system: WorkCoordinateSystem,
     ) -> Result<CommandResponse, ControllerError> {
         let command = encode_set_work_zero(axis, coordinate_system);
+        self.execute_acknowledged_line(&command).await
+    }
+
+    pub async fn return_to_work_zero(
+        &mut self,
+        request: ReturnToWorkZeroRequest,
+    ) -> Result<CommandResponse, ControllerError> {
+        let command = encode_return_to_work_zero(request)?;
         self.execute_acknowledged_line(&command).await
     }
 

@@ -12,7 +12,11 @@ import { createImageToGcodePlugin, IMAGE_TO_GCODE_PLUGIN_ID } from "./createImag
 describe("Image to G-code bundled plugin", () => {
   it("registers its launcher only through granted UI and job capabilities", async () => {
     const registry = createUiExtensionRegistry();
-    const gateway = { generate: vi.fn(), save: vi.fn() } as ImageJobGateway;
+    const gateway: ImageJobGateway = {
+      generate: vi.fn(),
+      generateSurfacing: vi.fn(),
+      save: vi.fn(),
+    };
     const loader = new InMemoryPluginLoader({
       uiRegistry: registry,
       jobs: new JobCreationService(gateway, new GeneratedJobStore()),

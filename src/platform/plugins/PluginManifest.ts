@@ -6,6 +6,7 @@ export const pluginCapabilityCatalog = [
   "machine.read",
   "machine.jog",
   "jobs.create",
+  "tools.read",
 ] as const;
 
 export type PluginCapability = (typeof pluginCapabilityCatalog)[number];

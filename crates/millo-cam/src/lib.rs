@@ -3,6 +3,7 @@ use std::fmt::Write;
 use base64::Engine;
 use image::{GenericImageView, ImageReader, Limits};
 use millo_gcode::{GcodeProgram, MAX_SOURCE_BYTES, ProgramParseRequest, parse_program};
+use millo_tooling::CuttingTool;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use usvg::tiny_skia_path::{PathSegment, Point, Transform};
@@ -86,6 +87,328 @@ pub struct GeneratedImageJob {
     pub vector_svg: String,
     pub program: GcodeProgram,
     pub summary: ImageJobSummary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SurfacingRasterAxis {
+    X,
+    Y,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SurfacingJobSettings {
+    pub origin_x_mm: f64,
+    pub origin_y_mm: f64,
+    pub width_mm: f64,
+    pub height_mm: f64,
+    pub edge_overrun_mm: f64,
+    pub surface_z_mm: f64,
+    pub removal_mm: f64,
+    pub depth_per_pass_mm: f64,
+    pub safe_z_mm: f64,
+    pub stepover_percent: f64,
+    pub feed_mm_per_min: f64,
+    pub plunge_mm_per_min: f64,
+    pub raster_axis: SurfacingRasterAxis,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SurfacingJobRequest {
+    pub source_name: String,
+    pub tool_id: String,
+    pub settings: SurfacingJobSettings,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SurfacingJobSummary {
+    pub tool_id: String,
+    pub tool_name: String,
+    pub tool_diameter_mm: f64,
+    pub pass_count: usize,
+    pub raster_line_count: usize,
+    pub stepover_mm: f64,
+    pub covered_width_mm: f64,
+    pub covered_height_mm: f64,
+    pub edge_overrun_mm: f64,
+    pub removal_mm: f64,
+    pub spindle_rpm: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedSurfacingJob {
+    pub source_name: String,
+    pub source: String,
+    pub program: GcodeProgram,
+    pub summary: SurfacingJobSummary,
+}
+
+#[derive(Debug, Error, PartialEq)]
+pub enum SurfacingJobError {
+    #[error("surfacing source name is required")]
+    MissingSourceName,
+    #[error("tool {0} cannot produce a flat surface")]
+    IncompatibleTool(String),
+    #[error("surfacing area must be at least one tool diameter on each axis")]
+    AreaSmallerThanTool,
+    #[error("edge overrun cannot exceed the tool radius")]
+    EdgeOverrunExceedsRadius,
+    #[error("invalid surfacing setting: {0}")]
+    InvalidSetting(&'static str),
+    #[error("surfacing plan exceeds the {max_lines} raster-line limit")]
+    TooManyRasterLines { max_lines: usize },
+    #[error("generated G-code exceeds the {max_bytes} byte limit")]
+    GcodeTooLarge { max_bytes: usize },
+    #[error("generated G-code failed validation: {0}")]
+    InvalidGeneratedGcode(String),
+}
+
+const MAX_SURFACING_RASTER_LINES: usize = 20_000;
+
+pub fn generate_surfacing_job(
+    request: SurfacingJobRequest,
+    tool: &CuttingTool,
+) -> Result<GeneratedSurfacingJob, SurfacingJobError> {
+    validate_surfacing_settings(&request.settings)?;
+    if request.source_name.trim().is_empty() {
+        return Err(SurfacingJobError::MissingSourceName);
+    }
+    if request.tool_id != tool.id || !tool.supports_surfacing() {
+        return Err(SurfacingJobError::IncompatibleTool(tool.name.clone()));
+    }
+    if request.settings.width_mm < tool.diameter_mm || request.settings.height_mm < tool.diameter_mm
+    {
+        return Err(SurfacingJobError::AreaSmallerThanTool);
+    }
+    let radius = tool.diameter_mm / 2.0;
+    if request.settings.edge_overrun_mm > radius {
+        return Err(SurfacingJobError::EdgeOverrunExceedsRadius);
+    }
+
+    let stepover_mm = tool.diameter_mm * request.settings.stepover_percent / 100.0;
+    if !stepover_mm.is_finite() || stepover_mm <= 0.0 {
+        return Err(SurfacingJobError::InvalidSetting("stepoverPercent"));
+    }
+    let cross_span = match request.settings.raster_axis {
+        SurfacingRasterAxis::X => {
+            request.settings.height_mm - tool.diameter_mm + request.settings.edge_overrun_mm * 2.0
+        }
+        SurfacingRasterAxis::Y => {
+            request.settings.width_mm - tool.diameter_mm + request.settings.edge_overrun_mm * 2.0
+        }
+    };
+    let raster_offsets = bounded_raster_offsets(cross_span, stepover_mm)?;
+    let pass_count = (request.settings.removal_mm / request.settings.depth_per_pass_mm)
+        .ceil()
+        .max(1.0) as usize;
+    let total_lines = raster_offsets.len().saturating_mul(pass_count);
+    if total_lines > MAX_SURFACING_RASTER_LINES {
+        return Err(SurfacingJobError::TooManyRasterLines {
+            max_lines: MAX_SURFACING_RASTER_LINES,
+        });
+    }
+
+    let source_name = gcode_name(request.source_name.trim());
+    let mut source = String::with_capacity(total_lines.saturating_mul(72));
+    let settings = &request.settings;
+    let min_x = settings.origin_x_mm + radius - settings.edge_overrun_mm;
+    let max_x = settings.origin_x_mm + settings.width_mm - radius + settings.edge_overrun_mm;
+    let min_y = settings.origin_y_mm + radius - settings.edge_overrun_mm;
+    let max_y = settings.origin_y_mm + settings.height_mm - radius + settings.edge_overrun_mm;
+    writeln!(
+        &mut source,
+        "(Millo surfacing job: {})",
+        comment_text(&source_name)
+    )
+    .unwrap();
+    writeln!(&mut source, "(Tool: {})", comment_text(&tool.name)).unwrap();
+    writeln!(
+        &mut source,
+        "(Diameter {} mm; recommended spindle {} rpm)",
+        number(tool.diameter_mm),
+        tool.spindle_rpm
+    )
+    .unwrap();
+    writeln!(&mut source, "G21 G90 G94 G17").unwrap();
+    writeln!(&mut source, "M5").unwrap();
+    writeln!(&mut source, "M9").unwrap();
+    writeln!(&mut source, "G0 Z{}", number(settings.safe_z_mm)).unwrap();
+
+    for pass in 1..=pass_count {
+        let removed = (settings.depth_per_pass_mm * pass as f64).min(settings.removal_mm);
+        let depth = settings.surface_z_mm - removed;
+        let start = raster_point(
+            settings.raster_axis,
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+            raster_offsets[0],
+            false,
+        );
+        writeln!(
+            &mut source,
+            "(Pass {pass}/{pass_count}; Z {})",
+            number(depth)
+        )
+        .unwrap();
+        writeln!(&mut source, "G0 X{} Y{}", number(start.0), number(start.1)).unwrap();
+        writeln!(
+            &mut source,
+            "G1 Z{} F{}",
+            number(depth),
+            number(settings.plunge_mm_per_min)
+        )
+        .unwrap();
+        for (index, offset) in raster_offsets.iter().copied().enumerate() {
+            let end = raster_point(
+                settings.raster_axis,
+                min_x,
+                max_x,
+                min_y,
+                max_y,
+                offset,
+                index % 2 == 0,
+            );
+            writeln!(
+                &mut source,
+                "G1 X{} Y{} F{}",
+                number(end.0),
+                number(end.1),
+                number(settings.feed_mm_per_min)
+            )
+            .unwrap();
+            if let Some(next_offset) = raster_offsets.get(index + 1) {
+                let cross = raster_point(
+                    settings.raster_axis,
+                    min_x,
+                    max_x,
+                    min_y,
+                    max_y,
+                    *next_offset,
+                    index % 2 == 0,
+                );
+                writeln!(
+                    &mut source,
+                    "G1 X{} Y{} F{}",
+                    number(cross.0),
+                    number(cross.1),
+                    number(settings.feed_mm_per_min)
+                )
+                .unwrap();
+            }
+            if source.len() > MAX_SOURCE_BYTES {
+                return Err(SurfacingJobError::GcodeTooLarge {
+                    max_bytes: MAX_SOURCE_BYTES,
+                });
+            }
+        }
+        writeln!(&mut source, "G0 Z{}", number(settings.safe_z_mm)).unwrap();
+    }
+    writeln!(&mut source, "M5").unwrap();
+    writeln!(&mut source, "M9").unwrap();
+    writeln!(&mut source, "M30").unwrap();
+    if source.len() > MAX_SOURCE_BYTES {
+        return Err(SurfacingJobError::GcodeTooLarge {
+            max_bytes: MAX_SOURCE_BYTES,
+        });
+    }
+    let program = parse_program(ProgramParseRequest {
+        source_name: source_name.clone(),
+        source: source.clone(),
+    })
+    .map_err(|error| SurfacingJobError::InvalidGeneratedGcode(error.to_string()))?;
+
+    Ok(GeneratedSurfacingJob {
+        source_name,
+        source,
+        program,
+        summary: SurfacingJobSummary {
+            tool_id: tool.id.clone(),
+            tool_name: tool.name.clone(),
+            tool_diameter_mm: tool.diameter_mm,
+            pass_count,
+            raster_line_count: total_lines,
+            stepover_mm,
+            covered_width_mm: settings.width_mm,
+            covered_height_mm: settings.height_mm,
+            edge_overrun_mm: settings.edge_overrun_mm,
+            removal_mm: settings.removal_mm,
+            spindle_rpm: tool.spindle_rpm,
+        },
+    })
+}
+
+fn validate_surfacing_settings(settings: &SurfacingJobSettings) -> Result<(), SurfacingJobError> {
+    surfacing_range(settings.origin_x_mm, -100_000.0, 100_000.0, "originXMm")?;
+    surfacing_range(settings.origin_y_mm, -100_000.0, 100_000.0, "originYMm")?;
+    surfacing_range(settings.width_mm, 0.1, 100_000.0, "widthMm")?;
+    surfacing_range(settings.height_mm, 0.1, 100_000.0, "heightMm")?;
+    surfacing_range(settings.edge_overrun_mm, 0.0, 250.0, "edgeOverrunMm")?;
+    surfacing_range(settings.surface_z_mm, -10_000.0, 10_000.0, "surfaceZMm")?;
+    surfacing_range(settings.removal_mm, 0.001, 100.0, "removalMm")?;
+    surfacing_range(settings.depth_per_pass_mm, 0.001, 20.0, "depthPerPassMm")?;
+    surfacing_range(settings.safe_z_mm, -10_000.0, 10_000.0, "safeZMm")?;
+    surfacing_range(settings.stepover_percent, 1.0, 95.0, "stepoverPercent")?;
+    surfacing_range(settings.feed_mm_per_min, 1.0, 100_000.0, "feedMmPerMin")?;
+    surfacing_range(settings.plunge_mm_per_min, 1.0, 50_000.0, "plungeMmPerMin")?;
+    if settings.safe_z_mm <= settings.surface_z_mm
+        || settings.depth_per_pass_mm > settings.removal_mm
+    {
+        return Err(SurfacingJobError::InvalidSetting("Z envelope"));
+    }
+    Ok(())
+}
+
+fn surfacing_range(
+    value: f64,
+    minimum: f64,
+    maximum: f64,
+    name: &'static str,
+) -> Result<(), SurfacingJobError> {
+    if value.is_finite() && (minimum..=maximum).contains(&value) {
+        Ok(())
+    } else {
+        Err(SurfacingJobError::InvalidSetting(name))
+    }
+}
+
+fn bounded_raster_offsets(span: f64, step: f64) -> Result<Vec<f64>, SurfacingJobError> {
+    if span <= f64::EPSILON {
+        return Ok(vec![0.0]);
+    }
+    let count = (span / step).ceil() as usize + 1;
+    if count > MAX_SURFACING_RASTER_LINES {
+        return Err(SurfacingJobError::TooManyRasterLines {
+            max_lines: MAX_SURFACING_RASTER_LINES,
+        });
+    }
+    let mut offsets = (0..count.saturating_sub(1))
+        .map(|index| (index as f64 * step).min(span))
+        .collect::<Vec<_>>();
+    offsets.push(span);
+    offsets.dedup_by(|left, right| (*left - *right).abs() < 0.000_001);
+    Ok(offsets)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn raster_point(
+    axis: SurfacingRasterAxis,
+    min_x: f64,
+    max_x: f64,
+    min_y: f64,
+    max_y: f64,
+    offset: f64,
+    high: bool,
+) -> (f64, f64) {
+    match axis {
+        SurfacingRasterAxis::X => (if high { max_x } else { min_x }, min_y + offset),
+        SurfacingRasterAxis::Y => (min_x + offset, if high { max_y } else { min_y }),
+    }
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -676,6 +999,35 @@ mod tests {
         base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 
+    fn surfacing_tool() -> CuttingTool {
+        millo_tooling::factory_presets()
+            .into_iter()
+            .find(|tool| tool.id == "preset-carbide3d-mcfly")
+            .unwrap()
+    }
+
+    fn surfacing_request() -> SurfacingJobRequest {
+        SurfacingJobRequest {
+            source_name: "spoilboard.nc".to_owned(),
+            tool_id: "preset-carbide3d-mcfly".to_owned(),
+            settings: SurfacingJobSettings {
+                origin_x_mm: 0.0,
+                origin_y_mm: 0.0,
+                width_mm: 100.0,
+                height_mm: 80.0,
+                edge_overrun_mm: 0.0,
+                surface_z_mm: 0.0,
+                removal_mm: 0.4,
+                depth_per_pass_mm: 0.2,
+                safe_z_mm: 5.0,
+                stepover_percent: 45.0,
+                feed_mm_per_min: 1_000.0,
+                plunge_mm_per_min: 250.0,
+                raster_axis: SurfacingRasterAxis::X,
+            },
+        }
+    }
+
     #[test]
     fn creates_valid_spindle_free_gcode_from_transformed_svg() {
         let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10">
@@ -800,5 +1152,84 @@ mod tests {
     fn generated_file_name_is_a_bounded_leaf_name() {
         assert_eq!(gcode_name("../unsafe:name.svg"), "_unsafe_name.nc");
         assert!(gcode_name(&"a".repeat(400)).len() <= 183);
+    }
+
+    #[test]
+    fn creates_a_bounded_multi_pass_spindle_free_surfacing_job() {
+        let result = generate_surfacing_job(surfacing_request(), &surfacing_tool()).unwrap();
+
+        assert_eq!(result.summary.pass_count, 2);
+        assert_eq!(result.summary.tool_diameter_mm, 25.4);
+        assert!(result.summary.raster_line_count >= 10);
+        assert!(result.source.contains("(Pass 1/2; Z -0.2)"));
+        assert!(result.source.contains("(Pass 2/2; Z -0.4)"));
+        assert!(
+            !result
+                .source
+                .lines()
+                .any(|line| line == "M3" || line == "M4")
+        );
+        assert!(result.program.summary.dry_run_eligible);
+        assert!(result.program.warnings.is_empty());
+        let bounds = result.program.summary.bounds.unwrap();
+        assert_eq!(bounds.min.x, 0.0);
+        assert!((bounds.max.x - 87.3).abs() < 0.001);
+    }
+
+    #[test]
+    fn surfacing_rejects_non_flat_tools_and_areas_smaller_than_the_cutter() {
+        let ball = millo_tooling::factory_presets()
+            .into_iter()
+            .find(|tool| matches!(tool.kind, millo_tooling::ToolKind::BallNose))
+            .unwrap();
+        let mut request = surfacing_request();
+        request.tool_id = ball.id.clone();
+        assert!(matches!(
+            generate_surfacing_job(request, &ball),
+            Err(SurfacingJobError::IncompatibleTool(_))
+        ));
+
+        let mut request = surfacing_request();
+        request.settings.width_mm = 20.0;
+        assert_eq!(
+            generate_surfacing_job(request, &surfacing_tool()).unwrap_err(),
+            SurfacingJobError::AreaSmallerThanTool
+        );
+    }
+
+    #[test]
+    fn surfacing_finishes_the_cross_axis_without_exceeding_the_line_limit() {
+        let result = generate_surfacing_job(surfacing_request(), &surfacing_tool()).unwrap();
+        let bounds = result.program.summary.bounds.unwrap();
+        assert!((bounds.max.y - 67.3).abs() < 0.001);
+
+        let mut request = surfacing_request();
+        request.settings.width_mm = 100_000.0;
+        request.settings.height_mm = 100_000.0;
+        request.settings.stepover_percent = 1.0;
+        assert!(matches!(
+            generate_surfacing_job(request, &surfacing_tool()),
+            Err(SurfacingJobError::TooManyRasterLines { .. })
+        ));
+    }
+
+    #[test]
+    fn surfacing_edge_overrun_is_bounded_by_the_tool_radius() {
+        let tool = surfacing_tool();
+        let mut request = surfacing_request();
+        request.settings.edge_overrun_mm = tool.diameter_mm / 2.0;
+        let result = generate_surfacing_job(request, &tool).unwrap();
+        let bounds = result.program.summary.bounds.unwrap();
+
+        assert_eq!(result.summary.edge_overrun_mm, 12.7);
+        assert!((bounds.max.x - 100.0).abs() < 0.001);
+        assert!((bounds.max.y - 80.0).abs() < 0.001);
+
+        let mut request = surfacing_request();
+        request.settings.edge_overrun_mm = tool.diameter_mm / 2.0 + 0.1;
+        assert_eq!(
+            generate_surfacing_job(request, &tool).unwrap_err(),
+            SurfacingJobError::EdgeOverrunExceedsRadius
+        );
     }
 }

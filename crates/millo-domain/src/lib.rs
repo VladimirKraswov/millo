@@ -415,3 +415,19 @@ pub struct WorkZeroOutcome {
     pub work_position: f64,
     pub snapshot: ControllerSnapshot,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReturnToWorkZeroRequest {
+    pub axis: WorkAxis,
+    pub feed_mm_per_min: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReturnToWorkZeroOutcome {
+    pub axis: WorkAxis,
+    pub coordinate_system: WorkCoordinateSystem,
+    pub command: String,
+    pub snapshot: ControllerSnapshot,
+}

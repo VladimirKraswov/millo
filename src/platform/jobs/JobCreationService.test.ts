@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { GeneratedImageJob, ImageJobRequest } from "../../shared/jobs";
+import type {
+  GeneratedImageJob,
+  GeneratedSurfacingJob,
+  ImageJobRequest,
+  SurfacingJobRequest,
+} from "../../shared/jobs";
 import type { ImageJobGateway } from "./ImageJobGateway";
 import { GeneratedJobStore } from "./GeneratedJobStore";
 import { JobCreationService } from "./JobCreationService";
@@ -13,12 +18,19 @@ const generated = {
   program: { lines: [], warnings: [], features: {}, summary: {}, toolpath: [] },
   summary: {},
 } as unknown as GeneratedImageJob;
+const generatedSurfacing = {
+  sourceName: "surface.nc",
+  source: "G21\nM5\nM30\n",
+  program: { lines: [], warnings: [], features: {}, summary: {}, toolpath: [] },
+  summary: {},
+} as unknown as GeneratedSurfacingJob;
 
 describe("JobCreationService", () => {
   it("publishes only immutable jobs returned by the core gateway", async () => {
     const store = new GeneratedJobStore();
     const gateway: ImageJobGateway = {
       generate: vi.fn(async () => generated),
+      generateSurfacing: vi.fn(),
       save: vi.fn(),
     };
     const service = new JobCreationService(gateway, store);
@@ -34,6 +46,7 @@ describe("JobCreationService", () => {
   it("rejects fabricated jobs for open and save", async () => {
     const gateway: ImageJobGateway = {
       generate: vi.fn(async () => generated),
+      generateSurfacing: vi.fn(),
       save: vi.fn(),
     };
     const service = new JobCreationService(gateway, new GeneratedJobStore());
@@ -41,5 +54,25 @@ describe("JobCreationService", () => {
     expect(() => service.open(generated)).toThrow("not issued");
     expect(() => service.save(generated)).toThrow("not issued");
     expect(gateway.save).not.toHaveBeenCalled();
+  });
+
+  it("issues surfacing jobs through the same immutable open/save boundary", async () => {
+    const store = new GeneratedJobStore();
+    const request = {} as SurfacingJobRequest;
+    const gateway: ImageJobGateway = {
+      generate: vi.fn(),
+      generateSurfacing: vi.fn(async () => generatedSurfacing),
+      save: vi.fn(async () => undefined),
+    };
+    const service = new JobCreationService(gateway, store);
+
+    const job = await service.generateSurfacing(request);
+    service.open(job);
+    await service.save(job);
+
+    expect(gateway.generateSurfacing).toHaveBeenCalledWith(request);
+    expect(gateway.save).toHaveBeenCalledWith(job);
+    expect(store.current()?.job).toBe(job);
+    expect(Object.isFrozen(job)).toBe(true);
   });
 });

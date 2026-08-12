@@ -63,6 +63,15 @@ that `JobCreationService` freezes core results and rejects fabricated jobs,
 local PNG to inspect its progressive vectorization controls without dispatching
 machine I/O.
 
+Tooling tests cover preset validation, editable factory records, persistent
+custom CRUD, duplicate rejection, atomic reload, and restoration of deleted
+presets without overwriting edits. Surfacing CAM fixtures reject incompatible
+tools and oversized edge overrun, exercise multi-depth X/Y rasters and line
+limits, require spindle-free parser-clean output, and verify complete final
+cross-axis coverage. Vitest covers the frozen `tools.read` capability, bundled
+plugin registration, and cleanup on unload. Use `/?fixture=tools` and
+`/?fixture=surfacing` for visual checks; neither fixture dispatches machine I/O.
+
 Machine-state host tests prove that mutable controller DTOs are cloned and
 deeply frozen, publication stops after an idempotent unsubscribe, and a state
 source does not imply a grant. Loader tests cover current/future read access,
@@ -193,9 +202,15 @@ port names remain untouched.
 - Mock GRBL updates only the active work offset, leaves machine position intact,
   and returns the changed G54-G59 parameter through `$#`.
 - Success requires the final work coordinate to be within `0.002 mm` of zero.
+- Absolute return fixtures encode one-axis `$J=G90 ... <axis>0`, preserve the
+  active G54-G59 offset, and verify that no `G10` is written.
+- Actor tests reject X/Y return without positive work-Z clearance and bound
+  feed/distance against live controller settings and the machine profile.
 - TypeScript tests cover the platform-neutral interactor, while the Tauri build
   verifies the typed command adapter. Automated tests never send work-zero to a
   physical controller.
+- The completed-run UI fixture requires both `Вернуть фрезу к Z0` and
+  `Подготовить повторный запуск`, plus the visible repeat-pass sequence.
 
 ## Current G-code and preview coverage
 

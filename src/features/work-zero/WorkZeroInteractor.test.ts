@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { WorkCoordinateGateway } from "../../platform/machine/WorkCoordinateGateway";
-import type { WorkZeroOutcome } from "../../shared/machine";
+import type { ReturnToWorkZeroOutcome, WorkZeroOutcome } from "../../shared/machine";
 import { emptySnapshot } from "../../shared/machine";
 import { WorkZeroInteractor } from "./WorkZeroInteractor";
 
@@ -13,11 +13,17 @@ const outcome: WorkZeroOutcome = {
   workPosition: 0,
   snapshot: emptySnapshot,
 };
+const returnOutcome: ReturnToWorkZeroOutcome = {
+  axis: "z",
+  coordinateSystem: "g54",
+  command: "$J=G90 G21 Z0.000 F100.000",
+  snapshot: emptySnapshot,
+};
 
 describe("WorkZeroInteractor", () => {
   it("rejects missing confirmation before reaching the gateway", () => {
     const setZero = vi.fn(async () => outcome);
-    const interactor = new WorkZeroInteractor({ setZero });
+    const interactor = new WorkZeroInteractor({ setZero, returnToZero: vi.fn() });
 
     expect(() => interactor.set("x", false)).toThrow(
       "work zero requires operator position confirmation",
@@ -27,7 +33,7 @@ describe("WorkZeroInteractor", () => {
 
   it("delegates one typed, confirmed axis request", async () => {
     const setZero = vi.fn(async () => outcome);
-    const gateway: WorkCoordinateGateway = { setZero };
+    const gateway: WorkCoordinateGateway = { setZero, returnToZero: vi.fn() };
     const interactor = new WorkZeroInteractor(gateway);
 
     await expect(interactor.set("x", true)).resolves.toBe(outcome);
@@ -36,5 +42,14 @@ describe("WorkZeroInteractor", () => {
       axis: "x",
       positionConfirmed: true,
     });
+  });
+
+  it("delegates one typed absolute return and validates its feed", async () => {
+    const returnToZero = vi.fn(async () => returnOutcome);
+    const interactor = new WorkZeroInteractor({ setZero: vi.fn(), returnToZero });
+
+    await expect(interactor.returnToZero("z", 100)).resolves.toBe(returnOutcome);
+    expect(returnToZero).toHaveBeenCalledWith({ axis: "z", feedMmPerMin: 100 });
+    expect(() => interactor.returnToZero("z", 0)).toThrow("between 10 and 100000");
   });
 });

@@ -2070,6 +2070,7 @@ dependencies = [
  "base64 0.22.1",
  "image 0.25.8",
  "millo-gcode",
+ "millo-tooling",
  "serde",
  "thiserror 2.0.20",
  "usvg",
@@ -2129,6 +2130,7 @@ dependencies = [
  "millo-sender",
  "millo-serial",
  "millo-settings",
+ "millo-tooling",
  "millo-transport",
  "serde",
  "serde_json",
@@ -2284,6 +2286,16 @@ dependencies = [
 [[package]]
 name = "millo-storage"
 version = "0.1.0"
+
+[[package]]
+name = "millo-tooling"
+version = "0.1.0"
+dependencies = [
+ "millo-storage",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "millo-transport"

@@ -14,6 +14,7 @@ The current slices form this path:
 Serial / Mock -> command arbiter -> GRBL lifecycle/parser -> typed Tauri IPC -> React
 File source -> millo-gcode parser -> immutable program DTO -> Three.js preview
 SVG/PNG -> millo-cam (VTracer/usvg) -> validated G-code -> normal Program workflow
+Tool library -> millo-tooling -> surfacing CAM -> validated G-code -> Program workflow
 File source -> intent-aware policy -> one-use authorization -> bounded GRBL sender
 Physical run -> bounded RX FIFO -> ok/error correlation -> fresh Idle completion
 ```
@@ -86,6 +87,14 @@ cannot choose `Pn`, format a line, or reuse the confirmation. This operation has
 been verified against Mock GRBL only; no work-zero write was sent to the physical
 machine in this slice. The probe is not installed or connected, so probing and
 heightmap motion remain unavailable.
+
+Returning to an existing work zero is a different typed motion command. The
+actor emits one absolute `$J=G90 G21 <axis>0` only after fresh `Idle`, `$G`,
+travel, feed, and active-WCS checks; it never writes `G10`. After a completed
+engraving, Program exposes `Вернуть фрезу к Z0` next to repeat-run preparation.
+The intended deeper second pass is therefore visible in place: return to Z0,
+Jog Z down by the desired increment, set only Z to zero, then prepare and
+revalidate the repeat run. See [ADR 0047](docs/decisions/0047-return-to-work-zero.md).
 
 The Program workbench loads `.nc`, `.ngc`, `.gcode`, `.tap`, and `.cnc` files up
 to 2 MB through a separate `ProgramGateway`. Rust parses compact words,
@@ -281,11 +290,10 @@ ordering, replacement declarations, and deterministic unload. The first
 in-memory plugin host validates a versioned manifest before activation and
 intersects required/optional capabilities with explicit grants and host support.
 Its built-in test plugin can replace Jog Pad and unload cleanly without loading
-external code. `ui.contribute` and guarded `machine.jog` are the first implemented
-host capabilities. `machine.read` now exposes detached, deeply frozen controller
+external code. `ui.contribute`, guarded `machine.jog`, `jobs.create`, and
+read-only `tools.read` are implemented host capabilities. `machine.read` exposes detached, deeply frozen controller
 snapshots and tracked subscriptions when the host wires a state source. Unload
-and failed activation remove those subscriptions and close retained proxies. Job
-creation remains a declared future contract.
+and failed activation remove those subscriptions and close retained proxies.
 
 The application now creates one `PluginHost` bootstrap containing the UI
 registry, machine snapshot store, and in-memory loader. React observes that store
@@ -330,6 +338,9 @@ An active Check card always exposes `Отменить проверку`; cancell
 the verified `$C -> Idle` cleanup and returns to the same readiness surface.
 Failed and cancelled checks never enter physical-run recovery because no motion
 authorization or recovery record was created.
+Completed physical jobs retain a compact post-run surface with a direct Z0
+return and repeat-run preparation; the operator does not need to discover the
+collapsed coordinate panel before making a controlled depth adjustment.
 GRBL's periodic `WCO`/override fields are reconciled in the Rust controller, so
 work coordinates and readiness remain stable between sparse status frames while
 reset and reconnect still discard stale evidence. See
@@ -346,6 +357,16 @@ job, but cannot submit raw source or reach the sender. Generated jobs enter the
 same preview, GRBL Check, preflight, authorization, and sender flow as files.
 See [Image jobs](docs/IMAGE_JOBS.md) and
 [ADR 0045](docs/decisions/0045-generated-jobs-capability.md).
+
+The Rust-owned cutting-tool library provides editable common flat, ball, V,
+engraving, and surfacing presets with geometry-aware schematics, Russian usage
+guidance, and official manufacturer references. It is opened from machine
+settings rather than occupying the operator header. Bundled job creators share
+one `Создать` menu. The default `Spoilboard Surfacing` plugin selects a compatible
+core tool and asks `millo-cam` for bounded multi-depth raster G-code; it never
+starts the spindle or reaches the sender. See [Tool library](docs/TOOL_LIBRARY.md),
+[Surfacing](docs/SURFACING.md), and
+[ADR 0046](docs/decisions/0046-core-tool-library-and-surfacing-plugin.md).
 
 The Mock diagnostics disclosure can inject reset, alarm, timeout, and link-drop scenarios. Alarm
 remains active until `Clear alarm`; two consecutive silent polls exercise the

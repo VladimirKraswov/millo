@@ -9,10 +9,12 @@ import {
 } from "lucide-react";
 
 import { bootstrapPluginHost } from "./app/bootstrapPluginHost";
-import { UiExtensionSlot } from "./platform/extensions/UiExtensionSlot";
-import { uiSlots } from "./platform/extensions/UiExtensionRegistry";
 import { CapabilityGrantStore } from "./platform/plugins/CapabilityGrantStore";
 import { createImageToGcodePlugin, IMAGE_TO_GCODE_PLUGIN_ID } from "./plugins/image-to-gcode/createImageToGcodePlugin";
+import {
+  createSpoilboardSurfacingPlugin,
+  SPOILBOARD_SURFACING_PLUGIN_ID,
+} from "./plugins/spoilboard-surfacing/createSpoilboardSurfacingPlugin";
 import {
   acknowledgeReset,
   clearMockAlarm,
@@ -47,6 +49,7 @@ import { previewFixtureAirSquareProgram } from "./features/program/previewFixtur
 import { previewFixturePreflightGateway } from "./features/program/previewFixturePreflight";
 import {
   previewFixtureCheckCompleteSender,
+  previewFixtureCompletedSender,
   previewFixtureCheckControlGateway,
   previewFixtureCheckRunningSender,
   previewFixtureFirstCutGateway,
@@ -59,6 +62,9 @@ import { MachineProfiles } from "./features/machine-profiles/MachineProfiles";
 import { MachineSettingsDialog } from "./features/machine-settings/MachineSettingsDialog";
 import { DiagnosticLogViewer } from "./features/diagnostics/DiagnosticLogViewer";
 import { WorkZeroDialog } from "./features/work-zero/WorkZeroDialog";
+import { ToolLibraryDialog } from "./features/tool-library/ToolLibraryDialog";
+import { WorkspaceToolsMenu } from "./components/WorkspaceToolsMenu";
+import { previewToolLibraryGateway } from "./features/tool-library/previewToolLibraryGateway";
 import { resolveWorkPosition } from "./features/work-zero/workPositionModel";
 import { bindMachineStateStream } from "./platform/machine/MachineStateEventStream";
 import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineCommandGateway";
@@ -66,6 +72,7 @@ import { tauriMachineStateEventStream } from "./platform/machine/tauriMachineSta
 import { tauriWorkCoordinateGateway } from "./platform/machine/tauriWorkCoordinateGateway";
 import { tauriProgramGateway } from "./platform/program/tauriProgramGateway";
 import { tauriImageJobGateway } from "./platform/jobs/tauriImageJobGateway";
+import { tauriToolLibraryGateway } from "./platform/tooling/tauriToolLibraryGateway";
 import { tauriDryRunGateway } from "./platform/program/tauriDryRunGateway";
 import { tauriRealRunPreflightGateway } from "./platform/program/tauriRealRunPreflightGateway";
 import {
@@ -74,6 +81,7 @@ import {
   type HardwareInspection,
   type Position,
   type TransportDescriptor,
+  type WorkAxis,
 } from "./shared/machine";
 import type {
   MachineProfile,
@@ -114,6 +122,7 @@ const developmentPreviewFixture =
     : developmentFixture === "first-cut" ||
         developmentFixture === "check-complete" ||
         developmentFixture === "check-running" ||
+        developmentFixture === "run-complete" ||
         developmentFixture === "tool-change" ||
         developmentFixture === "recovery"
       ? previewFixtureFirstCutProgram
@@ -125,6 +134,7 @@ const developmentPreflightFixture =
   developmentFixture === "first-cut" ||
   developmentFixture === "check-complete" ||
   developmentFixture === "check-running" ||
+  developmentFixture === "run-complete" ||
   developmentFixture === "tool-change" ||
   developmentFixture === "recovery" ||
   developmentFixture === "air-square";
@@ -132,6 +142,7 @@ const developmentFirstCutFixture =
   developmentFixture === "first-cut" ||
   developmentFixture === "check-complete" ||
   developmentFixture === "check-running" ||
+  developmentFixture === "run-complete" ||
   developmentFixture === "tool-change" ||
   developmentFixture === "recovery" ||
   developmentFixture === "air-square";
@@ -303,14 +314,24 @@ export default function App() {
         initialSnapshot: developmentMachineFixture ? developmentJogSnapshot : emptySnapshot,
         machineCommands: tauriMachineCommandGateway,
         imageJobs: tauriImageJobGateway,
+        toolLibrary: isDesktopRuntime()
+          ? tauriToolLibraryGateway
+          : previewToolLibraryGateway,
         grants: new CapabilityGrantStore([
           {
             pluginId: IMAGE_TO_GCODE_PLUGIN_ID,
             capabilities: ["ui.contribute", "jobs.create"],
           },
+          {
+            pluginId: SPOILBOARD_SURFACING_PLUGIN_ID,
+            capabilities: ["ui.contribute", "jobs.create", "tools.read"],
+          },
         ]),
         bundledPlugins: [
           createImageToGcodePlugin({ initialOpen: developmentFixture === "image-job" }),
+          createSpoilboardSurfacingPlugin({
+            initialOpen: developmentFixture === "surfacing",
+          }),
         ],
       }),
     [],
@@ -352,6 +373,9 @@ export default function App() {
   const [uiError, setUiError] = useState<string>();
   const [logOpen, setLogOpen] = useState(developmentFixture === "logs");
   const [workZeroOpen, setWorkZeroOpen] = useState(false);
+  const [toolLibraryOpen, setToolLibraryOpen] = useState(
+    developmentFixture === "tools",
+  );
   const [workbenchView, setWorkbenchView] = useState<"program" | "controller">(
     "program",
   );
@@ -449,6 +473,23 @@ export default function App() {
       await action();
     } catch (error) {
       setUiError(String(error));
+    }
+  };
+
+  const returnToWorkZero = async (axis: WorkAxis): Promise<void> => {
+    setBusy(true);
+    setUiError(undefined);
+    try {
+      const outcome = await tauriWorkCoordinateGateway.returnToZero({
+        axis,
+        feedMmPerMin: axis === "z" ? 100 : 300,
+      });
+      pluginHost.machineState.publish(outcome.snapshot);
+    } catch (error) {
+      setUiError(String(error));
+      throw error;
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -712,7 +753,7 @@ export default function App() {
         />
 
         <div className="topbar-tools" aria-label="Инструменты задания">
-          <UiExtensionSlot registry={pluginHost.uiRegistry} slot={uiSlots.workspaceTools} />
+          <WorkspaceToolsMenu registry={pluginHost.uiRegistry} />
         </div>
 
         <div className={`connection-state is-${snapshot.connection}`}>
@@ -843,11 +884,16 @@ export default function App() {
               initialProgram={developmentPreviewFixture}
               incomingJob={generatedJob}
               initialRunIntent={
-                developmentFixture === "check-complete" ? "cutting" : undefined
+                developmentFixture === "check-complete" ||
+                developmentFixture === "run-complete"
+                  ? "cutting"
+                  : undefined
               }
               initialSender={
                 developmentFixture === "tool-change"
                   ? previewFixtureToolChangeSender
+                  : developmentFixture === "run-complete"
+                    ? previewFixtureCompletedSender
                   : developmentFixture === "check-running"
                     ? previewFixtureCheckRunningSender
                   : developmentFixture === "check-complete"
@@ -862,6 +908,7 @@ export default function App() {
                 onAcknowledgeReset: () => runAction(acknowledgeReset),
                 onConnect: connectSelectedTransport,
                 onOpenWorkZero: () => setWorkZeroOpen(true),
+                onReturnToWorkZero: returnToWorkZero,
                 onUnlock: () => runAction(unlockAlarm),
                 snapshot,
                 workPosition: workPositionView.position,
@@ -1278,6 +1325,10 @@ export default function App() {
         initialView={settingsFocus === "motion" ? "controller" : "local"}
         onClose={() => setSettingsOpen(false)}
         onLocalUpdate={updateLocalMachine}
+        onOpenToolLibrary={() => {
+          setSettingsOpen(false);
+          setToolLibraryOpen(true);
+        }}
         onRollback={rollbackSetting}
         onWrite={writeControllerSetting}
         open={settingsOpen}
@@ -1304,6 +1355,13 @@ export default function App() {
         position={workPositionView.position}
         snapshot={snapshot}
       />
+      {pluginHost.tools && (
+        <ToolLibraryDialog
+          onClose={() => setToolLibraryOpen(false)}
+          open={toolLibraryOpen}
+          service={pluginHost.tools}
+        />
+      )}
     </div>
   );
 }

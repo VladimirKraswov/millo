@@ -10,6 +10,9 @@ describe("WorkZeroPanel", () => {
       <WorkZeroPanel
         desktopRuntime
         gateway={{
+          returnToZero: async () => {
+            throw new Error("not used during server render");
+          },
           setZero: async () => {
             throw new Error("not used during server render");
           },
@@ -28,5 +31,7 @@ describe("WorkZeroPanel", () => {
     expect(markup).toContain("Только X");
     expect(markup).toContain("Только Y");
     expect(markup).toContain("Только Z");
+    expect(markup).toContain("Вернуться к сохранённому нулю");
+    expect(markup).toContain("К Z0");
   });
 });

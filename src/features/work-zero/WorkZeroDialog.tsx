@@ -45,7 +45,7 @@ export function WorkZeroDialog({
         <header>
           <div>
             <span>Рабочая система · {activeCoordinateSystem}</span>
-            <h2 id="work-zero-dialog-title">Установить рабочий ноль</h2>
+            <h2 id="work-zero-dialog-title">Рабочий ноль</h2>
           </div>
           <button aria-label="Закрыть" onClick={onClose} title="Закрыть" type="button">
             <X aria-hidden="true" size={16} />

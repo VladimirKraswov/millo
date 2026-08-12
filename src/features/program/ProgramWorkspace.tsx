@@ -5,6 +5,7 @@ import {
   CircleCheck,
   FileCode2,
   History,
+  LocateFixed,
   Pause,
   Play,
   RotateCcw,
@@ -96,6 +97,7 @@ export interface ProgramMachineContext {
   readonly onAcknowledgeReset: () => void | Promise<unknown>;
   readonly onConnect: () => void | Promise<unknown>;
   readonly onOpenWorkZero: () => void;
+  readonly onReturnToWorkZero: (axis: "x" | "y" | "z") => Promise<void>;
   readonly onUnlock: () => void | Promise<unknown>;
   readonly snapshot: ControllerSnapshot;
   readonly workPosition?: Position;
@@ -483,6 +485,19 @@ export function ProgramWorkspace({
     setError(undefined);
     try {
       setSender(await action());
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setSenderCommandBusy(false);
+    }
+  };
+
+  const returnToWorkZero = async (axis: "x" | "y" | "z") => {
+    if (!machineContext || senderCommandBusy) return;
+    setSenderCommandBusy(true);
+    setError(undefined);
+    try {
+      await machineContext.onReturnToWorkZero(axis);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -1079,21 +1094,34 @@ export function ProgramWorkspace({
                   )}
                   {programRunVisible &&
                     physicalActions.primary === "prepareRerun" && (
-                    <button
-                      className="is-terminal-action"
-                      onClick={() => {
-                        setSender((current) => ({
-                          ...idleSenderSnapshot,
-                          runSequence: current.runSequence,
-                        }));
-                        setClearedSenderRunSequence(sender.runSequence);
-                        setRealRunReport(undefined);
-                      }}
-                      type="button"
-                    >
-                      <RotateCcw aria-hidden="true" size={13} />
-                      Подготовить повторный запуск
-                    </button>
+                    <>
+                      <button
+                        className="is-return-zero"
+                        disabled={senderCommandBusy || !machineContext}
+                        onClick={() => void returnToWorkZero("z")}
+                        title="Вернуть ось Z к сохранённому рабочему нулю без изменения G54–G59"
+                        type="button"
+                      >
+                        <LocateFixed aria-hidden="true" size={13} />
+                        Вернуть фрезу к Z0
+                      </button>
+                      <button
+                        className="is-terminal-action"
+                        disabled={senderCommandBusy}
+                        onClick={() => {
+                          setSender((current) => ({
+                            ...idleSenderSnapshot,
+                            runSequence: current.runSequence,
+                          }));
+                          setClearedSenderRunSequence(sender.runSequence);
+                          setRealRunReport(undefined);
+                        }}
+                        type="button"
+                      >
+                        <RotateCcw aria-hidden="true" size={13} />
+                        Подготовить повторный запуск
+                      </button>
+                    </>
                   )}
                   {programRunVisible &&
                     physicalActions.primary === "resolveInterruption" && (
@@ -1126,7 +1154,7 @@ export function ProgramWorkspace({
                   {displayedSender.state === "completed"
                     ? checkRunVisible
                       ? "Все строки приняты в $C; контроллер вернулся в Idle"
-                      : "Все строки подтверждены; контроллер вернулся в Idle"
+                      : "Ещё проход: Z0 → Jog Z− → Только Z → подготовить повтор"
                     : displayedSender.state === "failed"
                       ? displayedSenderFailure
                       : displayedSender.state === "toolChange"

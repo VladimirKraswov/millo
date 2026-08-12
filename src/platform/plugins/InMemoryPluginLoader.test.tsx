@@ -15,10 +15,13 @@ import {
 import type { MachineCommandGateway } from "../machine/MachineCommandGateway";
 import { MachineSnapshotStore } from "../machine/MachineStateSource";
 import type { JobCreationCapability } from "../jobs/JobCreationService";
+import type { ToolLibraryGateway } from "../tooling/ToolLibraryGateway";
+import { ToolLibraryService } from "../tooling/ToolLibraryService";
 import type {
   PluginActivationContext,
   PluginMachineJogCapability,
   PluginMachineReadCapability,
+  PluginToolsCapability,
 } from "./InMemoryPluginLoader";
 import type {
   ControllerSnapshot,
@@ -375,9 +378,10 @@ describe("InMemoryPluginLoader", () => {
     const pluginId = "dev.millo.jobs-service";
     const generated = Object.freeze({}) as GeneratedImageJob;
     const generateImage = vi.fn(async () => generated);
+    const generateSurfacing = vi.fn();
     const open = vi.fn();
     const save = vi.fn(async () => undefined);
-    const jobs: JobCreationCapability = { generateImage, open, save };
+    const jobs: JobCreationCapability = { generateImage, generateSurfacing, open, save };
     const loader = new InMemoryPluginLoader({
       uiRegistry: createUiExtensionRegistry(),
       jobs,
@@ -401,6 +405,39 @@ describe("InMemoryPluginLoader", () => {
     expect(save).toHaveBeenCalledWith(generated);
     await loader.unload(pluginId);
     expect(() => capability?.open(generated)).toThrow("no longer active");
+  });
+
+  it("scopes tools.read subscriptions and closes the proxy on unload", async () => {
+    const pluginId = "dev.millo.tool-observer";
+    const gateway = {
+      load: vi.fn(),
+      create: vi.fn(),
+      update: vi.fn(),
+      delete: vi.fn(),
+      restorePresets: vi.fn(),
+    } as unknown as ToolLibraryGateway;
+    const tools = new ToolLibraryService(gateway);
+    const unsubscribe = vi.fn();
+    vi.spyOn(tools, "subscribe").mockReturnValue(unsubscribe);
+    let capability: PluginToolsCapability | undefined;
+    const loader = new InMemoryPluginLoader({
+      uiRegistry: createUiExtensionRegistry(),
+      tools,
+      grants: new CapabilityGrantStore([
+        { pluginId, capabilities: ["tools.read"] },
+      ]),
+    });
+    const plugin = moduleWith(pluginId, ["tools.read"], (context) => {
+      capability = context.tools;
+      context.tools?.subscribe(vi.fn());
+    });
+
+    await loader.load(plugin);
+    expect(Object.isFrozen(capability?.current())).toBe(true);
+    await loader.unload(pluginId);
+
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(() => capability?.current()).toThrow("no longer active");
   });
 
   it("rejects API mismatch before activation", async () => {

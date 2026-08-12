@@ -261,6 +261,18 @@ export interface WorkZeroOutcome {
   snapshot: ControllerSnapshot;
 }
 
+export interface ReturnToWorkZeroRequest {
+  axis: WorkAxis;
+  feedMmPerMin: number;
+}
+
+export interface ReturnToWorkZeroOutcome {
+  axis: WorkAxis;
+  coordinateSystem: WorkCoordinateSystem;
+  command: string;
+  snapshot: ControllerSnapshot;
+}
+
 export const emptySnapshot: ControllerSnapshot = {
   connection: "disconnected",
   machine: {

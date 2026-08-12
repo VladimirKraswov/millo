@@ -1,4 +1,4 @@
-import type { GeneratedImageJob, PublishedJob } from "../../shared/jobs";
+import type { GeneratedJob, PublishedJob } from "../../shared/jobs";
 
 export class GeneratedJobStore {
   private readonly listeners = new Set<() => void>();
@@ -12,7 +12,7 @@ export class GeneratedJobStore {
     return () => this.listeners.delete(listener);
   };
 
-  publish(job: GeneratedImageJob): PublishedJob {
+  publish(job: GeneratedJob): PublishedJob {
     this.sequence += 1;
     this.snapshot = Object.freeze({ sequence: this.sequence, job });
     for (const listener of this.listeners) listener();

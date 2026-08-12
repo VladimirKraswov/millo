@@ -48,12 +48,57 @@ export interface ImageJobSummary {
   readonly sourceHeightPx?: number;
 }
 
-export interface GeneratedImageJob {
+export interface GeneratedJob {
   readonly sourceName: string;
   readonly source: string;
-  readonly vectorSvg: string;
   readonly program: GcodeProgram;
+}
+
+export interface GeneratedImageJob extends GeneratedJob {
+  readonly vectorSvg: string;
   readonly summary: ImageJobSummary;
+}
+
+export type SurfacingRasterAxis = "x" | "y";
+
+export interface SurfacingJobSettings {
+  readonly originXMm: number;
+  readonly originYMm: number;
+  readonly widthMm: number;
+  readonly heightMm: number;
+  readonly edgeOverrunMm: number;
+  readonly surfaceZMm: number;
+  readonly removalMm: number;
+  readonly depthPerPassMm: number;
+  readonly safeZMm: number;
+  readonly stepoverPercent: number;
+  readonly feedMmPerMin: number;
+  readonly plungeMmPerMin: number;
+  readonly rasterAxis: SurfacingRasterAxis;
+}
+
+export interface SurfacingJobRequest {
+  readonly sourceName: string;
+  readonly toolId: string;
+  readonly settings: SurfacingJobSettings;
+}
+
+export interface SurfacingJobSummary {
+  readonly toolId: string;
+  readonly toolName: string;
+  readonly toolDiameterMm: number;
+  readonly passCount: number;
+  readonly rasterLineCount: number;
+  readonly stepoverMm: number;
+  readonly coveredWidthMm: number;
+  readonly coveredHeightMm: number;
+  readonly edgeOverrunMm: number;
+  readonly removalMm: number;
+  readonly spindleRpm: number;
+}
+
+export interface GeneratedSurfacingJob extends GeneratedJob {
+  readonly summary: SurfacingJobSummary;
 }
 
 export interface GeneratedGcodeSaveOutcome {
@@ -63,5 +108,5 @@ export interface GeneratedGcodeSaveOutcome {
 
 export interface PublishedJob {
   readonly sequence: number;
-  readonly job: GeneratedImageJob;
+  readonly job: GeneratedJob;
 }

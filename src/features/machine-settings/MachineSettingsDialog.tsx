@@ -7,6 +7,7 @@ import {
   Search,
   Settings2,
   ShieldAlert,
+  Wrench,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -42,6 +43,7 @@ interface MachineSettingsDialogProps {
   settings?: ControllerSettingsState;
   onClose: () => void;
   onLocalUpdate: (profile: MachineProfile) => Promise<MachineProfileState>;
+  onOpenToolLibrary: () => void;
   onRollback: (key: string, revision: number) => Promise<ControllerSettingsState>;
   onWrite: (
     request: ControllerSettingEditRequest,
@@ -65,6 +67,7 @@ export function MachineSettingsDialog({
   settings,
   onClose,
   onLocalUpdate,
+  onOpenToolLibrary,
   onRollback,
   onWrite,
   initialView = "local",
@@ -393,6 +396,18 @@ export function MachineSettingsDialog({
                   </label>
                 ))}
               </fieldset>
+              <button
+                className="tooling-settings-card"
+                onClick={onOpenToolLibrary}
+                type="button"
+              >
+                <span className="tooling-settings-icon"><Wrench aria-hidden="true" size={18} /></span>
+                <span>
+                  <strong>Оснастка и режимы резания</strong>
+                  <small>Фрезы, геометрия, подачи и рекомендации по применению</small>
+                </span>
+                <span>Открыть</span>
+              </button>
             </section>
           )}
 

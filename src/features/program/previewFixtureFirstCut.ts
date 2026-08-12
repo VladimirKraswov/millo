@@ -64,6 +64,12 @@ export const previewFixtureCheckCompleteSender: SenderSnapshot = {
   timeEstimateComplete: true,
 };
 
+export const previewFixtureCompletedSender: SenderSnapshot = {
+  ...previewFixtureCheckCompleteSender,
+  runSequence: 43,
+  mode: "cutRun",
+};
+
 export const previewFixtureCheckRunningSender: SenderSnapshot = {
   ...previewFixtureCheckCompleteSender,
   runSequence: 42,

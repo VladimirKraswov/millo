@@ -34,11 +34,15 @@ PNG -> luminance/threshold -> VTracer -> SVG --+                         |
 
 ## Plugin contract
 
-`jobs.create` exposes three operations:
+`jobs.create` exposes these host-owned operations:
 
 1. `generateImage(request)` calls the Rust core and returns a deeply frozen job.
 2. `save(job)` opens the native `.nc` save dialog after a fresh parser check.
 3. `open(job)` publishes that exact core-issued object to Program workspace.
+
+The same capability also exposes the typed `generateSurfacing(request)` core
+operation. It resolves `toolId` from the Rust-owned library; plugins cannot pass
+untrusted cutter geometry. See [Surfacing](SURFACING.md).
 
 The host retains job identity in a `WeakSet`; plugins cannot fabricate a source
 object and pass it to save/open. Unloading a plugin closes retained proxies.

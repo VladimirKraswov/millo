@@ -1,7 +1,7 @@
 use millo_domain::{
     CommandResponse, ControllerAccessories, ControllerBufferState, ControllerCapabilities,
     ControllerOverrides, ControllerPins, DeviceInspection, JogAxis, MachineMode, MachineState,
-    Position, StepJogRequest, WorkAxis, WorkCoordinateSystem,
+    Position, ReturnToWorkZeroRequest, StepJogRequest, WorkAxis, WorkCoordinateSystem,
 };
 use thiserror::Error;
 
@@ -88,6 +88,31 @@ pub fn encode_step_jog(request: StepJogRequest) -> Result<String, JogValidationE
     Ok(format!(
         "$J=G91 G21 {axis}{:.3} F{:.3}",
         request.distance_mm, request.feed_mm_per_min
+    ))
+}
+
+pub fn encode_return_to_work_zero(
+    request: ReturnToWorkZeroRequest,
+) -> Result<String, JogValidationError> {
+    if !request.feed_mm_per_min.is_finite() {
+        return Err(JogValidationError::InvalidFeed);
+    }
+    if !(MIN_STEP_JOG_FEED_MM_PER_MIN..=MAX_STEP_JOG_FEED_MM_PER_MIN)
+        .contains(&request.feed_mm_per_min)
+    {
+        return Err(JogValidationError::FeedOutOfRange {
+            min_mm_per_min: MIN_STEP_JOG_FEED_MM_PER_MIN,
+            max_mm_per_min: MAX_STEP_JOG_FEED_MM_PER_MIN,
+        });
+    }
+    let axis = match request.axis {
+        WorkAxis::X => 'X',
+        WorkAxis::Y => 'Y',
+        WorkAxis::Z => 'Z',
+    };
+    Ok(format!(
+        "$J=G90 G21 {axis}0.000 F{:.3}",
+        request.feed_mm_per_min
     ))
 }
 
@@ -640,6 +665,25 @@ mod tests {
             encode_set_work_zero(WorkAxis::Z, WorkCoordinateSystem::G59),
             "G10 L20 P6 Z0"
         );
+    }
+
+    #[test]
+    fn encodes_absolute_metric_return_to_one_work_axis() {
+        assert_eq!(
+            encode_return_to_work_zero(ReturnToWorkZeroRequest {
+                axis: WorkAxis::Z,
+                feed_mm_per_min: 100.0,
+            })
+            .unwrap(),
+            "$J=G90 G21 Z0.000 F100.000"
+        );
+        assert!(matches!(
+            encode_return_to_work_zero(ReturnToWorkZeroRequest {
+                axis: WorkAxis::X,
+                feed_mm_per_min: 0.0,
+            }),
+            Err(JogValidationError::FeedOutOfRange { .. })
+        ));
     }
 
     #[test]

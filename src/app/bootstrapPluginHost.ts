@@ -11,6 +11,8 @@ import type { InMemoryPluginModule } from "../platform/plugins/InMemoryPluginLoa
 import { GeneratedJobStore } from "../platform/jobs/GeneratedJobStore";
 import type { ImageJobGateway } from "../platform/jobs/ImageJobGateway";
 import { JobCreationService } from "../platform/jobs/JobCreationService";
+import type { ToolLibraryGateway } from "../platform/tooling/ToolLibraryGateway";
+import { ToolLibraryService } from "../platform/tooling/ToolLibraryService";
 import { registerCoreUiExtensions } from "./registerCoreUiExtensions";
 
 export interface PluginHost {
@@ -18,6 +20,7 @@ export interface PluginHost {
   readonly machineState: MachineSnapshotStore;
   readonly plugins: InMemoryPluginLoader;
   readonly generatedJobs: GeneratedJobStore;
+  readonly tools?: ToolLibraryService;
   readonly ready: Promise<void>;
 }
 
@@ -26,6 +29,7 @@ export interface PluginHostOptions {
   readonly machineCommands: MachineCommandGateway;
   readonly grants?: CapabilityGrantStore;
   readonly imageJobs?: ImageJobGateway;
+  readonly toolLibrary?: ToolLibraryGateway;
   readonly bundledPlugins?: readonly InMemoryPluginModule[];
   readonly onPluginError?: (pluginId: string, error: unknown) => void;
 }
@@ -35,6 +39,9 @@ export function bootstrapPluginHost(options: PluginHostOptions): PluginHost {
   registerCoreUiExtensions(uiRegistry);
   const machineState = new MachineSnapshotStore(options.initialSnapshot);
   const generatedJobs = new GeneratedJobStore();
+  const tools = options.toolLibrary
+    ? new ToolLibraryService(options.toolLibrary)
+    : undefined;
   const jobs = options.imageJobs
     ? new JobCreationService(options.imageJobs, generatedJobs)
     : undefined;
@@ -43,10 +50,12 @@ export function bootstrapPluginHost(options: PluginHostOptions): PluginHost {
     machineState,
     machineCommands: options.machineCommands,
     jobs,
+    tools,
     grants: options.grants,
     onPluginError: options.onPluginError,
   });
   const ready = (async () => {
+    await tools?.initialize();
     for (const plugin of options.bundledPlugins ?? []) {
       await plugins.load(plugin);
     }
@@ -55,5 +64,12 @@ export function bootstrapPluginHost(options: PluginHostOptions): PluginHost {
     // The caller still owns reporting; attach immediately to avoid an unhandled rejection.
   });
 
-  return Object.freeze({ uiRegistry, machineState, plugins, generatedJobs, ready });
+  return Object.freeze({
+    uiRegistry,
+    machineState,
+    plugins,
+    generatedJobs,
+    tools,
+    ready,
+  });
 }

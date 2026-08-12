@@ -9,6 +9,8 @@ import type {
   OperatorConfirmation,
   OverrideAdjustment,
   RapidOverrideTarget,
+  ReturnToWorkZeroOutcome,
+  ReturnToWorkZeroRequest,
   ResetChallenge,
   StepJogReceipt,
   StepJogRequest,
@@ -115,6 +117,11 @@ export const setWorkZero = (
   request: WorkZeroRequest,
 ): Promise<WorkZeroOutcome> =>
   invoke<WorkZeroOutcome>("set_work_zero", { request });
+
+export const returnToWorkZero = (
+  request: ReturnToWorkZeroRequest,
+): Promise<ReturnToWorkZeroOutcome> =>
+  invoke<ReturnToWorkZeroOutcome>("return_to_work_zero", { request });
 
 export const cancelJog = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("cancel_jog");

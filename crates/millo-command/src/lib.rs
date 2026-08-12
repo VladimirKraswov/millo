@@ -11,8 +11,8 @@ use millo_domain::{
     CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot, DeviceInspection,
     HardwareInspection, HardwareProfile, JogPadStepOutcome, JogPadStepRequest, MachineMode,
     OperatorConfirmation, OverrideAdjustment, Position, RapidOverrideTarget, ResetChallenge,
-    StepJogReceipt, StepJogRequest, TestJogPreparation, WorkAxis, WorkCoordinateSystem,
-    WorkZeroOutcome, WorkZeroRequest,
+    ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest, StepJogReceipt, StepJogRequest,
+    TestJogPreparation, WorkAxis, WorkCoordinateSystem, WorkZeroOutcome, WorkZeroRequest,
 };
 use millo_dry_run::{
     DryRunLineKind, DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy,
@@ -90,6 +90,16 @@ pub enum ArbiterError {
     UnlockConfirmationRequired,
     #[error("work zero verification failed: {0}")]
     WorkZeroVerification(String),
+    #[error("current work position is unavailable")]
+    WorkPositionUnavailable,
+    #[error("raise work Z above zero before returning {0:?} to zero")]
+    ReturnToZeroNeedsClearance(WorkAxis),
+    #[error("return distance {requested:.3} mm exceeds the {axis:?} travel {maximum:.3} mm")]
+    ReturnToZeroDistanceExceedsProfile {
+        axis: WorkAxis,
+        requested: f64,
+        maximum: f64,
+    },
     #[error(transparent)]
     Sender(#[from] SenderError),
     #[error("dry run is disabled for the active transport")]
@@ -548,6 +558,14 @@ impl CommandArbiter {
             .await
     }
 
+    pub async fn return_to_work_zero(
+        &self,
+        request: ReturnToWorkZeroRequest,
+    ) -> Result<ReturnToWorkZeroOutcome, ArbiterError> {
+        self.call(|response| Request::ReturnToWorkZero { request, response })
+            .await
+    }
+
     pub async fn start_dry_run(&self, plan: DryRunPlan) -> Result<SenderSnapshot, ArbiterError> {
         self.call(|response| Request::StartDryRun { plan, response })
             .await
@@ -718,6 +736,10 @@ enum Request {
     SetWorkZero {
         request: WorkZeroRequest,
         response: oneshot::Sender<Result<WorkZeroOutcome, ArbiterError>>,
+    },
+    ReturnToWorkZero {
+        request: ReturnToWorkZeroRequest,
+        response: oneshot::Sender<Result<ReturnToWorkZeroOutcome, ArbiterError>>,
     },
     StartDryRun {
         plan: DryRunPlan,
@@ -1302,6 +1324,12 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         Request::SetWorkZero { request, response } => {
             invalidate_authorizations(safety, first_cut);
             let result = execute_set_work_zero(controller, request).await;
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::ReturnToWorkZero { request, response } => {
+            invalidate_authorizations(safety, first_cut);
+            let result = execute_return_to_work_zero(controller, hardware_profile, request).await;
             publish(snapshots, controller);
             let _ = response.send(result);
         }
@@ -2125,6 +2153,73 @@ async fn execute_set_work_zero(
     })
 }
 
+async fn execute_return_to_work_zero(
+    controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
+    request: ReturnToWorkZeroRequest,
+) -> Result<ReturnToWorkZeroOutcome, ArbiterError> {
+    validate_jog_pad_motion(0.01, request.feed_mm_per_min)?;
+    let snapshot = controller.refresh_status().await?;
+    ensure_stable_idle(&snapshot)?;
+    let work_position = snapshot
+        .machine
+        .work_position
+        .ok_or(ArbiterError::WorkPositionUnavailable)?;
+    if !matches!(request.axis, WorkAxis::Z) && work_position.z <= 0.0 {
+        return Err(ArbiterError::ReturnToZeroNeedsClearance(request.axis));
+    }
+
+    let inspection = controller.inspect_device().await?;
+    let coordinate_system = active_work_coordinate_system(&inspection.modal_state)
+        .ok_or(ArbiterError::ActiveWorkCoordinateSystemUnavailable)?;
+    ensure_stable_idle(&controller.snapshot())?;
+
+    let jog_axis = work_axis_to_jog_axis(request.axis);
+    let current = work_axis_value(work_position, request.axis).abs();
+    let maximum = axis_travel_limit(hardware_profile, jog_axis);
+    if current > maximum {
+        return Err(ArbiterError::ReturnToZeroDistanceExceedsProfile {
+            axis: request.axis,
+            requested: current,
+            maximum,
+        });
+    }
+    if let Some(maximum) = axis_max_rate(&inspection, jog_axis)
+        && request.feed_mm_per_min > maximum
+    {
+        return Err(ArbiterError::JogPadFeedExceedsAxisRate {
+            axis: jog_axis,
+            requested: request.feed_mm_per_min,
+            maximum,
+        });
+    }
+
+    let response = controller.return_to_work_zero(request).await?;
+    let snapshot = controller.refresh_status().await?;
+    Ok(ReturnToWorkZeroOutcome {
+        axis: request.axis,
+        coordinate_system,
+        command: response.command,
+        snapshot,
+    })
+}
+
+fn work_axis_to_jog_axis(axis: WorkAxis) -> millo_domain::JogAxis {
+    match axis {
+        WorkAxis::X => millo_domain::JogAxis::X,
+        WorkAxis::Y => millo_domain::JogAxis::Y,
+        WorkAxis::Z => millo_domain::JogAxis::Z,
+    }
+}
+
+fn work_axis_value(position: Position, axis: WorkAxis) -> f64 {
+    match axis {
+        WorkAxis::X => position.x,
+        WorkAxis::Y => position.y,
+        WorkAxis::Z => position.z,
+    }
+}
+
 fn verified_work_axis(
     snapshot: &ControllerSnapshot,
     parameters: &DeviceInspection,
@@ -2520,6 +2615,17 @@ mod tests {
         WorkZeroRequest {
             axis,
             position_confirmed,
+        }
+    }
+
+    fn return_to_zero_request(axis: WorkAxis) -> ReturnToWorkZeroRequest {
+        ReturnToWorkZeroRequest {
+            axis,
+            feed_mm_per_min: if matches!(axis, WorkAxis::Z) {
+                100.0
+            } else {
+                300.0
+            },
         }
     }
 
@@ -3534,6 +3640,65 @@ mod tests {
                 b"?".to_vec(),
             ]
         );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn return_to_work_zero_uses_absolute_jog_without_mutating_the_offset() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:10.000,20.000,3.000|WPos:10.000,20.000,3.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_active_wcs(55);
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(50),
+                failures_before_recovery: 2,
+            },
+            HardwareProfile::first_machine(),
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let outcome = arbiter
+            .return_to_work_zero(return_to_zero_request(WorkAxis::Z))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.coordinate_system, WorkCoordinateSystem::G55);
+        assert_eq!(outcome.command, "$J=G90 G21 Z0.000 F100.000");
+        assert!(
+            control
+                .writes()
+                .contains(&b"$J=G90 G21 Z0.000 F100.000\n".to_vec())
+        );
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"G10 L20"))
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn lateral_return_to_zero_requires_positive_work_z_clearance() {
+        let (arbiter, _control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let error = arbiter
+            .return_to_work_zero(return_to_zero_request(WorkAxis::X))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArbiterError::ReturnToZeroNeedsClearance(WorkAxis::X)
+        ));
         task.abort();
     }
 

@@ -30,7 +30,7 @@ const renderControls = (mode: "idle" | "jog"): string =>
       onOpenMotionSettings={vi.fn()}
       onSnapshot={vi.fn()}
       snapshot={snapshot(mode)}
-      workCoordinateGateway={{ setZero: vi.fn() }}
+      workCoordinateGateway={{ setZero: vi.fn(), returnToZero: vi.fn() }}
     />,
   );
 

@@ -65,6 +65,24 @@ Generation never touches the command actor. Opening a generated job does not
 authorize or dispatch it; it only publishes the same source/program pair that a
 file load would produce.
 
+Cutting tools and spoilboard CAM follow the same inward dependency rule:
+
+```text
+Settings UI -> ToolLibraryService -> typed Tauri CRUD -> millo-tooling JSON store
+Plugin UI -> tools.read + jobs.create -> Tauri adapter -> millo-cam
+                                             |             |
+                                             +-> trusted tool lookup
+                                                           +-> raster G-code
+                                                                   |
+                                                            millo-gcode reparse
+```
+
+The library is application-wide rather than machine-local. Plugins receive
+frozen read-only snapshots; only system settings can mutate the Rust store.
+Surfacing CAM resolves the requested tool ID in Rust and never accepts plugin-
+supplied geometry. Generated output remains motion-free until it enters the
+ordinary Program preflight and sender gates.
+
 Mock dry-run execution is a separate, explicitly gated path:
 
 ```text
@@ -305,6 +323,10 @@ does not schedule or execute controller I/O.
 - Alarm Unlock and work-zero actions remain typed actor requests. The Program
   surface can invoke them contextually, but cannot write `$X`, `G10`, or raw
   serial bytes itself. See ADR 0043.
+- Return-to-work-zero is a separate absolute-jog request, not a zeroing shortcut.
+  The actor owns WCS lookup, feed/travel bounds, positive-Z clearance for X/Y,
+  and `$J=G90` encoding. Program may expose Z0 after completion, but it cannot
+  mutate G54-G59 or submit an arbitrary coordinate. See ADR 0047.
 - The original source is retained beside the immutable preview. Starting a dry
   run sends that source back to Rust for a fresh parse and independent policy
   check; the UI's `dryRunEligible` display flag is never authority.
@@ -559,6 +581,15 @@ does not schedule or execute controller I/O.
   grants no movement capability and exposes no arbitrary coordinate command.
 - The first slice is covered by Mock GRBL and unit/UI tests only. Physical
   execution remains a separate operator-confirmed hardware check.
+
+Returning to an existing zero uses a distinct boundary:
+
+- A fresh status and `$G` are required before movement; only stable `Idle` and
+  G54-G59 are accepted.
+- Rust emits one-axis `$J=G90 G21 X|Y|Z0 F...`; React cannot provide a target.
+- Requested feed is bounded by live `$110/$111/$112`, and distance by the
+  selected machine profile. X/Y additionally require positive work Z.
+- The command never emits `G10`, so returning to zero cannot redefine it.
 
 ### Hardware readiness boundary
 

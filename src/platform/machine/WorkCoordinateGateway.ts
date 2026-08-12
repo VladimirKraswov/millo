@@ -1,5 +1,11 @@
-import type { WorkZeroOutcome, WorkZeroRequest } from "../../shared/machine";
+import type {
+  ReturnToWorkZeroOutcome,
+  ReturnToWorkZeroRequest,
+  WorkZeroOutcome,
+  WorkZeroRequest,
+} from "../../shared/machine";
 
 export interface WorkCoordinateGateway {
   setZero(request: WorkZeroRequest): Promise<WorkZeroOutcome>;
+  returnToZero(request: ReturnToWorkZeroRequest): Promise<ReturnToWorkZeroOutcome>;
 }

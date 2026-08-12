@@ -9,15 +9,17 @@ use millo_audit::{
     AuditCategory, AuditExportFormat, AuditExportOutcome, AuditLevel, AuditLog, AuditLogSnapshot,
 };
 use millo_cam::{
-    GeneratedImageJob, ImageJobRequest, generate_image_job as generate_image_job_core,
+    GeneratedImageJob, GeneratedSurfacingJob, ImageJobRequest, SurfacingJobRequest,
+    generate_image_job as generate_image_job_core,
+    generate_surfacing_job as generate_surfacing_job_core,
 };
 use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
     ControllerSnapshot, DeviceInspection, HardwareInspection, HardwareProfile, JogPadStepOutcome,
     JogPadStepRequest, OperatorConfirmation, OverrideAdjustment, RapidOverrideTarget,
-    ResetChallenge, StepJogReceipt, StepJogRequest, TestJogPreparation, WorkZeroOutcome,
-    WorkZeroRequest,
+    ResetChallenge, ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest, StepJogReceipt,
+    StepJogRequest, TestJogPreparation, WorkZeroOutcome, WorkZeroRequest,
 };
 use millo_dry_run::{DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, build_dry_run_plan};
 use millo_gcode::{
@@ -48,6 +50,7 @@ use millo_settings::{
     ControllerSettingEditRequest, ControllerSettingsSnapshot, MachineSettingsArchive,
     build_settings_snapshot,
 };
+use millo_tooling::{CuttingToolDraft, ToolLibraryState, ToolLibraryStore};
 use millo_transport::BoxedTransport;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -183,6 +186,7 @@ pub struct AppState {
     arbiter: CommandArbiter,
     audit: AuditLog,
     profiles: Mutex<MachineProfileStore>,
+    tools: Mutex<ToolLibraryStore>,
     active_transport: Mutex<TransportDescriptor>,
     mock: Mutex<Option<MockControl>>,
     transition_lock: Mutex<()>,
@@ -197,6 +201,7 @@ impl Default for AppState {
     fn default() -> Self {
         Self::from_profile_store(
             MachineProfileStore::in_memory(),
+            ToolLibraryStore::in_memory(),
             None,
             RunJournal::in_memory(),
             ProgramRecoveryStore::in_memory(),
@@ -215,6 +220,9 @@ impl AppState {
         let recovery_path = profile_path
             .parent()
             .map(|parent| parent.join("active-program-recovery.json"));
+        let tool_library_path = profile_path
+            .parent()
+            .map(|parent| parent.join("cutting-tools.json"));
         let audit = match profile_path
             .parent()
             .map(|parent| AuditLog::persistent(parent.join("logs")))
@@ -235,6 +243,11 @@ impl AppState {
         };
         let profiles =
             MachineProfileStore::load(profile_path).map_err(|error| error.to_string())?;
+        let tools = tool_library_path
+            .map(ToolLibraryStore::load)
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_else(ToolLibraryStore::in_memory);
         let journal = journal_path
             .map(RunJournal::load)
             .transpose()
@@ -245,7 +258,8 @@ impl AppState {
             .transpose()
             .map_err(|error| error.to_string())?
             .unwrap_or_else(ProgramRecoveryStore::in_memory);
-        let state = Self::from_profile_store(profiles, settings_root, journal, recovery, audit);
+        let state =
+            Self::from_profile_store(profiles, tools, settings_root, journal, recovery, audit);
         state.audit.record(
             AuditLevel::Info,
             AuditCategory::Application,
@@ -258,6 +272,7 @@ impl AppState {
 
     fn from_profile_store(
         profiles: MachineProfileStore,
+        tools: ToolLibraryStore,
         settings_root: Option<PathBuf>,
         run_journal: RunJournal,
         program_recovery: ProgramRecoveryStore,
@@ -283,6 +298,7 @@ impl AppState {
             arbiter,
             audit,
             profiles: Mutex::new(profiles),
+            tools: Mutex::new(tools),
             active_transport: Mutex::new(descriptor),
             mock: Mutex::new(mock),
             transition_lock: Mutex::new(()),
@@ -663,6 +679,102 @@ pub async fn dismiss_program_recovery(
 #[tauri::command]
 pub async fn machine_profiles(state: State<'_, AppState>) -> Result<MachineProfileState, String> {
     Ok(state.profiles.lock().await.state())
+}
+
+#[tauri::command]
+pub async fn tool_library(state: State<'_, AppState>) -> Result<ToolLibraryState, String> {
+    Ok(state.tools.lock().await.state())
+}
+
+#[tauri::command]
+pub async fn create_cutting_tool(
+    draft: CuttingToolDraft,
+    state: State<'_, AppState>,
+) -> Result<ToolLibraryState, String> {
+    let context = json!({ "name": &draft.name, "kind": draft.kind });
+    let result = state
+        .tools
+        .lock()
+        .await
+        .create(draft)
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Storage,
+        "storage.tool_created",
+        "Cutting tool added to the library",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn update_cutting_tool(
+    tool_id: String,
+    draft: CuttingToolDraft,
+    state: State<'_, AppState>,
+) -> Result<ToolLibraryState, String> {
+    let context = json!({ "toolId": &tool_id, "name": &draft.name, "kind": draft.kind });
+    let result = state
+        .tools
+        .lock()
+        .await
+        .update(&tool_id, draft)
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Storage,
+        "storage.tool_updated",
+        "Cutting tool updated",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn delete_cutting_tool(
+    tool_id: String,
+    state: State<'_, AppState>,
+) -> Result<ToolLibraryState, String> {
+    let context = json!({ "toolId": &tool_id });
+    let result = state
+        .tools
+        .lock()
+        .await
+        .delete(&tool_id)
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Storage,
+        "storage.tool_deleted",
+        "Cutting tool removed from the library",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn restore_cutting_tool_presets(
+    state: State<'_, AppState>,
+) -> Result<ToolLibraryState, String> {
+    let result = state
+        .tools
+        .lock()
+        .await
+        .restore_missing_presets()
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Storage,
+        "storage.tool_presets_restored",
+        "Missing cutting-tool presets restored",
+        Value::Null,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
@@ -1735,6 +1847,32 @@ pub async fn set_work_zero(
 }
 
 #[tauri::command]
+pub async fn return_to_work_zero(
+    request: ReturnToWorkZeroRequest,
+    state: State<'_, AppState>,
+) -> Result<ReturnToWorkZeroOutcome, String> {
+    let context = serde_json::to_value(request).unwrap_or(Value::Null);
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        state
+            .arbiter
+            .return_to_work_zero(request)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Controller,
+        "controller.return_to_work_zero",
+        "Absolute work-zero jog accepted",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
 pub async fn parse_gcode_program(
     request: ProgramParseRequest,
     options: Option<ProgramParseOptions>,
@@ -1767,6 +1905,38 @@ pub async fn generate_image_job(
         AuditCategory::Program,
         "program.image_job_generated",
         "Image job generated and reparsed",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn generate_surfacing_job(
+    request: SurfacingJobRequest,
+    state: State<'_, AppState>,
+) -> Result<GeneratedSurfacingJob, String> {
+    let tool = state
+        .tools
+        .lock()
+        .await
+        .get(&request.tool_id)
+        .cloned()
+        .ok_or_else(|| format!("unknown cutting tool: {}", request.tool_id))?;
+    let context = json!({
+        "sourceName": &request.source_name,
+        "toolId": &request.tool_id,
+        "settings": &request.settings,
+    });
+    let result = tokio::task::spawn_blocking(move || generate_surfacing_job_core(request, &tool))
+        .await
+        .map_err(|error| format!("surfacing job generation task failed: {error}"))?
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Program,
+        "program.surfacing_job_generated",
+        "Surfacing job generated and reparsed",
         context,
         &result,
     );

@@ -9,6 +9,7 @@ description = "Deterministic image-to-G-code generation core for Millo"
 base64 = "0.22"
 image = { version = "=0.25.8", default-features = false, features = ["png"] }
 millo-gcode = { path = "../millo-gcode" }
+millo-tooling = { path = "../millo-tooling" }
 serde.workspace = true
 thiserror.workspace = true
 usvg = { version = "=0.45.1", default-features = false }

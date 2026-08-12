@@ -20,6 +20,7 @@ members = [
   "crates/millo-sender",
   "crates/millo-serial",
   "crates/millo-storage",
+  "crates/millo-tooling",
   "crates/millo-transport",
   "src-tauri",
 ]

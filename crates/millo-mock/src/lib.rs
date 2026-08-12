@@ -316,12 +316,20 @@ impl Transport for MockTransport {
                     .active_reads
                     .push_back(MockRead::Line("error:8".to_owned()));
             }
-        } else if let Some(jog) = parse_step_jog(data) {
+        } else if let Some(jog) = parse_jog(data) {
             let mut position = status_position(&state.status_line).unwrap_or([0.0; 3]);
-            position[jog.axis] += jog.distance_mm;
+            let distance_mm = if jog.absolute {
+                let target = state.work_offsets[state.active_wcs][jog.axis] + jog.distance_mm;
+                let distance = target - position[jog.axis];
+                position[jog.axis] = target;
+                distance
+            } else {
+                position[jog.axis] += jog.distance_mm;
+                jog.distance_mm
+            };
             let work_position = subtract_position(position, state.work_offsets[state.active_wcs]);
             state.status_line = format_status("Jog", position, work_position, jog.feed_mm_per_min);
-            state.jog_polls_remaining = mock_jog_status_polls(jog);
+            state.jog_polls_remaining = mock_jog_status_polls(MockJog { distance_mm, ..jog });
             state
                 .active_reads
                 .push_back(MockRead::Line("ok".to_owned()));
@@ -413,6 +421,7 @@ struct MockJog {
     axis: usize,
     distance_mm: f64,
     feed_mm_per_min: f64,
+    absolute: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -421,14 +430,22 @@ struct MockWorkZero {
     axis: usize,
 }
 
-fn parse_step_jog(data: &[u8]) -> Option<MockJog> {
+fn parse_jog(data: &[u8]) -> Option<MockJog> {
     let command = std::str::from_utf8(data)
         .ok()?
         .trim_end_matches(['\r', '\n']);
-    let words: Vec<_> = command
-        .strip_prefix("$J=G91 G21 ")?
-        .split_whitespace()
-        .collect();
+    let (words, absolute): (Vec<_>, bool) = if let Some(words) = command.strip_prefix("$J=G91 G21 ")
+    {
+        (words.split_whitespace().collect(), false)
+    } else {
+        (
+            command
+                .strip_prefix("$J=G90 G21 ")?
+                .split_whitespace()
+                .collect(),
+            true,
+        )
+    };
     if words.len() != 2 {
         return None;
     }
@@ -445,6 +462,7 @@ fn parse_step_jog(data: &[u8]) -> Option<MockJog> {
         axis,
         distance_mm,
         feed_mm_per_min,
+        absolute,
     })
 }
 

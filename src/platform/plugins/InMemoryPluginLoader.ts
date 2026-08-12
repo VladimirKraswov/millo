@@ -8,10 +8,15 @@ import type {
 import type { MachineCommandGateway } from "../machine/MachineCommandGateway";
 import type { JobCreationCapability } from "../jobs/JobCreationService";
 import type {
+  GeneratedJob,
   GeneratedGcodeSaveOutcome,
   GeneratedImageJob,
+  GeneratedSurfacingJob,
   ImageJobRequest,
+  SurfacingJobRequest,
 } from "../../shared/jobs";
+import type { ToolLibraryState } from "../../shared/tooling";
+import type { ToolLibraryService } from "../tooling/ToolLibraryService";
 import type {
   MachineStateListener,
   MachineStateSource,
@@ -52,8 +57,14 @@ export interface PluginMachineReadCapability {
 
 export interface PluginJobsCapability {
   generateImage(request: ImageJobRequest): Promise<GeneratedImageJob>;
-  open(job: GeneratedImageJob): void;
-  save(job: GeneratedImageJob): Promise<GeneratedGcodeSaveOutcome | undefined>;
+  generateSurfacing(request: SurfacingJobRequest): Promise<GeneratedSurfacingJob>;
+  open(job: GeneratedJob): void;
+  save(job: GeneratedJob): Promise<GeneratedGcodeSaveOutcome | undefined>;
+}
+
+export interface PluginToolsCapability {
+  current(): ToolLibraryState;
+  subscribe(listener: (state: ToolLibraryState) => void): () => void;
 }
 
 export interface PluginActivationContext {
@@ -64,6 +75,7 @@ export interface PluginActivationContext {
   readonly machineRead?: PluginMachineReadCapability;
   readonly machineJog?: PluginMachineJogCapability;
   readonly jobs?: PluginJobsCapability;
+  readonly tools?: PluginToolsCapability;
 }
 
 export interface InMemoryPluginModule {
@@ -97,6 +109,7 @@ interface InMemoryPluginLoaderOptions {
   readonly machineCommands?: MachineCommandGateway;
   readonly machineState?: MachineStateSource;
   readonly jobs?: JobCreationCapability;
+  readonly tools?: ToolLibraryService;
   readonly grants?: CapabilityGrantStore;
   readonly onPluginError?: (pluginId: string, error: unknown) => void;
 }
@@ -113,6 +126,7 @@ export class InMemoryPluginLoader {
   private readonly machineCommands?: MachineCommandGateway;
   private readonly machineState?: MachineStateSource;
   private readonly jobs?: JobCreationCapability;
+  private readonly tools?: ToolLibraryService;
   private readonly grants: CapabilityGrantStore;
   private readonly onPluginError?: (pluginId: string, error: unknown) => void;
   private readonly active = new Map<string, ActivePlugin>();
@@ -123,6 +137,7 @@ export class InMemoryPluginLoader {
     this.machineCommands = options.machineCommands;
     this.machineState = options.machineState;
     this.jobs = options.jobs;
+    this.tools = options.tools;
     this.grants = options.grants ?? new CapabilityGrantStore();
     this.onPluginError = options.onPluginError;
   }
@@ -264,6 +279,8 @@ export class InMemoryPluginLoader {
         return this.machineState !== undefined;
       case "jobs.create":
         return this.jobs !== undefined;
+      case "tools.read":
+        return this.tools !== undefined;
     }
   }
 
@@ -299,6 +316,12 @@ export class InMemoryPluginLoader {
               resources.assertOpen();
               return job;
             },
+            generateSurfacing: async (request: SurfacingJobRequest) => {
+              resources.assertOpen();
+              const job = await this.jobs!.generateSurfacing(request);
+              resources.assertOpen();
+              return job;
+            },
             open: (job: GeneratedImageJob) => {
               resources.assertOpen();
               this.jobs!.open(job);
@@ -311,6 +334,22 @@ export class InMemoryPluginLoader {
             },
           })
         : undefined;
+    const tools =
+      hasCapability("tools.read") && this.tools
+        ? Object.freeze({
+            current: () => {
+              resources.assertOpen();
+              return this.tools!.current();
+            },
+            subscribe: (listener: (state: ToolLibraryState) => void) => {
+              resources.assertOpen();
+              if (typeof listener !== "function") {
+                throw new PluginLoadError("tools.read listener must be a function");
+              }
+              return resources.track(this.tools!.subscribe(listener));
+            },
+          })
+        : undefined;
 
     return Object.freeze({
       manifest,
@@ -320,6 +359,7 @@ export class InMemoryPluginLoader {
       machineRead,
       machineJog,
       jobs,
+      tools,
     });
   }
 
