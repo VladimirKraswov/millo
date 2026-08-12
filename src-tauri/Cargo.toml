@@ -13,6 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+millo-audit = { path = "../crates/millo-audit" }
 millo-command = { path = "../crates/millo-command" }
 millo-controller = { path = "../crates/millo-controller" }
 millo-dry-run = { path = "../crates/millo-dry-run" }
@@ -30,4 +31,5 @@ millo-transport = { path = "../crates/millo-transport" }
 serde.workspace = true
 serde_json.workspace = true
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 tokio.workspace = true

@@ -117,6 +117,12 @@ the physical-run operator pause state while GRBL is in Check.
 
 ### Local persistence boundary
 
+- `millo-audit` is an independent best-effort diagnostic boundary. Calls append
+  to a bounded memory tail and use a fixed nonblocking queue; a dedicated thread
+  owns JSONL writes, flush, rotation, restore, and export. Audit backpressure or
+  disk failure can increment health counters but cannot delay controller/sender
+  I/O or prevent application startup. Audit entries are evidence only and can
+  never authorize motion or resume a job.
 - `millo-storage` is the only implementation of local temp/backup replacement.
   It writes a new file with `create_new`, flushes it with `fsync`, moves the
   current primary to `.bak`, renames the complete temporary file, and syncs the

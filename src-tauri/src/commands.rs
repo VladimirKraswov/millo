@@ -5,6 +5,9 @@ use std::{
     time::{Instant, SystemTime},
 };
 
+use millo_audit::{
+    AuditCategory, AuditExportFormat, AuditExportOutcome, AuditLevel, AuditLog, AuditLogSnapshot,
+};
 use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
@@ -44,7 +47,9 @@ use millo_settings::{
 };
 use millo_transport::BoxedTransport;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_dialog::DialogExt;
 use tokio::{
     sync::{Mutex, mpsc},
     task::JoinHandle,
@@ -52,6 +57,36 @@ use tokio::{
 
 const MOCK_TRANSPORT_ID: &str = "mock";
 const SERIAL_TRANSPORT_PREFIX: &str = "serial:";
+
+fn audit_operation<T>(
+    audit: &AuditLog,
+    category: AuditCategory,
+    operation: &str,
+    success_message: &str,
+    data: Value,
+    result: &Result<T, String>,
+) {
+    match result {
+        Ok(_) => {
+            audit.record(
+                AuditLevel::Info,
+                category,
+                format!("{operation}.completed"),
+                success_message,
+                data,
+            );
+        }
+        Err(error) => {
+            audit.record(
+                AuditLevel::Error,
+                category,
+                format!("{operation}.failed"),
+                error,
+                json!({ "context": data }),
+            );
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -129,6 +164,7 @@ impl ResolvedTransport {
 
 pub struct AppState {
     arbiter: CommandArbiter,
+    audit: AuditLog,
     profiles: Mutex<MachineProfileStore>,
     active_transport: Mutex<TransportDescriptor>,
     mock: Mutex<Option<MockControl>>,
@@ -147,6 +183,7 @@ impl Default for AppState {
             None,
             RunJournal::in_memory(),
             ProgramRecoveryStore::in_memory(),
+            AuditLog::in_memory(),
         )
     }
 }
@@ -161,6 +198,24 @@ impl AppState {
         let recovery_path = profile_path
             .parent()
             .map(|parent| parent.join("active-program-recovery.json"));
+        let audit = match profile_path
+            .parent()
+            .map(|parent| AuditLog::persistent(parent.join("logs")))
+        {
+            Some(Ok(audit)) => audit,
+            Some(Err(error)) => {
+                let audit = AuditLog::in_memory();
+                audit.record(
+                    AuditLevel::Critical,
+                    AuditCategory::Storage,
+                    "storage.audit_initialization_failed",
+                    error.to_string(),
+                    json!({ "fallback": "inMemory" }),
+                );
+                audit
+            }
+            None => AuditLog::in_memory(),
+        };
         let profiles =
             MachineProfileStore::load(profile_path).map_err(|error| error.to_string())?;
         let journal = journal_path
@@ -173,12 +228,15 @@ impl AppState {
             .transpose()
             .map_err(|error| error.to_string())?
             .unwrap_or_else(ProgramRecoveryStore::in_memory);
-        Ok(Self::from_profile_store(
-            profiles,
-            settings_root,
-            journal,
-            recovery,
-        ))
+        let state = Self::from_profile_store(profiles, settings_root, journal, recovery, audit);
+        state.audit.record(
+            AuditLevel::Info,
+            AuditCategory::Application,
+            "application.started",
+            "Millo desktop backend started",
+            json!({ "version": env!("CARGO_PKG_VERSION") }),
+        );
+        Ok(state)
     }
 
     fn from_profile_store(
@@ -186,6 +244,7 @@ impl AppState {
         settings_root: Option<PathBuf>,
         run_journal: RunJournal,
         program_recovery: ProgramRecoveryStore,
+        audit: AuditLog,
     ) -> Self {
         let initial = ResolvedTransport::mock();
         let descriptor = initial.descriptor;
@@ -205,6 +264,7 @@ impl AppState {
 
         Self {
             arbiter,
+            audit,
             profiles: Mutex::new(profiles),
             active_transport: Mutex::new(descriptor),
             mock: Mutex::new(mock),
@@ -228,7 +288,9 @@ impl AppState {
         let persistence_sender = start_run_persistence_worker(
             Arc::clone(&self.run_journal),
             Arc::clone(&self.program_recovery),
+            self.audit.clone(),
         );
+        let audit = self.audit.clone();
         *event_task = Some(tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -237,8 +299,28 @@ impl AppState {
                             break;
                         }
                         let snapshot = snapshots.borrow_and_update().clone();
+                        let level = if snapshot.alarm.is_some() || snapshot.last_error.is_some() {
+                            AuditLevel::Error
+                        } else if snapshot.reset_notice.is_some() {
+                            AuditLevel::Warning
+                        } else {
+                            AuditLevel::Debug
+                        };
+                        audit.record(
+                            level,
+                            AuditCategory::Controller,
+                            "controller.snapshot",
+                            format!("{:?} / {:?}", snapshot.connection, snapshot.machine.mode),
+                            serde_json::to_value(&snapshot).unwrap_or(Value::Null),
+                        );
                         if let Err(error) = app.emit("machine-state", snapshot) {
-                            eprintln!("machine-state event emission failed: {error}");
+                            audit.record(
+                                AuditLevel::Error,
+                                AuditCategory::Ui,
+                                "ui.machine_state_emit_failed",
+                                error.to_string(),
+                                Value::Null,
+                            );
                         }
                     }
                     changed = sender_snapshots.changed() => {
@@ -246,13 +328,46 @@ impl AppState {
                             break;
                         }
                         let snapshot = sender_snapshots.borrow_and_update().clone();
+                        let level = if snapshot.failure.is_some() {
+                            AuditLevel::Error
+                        } else if matches!(snapshot.state, millo_sender::SenderState::ToolChange) {
+                            AuditLevel::Warning
+                        } else if matches!(
+                            snapshot.state,
+                            millo_sender::SenderState::Completed
+                                | millo_sender::SenderState::Failed
+                                | millo_sender::SenderState::Cancelled
+                        ) {
+                            AuditLevel::Info
+                        } else {
+                            AuditLevel::Debug
+                        };
+                        audit.record(
+                            level,
+                            AuditCategory::Sender,
+                            "sender.snapshot",
+                            format!("{:?} at source line {:?}", snapshot.state, snapshot.current_source_line),
+                            serde_json::to_value(&snapshot).unwrap_or(Value::Null),
+                        );
                         if let Err(error) = app.emit("dry-run-state", snapshot.clone()) {
-                            eprintln!("dry-run-state event emission failed: {error}");
+                            audit.record(
+                                AuditLevel::Error,
+                                AuditCategory::Ui,
+                                "ui.sender_state_emit_failed",
+                                error.to_string(),
+                                Value::Null,
+                            );
                         }
                         if let Some(sender) = persistence_sender.as_ref()
                             && sender.send(snapshot).await.is_err()
                         {
-                            eprintln!("sender journal worker stopped unexpectedly");
+                            audit.record(
+                                AuditLevel::Critical,
+                                AuditCategory::Storage,
+                                "storage.sender_journal_worker_stopped",
+                                "Sender journal worker stopped unexpectedly",
+                                Value::Null,
+                            );
                         }
                     }
                 }
@@ -264,8 +379,10 @@ impl AppState {
 fn start_run_persistence_worker(
     journal: Arc<StdMutex<RunJournal>>,
     recovery: Arc<StdMutex<ProgramRecoveryStore>>,
+    audit: AuditLog,
 ) -> Option<mpsc::Sender<SenderSnapshot>> {
     let (sender, mut snapshots) = mpsc::channel::<SenderSnapshot>(128);
+    let worker_audit = audit.clone();
     let worker = std::thread::Builder::new()
         .name("millo-run-journal".to_owned())
         .spawn(move || {
@@ -275,27 +392,61 @@ fn start_run_persistence_worker(
                         if let Err(error) =
                             journal.observe(&snapshot, SystemTime::now(), Instant::now())
                         {
-                            eprintln!("sender journal checkpoint failed: {error}");
+                            worker_audit.record(
+                                AuditLevel::Error,
+                                AuditCategory::Storage,
+                                "storage.sender_journal_failed",
+                                error.to_string(),
+                                json!({ "runSequence": snapshot.run_sequence }),
+                            );
                         }
                     }
-                    Err(error) => eprintln!("sender journal lock poisoned: {error}"),
+                    Err(error) => {
+                        worker_audit.record(
+                            AuditLevel::Critical,
+                            AuditCategory::Storage,
+                            "storage.sender_journal_lock_poisoned",
+                            error.to_string(),
+                            Value::Null,
+                        );
+                    }
                 }
                 match recovery.lock() {
                     Ok(mut recovery) => {
                         if let Err(error) =
                             recovery.observe(&snapshot, SystemTime::now(), Instant::now())
                         {
-                            eprintln!("program recovery checkpoint failed: {error}");
+                            worker_audit.record(
+                                AuditLevel::Error,
+                                AuditCategory::Storage,
+                                "storage.program_recovery_failed",
+                                error.to_string(),
+                                json!({ "runSequence": snapshot.run_sequence }),
+                            );
                         }
                     }
-                    Err(error) => eprintln!("program recovery lock poisoned: {error}"),
+                    Err(error) => {
+                        worker_audit.record(
+                            AuditLevel::Critical,
+                            AuditCategory::Storage,
+                            "storage.program_recovery_lock_poisoned",
+                            error.to_string(),
+                            Value::Null,
+                        );
+                    }
                 }
             }
         });
     match worker {
         Ok(_) => Some(sender),
         Err(error) => {
-            eprintln!("sender journal worker could not start: {error}");
+            audit.record(
+                AuditLevel::Critical,
+                AuditCategory::Storage,
+                "storage.persistence_worker_start_failed",
+                error.to_string(),
+                Value::Null,
+            );
             None
         }
     }
@@ -314,6 +465,59 @@ pub async fn sender_run_history(
     })
     .await
     .map_err(|error| format!("sender journal history task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn diagnostic_log_snapshot(
+    limit: Option<usize>,
+    state: State<'_, AppState>,
+) -> Result<AuditLogSnapshot, String> {
+    Ok(state.audit.snapshot(limit.unwrap_or(500).clamp(1, 2_000)))
+}
+
+#[tauri::command]
+pub async fn export_diagnostic_log(
+    format: AuditExportFormat,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<AuditExportOutcome>, String> {
+    let (selection, selected) = tokio::sync::oneshot::channel();
+    let (file_name, filter_name, extensions): (&str, &str, &[&str]) = match format {
+        AuditExportFormat::JsonLines => ("millo-diagnostic-log.jsonl", "JSON Lines", &["jsonl"]),
+        AuditExportFormat::Text => ("millo-diagnostic-log.log", "Text log", &["log", "txt"]),
+    };
+    app.dialog()
+        .file()
+        .set_file_name(file_name)
+        .add_filter(filter_name, extensions)
+        .save_file(move |path| {
+            let _ = selection.send(path);
+        });
+    let Some(path) = selected
+        .await
+        .map_err(|_| "diagnostic log save dialog closed unexpectedly".to_owned())?
+    else {
+        return Ok(None);
+    };
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    let audit = state.audit.clone();
+    let export_path = path.clone();
+    let outcome = tokio::task::spawn_blocking(move || audit.export(export_path, format))
+        .await
+        .map_err(|error| format!("diagnostic log export task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
+    state.audit.record(
+        AuditLevel::Info,
+        AuditCategory::Storage,
+        "storage.audit_exported",
+        "Diagnostic log exported",
+        json!({
+            "path": path,
+            "format": format,
+            "entryCount": outcome.entry_count,
+        }),
+    );
+    Ok(Some(outcome))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
@@ -663,18 +867,47 @@ pub async fn connect_transport(
     state: State<'_, AppState>,
 ) -> Result<ConnectOutcome, String> {
     let _transition = state.transition_lock.lock().await;
+    state.audit.record(
+        AuditLevel::Info,
+        AuditCategory::Transport,
+        "transport.connect.requested",
+        "Controller connection requested",
+        json!({ "transportId": &transport_id, "baudRate": baud_rate }),
+    );
     state.start_event_bridge(app).await;
-    let replacement = resolve_transport(&transport_id, baud_rate).await?;
+    let replacement = match resolve_transport(&transport_id, baud_rate).await {
+        Ok(replacement) => replacement,
+        Err(error) => {
+            state.audit.record(
+                AuditLevel::Error,
+                AuditCategory::Transport,
+                "transport.resolve.failed",
+                &error,
+                json!({ "transportId": &transport_id, "baudRate": baud_rate }),
+            );
+            return Err(error);
+        }
+    };
     let descriptor = replacement.descriptor.clone();
 
-    state
+    if let Err(error) = state
         .arbiter
         .replace_transport_with_execution_target(
             replacement.transport,
             replacement.execution_target,
         )
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())
+    {
+        state.audit.record(
+            AuditLevel::Error,
+            AuditCategory::Transport,
+            "transport.replace.failed",
+            &error,
+            json!({ "transportId": &transport_id, "baudRate": baud_rate }),
+        );
+        return Err(error);
+    }
     *state.settings_session.lock().await = None;
     *state.active_transport.lock().await = descriptor.clone();
     *state.mock.lock().await = replacement.mock;
@@ -806,14 +1039,48 @@ pub async fn connect_transport(
     .await;
 
     match result {
-        Ok(outcome) => Ok(outcome),
+        Ok(outcome) => {
+            state.audit.record(
+                AuditLevel::Info,
+                AuditCategory::Transport,
+                "transport.connect.completed",
+                "Controller connected and synchronized",
+                json!({
+                    "transport": descriptor,
+                    "firmwareVersion": &outcome.inspection.device.firmware_version,
+                    "firmwareBuildInfo": &outcome.inspection.device.firmware_build_info,
+                    "profileId": &outcome.settings.profile_id,
+                    "machineMode": outcome.snapshot.machine.mode,
+                }),
+            );
+            Ok(outcome)
+        }
         Err(connection_error) => {
             *state.settings_session.lock().await = None;
             match state.arbiter.disconnect().await {
-                Ok(_) => Err(connection_error),
-                Err(cleanup_error) => Err(format!(
-                    "{connection_error}; connection cleanup also failed: {cleanup_error}"
-                )),
+                Ok(_) => {
+                    state.audit.record(
+                        AuditLevel::Error,
+                        AuditCategory::Transport,
+                        "transport.connect.failed",
+                        &connection_error,
+                        json!({ "transport": descriptor }),
+                    );
+                    Err(connection_error)
+                }
+                Err(cleanup_error) => {
+                    let error = format!(
+                        "{connection_error}; connection cleanup also failed: {cleanup_error}"
+                    );
+                    state.audit.record(
+                        AuditLevel::Critical,
+                        AuditCategory::Transport,
+                        "transport.connect_cleanup.failed",
+                        &error,
+                        json!({ "transport": descriptor }),
+                    );
+                    Err(error)
+                }
             }
         }
     }
@@ -1110,20 +1377,42 @@ fn suggested_machine_name(
 
 #[tauri::command]
 pub async fn refresh_status(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
-    state
+    let result = state
         .arbiter
         .refresh_status()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Controller,
+        "controller.status_refresh",
+        "Fresh GRBL status received",
+        Value::Null,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
 pub async fn inspect_device(state: State<'_, AppState>) -> Result<HardwareInspection, String> {
-    let inspection = state
+    let inspection = match state
         .arbiter
         .inspect_device()
         .await
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| error.to_string())
+    {
+        Ok(inspection) => inspection,
+        Err(error) => {
+            state.audit.record(
+                AuditLevel::Error,
+                AuditCategory::Controller,
+                "controller.inspection.failed",
+                &error,
+                Value::Null,
+            );
+            return Err(error);
+        }
+    };
     if let Some(active) = state.settings_session.lock().await.as_mut() {
         active.inspection = inspection.device.clone();
         active.revision = active.revision.saturating_add(1);
@@ -1133,6 +1422,13 @@ pub async fn inspect_device(state: State<'_, AppState>) -> Result<HardwareInspec
                 .map_err(|error| error.to_string())?;
         }
     }
+    state.audit.record(
+        AuditLevel::Info,
+        AuditCategory::Controller,
+        "controller.inspection.completed",
+        "GRBL identity, settings, modal state, and coordinates synchronized",
+        serde_json::to_value(&inspection).unwrap_or(Value::Null),
+    );
     Ok(inspection)
 }
 
@@ -1153,7 +1449,17 @@ pub async fn update_controller_setting(
     state: State<'_, AppState>,
 ) -> Result<ControllerSettingsState, String> {
     let _transition = state.transition_lock.lock().await;
-    apply_controller_setting(&state, request).await
+    let context = serde_json::to_value(&request).unwrap_or(Value::Null);
+    let result = apply_controller_setting(&state, request).await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Controller,
+        "controller.setting_write",
+        "Controller setting written and read back",
+        context,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
@@ -1202,6 +1508,14 @@ pub async fn disconnect(state: State<'_, AppState>) -> Result<ControllerSnapshot
         .await
         .map_err(|error| error.to_string());
     *state.settings_session.lock().await = None;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Transport,
+        "transport.disconnect",
+        "Controller transport disconnected",
+        Value::Null,
+        &result,
+    );
     result
 }
 
@@ -1216,11 +1530,20 @@ pub async fn acknowledge_reset(state: State<'_, AppState>) -> Result<ControllerS
 
 #[tauri::command]
 pub async fn feed_hold(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
-    state
+    let result = state
         .arbiter
         .feed_hold()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Safety,
+        "safety.feed_hold",
+        "Realtime Feed Hold sent",
+        Value::Null,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
@@ -1261,11 +1584,20 @@ pub async fn adjust_spindle_override(
 
 #[tauri::command]
 pub async fn request_soft_reset(state: State<'_, AppState>) -> Result<ResetChallenge, String> {
-    state
+    let result = state
         .arbiter
         .request_soft_reset()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Safety,
+        "safety.soft_reset_challenge",
+        "Soft Reset challenge issued",
+        Value::Null,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
@@ -1273,11 +1605,20 @@ pub async fn confirm_soft_reset(
     challenge_id: u64,
     state: State<'_, AppState>,
 ) -> Result<ControllerSnapshot, String> {
-    state
+    let result = state
         .arbiter
         .confirm_soft_reset(challenge_id)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Safety,
+        "safety.soft_reset",
+        "Soft Reset sent and controller banner observed",
+        json!({ "challengeId": challenge_id }),
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
@@ -1311,12 +1652,25 @@ pub async fn jog_pad_step(
     request: JogPadStepRequest,
     state: State<'_, AppState>,
 ) -> Result<JogPadStepOutcome, String> {
-    ensure_machine_bound(&state).await?;
-    state
-        .arbiter
-        .jog_pad_step(request)
-        .await
-        .map_err(|error| error.to_string())
+    let context = serde_json::to_value(request).unwrap_or(Value::Null);
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        state
+            .arbiter
+            .jog_pad_step(request)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Controller,
+        "controller.jog_step",
+        "Guarded jog step accepted",
+        context,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
@@ -1324,12 +1678,25 @@ pub async fn set_work_zero(
     request: WorkZeroRequest,
     state: State<'_, AppState>,
 ) -> Result<WorkZeroOutcome, String> {
-    ensure_machine_bound(&state).await?;
-    state
-        .arbiter
-        .set_work_zero(request)
-        .await
-        .map_err(|error| error.to_string())
+    let context = serde_json::to_value(request).unwrap_or(Value::Null);
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        state
+            .arbiter
+            .set_work_zero(request)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Controller,
+        "controller.work_zero",
+        "Work zero written and verified through $#",
+        context,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
@@ -1353,26 +1720,61 @@ pub async fn preflight_real_run(
     state: State<'_, AppState>,
 ) -> Result<RunPreflightReport, String> {
     let _transition = state.transition_lock.lock().await;
-    ensure_machine_bound(&state).await?;
-    if state.active_transport.lock().await.kind != TransportKind::Serial {
-        return Err("real-run preflight requires an active serial transport".to_owned());
-    }
-    let program = tokio::task::spawn_blocking(move || {
-        parse_program_with_options(
-            request,
-            ProgramParseOptions {
-                block_delete: execution_options.block_delete,
-            },
-        )
-    })
-    .await
-    .map_err(|error| format!("real-run parser task failed: {error}"))?
-    .map_err(|error| error.to_string())?;
-    state
-        .arbiter
-        .preflight_real_run_with_options(program, intent, execution_options)
+    let context = json!({
+        "sourceName": &request.source_name,
+        "sourceBytes": request.source.len(),
+        "intent": intent,
+        "executionOptions": execution_options,
+    });
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        if state.active_transport.lock().await.kind != TransportKind::Serial {
+            return Err("real-run preflight requires an active serial transport".to_owned());
+        }
+        let program = tokio::task::spawn_blocking(move || {
+            parse_program_with_options(
+                request,
+                ProgramParseOptions {
+                    block_delete: execution_options.block_delete,
+                },
+            )
+        })
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| format!("real-run parser task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
+        state
+            .arbiter
+            .preflight_real_run_with_options(program, intent, execution_options)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Program,
+        "program.preflight",
+        "Program preflight completed",
+        context,
+        &result,
+    );
+    if let Ok(report) = &result {
+        state.audit.record(
+            if report.ready {
+                AuditLevel::Info
+            } else {
+                AuditLevel::Warning
+            },
+            AuditCategory::Program,
+            "program.preflight.report",
+            if report.ready {
+                "Program is ready for operator authorization"
+            } else {
+                "Program preflight is blocked"
+            },
+            serde_json::to_value(report).unwrap_or(Value::Null),
+        );
+    }
+    result
 }
 
 #[tauri::command]
@@ -1382,27 +1784,44 @@ pub async fn authorize_first_cut(
     state: State<'_, AppState>,
 ) -> Result<FirstCutPreparation, String> {
     let _transition = state.transition_lock.lock().await;
-    ensure_machine_bound(&state).await?;
-    if state.active_transport.lock().await.kind != TransportKind::Serial {
-        return Err("first-cut authorization requires an active serial transport".to_owned());
-    }
-    let execution_options = confirmation.execution_options;
-    let program = tokio::task::spawn_blocking(move || {
-        parse_program_with_options(
-            request,
-            ProgramParseOptions {
-                block_delete: execution_options.block_delete,
-            },
-        )
-    })
-    .await
-    .map_err(|error| format!("first-cut parser task failed: {error}"))?
-    .map_err(|error| error.to_string())?;
-    state
-        .arbiter
-        .authorize_first_cut(program, confirmation)
+    let context = json!({
+        "sourceName": &request.source_name,
+        "sourceBytes": request.source.len(),
+        "confirmation": &confirmation,
+    });
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        if state.active_transport.lock().await.kind != TransportKind::Serial {
+            return Err("first-cut authorization requires an active serial transport".to_owned());
+        }
+        let execution_options = confirmation.execution_options;
+        let program = tokio::task::spawn_blocking(move || {
+            parse_program_with_options(
+                request,
+                ProgramParseOptions {
+                    block_delete: execution_options.block_delete,
+                },
+            )
+        })
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| format!("first-cut parser task failed: {error}"))?
+        .map_err(|error| error.to_string())?;
+        state
+            .arbiter
+            .authorize_first_cut(program, confirmation)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Safety,
+        "safety.program_authorization",
+        "One-use program authorization issued",
+        context,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
@@ -1412,8 +1831,39 @@ pub async fn start_program_run(
     execution_options: ProgramExecutionOptions,
     state: State<'_, AppState>,
 ) -> Result<SenderSnapshot, String> {
+    let context = json!({
+        "sourceName": &request.source_name,
+        "sourceBytes": request.source.len(),
+        "authorizationId": authorization_id,
+        "executionOptions": execution_options,
+    });
+    state.audit.record(
+        AuditLevel::Info,
+        AuditCategory::Program,
+        "program.run.requested",
+        "Program execution requested",
+        context.clone(),
+    );
+    let result = start_program_run_impl(request, authorization_id, execution_options, &state).await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Program,
+        "program.run",
+        "Program sender started",
+        context,
+        &result,
+    );
+    result
+}
+
+async fn start_program_run_impl(
+    request: ProgramParseRequest,
+    authorization_id: u64,
+    execution_options: ProgramExecutionOptions,
+    state: &AppState,
+) -> Result<SenderSnapshot, String> {
     let _transition = state.transition_lock.lock().await;
-    ensure_machine_bound(&state).await?;
+    ensure_machine_bound(state).await?;
     if state.active_transport.lock().await.kind != TransportKind::Serial {
         return Err("program run requires an active serial transport".to_owned());
     }
@@ -1543,8 +1993,30 @@ pub async fn start_check_run(
     execution_options: ProgramExecutionOptions,
     state: State<'_, AppState>,
 ) -> Result<SenderSnapshot, String> {
+    let context = json!({
+        "sourceName": &request.source_name,
+        "sourceBytes": request.source.len(),
+        "executionOptions": execution_options,
+    });
+    let result = start_check_run_impl(request, execution_options, &state).await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Program,
+        "program.check_run",
+        "GRBL Check sender started",
+        context,
+        &result,
+    );
+    result
+}
+
+async fn start_check_run_impl(
+    request: ProgramParseRequest,
+    execution_options: ProgramExecutionOptions,
+    state: &AppState,
+) -> Result<SenderSnapshot, String> {
     let _transition = state.transition_lock.lock().await;
-    ensure_machine_bound(&state).await?;
+    ensure_machine_bound(state).await?;
     if state.active_transport.lock().await.kind != TransportKind::Serial {
         return Err("GRBL Check requires an active serial transport".to_owned());
     }
@@ -1569,15 +2041,27 @@ pub async fn start_check_run(
 #[tauri::command]
 pub async fn resume_program_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
     let _transition = state.transition_lock.lock().await;
-    ensure_machine_bound(&state).await?;
-    if state.active_transport.lock().await.kind != TransportKind::Serial {
-        return Err("program resume requires an active serial transport".to_owned());
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        if state.active_transport.lock().await.kind != TransportKind::Serial {
+            return Err("program resume requires an active serial transport".to_owned());
+        }
+        state
+            .arbiter
+            .resume_program_run()
+            .await
+            .map_err(|error| error.to_string())
     }
-    state
-        .arbiter
-        .resume_program_run()
-        .await
-        .map_err(|error| error.to_string())
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Sender,
+        "sender.resume",
+        "Physical sender resumed",
+        Value::Null,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
@@ -1586,15 +2070,28 @@ pub async fn complete_tool_change(
     state: State<'_, AppState>,
 ) -> Result<SenderSnapshot, String> {
     let _transition = state.transition_lock.lock().await;
-    ensure_machine_bound(&state).await?;
-    if state.active_transport.lock().await.kind != TransportKind::Serial {
-        return Err("tool change requires an active serial transport".to_owned());
+    let context = serde_json::to_value(confirmation).unwrap_or(Value::Null);
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        if state.active_transport.lock().await.kind != TransportKind::Serial {
+            return Err("tool change requires an active serial transport".to_owned());
+        }
+        state
+            .arbiter
+            .complete_tool_change(confirmation)
+            .await
+            .map_err(|error| error.to_string())
     }
-    state
-        .arbiter
-        .complete_tool_change(confirmation)
-        .await
-        .map_err(|error| error.to_string())
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Safety,
+        "safety.tool_change",
+        "Tool change confirmed and sender resumed",
+        context,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
@@ -1622,38 +2119,74 @@ pub async fn start_mock_dry_run(
 
 #[tauri::command]
 pub async fn pause_dry_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
-    state
+    let result = state
         .arbiter
         .pause_dry_run()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Sender,
+        "sender.pause",
+        "Sender paused",
+        Value::Null,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
 pub async fn resume_dry_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
-    state
+    let result = state
         .arbiter
         .resume_dry_run()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Sender,
+        "sender.resume",
+        "Sender resumed",
+        Value::Null,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
 pub async fn cancel_dry_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
-    state
+    let result = state
         .arbiter
         .cancel_dry_run()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Sender,
+        "sender.cancel",
+        "Sender cancelled",
+        Value::Null,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
 pub async fn cancel_jog(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
-    state
+    let result = state
         .arbiter
         .cancel_jog()
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Safety,
+        "safety.jog_cancel",
+        "Realtime Jog Cancel sent",
+        Value::Null,
+        &result,
+    );
+    result
 }
 
 #[tauri::command]
@@ -1866,6 +2399,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn audit_operation_preserves_structured_failure_context() {
+        let audit = AuditLog::in_memory();
+        let result: Result<(), String> = Err("ALARM:2 on source line 18".to_owned());
+        audit_operation(
+            &audit,
+            AuditCategory::Sender,
+            "sender.test",
+            "unused",
+            json!({ "sourceLine": 18, "command": "G1 Z-0.200 F80" }),
+            &result,
+        );
+
+        let mut entries = audit.snapshot(10).entries;
+        let entry = entries.pop().unwrap();
+        assert_eq!(entry.level, AuditLevel::Error);
+        assert_eq!(entry.event, "sender.test.failed");
+        assert_eq!(entry.data["context"]["sourceLine"], 18);
+        assert_eq!(entry.data["context"]["command"], "G1 Z-0.200 F80");
+    }
+
+    #[test]
     fn recovery_preparation_requires_every_operator_confirmation() {
         let incomplete = ProgramRecoveryPreparationRequest {
             recovery_id: 1,
@@ -1898,8 +2452,12 @@ mod tests {
     async fn run_persistence_worker_processes_snapshots_off_the_async_task() {
         let journal = Arc::new(StdMutex::new(RunJournal::in_memory()));
         let recovery = Arc::new(StdMutex::new(ProgramRecoveryStore::in_memory()));
-        let sender =
-            start_run_persistence_worker(Arc::clone(&journal), Arc::clone(&recovery)).unwrap();
+        let sender = start_run_persistence_worker(
+            Arc::clone(&journal),
+            Arc::clone(&recovery),
+            AuditLog::in_memory(),
+        )
+        .unwrap();
         let snapshot = SenderSnapshot {
             run_sequence: 1,
             source_name: Some("worker.nc".to_owned()),

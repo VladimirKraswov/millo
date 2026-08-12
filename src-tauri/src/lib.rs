@@ -4,21 +4,22 @@ use commands::{
     AppState, acknowledge_reset, active_transport, adjust_feed_override, adjust_spindle_override,
     authorize_first_cut, cancel_dry_run, cancel_jog, complete_tool_change, confirm_soft_reset,
     connect_transport, controller_settings, controller_snapshot, create_machine_profile,
-    detect_machine_profile, disconnect, dismiss_program_recovery, feed_hold, inspect_device,
-    jog_pad_step, list_transports, machine_profiles, mock_clear_alarm, mock_start_run,
-    mock_trigger_alarm, mock_trigger_disconnect, mock_trigger_reset, mock_trigger_timeout,
-    parse_gcode_program, pause_dry_run, preflight_real_run, prepare_program_recovery,
-    prepare_test_jog, program_recovery_candidate, refresh_status, request_soft_reset,
-    resume_dry_run, resume_program_run, rollback_controller_setting, select_machine_profile,
-    sender_run_history, sender_snapshot, set_rapid_override, set_work_zero, start_check_run,
-    start_mock_dry_run, start_program_run, step_jog, update_controller_setting,
-    update_machine_local_settings,
+    detect_machine_profile, diagnostic_log_snapshot, disconnect, dismiss_program_recovery,
+    export_diagnostic_log, feed_hold, inspect_device, jog_pad_step, list_transports,
+    machine_profiles, mock_clear_alarm, mock_start_run, mock_trigger_alarm,
+    mock_trigger_disconnect, mock_trigger_reset, mock_trigger_timeout, parse_gcode_program,
+    pause_dry_run, preflight_real_run, prepare_program_recovery, prepare_test_jog,
+    program_recovery_candidate, refresh_status, request_soft_reset, resume_dry_run,
+    resume_program_run, rollback_controller_setting, select_machine_profile, sender_run_history,
+    sender_snapshot, set_rapid_override, set_work_zero, start_check_run, start_mock_dry_run,
+    start_program_run, step_jog, update_controller_setting, update_machine_local_settings,
 };
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let profile_path = app.path().app_config_dir()?.join("machine-profiles.json");
             app.manage(AppState::load(profile_path)?);
@@ -58,6 +59,8 @@ pub fn run() {
             complete_tool_change,
             sender_snapshot,
             sender_run_history,
+            diagnostic_log_snapshot,
+            export_diagnostic_log,
             program_recovery_candidate,
             prepare_program_recovery,
             dismiss_program_recovery,

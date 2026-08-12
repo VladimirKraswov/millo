@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+  "crates/millo-audit",
   "crates/millo-command",
   "crates/millo-controller",
   "crates/millo-dry-run",

@@ -118,6 +118,14 @@ selectable and explicitly report that they have no preview geometry. The table
 renders only a small overscanned window, so the 200,000-line parser limit does
 not become 200,000 DOM nodes.
 
+The connection panel also opens a persistent structured event journal. It
+correlates controller lifecycle, preflight, safety actions, sender source lines,
+GRBL failures, Hold/Reset/disconnect, and persistence health by session and
+sequence. The viewer colors severity, filters category/level/text, expands JSON
+details, and exports through a native save dialog as readable `.log` or machine-
+processable `.jsonl`. Debug traffic is hidden by default. The bounded audit
+writer is asynchronous and cannot authorize motion or block the command actor.
+
 On an active serial target, Program exposes intent-aware real-run preflight.
 Tauri reparses the retained source, and the command actor performs a fresh
 `? -> $I/$$/$G/$# -> ?` transaction before `millo-run` combines the strict
@@ -320,6 +328,7 @@ successful GRBL status exchange.
 
 | Package | Responsibility |
 | --- | --- |
+| `millo-audit` | Bounded structured JSONL diagnostics, rotation, tail, and export |
 | `millo-domain` | Stable machine and controller types |
 | `millo-gcode` | Immutable G-code program, warnings, parser, and preview geometry |
 | `millo-journal` | Bounded crash-diagnostic history with throttled atomic JSON checkpoints |

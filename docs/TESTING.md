@@ -438,6 +438,22 @@ additional two steps are the typed M5/M9 shutdown epilogue before M30.
 - Tauri owns only the platform config path and observes the existing sender
   event stream; it cannot alter journal recovery disposition.
 
+## Structured diagnostic log coverage
+
+- `millo-audit` tests enforce a bounded in-memory tail, monotonic sequence,
+  fixed-capacity writer queue, 5 MiB rotation policy, recent-entry restoration
+  across generations, and serialized text/JSONL export.
+- The desktop adapter records controller and sender snapshots plus typed
+  connect, settings, Jog, zero, preflight, authorization, Start, Hold, Reset,
+  resume, cancellation, disconnect, persistence, and event-bridge outcomes.
+  Full source text is excluded; sender source line and current command remain.
+- A persistent-log initialization error degrades to an in-memory Critical event
+  instead of preventing Millo startup. Dropped queue entries and write failures
+  remain visible in the UI health row.
+- UI tests hide Debug by default, combine level/category/search predicates, and
+  count warning/error attention. `/?fixture=logs` covers the colored structured
+  viewer, expandable JSON fields, and stable overlay layout.
+
 ## Interrupted-job recovery coverage
 
 - `millo-recovery` tests bind exact source and program fingerprint to a machine

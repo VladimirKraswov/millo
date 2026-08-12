@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { ChevronDown, PlugZap, RefreshCw, Unplug } from "lucide-react";
+import { ChevronDown, PlugZap, RefreshCw, ScrollText, Unplug } from "lucide-react";
 
 import { bootstrapPluginHost } from "./app/bootstrapPluginHost";
 import {
@@ -42,6 +42,7 @@ import {
 import { ProgramWorkspace } from "./features/program/ProgramWorkspace";
 import { MachineProfiles } from "./features/machine-profiles/MachineProfiles";
 import { MachineSettingsDialog } from "./features/machine-settings/MachineSettingsDialog";
+import { DiagnosticLogViewer } from "./features/diagnostics/DiagnosticLogViewer";
 import { bindMachineStateStream } from "./platform/machine/MachineStateEventStream";
 import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineCommandGateway";
 import { tauriMachineStateEventStream } from "./platform/machine/tauriMachineStateEventStream";
@@ -66,6 +67,7 @@ import type {
   ControllerSettingEditRequest,
   ControllerSettingsState,
 } from "./shared/settings";
+import type { AuditLogSnapshot } from "./shared/audit";
 
 const connectionLabels = {
   disconnected: "Отключено",
@@ -109,7 +111,7 @@ const developmentFirstCutFixture =
   developmentFixture === "tool-change" ||
   developmentFixture === "recovery" ||
   developmentFixture === "air-square";
-const developmentJogFixture = ["jog", "jog-active", "alarm", "reset"].includes(
+const developmentJogFixture = ["jog", "jog-active", "alarm", "reset", "logs"].includes(
   developmentFixture ?? "",
 );
 const developmentMachineMode =
@@ -203,6 +205,47 @@ const developmentSettingsFixture: ControllerSettingsState = {
     label: "LUNYEE_4axis_Control · 1.1f.20230316 · /dev/cu.usbmodem11101",
   },
 };
+const developmentAuditFixture: AuditLogSnapshot = {
+  sessionId: "preview-2048",
+  activePath: "/Users/operator/Library/Application Support/Millo/logs/millo-audit.jsonl",
+  droppedEntries: 0,
+  writeFailures: 0,
+  entries: [
+    {
+      schemaVersion: 1,
+      sequence: 201,
+      sessionId: "preview-2048",
+      timestampMs: Date.now() - 8_500,
+      level: "info",
+      category: "transport",
+      event: "transport.connect.completed",
+      message: "Controller connected and synchronized",
+      data: { port: "/dev/cu.usbmodem11101", firmware: "Grbl 1.1f" },
+    },
+    {
+      schemaVersion: 1,
+      sequence: 202,
+      sessionId: "preview-2048",
+      timestampMs: Date.now() - 5_200,
+      level: "warning",
+      category: "program",
+      event: "program.preflight.report",
+      message: "Program preflight is blocked",
+      data: { sourceName: "millo-solar-guilloche.nc", blocker: "Work zero not verified" },
+    },
+    {
+      schemaVersion: 1,
+      sequence: 203,
+      sessionId: "preview-2048",
+      timestampMs: Date.now() - 2_100,
+      level: "error",
+      category: "sender",
+      event: "sender.snapshot",
+      message: "ALARM:2 at source line 18",
+      data: { sourceLine: 18, command: "G1 Z-0.200 F80", state: "failed" },
+    },
+  ],
+};
 
 const formatCoordinate = (value: number | undefined): string =>
   value === undefined ? "--" : value.toFixed(3);
@@ -272,6 +315,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [uiError, setUiError] = useState<string>();
+  const [logOpen, setLogOpen] = useState(developmentFixture === "logs");
   const [workbenchView, setWorkbenchView] = useState<"program" | "controller">(
     "program",
   );
@@ -937,6 +981,14 @@ export default function App() {
             )}
           </div>
 
+          <button className="log-open-action" onClick={() => setLogOpen(true)} type="button">
+            <ScrollText aria-hidden="true" size={14} />
+            <span>
+              <strong>Журнал событий</strong>
+              <small>Подключение · GRBL · Sender</small>
+            </span>
+          </button>
+
           {hasConnection && (
             <SafetyControls
               desktopRuntime={desktopRuntime}
@@ -1133,6 +1185,13 @@ export default function App() {
         open={settingsOpen}
         profile={selectedMachine}
         settings={controllerSettings}
+      />
+      <DiagnosticLogViewer
+        desktopRuntime={desktopRuntime}
+        initialSnapshot={developmentFixture === "logs" ? developmentAuditFixture : undefined}
+        onClose={() => setLogOpen(false)}
+        onError={setUiError}
+        open={logOpen}
       />
     </div>
   );
