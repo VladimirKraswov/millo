@@ -265,6 +265,17 @@ does not schedule or execute controller I/O.
 - `Program` and `Controller` are separate retained workbench views. Program
   state survives tab changes; Device Inspector remains available without being
   mixed into preview diagnostics.
+- Program composes a host-owned job-readiness read model from typed controller,
+  parser, work-coordinate, preflight, and GRBL Check facts. The model returns
+  four stable status rows and exactly one contextual action; React never infers
+  authority from button order or locally cached success.
+- G54-G59 work position is the primary operator coordinate. A pure read model
+  prefers controller WPos and otherwise derives it from MPos plus WCO or fresh
+  Inspector G5x/G92/TLO evidence. G53 is retained as a compact secondary
+  diagnostic coordinate.
+- Alarm Unlock and work-zero actions remain typed actor requests. The Program
+  surface can invoke them contextually, but cannot write `$X`, `G10`, or raw
+  serial bytes itself. See ADR 0043.
 - The original source is retained beside the immutable preview. Starting a dry
   run sends that source back to Rust for a fresh parse and independent policy
   check; the UI's `dryRunEligible` display flag is never authority.

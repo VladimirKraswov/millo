@@ -12,7 +12,8 @@ use commands::{
     program_recovery_candidate, refresh_status, request_soft_reset, resume_dry_run,
     resume_program_run, rollback_controller_setting, select_machine_profile, sender_run_history,
     sender_snapshot, set_rapid_override, set_work_zero, start_check_run, start_mock_dry_run,
-    start_program_run, step_jog, update_controller_setting, update_machine_local_settings,
+    start_program_run, step_jog, unlock_alarm, update_controller_setting,
+    update_machine_local_settings,
 };
 use tauri::Manager;
 
@@ -71,6 +72,7 @@ pub fn run() {
             cancel_jog,
             disconnect,
             acknowledge_reset,
+            unlock_alarm,
             mock_trigger_reset,
             mock_start_run,
             mock_trigger_alarm,

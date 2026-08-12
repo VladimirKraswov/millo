@@ -1529,6 +1529,24 @@ pub async fn acknowledge_reset(state: State<'_, AppState>) -> Result<ControllerS
 }
 
 #[tauri::command]
+pub async fn unlock_alarm(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
+    let result = state
+        .arbiter
+        .unlock_alarm(true)
+        .await
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Safety,
+        "safety.alarm_unlock",
+        "GRBL Alarm unlocked and Idle verified",
+        Value::Null,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
 pub async fn feed_hold(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
     let result = state
         .arbiter

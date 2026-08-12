@@ -69,6 +69,9 @@ export const disconnect = (): Promise<ControllerSnapshot> =>
 export const acknowledgeReset = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("acknowledge_reset");
 
+export const unlockAlarm = (): Promise<ControllerSnapshot> =>
+  invoke<ControllerSnapshot>("unlock_alarm");
+
 export const feedHold = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("feed_hold");
 

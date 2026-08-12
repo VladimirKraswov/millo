@@ -307,6 +307,14 @@ metrics, and Mock scenarios open only on demand. Parser warnings and failed
 preflight evidence open their diagnostics automatically. This hierarchy is
 recorded in [ADR 0039](docs/decisions/0039-progressive-operator-shell.md).
 
+Program now presents Machine, File, Work zero, and Validation as persistent job
+facts beside the preview and exposes exactly one next action: Connect, Unlock,
+set zero, validate, run GRBL Check, or Start. This is not a modal wizard; all
+context remains visible and experienced operators can open origin or diagnostics
+directly. G54-G59 work position is primary while G53 remains compact secondary
+evidence. The contract is recorded in
+[ADR 0043](docs/decisions/0043-job-centered-operator-workflow.md).
+
 The Mock diagnostics disclosure can inject reset, alarm, timeout, and link-drop scenarios. Alarm
 remains active until `Clear alarm`; two consecutive silent polls exercise the
 automatic recovery path.
@@ -403,7 +411,8 @@ Crash-safe guided restart is recorded in
 [ADR 0038](docs/decisions/0038-guided-power-loss-recovery.md).
 The progressive operator shell and compact confirmation mapping are recorded in
 [ADR 0039](docs/decisions/0039-progressive-operator-shell.md).
-The
+The job-centered run flow and contextual action priority are recorded in
+[ADR 0043](docs/decisions/0043-job-centered-operator-workflow.md). The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).
 

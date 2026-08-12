@@ -168,8 +168,8 @@ export function FirstCutAuthorizationDialog({
       >
         <header>
           <div>
-            <span>One-time safety gate</span>
-            <h2 id="first-cut-title">Запуск программы</h2>
+            <span>Перед запуском</span>
+            <h2 id="first-cut-title">Подтвердите готовность</h2>
           </div>
           <button
             aria-label="Закрыть"
@@ -185,14 +185,14 @@ export function FirstCutAuthorizationDialog({
         <div className="first-cut-intro">
           <CircleAlert aria-hidden="true" size={18} />
           <div>
-            <strong>Последняя проверка перед движением</strong>
+            <strong>Все готово к движению?</strong>
             <span>Контроллер будет повторно проверен автоматически.</span>
           </div>
           <code>{intent === "airRun" ? "AIR" : "CUT"}</code>
         </div>
         <div className="program-run-mode-summary">
           <span>Режим</span>
-          <strong>{intent === "airRun" ? "Air run" : "Обработка с инструментом"}</strong>
+          <strong>{intent === "airRun" ? "Без резания" : "Гравировка с инструментом"}</strong>
         </div>
         <div className="first-cut-checklist is-compact">
           <label>
@@ -251,8 +251,8 @@ export function FirstCutAuthorizationDialog({
             {busy
               ? "Проверка и запуск..."
               : intent === "airRun"
-                ? "Проверить и начать Air run"
-                : "Проверить и начать обработку"}
+                ? "Проверить и запустить без резания"
+                : "Проверить и запустить гравировку"}
           </button>
         </footer>
       </section>

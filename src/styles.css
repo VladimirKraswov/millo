@@ -1460,8 +1460,7 @@ select:focus-visible {
 }
 
 .program-identity span,
-.warning-heading span,
-.program-gate span {
+.warning-heading span {
   color: #75838c;
   font-size: 8px;
   text-transform: uppercase;
@@ -1573,7 +1572,7 @@ select:focus-visible {
 .program-body {
   display: grid;
   flex: 1 1 auto;
-  grid-template-columns: minmax(0, 1fr) 240px;
+  grid-template-columns: minmax(0, 1fr) 310px;
   min-height: 0;
 }
 
@@ -1732,36 +1731,178 @@ select:focus-visible {
   background: #11171b;
 }
 
-.program-gate {
+.job-readiness-shell {
+  flex: 0 0 auto;
+  border-bottom: 1px solid #27323a;
+}
+
+.job-readiness {
+  display: flex;
+  flex-direction: column;
+  background: #10171b;
+}
+
+.job-readiness > header {
+  display: flex;
+  min-height: 62px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #27323a;
+}
+
+.job-readiness > header > div:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.job-readiness > header span {
+  color: #718089;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.job-readiness > header strong {
+  overflow: hidden;
+  color: #e4eaed;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.job-readiness .program-run-intent {
+  width: 132px;
+  flex: 0 0 132px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 0;
+  border: 1px solid #334149;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #141d22;
+}
+
+.job-readiness .program-run-intent button {
+  min-width: 0;
+  min-height: 28px;
+  padding: 0 5px;
+  border: 0;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.job-readiness-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.job-readiness-step {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
+  min-height: 47px;
+  grid-template-columns: 18px minmax(0, 1fr) 26px;
   align-items: center;
   gap: 8px;
-  min-height: 52px;
-  padding: 8px 11px;
-  border-bottom: 1px solid #27323a;
-  color: #ffb454;
-  background: #211b14;
+  padding: 7px 11px;
+  border-bottom: 1px solid #222d34;
+  color: #cc9e54;
 }
 
-.program-gate.is-clear {
-  color: #77d6b3;
-  background: #132019;
+.job-readiness-step.is-ready {
+  color: #67caa6;
 }
 
-.program-gate > div {
+.job-readiness-step.is-blocked {
+  color: #e37979;
+}
+
+.job-readiness-step.is-pending {
+  color: #697780;
+}
+
+.job-readiness-step > span {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 2px;
 }
 
-.program-gate strong {
-  overflow: hidden;
-  color: currentColor;
+.job-readiness-step strong {
+  color: #cbd4d9;
   font-size: 10px;
+  font-weight: 600;
+}
+
+.job-readiness-step small {
+  overflow: hidden;
+  color: #75838c;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.job-readiness-step > button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #344149;
+  border-radius: 4px;
+  color: #9eabb2;
+  background: #151d22;
+  cursor: pointer;
+}
+
+.job-readiness-step > button:hover:not(:disabled) {
+  border-color: #558273;
+  color: #8ed9bd;
+}
+
+.job-primary-action {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin: 11px;
+  border: 1px solid #4f8c77;
+  border-radius: 5px;
+  color: #e5fff5;
+  background: #276c56;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.job-primary-action:hover:not(:disabled) {
+  border-color: #77d6b3;
+  background: #317d65;
+}
+
+.job-primary-action.is-unlock {
+  border-color: #b06558;
+  color: #ffe7df;
+  background: #813e36;
+}
+
+.job-primary-action.is-reviewProgram {
+  border-color: #96713e;
+  color: #ffe5b9;
+  background: #624621;
+}
+
+.job-primary-action:disabled,
+.job-readiness-step > button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.job-readiness-shell > .execution-settings {
+  margin: 0;
+  padding: 0 11px;
 }
 
 .dry-run-card {
@@ -1953,102 +2094,6 @@ select:focus-visible {
 .dry-run-card.is-failed .dry-run-heading strong,
 .dry-run-card > small.is-error {
   color: #ef8585;
-}
-
-.real-run-preflight {
-  display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  gap: 7px;
-  padding: 9px 10px;
-  border-bottom: 1px solid #27323a;
-  background: #10171b;
-}
-
-.real-run-preflight.is-ready {
-  box-shadow: inset 2px 0 #57b995;
-}
-
-.real-run-preflight.is-blocked {
-  box-shadow: inset 2px 0 #d36c72;
-}
-
-.real-run-preflight-heading {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  color: #75838c;
-}
-
-.real-run-preflight-heading > div {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.real-run-preflight-heading span,
-.real-run-preflight > small {
-  color: #75838c;
-  font-size: 8px;
-}
-
-.real-run-preflight-heading strong {
-  color: #c9d3d8;
-  font-size: 10px;
-}
-
-.real-run-preflight.is-ready .real-run-preflight-heading strong {
-  color: #77d6b3;
-}
-
-.real-run-preflight.is-blocked .real-run-preflight-heading strong {
-  color: #ef8585;
-}
-
-.real-run-preflight-heading code {
-  color: #819098;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 8px;
-  white-space: nowrap;
-}
-
-.real-run-preflight > button {
-  display: flex;
-  min-height: 28px;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border: 1px solid #49625b;
-  border-radius: 4px;
-  color: #dbe5e1;
-  background: #18241f;
-  font-size: 9px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.real-run-preflight > button:hover:not(:disabled) {
-  border-color: #68a78f;
-  background: #1c2e26;
-}
-
-.real-run-preflight > button:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-.real-run-preflight > button.first-cut-open {
-  border-color: #477965;
-  color: #bfe9d8;
-  background: #183025;
-}
-
-.real-run-preflight > button.first-cut-open.is-placeholder {
-  visibility: hidden;
 }
 
 .first-cut-backdrop {
@@ -2779,7 +2824,7 @@ select:focus-visible {
   font-size: 9px;
 }
 
-.real-run-preflight .is-spinning {
+.job-primary-action .is-spinning {
   animation: preflight-spin 800ms linear infinite;
 }
 
@@ -3716,6 +3761,30 @@ button.real-run-check:hover {
 .readout-label small {
   color: #6f7c85;
   font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.machine-position-secondary {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 2px 0;
+  color: #65737c;
+  font-size: 8px;
+}
+
+.machine-position-secondary span {
+  text-transform: uppercase;
+}
+
+.machine-position-secondary code {
+  overflow: hidden;
+  color: #84929a;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .position-grid {
@@ -4850,6 +4919,75 @@ button.real-run-check:hover {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 5px;
   margin-top: 10px;
+}
+
+.work-zero-all {
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid #4c8d76;
+  border-radius: 5px;
+  color: #d9f8ec;
+  background: #205d49;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.work-zero-all:hover:not(:disabled) {
+  border-color: #77d6b3;
+  background: #287159;
+}
+
+.work-zero-all:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.work-zero-backdrop {
+  z-index: 74;
+}
+
+.work-zero-dialog {
+  width: min(520px, 100%);
+}
+
+.work-zero-dialog-body {
+  padding: 0 18px 18px;
+}
+
+.work-zero-current {
+  display: grid;
+  min-height: 52px;
+  grid-template-columns: 22px minmax(50px, 1fr) repeat(3, auto);
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #2a363e;
+  color: #77d6b3;
+}
+
+.work-zero-current span {
+  color: #89969e;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.work-zero-current code {
+  color: #cfd9de;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.work-zero-dialog .work-zero {
+  margin-top: 0;
+  padding-top: 16px;
+  border-top: 0;
 }
 
 .work-zero-actions button {

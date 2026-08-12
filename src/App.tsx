@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { ChevronDown, PlugZap, RefreshCw, ScrollText, Unplug } from "lucide-react";
+import {
+  ChevronDown,
+  KeyRound,
+  PlugZap,
+  RefreshCw,
+  ScrollText,
+  Unplug,
+} from "lucide-react";
 
 import { bootstrapPluginHost } from "./app/bootstrapPluginHost";
 import {
@@ -19,6 +26,7 @@ import {
   triggerMockRun,
   triggerMockReset,
   triggerMockTimeout,
+  unlockAlarm,
   updateControllerSetting,
 } from "./api/controller";
 import {
@@ -43,6 +51,8 @@ import { ProgramWorkspace } from "./features/program/ProgramWorkspace";
 import { MachineProfiles } from "./features/machine-profiles/MachineProfiles";
 import { MachineSettingsDialog } from "./features/machine-settings/MachineSettingsDialog";
 import { DiagnosticLogViewer } from "./features/diagnostics/DiagnosticLogViewer";
+import { WorkZeroDialog } from "./features/work-zero/WorkZeroDialog";
+import { resolveWorkPosition } from "./features/work-zero/workPositionModel";
 import { bindMachineStateStream } from "./platform/machine/MachineStateEventStream";
 import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineCommandGateway";
 import { tauriMachineStateEventStream } from "./platform/machine/tauriMachineStateEventStream";
@@ -114,6 +124,7 @@ const developmentFirstCutFixture =
 const developmentJogFixture = ["jog", "jog-active", "alarm", "reset", "logs"].includes(
   developmentFixture ?? "",
 );
+const developmentMachineFixture = developmentJogFixture || developmentPreflightFixture;
 const developmentMachineMode =
   developmentFixture === "jog-active"
     ? "jog"
@@ -275,7 +286,7 @@ export default function App() {
   const pluginHost = useMemo(
     () =>
       bootstrapPluginHost({
-        initialSnapshot: developmentJogFixture ? developmentJogSnapshot : emptySnapshot,
+        initialSnapshot: developmentMachineFixture ? developmentJogSnapshot : emptySnapshot,
         machineCommands: tauriMachineCommandGateway,
       }),
     [],
@@ -297,14 +308,14 @@ export default function App() {
   const [machineProfiles, setMachineProfiles] = useState<MachineProfileState>(
     developmentFixture === "profiles" ||
     developmentFixture === "settings" ||
-    developmentJogFixture
+    developmentMachineFixture
       ? developmentProfileFixture
       : { profiles: [] },
   );
   const [profileBusy, setProfileBusy] = useState(false);
   const [controllerSettings, setControllerSettings] =
     useState<ControllerSettingsState | undefined>(
-      developmentFixture === "settings" || developmentJogFixture
+      developmentFixture === "settings" || developmentMachineFixture
         ? developmentSettingsFixture
         : undefined,
     );
@@ -316,6 +327,7 @@ export default function App() {
   const [discovering, setDiscovering] = useState(false);
   const [uiError, setUiError] = useState<string>();
   const [logOpen, setLogOpen] = useState(developmentFixture === "logs");
+  const [workZeroOpen, setWorkZeroOpen] = useState(false);
   const [workbenchView, setWorkbenchView] = useState<"program" | "controller">(
     "program",
   );
@@ -470,6 +482,7 @@ export default function App() {
   const maxJogFeedMmPerMin =
     jogAxisRates.length > 0 ? Math.min(...jogAxisRates) : 1_000;
   const maxJogDistanceMm = selectedMachine?.maxJogDistanceMm ?? 50;
+  const workPositionView = resolveWorkPosition(snapshot, inspection);
 
   useEffect(() => {
     if (transportLocked || !selectedMachine?.connection) return;
@@ -696,7 +709,15 @@ export default function App() {
                         : snapshot.alarm.message}
                     </strong>
                   </div>
-                  <small>Проверить станок</small>
+                  <button
+                    aria-label="Разблокировать станок"
+                    disabled={controlsBusy || !desktopRuntime}
+                    onClick={() => void runAction(unlockAlarm)}
+                    title="Разблокировать станок"
+                    type="button"
+                  >
+                    <KeyRound aria-hidden="true" size={13} />
+                  </button>
                 </div>
               ) : snapshot.resetNotice ? (
                 <div className="operator-notice reset-notice" role="status">
@@ -719,10 +740,18 @@ export default function App() {
 
           <div className="readout-section">
             <div className="readout-label">
-              <span>Machine position</span>
-              <small>G53</small>
+              <span>Рабочая позиция</span>
+              <small>{workPositionView.coordinateSystem}</small>
             </div>
-            <PositionReadout position={snapshot.machine.machinePosition} />
+            <PositionReadout position={workPositionView.position} />
+            <div className="machine-position-secondary">
+              <span>Станок · G53</span>
+              <code>
+                X {formatCoordinate(snapshot.machine.machinePosition?.x)} · Y{" "}
+                {formatCoordinate(snapshot.machine.machinePosition?.y)} · Z{" "}
+                {formatCoordinate(snapshot.machine.machinePosition?.z)}
+              </code>
+            </div>
           </div>
 
           <div className="workbench-tabs" role="tablist" aria-label="Workbench view">
@@ -770,6 +799,18 @@ export default function App() {
                   ? previewFixtureToolChangeSender
                   : undefined
               }
+              machineContext={{
+                activeCoordinateSystem: workPositionView.coordinateSystem,
+                busy: controlsBusy,
+                machineBound,
+                machineName: selectedMachine?.name ?? displayedTransport.label,
+                onAcknowledgeReset: () => runAction(acknowledgeReset),
+                onConnect: connectSelectedTransport,
+                onOpenWorkZero: () => setWorkZeroOpen(true),
+                onUnlock: () => runAction(unlockAlarm),
+                snapshot,
+                workPosition: workPositionView.position,
+              }}
               onInspection={setInspection}
               realRunAvailable={
                 developmentPreflightFixture ||
@@ -793,7 +834,9 @@ export default function App() {
                         : undefined
               }
               realRunTarget={
-                developmentPreflightFixture || activeTransport.kind === "serial"
+                developmentPreflightFixture ||
+                activeTransport.kind === "serial" ||
+                selectedTransport.kind === "serial"
               }
             />
           </div>
@@ -1192,6 +1235,19 @@ export default function App() {
         onClose={() => setLogOpen(false)}
         onError={setUiError}
         open={logOpen}
+      />
+
+      <WorkZeroDialog
+        activeCoordinateSystem={workPositionView.coordinateSystem}
+        desktopRuntime={desktopRuntime}
+        disabled={controlsBusy}
+        gateway={tauriWorkCoordinateGateway}
+        onClose={() => setWorkZeroOpen(false)}
+        onError={setUiError}
+        onSnapshot={pluginHost.machineState.publish}
+        open={workZeroOpen}
+        position={workPositionView.position}
+        snapshot={snapshot}
       />
     </div>
   );

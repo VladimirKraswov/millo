@@ -7,10 +7,8 @@ import {
   History,
   Pause,
   Play,
-  RefreshCw,
   ScanSearch,
   ShieldAlert,
-  ShieldCheck,
   SlidersHorizontal,
   Square,
   Trash2,
@@ -28,7 +26,11 @@ import {
 } from "react";
 
 import type { ProgramGateway } from "../../platform/program/ProgramGateway";
-import type { HardwareInspection } from "../../shared/machine";
+import type {
+  ControllerSnapshot,
+  HardwareInspection,
+  Position,
+} from "../../shared/machine";
 import {
   idleSenderSnapshot,
   type DryRunGateway,
@@ -52,6 +54,7 @@ import type {
   ToolChangeConfirmation,
 } from "../../shared/realRun";
 import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
+import { JobReadinessPanel } from "./JobReadinessPanel";
 import { ProgramFilePicker } from "./ProgramFilePicker";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramLineTable } from "./ProgramLineTable";
@@ -66,12 +69,29 @@ import {
 } from "./dryRunReadModel";
 import { realRunPreflightControls } from "./realRunPreflightReadModel";
 import { senderActionLayout } from "./operatorLayoutModel";
+import {
+  jobReadinessModel,
+  type JobReadinessAction,
+} from "./jobReadinessModel";
 import type { PreviewView } from "./ToolpathPreview";
 
 const ToolpathPreview = lazy(async () => {
   const module = await import("./ToolpathPreview");
   return { default: module.ToolpathPreview };
 });
+
+export interface ProgramMachineContext {
+  readonly activeCoordinateSystem: string;
+  readonly busy: boolean;
+  readonly machineBound: boolean;
+  readonly machineName: string;
+  readonly onAcknowledgeReset: () => void | Promise<unknown>;
+  readonly onConnect: () => void | Promise<unknown>;
+  readonly onOpenWorkZero: () => void;
+  readonly onUnlock: () => void | Promise<unknown>;
+  readonly snapshot: ControllerSnapshot;
+  readonly workPosition?: Position;
+}
 
 interface ProgramWorkspaceProps {
   readonly desktopRuntime: boolean;
@@ -81,6 +101,7 @@ interface ProgramWorkspaceProps {
   readonly initialProgram?: GcodeProgram;
   readonly initialSender?: SenderSnapshot;
   readonly initialSource?: string;
+  readonly machineContext?: ProgramMachineContext;
   readonly onInspection?: (inspection: HardwareInspection) => void;
   readonly realRunAvailable?: boolean;
   readonly realRunGateway?: RealRunPreflightGateway;
@@ -155,6 +176,7 @@ export function ProgramWorkspace({
   initialProgram,
   initialSender,
   initialSource = "",
+  machineContext,
   onInspection,
   realRunAvailable = false,
   realRunGateway,
@@ -433,6 +455,46 @@ export function ProgramWorkspace({
     gatewayAvailable: realRunGateway !== undefined,
     checking: preflightLoading,
   });
+  const requiresGrblCheck =
+    reportForProgram?.checks.some(
+      (check) => check.id === "grbl-check-certificate" && check.level === "blocker",
+    ) ?? false;
+  const readiness = jobReadinessModel({
+    alarm: machineContext?.snapshot.alarm !== undefined,
+    connection: machineContext?.snapshot.connection ?? "disconnected",
+    machineBound: machineContext?.machineBound ?? false,
+    machineMode: machineContext?.snapshot.machine.mode ?? "unknown",
+    parserEligible: program?.summary.dryRunEligible ?? false,
+    preflightStatus: preflightControls.status,
+    resetPending: machineContext?.snapshot.resetNotice !== undefined,
+    requiresGrblCheck,
+    workPositionAvailable: machineContext?.workPosition !== undefined,
+  });
+  const machineDetail = machineContext
+    ? machineContext.snapshot.connection !== "connected"
+      ? "Не подключен"
+      : machineContext.snapshot.alarm
+        ? `ALARM${machineContext.snapshot.alarm.code === undefined ? "" : `:${machineContext.snapshot.alarm.code}`}`
+        : machineContext.snapshot.resetNotice
+          ? "Контроллер перезапущен"
+          : `${machineContext.machineName} · ${machineContext.snapshot.machine.reportedMode}`
+    : "Не подключен";
+  const fileDetail = program?.summary.dryRunEligible
+    ? `${program.summary.lineCount} строк · ${program.warnings.length} замечаний`
+    : `${program?.warnings.length ?? 0} замечаний требуют внимания`;
+  const originDetail = machineContext?.workPosition
+    ? `${machineContext.activeCoordinateSystem} · X ${machineContext.workPosition.x.toFixed(3)} · Y ${machineContext.workPosition.y.toFixed(3)} · Z ${machineContext.workPosition.z.toFixed(3)}`
+    : `${machineContext?.activeCoordinateSystem ?? "G54"} · не установлен`;
+  const validationDetail =
+    preflightControls.status === "ready"
+      ? `Готово · ${reportForProgram?.cautionCount ?? 0} замечаний`
+      : preflightControls.status === "blocked"
+        ? requiresGrblCheck
+          ? "Нужна проверка контроллером"
+          : `${reportForProgram?.blockerCount ?? 0} блокирующих замечаний`
+        : preflightControls.status === "checking"
+          ? "Читаем состояние GRBL"
+          : "Еще не выполнялась";
   const runRealPreflight = async () => {
     if (!loaded || !realRunGateway || !preflightControls.canCheck) return;
     setPreflightLoading(true);
@@ -499,6 +561,22 @@ export function ProgramWorkspace({
       ),
     );
   };
+  const runReadinessAction = (action: JobReadinessAction) => {
+    if (action === "connect") void machineContext?.onConnect();
+    if (action === "unlock") void machineContext?.onUnlock();
+    if (action === "acknowledgeReset") void machineContext?.onAcknowledgeReset();
+    if (action === "setWorkZero") machineContext?.onOpenWorkZero();
+    if (action === "runPreflight") void runRealPreflight();
+    if (action === "runGrblCheck") {
+      setRealRunReport(undefined);
+      startCheckRun();
+    }
+    if (action === "startProgram") setFirstCutOpen(true);
+    if (action === "reviewProgram") {
+      setDiagnosticView(reportForProgram ? "preflight" : "warnings");
+      setDiagnosticsOpen(true);
+    }
+  };
   const completeToolChange = async (
     confirmation: ToolChangeConfirmation,
   ): Promise<void> => {
@@ -543,6 +621,13 @@ export function ProgramWorkspace({
       setSelectedSourceLine(sender.currentSourceLine);
     }
   }, [checkRunVisible, programRunVisible, sender.currentSourceLine]);
+
+  useEffect(() => {
+    if (!checkRunVisible || sender.state !== "completed") return;
+    setSender({ ...idleSenderSnapshot, runSequence: sender.runSequence });
+    setRealRunReport(undefined);
+    void runRealPreflight();
+  }, [checkRunVisible, sender.runSequence, sender.state]);
 
   return (
     <section className="program-workspace" aria-labelledby="program-title">
@@ -703,23 +788,6 @@ export function ProgramWorkspace({
           </div>
 
           <aside className="program-diagnostics" aria-label="Program diagnostics">
-            <div
-              className={`program-gate ${program.summary.dryRunEligible ? "is-clear" : "is-blocked"}`}
-            >
-              {program.summary.dryRunEligible ? (
-                <FileCode2 aria-hidden="true" size={16} />
-              ) : (
-                <ShieldAlert aria-hidden="true" size={16} />
-              )}
-              <div>
-                <span>Safety gate</span>
-                <strong>
-                  {program.summary.dryRunEligible
-                    ? "Geometry ready"
-                    : "Review required"}
-                </strong>
-              </div>
-            </div>
             {realRunTarget && (programRunVisible || checkRunVisible) ? (
               <div className={`dry-run-card program-run-card is-${displayedSender.state}`}>
                 <div className="dry-run-heading">
@@ -795,78 +863,29 @@ export function ProgramWorkspace({
                 </small>
               </div>
             ) : realRunTarget ? (
-              <div
-                className={`real-run-preflight is-${preflightControls.status}`}
-              >
-                <div
-                  aria-label="Режим выполнения"
-                  className="program-run-intent"
-                  role="group"
-                >
-                  <button
-                    aria-pressed={programRunIntent === "airRun"}
-                    disabled={preflightLoading}
-                    onClick={() => {
-                      setProgramRunIntent("airRun");
-                      setRealRunReport(undefined);
-                    }}
-                    type="button"
-                  >
-                    Air run
-                  </button>
-                  <button
-                    aria-pressed={programRunIntent === "cutting"}
-                    disabled={preflightLoading}
-                    onClick={() => {
-                      setProgramRunIntent("cutting");
-                      setRealRunReport(undefined);
-                    }}
-                    type="button"
-                  >
-                    Обработка
-                  </button>
-                </div>
-                <div className="real-run-preflight-heading">
-                  <div>
-                    <span>Serial preflight</span>
-                    <strong>{preflightControls.statusLabel}</strong>
-                  </div>
-                  {reportForProgram ? (
-                    <code>status #{reportForProgram.pollSequence}</code>
-                  ) : (
-                    <ShieldAlert aria-hidden="true" size={15} />
-                  )}
-                </div>
-                <button
-                  disabled={!preflightControls.canCheck}
-                  onClick={() => void runRealPreflight()}
-                  type="button"
-                >
-                  <RefreshCw
-                    aria-hidden="true"
-                    className={preflightLoading ? "is-spinning" : undefined}
-                    size={13}
-                  />
-                  {reportForProgram ? "Проверить снова" : "Проверить готовность"}
-                </button>
-                <button
-                  aria-hidden={!reportForProgram?.ready}
-                  className={`first-cut-open${reportForProgram?.ready ? "" : " is-placeholder"}`}
-                  disabled={!reportForProgram?.ready}
-                  onClick={() => setFirstCutOpen(true)}
-                  tabIndex={reportForProgram?.ready ? 0 : -1}
-                  type="button"
-                >
-                  <ShieldCheck aria-hidden="true" size={13} />
-                  Запустить программу
-                </button>
-                <small>
-                  {reportForProgram?.ready
-                    ? `${reportForProgram.cautionCount} caution · готов к авторизации`
-                    : reportForProgram
-                      ? `${reportForProgram.blockerCount} blocker · ${reportForProgram.cautionCount} caution`
-                      : "Проверка файла и свежего состояния GRBL"}
-                </small>
+              <div className="job-readiness-shell">
+                <JobReadinessPanel
+                  busy={
+                    preflightLoading ||
+                    loading ||
+                    senderActive ||
+                    (machineContext?.busy ?? false)
+                  }
+                  details={{
+                    machine: machineDetail,
+                    file: fileDetail,
+                    origin: originDetail,
+                    validation: validationDetail,
+                  }}
+                  intent={programRunIntent}
+                  onIntent={(intent) => {
+                    setProgramRunIntent(intent);
+                    setRealRunReport(undefined);
+                  }}
+                  onOpenOrigin={() => machineContext?.onOpenWorkZero()}
+                  onPrimary={runReadinessAction}
+                  view={readiness}
+                />
                 <details className="execution-settings">
                   <summary>
                     <SlidersHorizontal aria-hidden="true" size={13} />

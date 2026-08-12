@@ -97,6 +97,22 @@ mobile sizes.
 6. Perform visual verification for changed operator screens.
 7. Commit the complete slice atomically.
 
+## Job-centered operator workflow
+
+- `jobReadinessModel` tests the complete primary-action priority, including
+  disconnected, Alarm, missing work zero, required GRBL Check, and ready Start.
+- `workPositionModel` verifies direct WPos and conservative MPos derivation from
+  active G5x, G92, and TLO evidence.
+- React server-render tests preserve four readiness facts, exactly one primary
+  action, and prominent XYZ plus individual-axis zero controls.
+- Visual regression is performed with `/?fixture=first-cut`: inspect unchecked
+  readiness, run preflight, confirm that Start replaces the previous action,
+  open Work zero, and open the final confirmation. The fixture must show a bound
+  connected machine so its states do not contradict the job surface.
+- The typed Unlock boundary remains covered by the actor test
+  `alarm_unlock_requires_confirmation_and_verifies_idle_in_the_actor`; the Tauri
+  adapter only forwards explicit UI intent and records the result in audit.
+
 ## Current lifecycle coverage
 
 - GRBL status, reset, alarm, error, and acknowledgement fixtures, including
