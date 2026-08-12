@@ -96,6 +96,12 @@ pub enum ArbiterError {
     ToolChangeControllerUnavailable(MachineMode),
     #[error("a physical program run can be stopped only with Feed Hold followed by Soft Reset")]
     ProgramRunStopRequiresReset,
+    #[error("prepared program run {expected} does not match active run {actual}")]
+    PreparedRunMismatch { expected: u64, actual: u64 },
+    #[error("prepared program run is unavailable while sender is {0:?}")]
+    PreparedRunUnavailable(SenderState),
+    #[error("prepared program run has already been committed to dispatch")]
+    PreparedRunAlreadyCommitted,
     #[error(transparent)]
     FirstCut(#[from] FirstCutAuthorizationError),
     #[error(transparent)]
@@ -356,6 +362,42 @@ impl CommandArbiter {
         .await
     }
 
+    pub async fn prepare_program_run(
+        &self,
+        program: GcodeProgram,
+        authorization_id: u64,
+    ) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::StartProgramRun {
+            program,
+            authorization_id,
+            dispatch_immediately: false,
+            response,
+        })
+        .await
+    }
+
+    pub async fn commit_prepared_program_run(
+        &self,
+        run_sequence: u64,
+    ) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::CommitPreparedProgramRun {
+            run_sequence,
+            response,
+        })
+        .await
+    }
+
+    pub async fn discard_prepared_program_run(
+        &self,
+        run_sequence: u64,
+    ) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::DiscardPreparedProgramRun {
+            run_sequence,
+            response,
+        })
+        .await
+    }
+
     pub async fn start_check_run(
         &self,
         program: GcodeProgram,
@@ -516,7 +558,7 @@ impl CommandArbiter {
 
     #[cfg(test)]
     async fn release_serial_run_fixture(&self) -> Result<SenderSnapshot, ArbiterError> {
-        self.call(|response| Request::ReleaseSerialRunFixture { response })
+        self.commit_prepared_program_run(self.sender_snapshot().run_sequence)
             .await
     }
 
@@ -656,8 +698,12 @@ enum Request {
     CancelDryRun {
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
-    #[cfg(test)]
-    ReleaseSerialRunFixture {
+    CommitPreparedProgramRun {
+        run_sequence: u64,
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
+    },
+    DiscardPreparedProgramRun {
+        run_sequence: u64,
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
 }
@@ -1225,10 +1271,44 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
         }
-        #[cfg(test)]
-        Request::ReleaseSerialRunFixture { response } => {
-            *sender_dispatch_enabled = true;
-            let result = Ok(sender.snapshot());
+        Request::CommitPreparedProgramRun {
+            run_sequence,
+            response,
+        } => {
+            let active = sender.snapshot();
+            let result = if active.run_sequence != run_sequence {
+                Err(ArbiterError::PreparedRunMismatch {
+                    expected: run_sequence,
+                    actual: active.run_sequence,
+                })
+            } else if active.state != SenderState::Running {
+                Err(ArbiterError::PreparedRunUnavailable(active.state))
+            } else if *sender_dispatch_enabled {
+                Err(ArbiterError::PreparedRunAlreadyCommitted)
+            } else {
+                *sender_dispatch_enabled = true;
+                Ok(active)
+            };
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
+        Request::DiscardPreparedProgramRun {
+            run_sequence,
+            response,
+        } => {
+            let active = sender.snapshot();
+            let result = if active.run_sequence != run_sequence {
+                Err(ArbiterError::PreparedRunMismatch {
+                    expected: run_sequence,
+                    actual: active.run_sequence,
+                })
+            } else if active.state != SenderState::Running {
+                Err(ArbiterError::PreparedRunUnavailable(active.state))
+            } else if *sender_dispatch_enabled {
+                Err(ArbiterError::PreparedRunAlreadyCommitted)
+            } else {
+                sender.cancel().map_err(ArbiterError::from)
+            };
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
         }
@@ -3868,6 +3948,34 @@ mod tests {
         arbiter.refresh_status().await.unwrap();
         let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
         assert_eq!(completed.mode, Some(millo_sender::SenderMode::CutRun));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn prepared_physical_run_dispatches_only_after_matching_commit() {
+        let source = "G21 G90 G94\nG0 Z2\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        let (_, prepared) = authorize_and_start_serial_fixture(&arbiter, source, false).await;
+
+        tokio::task::yield_now().await;
+        assert_eq!(prepared.state, SenderState::Running);
+        assert!(!control.writes().iter().any(|write| write.starts_with(b"N")));
+        assert!(matches!(
+            arbiter
+                .commit_prepared_program_run(prepared.run_sequence + 1)
+                .await,
+            Err(ArbiterError::PreparedRunMismatch { .. })
+        ));
+        assert!(!control.writes().iter().any(|write| write.starts_with(b"N")));
+
+        let discarded = arbiter
+            .discard_prepared_program_run(prepared.run_sequence)
+            .await
+            .unwrap();
+        assert_eq!(discarded.state, SenderState::Cancelled);
+        assert!(!control.writes().iter().any(|write| write.starts_with(b"N")));
         task.abort();
     }
 

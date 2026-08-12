@@ -25,11 +25,14 @@ use millo_profile::{
     MachineLocalSettingsUpdate, MachineProfile, MachineProfileDraft, MachineProfileState,
     MachineProfileStore,
 };
+use millo_recovery::{
+    ProgramRecoveryCandidate, ProgramRecoveryPackage, ProgramRecoveryStore, RecoverySeed,
+};
 use millo_run::{
     FirstCutConfirmation, FirstCutPreparation, ProgramRunIntent, RunPreflightReport,
-    ToolChangeConfirmation,
+    ToolChangeConfirmation, program_fingerprint,
 };
-use millo_sender::SenderSnapshot;
+use millo_sender::{SenderMode, SenderSnapshot};
 use millo_serial::{
     SerialConfig, SerialPortDescriptor, SerialPortKind, SerialTransport,
     available_ports as available_serial_ports,
@@ -39,7 +42,7 @@ use millo_settings::{
     build_settings_snapshot,
 };
 use millo_transport::BoxedTransport;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 use tokio::{
     sync::{Mutex, mpsc},
@@ -133,6 +136,7 @@ pub struct AppState {
     settings_root: Option<PathBuf>,
     settings_session: Mutex<Option<ActiveControllerSettings>>,
     run_journal: Arc<StdMutex<RunJournal>>,
+    program_recovery: Arc<StdMutex<ProgramRecoveryStore>>,
 }
 
 impl Default for AppState {
@@ -141,6 +145,7 @@ impl Default for AppState {
             MachineProfileStore::in_memory(),
             None,
             RunJournal::in_memory(),
+            ProgramRecoveryStore::in_memory(),
         )
     }
 }
@@ -152,6 +157,9 @@ impl AppState {
         let journal_path = profile_path
             .parent()
             .map(|parent| parent.join("sender-runs.json"));
+        let recovery_path = profile_path
+            .parent()
+            .map(|parent| parent.join("active-program-recovery.json"));
         let profiles =
             MachineProfileStore::load(profile_path).map_err(|error| error.to_string())?;
         let journal = journal_path
@@ -159,13 +167,24 @@ impl AppState {
             .transpose()
             .map_err(|error| error.to_string())?
             .unwrap_or_else(RunJournal::in_memory);
-        Ok(Self::from_profile_store(profiles, settings_root, journal))
+        let recovery = recovery_path
+            .map(ProgramRecoveryStore::load)
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_else(ProgramRecoveryStore::in_memory);
+        Ok(Self::from_profile_store(
+            profiles,
+            settings_root,
+            journal,
+            recovery,
+        ))
     }
 
     fn from_profile_store(
         profiles: MachineProfileStore,
         settings_root: Option<PathBuf>,
         run_journal: RunJournal,
+        program_recovery: ProgramRecoveryStore,
     ) -> Self {
         let initial = ResolvedTransport::mock();
         let descriptor = initial.descriptor;
@@ -193,6 +212,7 @@ impl AppState {
             settings_root,
             settings_session: Mutex::new(None),
             run_journal: Arc::new(StdMutex::new(run_journal)),
+            program_recovery: Arc::new(StdMutex::new(program_recovery)),
         }
     }
 
@@ -204,7 +224,10 @@ impl AppState {
 
         let mut snapshots = self.arbiter.subscribe();
         let mut sender_snapshots = self.arbiter.subscribe_sender();
-        let journal_sender = start_run_journal_worker(Arc::clone(&self.run_journal));
+        let persistence_sender = start_run_persistence_worker(
+            Arc::clone(&self.run_journal),
+            Arc::clone(&self.program_recovery),
+        );
         *event_task = Some(tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -225,7 +248,7 @@ impl AppState {
                         if let Err(error) = app.emit("dry-run-state", snapshot.clone()) {
                             eprintln!("dry-run-state event emission failed: {error}");
                         }
-                        if let Some(sender) = journal_sender.as_ref()
+                        if let Some(sender) = persistence_sender.as_ref()
                             && sender.send(snapshot).await.is_err()
                         {
                             eprintln!("sender journal worker stopped unexpectedly");
@@ -237,23 +260,34 @@ impl AppState {
     }
 }
 
-fn start_run_journal_worker(
+fn start_run_persistence_worker(
     journal: Arc<StdMutex<RunJournal>>,
+    recovery: Arc<StdMutex<ProgramRecoveryStore>>,
 ) -> Option<mpsc::Sender<SenderSnapshot>> {
     let (sender, mut snapshots) = mpsc::channel::<SenderSnapshot>(128);
     let worker = std::thread::Builder::new()
         .name("millo-run-journal".to_owned())
         .spawn(move || {
             while let Some(snapshot) = snapshots.blocking_recv() {
-                let mut journal = match journal.lock() {
-                    Ok(journal) => journal,
-                    Err(error) => {
-                        eprintln!("sender journal lock poisoned: {error}");
-                        break;
+                match journal.lock() {
+                    Ok(mut journal) => {
+                        if let Err(error) =
+                            journal.observe(&snapshot, SystemTime::now(), Instant::now())
+                        {
+                            eprintln!("sender journal checkpoint failed: {error}");
+                        }
                     }
-                };
-                if let Err(error) = journal.observe(&snapshot, SystemTime::now(), Instant::now()) {
-                    eprintln!("sender journal checkpoint failed: {error}");
+                    Err(error) => eprintln!("sender journal lock poisoned: {error}"),
+                }
+                match recovery.lock() {
+                    Ok(mut recovery) => {
+                        if let Err(error) =
+                            recovery.observe(&snapshot, SystemTime::now(), Instant::now())
+                        {
+                            eprintln!("program recovery checkpoint failed: {error}");
+                        }
+                    }
+                    Err(error) => eprintln!("program recovery lock poisoned: {error}"),
                 }
             }
         });
@@ -279,6 +313,126 @@ pub async fn sender_run_history(
     })
     .await
     .map_err(|error| format!("sender journal history task failed: {error}"))?
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramRecoveryPreparationRequest {
+    pub recovery_id: u64,
+    pub safe_z_mm: f64,
+    pub machine_reference_restored: bool,
+    pub work_zero_restored: bool,
+    pub restart_point_inspected: bool,
+    pub path_clear: bool,
+    pub power_control_reachable: bool,
+}
+
+impl ProgramRecoveryPreparationRequest {
+    fn missing(self) -> Vec<&'static str> {
+        [
+            (!self.machine_reference_restored)
+                .then_some("machine reference restored after power loss"),
+            (!self.work_zero_restored).then_some("work zero restored"),
+            (!self.restart_point_inspected).then_some("restart point inspected in preview"),
+            (!self.path_clear).then_some("clearance route and repeated path are clear"),
+            (!self.power_control_reachable).then_some("machine power control reachable"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+}
+
+#[tauri::command]
+pub async fn program_recovery_candidate(
+    state: State<'_, AppState>,
+) -> Result<Option<ProgramRecoveryCandidate>, String> {
+    let snapshot = state.arbiter.sender_snapshot();
+    let recovery = Arc::clone(&state.program_recovery);
+    tokio::task::spawn_blocking(move || {
+        let mut recovery = recovery
+            .lock()
+            .map_err(|error| format!("program recovery lock poisoned: {error}"))?;
+        recovery
+            .observe(&snapshot, SystemTime::now(), Instant::now())
+            .map_err(|error| error.to_string())?;
+        recovery.candidate().map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("program recovery candidate task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn prepare_program_recovery(
+    request: ProgramRecoveryPreparationRequest,
+    state: State<'_, AppState>,
+) -> Result<ProgramRecoveryPackage, String> {
+    let _transition = state.transition_lock.lock().await;
+    let missing = request.missing();
+    if !missing.is_empty() {
+        return Err(format!(
+            "program recovery confirmation is incomplete: {missing:?}"
+        ));
+    }
+    ensure_machine_bound(&state).await?;
+    if state.active_transport.lock().await.kind != TransportKind::Serial {
+        return Err("program recovery requires an active serial transport".to_owned());
+    }
+    let snapshot = state
+        .arbiter
+        .refresh_status()
+        .await
+        .map_err(|error| error.to_string())?;
+    if snapshot.connection != millo_domain::ConnectionState::Connected
+        || snapshot.machine.mode != millo_domain::MachineMode::Idle
+        || snapshot.alarm.is_some()
+        || snapshot.reset_notice.is_some()
+    {
+        return Err("program recovery requires fresh Connected + Idle state".to_owned());
+    }
+    state
+        .arbiter
+        .inspect_device()
+        .await
+        .map_err(|error| error.to_string())?;
+    let fingerprint = state
+        .settings_session
+        .lock()
+        .await
+        .as_ref()
+        .map(|session| session.fingerprint.key.clone())
+        .ok_or_else(|| "controller settings have not been synchronized".to_owned())?;
+    let recovery = Arc::clone(&state.program_recovery);
+    tokio::task::spawn_blocking(move || {
+        let mut recovery = recovery
+            .lock()
+            .map_err(|error| format!("program recovery lock poisoned: {error}"))?;
+        if !recovery.machine_matches(request.recovery_id, &fingerprint) {
+            return Err("interrupted job belongs to a different controller".to_owned());
+        }
+        recovery
+            .prepare(request.recovery_id, request.safe_z_mm)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("program recovery preparation task failed: {error}"))?
+}
+
+#[tauri::command]
+pub async fn dismiss_program_recovery(
+    recovery_id: u64,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let recovery = Arc::clone(&state.program_recovery);
+    tokio::task::spawn_blocking(move || {
+        recovery
+            .lock()
+            .map_err(|error| format!("program recovery lock poisoned: {error}"))?
+            .dismiss(recovery_id)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| format!("program recovery dismissal task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -1259,6 +1413,14 @@ pub async fn start_program_run(
     if state.active_transport.lock().await.kind != TransportKind::Serial {
         return Err("program run requires an active serial transport".to_owned());
     }
+    let (machine_fingerprint, profile_id) = state
+        .settings_session
+        .lock()
+        .await
+        .as_ref()
+        .map(|session| (session.fingerprint.key.clone(), session.profile_id.clone()))
+        .ok_or_else(|| "controller settings have not been synchronized".to_owned())?;
+    let source = request.clone();
     let program = tokio::task::spawn_blocking(move || {
         parse_program_with_options(
             request,
@@ -1270,11 +1432,105 @@ pub async fn start_program_run(
     .await
     .map_err(|error| format!("program-run parser task failed: {error}"))?
     .map_err(|error| error.to_string())?;
-    state
+    let stored_source_name = program.source_name.clone();
+    let fingerprint = program_fingerprint(&program);
+    let prepared = state
         .arbiter
-        .start_program_run(program, authorization_id)
+        .prepare_program_run(program, authorization_id)
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    let intent = match prepared.mode {
+        Some(SenderMode::AirRun) => ProgramRunIntent::AirRun,
+        Some(SenderMode::CutRun) => ProgramRunIntent::Cutting,
+        _ => {
+            let _ = state
+                .arbiter
+                .discard_prepared_program_run(prepared.run_sequence)
+                .await;
+            return Err("prepared sender did not retain a physical run intent".to_owned());
+        }
+    };
+    let controller = state.arbiter.snapshot();
+    let seed = RecoverySeed {
+        machine_fingerprint,
+        profile_id,
+        source_name: stored_source_name,
+        source: source.source,
+        program_fingerprint: fingerprint,
+        intent,
+        execution_options,
+        run_sequence: prepared.run_sequence,
+        start_machine_position: controller.machine.machine_position,
+        start_work_position: controller.machine.work_position,
+        start_work_coordinate_offset: controller.machine.work_coordinate_offset,
+    };
+    let recovery = Arc::clone(&state.program_recovery);
+    let prepared_for_store = prepared.clone();
+    let arm_task = tokio::task::spawn_blocking(move || {
+        recovery
+            .lock()
+            .map_err(|error| format!("program recovery lock poisoned: {error}"))?
+            .arm(seed, &prepared_for_store, SystemTime::now(), Instant::now())
+            .map_err(|error| error.to_string())
+    })
+    .await;
+    let arm_result = match arm_task {
+        Ok(result) => result,
+        Err(error) => Err(format!("program recovery arm task failed: {error}")),
+    };
+    let candidate = match arm_result {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            let _ = state
+                .arbiter
+                .discard_prepared_program_run(prepared.run_sequence)
+                .await;
+            return Err(format!(
+                "program run was not dispatched because recovery evidence could not be persisted: {error}"
+            ));
+        }
+    };
+    match state
+        .arbiter
+        .commit_prepared_program_run(prepared.run_sequence)
+        .await
+    {
+        Ok(snapshot) => {
+            match state.program_recovery.lock() {
+                Ok(mut recovery) => {
+                    if let Err(error) = recovery.commit_arm(candidate.id) {
+                        eprintln!("program recovery arm commit bookkeeping failed: {error}");
+                    }
+                }
+                Err(error) => eprintln!("program recovery lock poisoned after commit: {error}"),
+            }
+            Ok(snapshot)
+        }
+        Err(error) => {
+            let recovery = Arc::clone(&state.program_recovery);
+            let rollback = tokio::task::spawn_blocking(move || {
+                recovery
+                    .lock()
+                    .map_err(|lock| format!("program recovery lock poisoned: {lock}"))?
+                    .rollback_arm(candidate.id)
+                    .map_err(|rollback| rollback.to_string())
+            })
+            .await;
+            let _ = state
+                .arbiter
+                .discard_prepared_program_run(prepared.run_sequence)
+                .await;
+            match rollback {
+                Ok(Ok(())) => Err(error.to_string()),
+                Ok(Err(rollback)) => Err(format!(
+                    "{error}; prepared recovery rollback also failed: {rollback}"
+                )),
+                Err(rollback) => Err(format!(
+                    "{error}; prepared recovery rollback task failed: {rollback}"
+                )),
+            }
+        }
+    }
 }
 
 #[tauri::command]
@@ -1605,10 +1861,38 @@ fn serial_port_name(transport_id: &str) -> Result<&str, String> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn recovery_preparation_requires_every_operator_confirmation() {
+        let incomplete = ProgramRecoveryPreparationRequest {
+            recovery_id: 1,
+            safe_z_mm: 5.0,
+            machine_reference_restored: false,
+            work_zero_restored: false,
+            restart_point_inspected: false,
+            path_clear: false,
+            power_control_reachable: false,
+        };
+        assert_eq!(incomplete.missing().len(), 5);
+        assert!(
+            ProgramRecoveryPreparationRequest {
+                machine_reference_restored: true,
+                work_zero_restored: true,
+                restart_point_inspected: true,
+                path_clear: true,
+                power_control_reachable: true,
+                ..incomplete
+            }
+            .missing()
+            .is_empty()
+        );
+    }
+
     #[tokio::test]
-    async fn run_journal_worker_processes_snapshots_off_the_async_task() {
+    async fn run_persistence_worker_processes_snapshots_off_the_async_task() {
         let journal = Arc::new(StdMutex::new(RunJournal::in_memory()));
-        let sender = start_run_journal_worker(Arc::clone(&journal)).unwrap();
+        let recovery = Arc::new(StdMutex::new(ProgramRecoveryStore::in_memory()));
+        let sender =
+            start_run_persistence_worker(Arc::clone(&journal), Arc::clone(&recovery)).unwrap();
         let snapshot = SenderSnapshot {
             run_sequence: 1,
             source_name: Some("worker.nc".to_owned()),

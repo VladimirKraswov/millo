@@ -3,6 +3,7 @@ import {
   CircleAlert,
   CircleCheck,
   FileCode2,
+  History,
   Pause,
   Play,
   RefreshCw,
@@ -35,6 +36,11 @@ import {
   type SenderState,
 } from "../../shared/dryRun";
 import type { GcodeProgram, ProgramWarning } from "../../shared/program";
+import type {
+  ProgramRecoveryCandidate,
+  ProgramRecoveryPackage,
+  ProgramRecoveryPreparationRequest,
+} from "../../shared/recovery";
 import { defaultProgramExecutionOptions } from "../../shared/realRun";
 import type {
   FirstCutConfirmation,
@@ -48,6 +54,7 @@ import type {
 import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramLineTable } from "./ProgramLineTable";
+import { ProgramRecoveryDialog } from "./ProgramRecoveryDialog";
 import { ToolChangeDialog } from "./ToolChangeDialog";
 import { canStartCheckRun } from "./checkRunReadModel";
 import {
@@ -170,6 +177,9 @@ export function ProgramWorkspace({
     useState<ProgramExecutionOptions>(defaultProgramExecutionOptions);
   const [firstCutOpen, setFirstCutOpen] = useState(false);
   const [toolChangeOpen, setToolChangeOpen] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
+  const [recoveryCandidate, setRecoveryCandidate] =
+    useState<ProgramRecoveryCandidate>();
   const [firstCutPreparation, setFirstCutPreparation] =
     useState<FirstCutPreparation>();
   const [preflightLoading, setPreflightLoading] = useState(false);
@@ -207,6 +217,43 @@ export function ProgramWorkspace({
       unsubscribe?.();
     };
   }, [desktopRuntime, dryRunGateway]);
+
+  useEffect(() => {
+    if (!realRunGateway) return;
+    let active = true;
+    void realRunGateway
+      .recoveryCandidate()
+      .then((candidate) => {
+        if (active) setRecoveryCandidate(candidate ?? undefined);
+      })
+      .catch((reason: unknown) => {
+        if (active) setError(String(reason));
+      });
+    return () => {
+      active = false;
+    };
+  }, [realRunGateway]);
+
+  useEffect(() => {
+    if (
+      !realRunGateway ||
+      (sender.state !== "failed" && sender.state !== "cancelled")
+    ) {
+      return;
+    }
+    let active = true;
+    void realRunGateway
+      .recoveryCandidate()
+      .then((candidate) => {
+        if (active) setRecoveryCandidate(candidate ?? undefined);
+      })
+      .catch((reason: unknown) => {
+        if (active) setError(String(reason));
+      });
+    return () => {
+      active = false;
+    };
+  }, [realRunGateway, sender.runSequence, sender.state]);
 
   useEffect(() => {
     if (!realRunTarget || !realRunAvailable) {
@@ -255,6 +302,44 @@ export function ProgramWorkspace({
     event.preventDefault();
     setDragging(false);
     void loadFile(event.dataTransfer.files[0]);
+  };
+
+  const prepareRecovery = (
+    request: ProgramRecoveryPreparationRequest,
+  ): Promise<ProgramRecoveryPackage> => {
+    if (!realRunGateway) throw new Error("Recovery gateway is unavailable");
+    return realRunGateway.prepareRecovery(request);
+  };
+
+  const loadRecoveryPackage = async (prepared: ProgramRecoveryPackage) => {
+    setLoading(true);
+    setError(undefined);
+    try {
+      const program = await gateway.parse(prepared.request, {
+        blockDelete: prepared.executionOptions.blockDelete,
+      });
+      setLoaded({ program, source: prepared.request.source });
+      setProgramRunIntent(prepared.intent);
+      setProgramExecutionOptions(prepared.executionOptions);
+      setSender(idleSenderSnapshot);
+      setSelectedSourceLine(prepared.restartSourceLine);
+      setDiagnosticView("lines");
+      setRealRunReport(undefined);
+      setFirstCutPreparation(undefined);
+      setFirstCutOpen(false);
+      setRecoveryCandidate(undefined);
+    } catch (reason) {
+      setError(String(reason));
+      throw reason;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const dismissRecovery = async (recoveryId: number) => {
+    if (!realRunGateway) throw new Error("Recovery gateway is unavailable");
+    await realRunGateway.dismissRecovery(recoveryId);
+    setRecoveryCandidate(undefined);
   };
 
   const bounds = program?.summary.bounds;
@@ -500,6 +585,33 @@ export function ProgramWorkspace({
           </label>
         </div>
       </header>
+
+      {recoveryCandidate && !senderActive && (
+        <aside
+          className={`program-recovery-banner${recoveryCandidate.ready ? "" : " is-blocked"}`}
+          role="status"
+        >
+          <History aria-hidden="true" size={18} />
+          <div>
+            <span>Незавершённая программа</span>
+            <strong>{recoveryCandidate.sourceName}</strong>
+            <small>{recoveryCandidate.detail}</small>
+          </div>
+          <dl>
+            <div>
+              <dt>Executed</dt>
+              <dd>{recoveryCandidate.executingSourceLine ?? "нет Ln"}</dd>
+            </div>
+            <div>
+              <dt>Restart</dt>
+              <dd>{recoveryCandidate.restartSourceLine ?? "blocked"}</dd>
+            </div>
+          </dl>
+          <button onClick={() => setRecoveryOpen(true)} type="button">
+            {recoveryCandidate.ready ? "Восстановить" : "Подробнее"}
+          </button>
+        </aside>
+      )}
 
       {program ? (
         <div className="program-body">
@@ -1035,6 +1147,7 @@ export function ProgramWorkspace({
         onStarted={(snapshot) => {
           setSender(snapshot);
           setFirstCutPreparation(undefined);
+          setRecoveryCandidate(undefined);
         }}
         open={firstCutOpen}
         report={reportForProgram}
@@ -1051,6 +1164,17 @@ export function ProgramWorkspace({
             sourceLine={displayedSender.currentSourceLine}
           />
         )}
+
+      {recoveryCandidate && realRunGateway && (
+        <ProgramRecoveryDialog
+          candidate={recoveryCandidate}
+          onClose={() => setRecoveryOpen(false)}
+          onDismiss={dismissRecovery}
+          onPrepare={prepareRecovery}
+          onPrepared={loadRecoveryPackage}
+          open={recoveryOpen}
+        />
+      )}
 
       {error && <p className="program-error">{error}</p>}
     </section>

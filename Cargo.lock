@@ -1870,6 +1870,7 @@ dependencies = [
  "millo-journal",
  "millo-mock",
  "millo-profile",
+ "millo-recovery",
  "millo-run",
  "millo-sender",
  "millo-serial",

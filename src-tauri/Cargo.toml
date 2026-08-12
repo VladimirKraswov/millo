@@ -21,6 +21,7 @@ millo-gcode = { path = "../crates/millo-gcode" }
 millo-journal = { path = "../crates/millo-journal" }
 millo-mock = { path = "../crates/millo-mock" }
 millo-profile = { path = "../crates/millo-profile" }
+millo-recovery = { path = "../crates/millo-recovery" }
 millo-run = { path = "../crates/millo-run" }
 millo-serial = { path = "../crates/millo-serial" }
 millo-settings = { path = "../crates/millo-settings" }

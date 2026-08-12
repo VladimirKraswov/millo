@@ -107,8 +107,10 @@ means immutable parse-to-plan input, bounded/correlated streaming, realtime
 safety and overrides, terminal drain, typed failures, runtime timing, Mock
 fault coverage, and physical Check/Air evidence all pass together.
 
-This statement deliberately excludes partial-file restart, probing,
+This statement deliberately excludes arbitrary partial-file start, probing,
 heightmaps, coolant, machine/reference-coordinate movement, coordinate
-mutation, and tool-length offsets. Those features can change physical meaning
-or depend on absent hardware, so each remains a separate typed workflow rather
-than an unguarded sender option.
+mutation, and tool-length offsets. Guided restart of a Millo-started interrupted
+job is the narrower ADR 0038 workflow and requires durable physical-line
+evidence plus a new whole-program safety pipeline. The other features can change
+physical meaning or depend on absent hardware, so each remains a separate typed
+workflow rather than an unguarded sender option.

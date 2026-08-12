@@ -1,5 +1,10 @@
 import type { HardwareInspection } from "./machine";
 import type { ProgramBounds, ProgramParseRequest } from "./program";
+import type {
+  ProgramRecoveryCandidate,
+  ProgramRecoveryPackage,
+  ProgramRecoveryPreparationRequest,
+} from "./recovery";
 
 export type ProgramRunIntent = "airRun" | "cutting";
 
@@ -85,6 +90,11 @@ export interface ToolChangeConfirmation {
 }
 
 export interface RealRunPreflightGateway {
+  recoveryCandidate(): Promise<ProgramRecoveryCandidate | null>;
+  prepareRecovery(
+    request: ProgramRecoveryPreparationRequest,
+  ): Promise<ProgramRecoveryPackage>;
+  dismissRecovery(recoveryId: number): Promise<void>;
   preflight(
     request: ProgramParseRequest,
     intent: ProgramRunIntent,

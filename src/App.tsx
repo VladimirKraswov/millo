@@ -35,6 +35,7 @@ import { previewFixturePreflightGateway } from "./features/program/previewFixtur
 import {
   previewFixtureFirstCutGateway,
   previewFixtureFirstCutProgram,
+  previewFixtureRecoveryGateway,
   previewFixtureToolChangeSender,
 } from "./features/program/previewFixtureFirstCut";
 import { ProgramWorkspace } from "./features/program/ProgramWorkspace";
@@ -89,19 +90,23 @@ const developmentFixture = import.meta.env.DEV
 const developmentPreviewFixture =
   developmentFixture === "air-square"
     ? previewFixtureAirSquareProgram
-    : developmentFixture === "first-cut" || developmentFixture === "tool-change"
-    ? previewFixtureFirstCutProgram
-    : developmentFixture === "program" || developmentFixture === "preflight"
-      ? previewFixtureProgram
-      : undefined;
+    : developmentFixture === "first-cut" ||
+        developmentFixture === "tool-change" ||
+        developmentFixture === "recovery"
+      ? previewFixtureFirstCutProgram
+      : developmentFixture === "program" || developmentFixture === "preflight"
+        ? previewFixtureProgram
+        : undefined;
 const developmentPreflightFixture =
   developmentFixture === "preflight" ||
   developmentFixture === "first-cut" ||
   developmentFixture === "tool-change" ||
+  developmentFixture === "recovery" ||
   developmentFixture === "air-square";
 const developmentFirstCutFixture =
   developmentFixture === "first-cut" ||
   developmentFixture === "tool-change" ||
+  developmentFixture === "recovery" ||
   developmentFixture === "air-square";
 const developmentProfileFixture: MachineProfileState = {
   profiles: [
@@ -666,17 +671,19 @@ export default function App() {
                   snapshot.connection === "connected" &&
                   snapshot.machine.mode === "idle" &&
                   snapshot.alarm === undefined &&
-                  snapshot.resetNotice === undefined)
-                  && machineBound
+                  snapshot.resetNotice === undefined &&
+                  machineBound)
               }
               realRunGateway={
-                developmentFirstCutFixture
-                  ? previewFixtureFirstCutGateway
-                  : developmentPreflightFixture
-                  ? previewFixturePreflightGateway
-                  : desktopRuntime
-                    ? tauriRealRunPreflightGateway
-                    : undefined
+                developmentFixture === "recovery"
+                  ? previewFixtureRecoveryGateway
+                  : developmentFirstCutFixture
+                    ? previewFixtureFirstCutGateway
+                    : developmentPreflightFixture
+                      ? previewFixturePreflightGateway
+                      : desktopRuntime
+                        ? tauriRealRunPreflightGateway
+                        : undefined
               }
               realRunTarget={
                 developmentPreflightFixture || activeTransport.kind === "serial"

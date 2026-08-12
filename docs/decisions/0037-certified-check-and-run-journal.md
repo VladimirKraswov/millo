@@ -38,5 +38,6 @@ Failed and cancelled entries are marked `RestartBlocked`.
   cleanup invalidate validation evidence.
 - A crash leaves bounded last-ACK and typed-failure evidence without frequent
   per-line disk writes.
-- The journal cannot start motion. Partial restart still requires future modal,
-  position, work-coordinate, safe-approach, and operator authorization proofs.
+- The journal cannot start motion. ADR 0038 adds those modal, position,
+  work-coordinate, safe-approach, and operator-authorization proofs in a
+  separate single-record recovery store; journal entries remain non-executable.

@@ -129,6 +129,10 @@ the physical-run operator pause state while GRBL is in Check.
   fingerprint, execution options, start positions, sender sequence and latest
   physical `Ln:` checkpoint. It uses the same synced temp/backup replacement.
   Completed jobs are never offered; a missing `Ln:` produces a visible blocker.
+- Physical Start uses a prepared/commit actor boundary. The prepared sender has
+  a run sequence but dispatch is disabled. Tauri arms and syncs recovery first;
+  only a matching commit releases the source FIFO. Persistence failure discards
+  the prepared sender without writing a G-code block.
 - Recovery planning is pure and motion-free. It reparses the stored source,
   verifies its fingerprint, rewinds to the latest preceding rapid segment at
   program clearance (or the first known motion), and emits a new G-code program
@@ -294,13 +298,14 @@ does not schedule or execute controller I/O.
   current source line, and terminal error. Plugins receive no sender or raw-line
   capability. `jobs.create` remains reserved.
 - The same event bridge passes snapshots through a bounded queue to a dedicated
-  journal worker thread. JSON serialization, `write`, and `fsync` therefore
-  cannot block the Tokio controller/sender runtime. The worker updates one
-  bounded record per run at start, state changes, every 250 acknowledgements or
-  two seconds, and terminal state. Backpressure may delay journal/UI forwarding,
-  but it never delays controller I/O or drops a terminal checkpoint. The adapter
-  owns the config path; the journal crate owns schema, throttling, backup
-  replacement, corruption reporting, and recovery labels.
+  persistence worker thread. JSON serialization, `write`, and `fsync` therefore
+  cannot block the Tokio controller/sender runtime. The worker updates journal
+  history at state changes, every 250 acknowledgements or two seconds, and at
+  terminal state; it independently checkpoints changed physical `Ln:` recovery
+  evidence at most once per second and at terminal state. Backpressure may delay
+  journal/UI forwarding, but it never delays controller I/O or drops a terminal
+  checkpoint. The adapter owns config paths; each store owns schema, throttling,
+  backup replacement, corruption reporting, and domain policy.
 
 ### GRBL Check-run boundary
 

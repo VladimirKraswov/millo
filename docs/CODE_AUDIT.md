@@ -16,8 +16,10 @@ tests, configuration, and direct/transitive dependency reports.
 - Connect and transport replacement fail unless the actor is disconnected.
   Partial Tauri connection setup is cleaned up before an error reaches React.
 - Mock Pause/Resume cannot mutate a physical sender.
-- Sender journal `fsync` runs outside Tokio. Profiles, settings, and journal use
-  one synced temp/backup replacement implementation with corruption recovery.
+- Sender journal and recovery `fsync` run outside Tokio. Profiles, settings,
+  journal, and active-job recovery use one synced temp/backup replacement
+  implementation with corruption recovery. Physical Start is not committed to
+  the actor until the first recovery generation is durable.
 - Native serial lines are bounded to 4 KiB and incomplete EOF frames fail closed.
 - Settings autosave is fenced by dialog lifecycle, controller fingerprint, and
   profile ID. Pending work is invalidated when the operator closes or switches.

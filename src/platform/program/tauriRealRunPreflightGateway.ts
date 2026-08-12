@@ -10,6 +10,17 @@ import type {
 import type { SenderSnapshot } from "../../shared/dryRun";
 
 export const tauriRealRunPreflightGateway: RealRunPreflightGateway = {
+  recoveryCandidate: () =>
+    invoke<import("../../shared/recovery").ProgramRecoveryCandidate | null>(
+      "program_recovery_candidate",
+    ),
+  prepareRecovery: (request) =>
+    invoke<import("../../shared/recovery").ProgramRecoveryPackage>(
+      "prepare_program_recovery",
+      { request },
+    ),
+  dismissRecovery: (recoveryId) =>
+    invoke<void>("dismiss_program_recovery", { recoveryId }),
   preflight: (request, intent, executionOptions) =>
     invoke<RunPreflightReport>("preflight_real_run", {
       request,

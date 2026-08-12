@@ -429,6 +429,14 @@ additional two steps are the typed M5/M9 shutdown epilogue before M30.
   WCS/modal/tool/spindle state, omit already-finished geometry, reject safe Z
   below the program envelope, and block recovery when GRBL did not provide
   `Ln:` execution telemetry.
+- Actor fixtures prove a prepared physical run emits no `N` block before a
+  matching commit and that mismatch/discard remains motion-free. Store fixtures
+  prove a failed run stays available only for the matching machine fingerprint,
+  while completed runs disappear.
+- React model tests require all five recovery confirmations, finite Safe Z at or
+  above the parser envelope, and atomic busy-state consumption. The recovery
+  fixture is inspected at desktop and 390 x 844: banner, restart XYZ, checklist,
+  disabled/enabled action, low-Safe-Z rejection, and browser console.
 
 ### Hardware Air-run fixture
 

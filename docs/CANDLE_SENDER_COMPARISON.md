@@ -28,7 +28,8 @@ cases. Source references describe the audited Candle checkout in
 | Runtime timing | `TimeEstimator` is integrated with Candle's UI/parser and includes planner-oriented estimation | Per-line integer timing is embedded in the immutable Rust plan; snapshots expose active elapsed and explicit complete/lower-bound ETA, exclude Hold, and freeze every terminal state | Timing survives UI replacement and cannot show paused wall time or a silently “exact” rapid estimate | Plan/sender timing tests and TS read-model tests |
 | Shutdown contract | End behavior may depend on file content and mutable configured end commands | Every plan injects typed `M5` then `M9` after source lines and before deferred M2/M30; completion still requires fresh `Idle`; snapshot records shutdown acknowledgements | A successful file that omitted output-off commands cannot be reported complete without issuing and correlating both safe-output commands | Plan/sender/actor tests; physical 10/10 Check fixture |
 | Large-job progress | Issue reports describe pauses, memory pressure, UI freezes, and silent mid-job stops | Plan storage is bounded, in-flight state is bounded by controller RX bytes, snapshots are O(1), and each `ok` publishes sequence/line/age telemetry; 100,000 lines are a regression fixture | Prevents queue-sized response/UI state and makes a lack of progress observable instead of looking like a running job | 100k stress test; heartbeat read-model test |
-| Crash diagnostics | Mutable UI/queue state may be lost with the process, while send-from-line offers insufficient physical proof | `millo-journal` keeps 100 run records, throttled exact-ACK checkpoints, typed failures, shutdown evidence, atomic temp/backup JSON, and an explicit non-executable recovery disposition | A crash or unexplained stop leaves bounded forensic evidence without presenting an unsafe line number as a Resume button | Journal throttle, failure, bound, persistence and backup-recovery tests |
+| Crash diagnostics | Mutable UI/queue state may be lost with the process, while send-from-line offers insufficient physical proof | `millo-journal` keeps 100 run records, throttled exact-ACK checkpoints, typed failures, shutdown evidence, atomic temp/backup JSON, and an explicit non-executable journal disposition | A crash or unexplained stop leaves bounded forensic evidence without treating buffered acceptance as completed cutting | Journal throttle, failure, bound, persistence and backup-recovery tests |
+| Power-loss restart | Send-from-selected-line relies on operator-selected source position and reconstructed parser state | Start is two-phase: the exact source/machine/options are synced before first dispatch; source lines become wire `N` tags; physical `Ln:` is persisted; recovery verifies the same controller, rewinds to a clearance rapid, emits a separate Safe-Z/modal program, and sends it through ordinary Check/preflight/authorization | Avoids both lost crash context and a blind exact-line resume into stale coordinates or a partially executed buffered block | `millo-recovery`, prepared-run actor tests, atomic-store fixtures, recovery UI/model checks; ADR 0038 |
 | Testability | Sender behavior depends heavily on `frmMain`, Qt widgets, timers, and dialogs | Parser, policy, lease, sender, actor, GRBL parser, Mock transport, and serial adapter are separate crates | Every state transition can be regression-tested without a window or physical machine | `npm run verify`; deterministic Mock fault injection |
 
 ## Deliberate non-parity
@@ -46,10 +47,12 @@ The following Candle features are not accepted as raw sender behavior in Millo:
 - Arbitrary start/end strings and raw console/plugin writes are not part of the
   execution capability. Future customization must compile into a reviewed,
   typed plan and preserve authorization.
-- Candle-style send-from-selected-line and `autoLine` modal reconstruction are
-  not exposed. A partial run must first prove modal state, work coordinates,
-  physical position, safe approach, and a new program-bound authorization;
-  prepending remembered G words alone cannot establish those facts.
+- Candle-style arbitrary send-from-selected-line and `autoLine` modal
+  reconstruction are not exposed. Millo offers only the guarded interrupted-job
+  workflow: matching source and controller, physical `Ln:` evidence,
+  conservative rewind, explicit Safe Z, restored work reference, preview,
+  Check, and a new program-bound authorization. Prepending remembered G words
+  alone cannot establish those facts.
 - Parser-state restoration after Soft Reset is not attempted. Reset terminates
   the lease and run; restoring only modal words would not prove position,
   planner contents, workholding, or spindle state.

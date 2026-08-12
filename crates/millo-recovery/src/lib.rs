@@ -60,6 +60,8 @@ struct RecoveryRecord {
     start_machine_position: Option<Position>,
     start_work_position: Option<Position>,
     start_work_coordinate_offset: Option<Position>,
+    #[serde(default)]
+    prepared_recovery_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +84,7 @@ pub struct ProgramRecoveryCandidate {
     pub executing_source_line: Option<usize>,
     pub restart_source_line: Option<usize>,
     pub restart_position: Option<ProgramPoint>,
+    pub minimum_safe_z_mm: Option<f64>,
     pub ready: bool,
     pub detail: String,
 }
@@ -125,8 +128,14 @@ pub enum ProgramRecoveryError {
     InvalidSenderMode,
     #[error("program recovery cannot arm sender run sequence zero")]
     InvalidRunSequence,
+    #[error("program recovery seed does not match the prepared physical sender")]
+    PreparedRunMismatch,
     #[error("program recovery source is invalid: {0}")]
     InvalidSource(String),
+    #[error("unfinished recovery record {id} for {source_name} must be recovered or dismissed")]
+    OutstandingRecovery { id: u64, source_name: String },
+    #[error("program recovery arm {0} is not pending")]
+    ArmNotPending(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +150,7 @@ pub struct ProgramRecoveryStore {
     path: Option<PathBuf>,
     record: Option<RecoveryRecord>,
     checkpoint: Option<PersistedCheckpoint>,
+    pending_arm: Option<(u64, Option<RecoveryRecord>)>,
 }
 
 impl ProgramRecoveryStore {
@@ -149,6 +159,7 @@ impl ProgramRecoveryStore {
             path: None,
             record: None,
             checkpoint: None,
+            pending_arm: None,
         }
     }
 
@@ -160,6 +171,7 @@ impl ProgramRecoveryStore {
             path: Some(path),
             record: loaded.and_then(|loaded| loaded.0.record),
             checkpoint: None,
+            pending_arm: None,
         };
         if recovered_from_backup {
             store.remove_corrupt_primary()?;
@@ -181,12 +193,35 @@ impl ProgramRecoveryStore {
         if !matches!(snapshot.mode, Some(SenderMode::AirRun | SenderMode::CutRun)) {
             return Err(ProgramRecoveryError::InvalidSenderMode);
         }
+        let intent_matches = matches!(
+            (seed.intent, snapshot.mode),
+            (ProgramRunIntent::AirRun, Some(SenderMode::AirRun))
+                | (ProgramRunIntent::Cutting, Some(SenderMode::CutRun))
+        );
+        if snapshot.source_name.as_deref() != Some(seed.source_name.as_str()) || !intent_matches {
+            return Err(ProgramRecoveryError::PreparedRunMismatch);
+        }
+        if let Some(active) = self
+            .record
+            .as_ref()
+            .filter(|record| record.state != SenderState::Completed)
+        {
+            let approved_recovery = active.machine_fingerprint == seed.machine_fingerprint
+                && active.prepared_recovery_fingerprint.as_deref()
+                    == Some(seed.program_fingerprint.as_str());
+            if !approved_recovery {
+                return Err(ProgramRecoveryError::OutstandingRecovery {
+                    id: active.id,
+                    source_name: active.source_name.clone(),
+                });
+            }
+        }
         let program = parse_seed(&seed)?;
         if program_fingerprint(&program) != seed.program_fingerprint {
             return Err(ProgramRecoveryError::ProgramChanged);
         }
         let now_unix_ms = unix_millis(now);
-        self.record = Some(RecoveryRecord {
+        let record = RecoveryRecord {
             id: unix_micros(now),
             machine_fingerprint: seed.machine_fingerprint,
             profile_id: seed.profile_id,
@@ -205,15 +240,20 @@ impl ProgramRecoveryStore {
             start_machine_position: seed.start_machine_position,
             start_work_position: seed.start_work_position,
             start_work_coordinate_offset: seed.start_work_coordinate_offset,
-        });
-        self.persist()?;
+            prepared_recovery_fingerprint: None,
+        };
+        let candidate = candidate_for_record(&record)?.ok_or(ProgramRecoveryError::Missing)?;
+        let previous = self.record.clone();
+        self.persist_record(Some(record.clone()))?;
+        self.pending_arm = Some((record.id, previous));
+        self.record = Some(record);
         self.checkpoint = Some(PersistedCheckpoint {
             run_sequence: seed.run_sequence,
             state: snapshot.state,
             executing_source_line: snapshot.executing_source_line,
             persisted_at: monotonic,
         });
-        self.candidate()?.ok_or(ProgramRecoveryError::Missing)
+        Ok(candidate)
     }
 
     pub fn observe(
@@ -222,10 +262,30 @@ impl ProgramRecoveryStore {
         now: SystemTime,
         monotonic: Instant,
     ) -> Result<bool, ProgramRecoveryError> {
+        let should_restore_parent = self.record.as_ref().is_some_and(|record| {
+            snapshot_matches_record(snapshot, record)
+                && record.executing_source_line.is_none()
+                && snapshot.executing_source_line.is_none()
+                && matches!(snapshot.state, SenderState::Failed | SenderState::Cancelled)
+        });
+        if should_restore_parent
+            && let Some((pending_id, Some(previous))) = self.pending_arm.as_ref()
+            && self
+                .record
+                .as_ref()
+                .is_some_and(|record| record.id == *pending_id)
+        {
+            let previous = previous.clone();
+            self.persist_record(Some(previous.clone()))?;
+            self.record = Some(previous);
+            self.checkpoint = None;
+            self.pending_arm = None;
+            return Ok(true);
+        }
         let Some(record) = self.record.as_mut() else {
             return Ok(false);
         };
-        if snapshot.run_sequence != record.run_sequence {
+        if !snapshot_matches_record(snapshot, record) {
             return Ok(false);
         }
         record.state = snapshot.state;
@@ -254,6 +314,9 @@ impl ProgramRecoveryStore {
             executing_source_line,
             persisted_at: monotonic,
         });
+        if executing_source_line.is_some() {
+            self.pending_arm = None;
+        }
         Ok(true)
     }
 
@@ -261,53 +324,11 @@ impl ProgramRecoveryStore {
         let Some(record) = self.record.as_ref() else {
             return Ok(None);
         };
-        if record.state == SenderState::Completed {
-            return Ok(None);
-        }
-        let base = |ready, detail, restart: Option<RecoveryAnchor>| ProgramRecoveryCandidate {
-            id: record.id,
-            source_name: record.source_name.clone(),
-            intent: record.intent,
-            state: record.state,
-            updated_at_unix_ms: record.updated_at_unix_ms,
-            total_lines: record.total_lines,
-            acknowledged_lines: record.acknowledged_lines,
-            executing_source_line: record.executing_source_line,
-            restart_source_line: restart.as_ref().map(|anchor| anchor.source_line),
-            restart_position: restart.map(|anchor| anchor.checkpoint.position),
-            ready,
-            detail,
-        };
-        let Some(executing) = record.executing_source_line else {
-            return Ok(Some(base(
-                false,
-                "GRBL did not expose Ln execution telemetry; automatic line recovery is blocked"
-                    .to_owned(),
-                None,
-            )));
-        };
-        let program = parse_record(record)?;
-        if program_fingerprint(&program) != record.program_fingerprint {
-            return Ok(Some(base(
-                false,
-                "Stored source fingerprint mismatch; recovery is blocked".to_owned(),
-                None,
-            )));
-        }
-        let anchor = recovery_anchor(&program, executing)?;
-        Ok(Some(base(
-            true,
-            format!(
-                "Restart from source line {} replays {} line(s) before the interrupted line",
-                anchor.source_line,
-                executing.saturating_sub(anchor.source_line)
-            ),
-            Some(anchor),
-        )))
+        candidate_for_record(record)
     }
 
     pub fn prepare(
-        &self,
+        &mut self,
         recovery_id: u64,
         safe_z_mm: f64,
     ) -> Result<ProgramRecoveryPackage, ProgramRecoveryError> {
@@ -344,14 +365,14 @@ impl ProgramRecoveryStore {
             source_name: recovery_source_name(record.id, &record.source_name),
             source: build_recovery_source(record, &anchor, safe_z_mm),
         };
-        parse_program_with_options(
+        let prepared_program = parse_program_with_options(
             request.clone(),
             ProgramParseOptions {
                 block_delete: record.execution_options.block_delete,
             },
         )
         .map_err(|error| ProgramRecoveryError::InvalidSource(error.to_string()))?;
-        Ok(ProgramRecoveryPackage {
+        let package = ProgramRecoveryPackage {
             recovery_id: record.id,
             original_source_name: record.source_name.clone(),
             interrupted_source_line: interrupted,
@@ -362,13 +383,40 @@ impl ProgramRecoveryStore {
             intent: record.intent,
             execution_options: record.execution_options,
             request,
-        })
+        };
+        let mut updated = record.clone();
+        updated.prepared_recovery_fingerprint = Some(program_fingerprint(&prepared_program));
+        self.persist_record(Some(updated.clone()))?;
+        self.record = Some(updated);
+        Ok(package)
     }
 
     pub fn machine_matches(&self, recovery_id: u64, fingerprint: &str) -> bool {
         self.record.as_ref().is_some_and(|record| {
             record.id == recovery_id && record.machine_fingerprint == fingerprint
         })
+    }
+
+    pub fn commit_arm(&mut self, recovery_id: u64) -> Result<(), ProgramRecoveryError> {
+        match self.pending_arm.as_ref() {
+            Some((pending_id, _)) if *pending_id == recovery_id => Ok(()),
+            _ => Err(ProgramRecoveryError::ArmNotPending(recovery_id)),
+        }
+    }
+
+    pub fn rollback_arm(&mut self, recovery_id: u64) -> Result<(), ProgramRecoveryError> {
+        let Some((pending_id, previous)) = self.pending_arm.as_ref() else {
+            return Err(ProgramRecoveryError::ArmNotPending(recovery_id));
+        };
+        if *pending_id != recovery_id {
+            return Err(ProgramRecoveryError::ArmNotPending(recovery_id));
+        }
+        let previous = previous.clone();
+        self.persist_record(previous.clone())?;
+        self.record = previous;
+        self.checkpoint = None;
+        self.pending_arm = None;
+        Ok(())
     }
 
     pub fn dismiss(&mut self, recovery_id: u64) -> Result<(), ProgramRecoveryError> {
@@ -379,18 +427,24 @@ impl ProgramRecoveryStore {
                 actual: record.id,
             });
         }
+        self.persist_record(None)?;
         self.record = None;
         self.checkpoint = None;
-        self.persist()
+        self.pending_arm = None;
+        Ok(())
     }
 
     fn persist(&self) -> Result<(), ProgramRecoveryError> {
+        self.persist_record(self.record.clone())
+    }
+
+    fn persist_record(&self, record: Option<RecoveryRecord>) -> Result<(), ProgramRecoveryError> {
         let Some(path) = self.path.as_ref() else {
             return Ok(());
         };
         let bytes = serde_json::to_vec_pretty(&RecoveryFile {
             schema_version: RECOVERY_SCHEMA_VERSION,
-            record: self.record.clone(),
+            record,
         })?;
         write_atomically(path, &bytes)?;
         Ok(())
@@ -412,6 +466,66 @@ impl ProgramRecoveryStore {
 struct RecoveryAnchor {
     source_line: usize,
     checkpoint: ProgramExecutionCheckpoint,
+}
+
+fn candidate_for_record(
+    record: &RecoveryRecord,
+) -> Result<Option<ProgramRecoveryCandidate>, ProgramRecoveryError> {
+    if record.state == SenderState::Completed {
+        return Ok(None);
+    }
+    let base = |ready, detail, restart: Option<RecoveryAnchor>, minimum_safe_z_mm: Option<f64>| {
+        ProgramRecoveryCandidate {
+            id: record.id,
+            source_name: record.source_name.clone(),
+            intent: record.intent,
+            state: record.state,
+            updated_at_unix_ms: record.updated_at_unix_ms,
+            total_lines: record.total_lines,
+            acknowledged_lines: record.acknowledged_lines,
+            executing_source_line: record.executing_source_line,
+            restart_source_line: restart.as_ref().map(|anchor| anchor.source_line),
+            restart_position: restart.map(|anchor| anchor.checkpoint.position),
+            minimum_safe_z_mm,
+            ready,
+            detail,
+        }
+    };
+    let Some(executing) = record.executing_source_line else {
+        return Ok(Some(base(
+            false,
+            "GRBL did not expose Ln execution telemetry; automatic line recovery is blocked"
+                .to_owned(),
+            None,
+            None,
+        )));
+    };
+    let program = parse_record(record)?;
+    if program_fingerprint(&program) != record.program_fingerprint {
+        return Ok(Some(base(
+            false,
+            "Stored source fingerprint mismatch; recovery is blocked".to_owned(),
+            None,
+            None,
+        )));
+    }
+    let anchor = recovery_anchor(&program, executing)?;
+    let minimum_safe_z_mm = program
+        .summary
+        .bounds
+        .map(|bounds| bounds.max.z)
+        .unwrap_or(anchor.checkpoint.position.z)
+        .max(anchor.checkpoint.position.z);
+    Ok(Some(base(
+        true,
+        format!(
+            "Restart from source line {} replays {} line(s) before the interrupted line",
+            anchor.source_line,
+            executing.saturating_sub(anchor.source_line)
+        ),
+        Some(anchor),
+        Some(minimum_safe_z_mm),
+    )))
 }
 
 fn recovery_anchor(
@@ -586,31 +700,45 @@ fn parse_record(record: &RecoveryRecord) -> Result<GcodeProgram, ProgramRecovery
 }
 
 fn load_with_backup(path: &Path) -> Result<Option<(RecoveryFile, bool)>, ProgramRecoveryError> {
-    let mut parse_error = None;
-    for (index, candidate) in [path.to_path_buf(), backup_path(path)]
-        .into_iter()
-        .enumerate()
-    {
-        if !candidate.exists() {
-            continue;
-        }
-        let bytes = fs::read(candidate)?;
-        let file: RecoveryFile = match serde_json::from_slice(&bytes) {
-            Ok(file) => file,
-            Err(error) => {
-                parse_error = Some(error);
-                continue;
+    let primary = read_recovery_file(path);
+    let backup = read_recovery_file(&backup_path(path));
+    match primary {
+        Ok(Some(primary)) => match backup {
+            Ok(Some(backup)) if should_restore_interrupted_parent(&primary, &backup) => {
+                Ok(Some((backup, true)))
             }
-        };
-        if file.schema_version != RECOVERY_SCHEMA_VERSION {
-            return Err(ProgramRecoveryError::UnsupportedSchema(file.schema_version));
-        }
-        return Ok(Some((file, index == 1)));
+            _ => Ok(Some((primary, false))),
+        },
+        Ok(None) => backup.map(|backup| backup.map(|backup| (backup, true))),
+        Err(primary_error) => match backup {
+            Ok(Some(backup)) => Ok(Some((backup, true))),
+            _ => Err(primary_error),
+        },
     }
-    if let Some(error) = parse_error {
-        return Err(error.into());
+}
+
+fn read_recovery_file(path: &Path) -> Result<Option<RecoveryFile>, ProgramRecoveryError> {
+    if !path.exists() {
+        return Ok(None);
     }
-    Ok(None)
+    let bytes = fs::read(path)?;
+    let file: RecoveryFile = serde_json::from_slice(&bytes)?;
+    if file.schema_version != RECOVERY_SCHEMA_VERSION {
+        return Err(ProgramRecoveryError::UnsupportedSchema(file.schema_version));
+    }
+    Ok(Some(file))
+}
+
+fn should_restore_interrupted_parent(current: &RecoveryFile, backup: &RecoveryFile) -> bool {
+    let (Some(current), Some(previous)) = (current.record.as_ref(), backup.record.as_ref()) else {
+        return false;
+    };
+    current.state != SenderState::Completed
+        && current.executing_source_line.is_none()
+        && previous.state != SenderState::Completed
+        && previous.machine_fingerprint == current.machine_fingerprint
+        && previous.prepared_recovery_fingerprint.as_deref()
+            == Some(current.program_fingerprint.as_str())
 }
 
 fn is_terminal(state: SenderState) -> bool {
@@ -618,6 +746,17 @@ fn is_terminal(state: SenderState) -> bool {
         state,
         SenderState::Completed | SenderState::Failed | SenderState::Cancelled
     )
+}
+
+fn snapshot_matches_record(snapshot: &SenderSnapshot, record: &RecoveryRecord) -> bool {
+    let mode_matches = matches!(
+        (record.intent, snapshot.mode),
+        (ProgramRunIntent::AirRun, Some(SenderMode::AirRun))
+            | (ProgramRunIntent::Cutting, Some(SenderMode::CutRun))
+    );
+    snapshot.run_sequence == record.run_sequence
+        && snapshot.source_name.as_deref() == Some(record.source_name.as_str())
+        && mode_matches
 }
 
 fn unix_millis(time: SystemTime) -> u64 {
@@ -694,10 +833,23 @@ mod tests {
         assert!(candidate.ready);
         assert_eq!(candidate.executing_source_line, Some(9));
         assert_eq!(candidate.restart_source_line, Some(7));
+        assert_eq!(candidate.minimum_safe_z_mm, Some(5.0));
         let package = store.prepare(candidate.id, 8.0).unwrap();
         assert_eq!(package.restart_source_line, 7);
         assert_eq!(package.restart_position.z, 5.0);
-        assert!(package.request.source.contains("G0 Z8.0000"));
+        let recovery_lines = package.request.source.lines().collect::<Vec<_>>();
+        assert_eq!(
+            recovery_lines[1..8],
+            [
+                "M5",
+                "M9",
+                "G21 G90 G94",
+                "G54",
+                "G0 Z8.0000",
+                "G0 X10.0000 Y0.0000",
+                "G0 Z5.0000",
+            ]
+        );
         assert!(package.request.source.contains("G21 G90 G91.1 G94 G17 G0"));
         assert!(package.request.source.ends_with("G1 X30\nM30"));
         assert!(!package.request.source.contains("G1 X10"));
@@ -719,11 +871,12 @@ mod tests {
         ));
 
         snapshot.executing_source_line = Some(9);
-        let candidate = store
+        let mut clearance_store = ProgramRecoveryStore::in_memory();
+        let candidate = clearance_store
             .arm(seed(&snapshot), &snapshot, wall, Instant::now())
             .unwrap();
         assert!(matches!(
-            store.prepare(candidate.id, 4.0),
+            clearance_store.prepare(candidate.id, 4.0),
             Err(ProgramRecoveryError::InvalidSafeZ { .. })
         ));
     }
@@ -780,5 +933,199 @@ mod tests {
         ));
         store.dismiss(candidate.id).unwrap();
         assert!(store.candidate().unwrap().is_none());
+    }
+
+    #[test]
+    fn failed_run_remains_recoverable_only_for_the_bound_controller() {
+        let snapshot = running_snapshot();
+        let mut store = ProgramRecoveryStore::in_memory();
+        let wall = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let candidate = store
+            .arm(seed(&snapshot), &snapshot, wall, Instant::now())
+            .unwrap();
+        let mut failed = snapshot;
+        failed.state = SenderState::Failed;
+        store
+            .observe(
+                &failed,
+                wall + Duration::from_secs(1),
+                Instant::now() + Duration::from_secs(1),
+            )
+            .unwrap();
+
+        let offered = store.candidate().unwrap().unwrap();
+        assert_eq!(offered.id, candidate.id);
+        assert!(offered.ready);
+        assert!(store.machine_matches(candidate.id, "usb:1234:5678:serial"));
+        assert!(!store.machine_matches(candidate.id, "usb:ffff:ffff:other"));
+    }
+
+    #[test]
+    fn unrelated_snapshot_with_a_reused_process_sequence_cannot_hide_recovery() {
+        let snapshot = running_snapshot();
+        let mut store = ProgramRecoveryStore::in_memory();
+        let wall = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let candidate = store
+            .arm(seed(&snapshot), &snapshot, wall, Instant::now())
+            .unwrap();
+        let mut unrelated = snapshot;
+        unrelated.source_name = Some("mock-after-restart.nc".to_owned());
+        unrelated.mode = Some(SenderMode::MockDryRun);
+        unrelated.state = SenderState::Completed;
+
+        assert!(
+            !store
+                .observe(
+                    &unrelated,
+                    wall + Duration::from_secs(1),
+                    Instant::now() + Duration::from_secs(1),
+                )
+                .unwrap()
+        );
+        assert_eq!(store.candidate().unwrap().unwrap().id, candidate.id);
+    }
+
+    #[test]
+    fn unresolved_evidence_can_only_be_replaced_by_its_prepared_recovery_program() {
+        let snapshot = running_snapshot();
+        let mut store = ProgramRecoveryStore::in_memory();
+        let wall = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let candidate = store
+            .arm(seed(&snapshot), &snapshot, wall, Instant::now())
+            .unwrap();
+
+        let mut unrelated = seed(&snapshot);
+        unrelated.source_name = "other.nc".to_owned();
+        unrelated.source = "G21 G90\nG0 X1".to_owned();
+        unrelated.program_fingerprint = program_fingerprint(
+            &parse_program_with_options(
+                ProgramParseRequest {
+                    source_name: unrelated.source_name.clone(),
+                    source: unrelated.source.clone(),
+                },
+                ProgramParseOptions::default(),
+            )
+            .unwrap(),
+        );
+        let mut unrelated_snapshot = snapshot.clone();
+        unrelated_snapshot.source_name = Some(unrelated.source_name.clone());
+        assert!(matches!(
+            store.arm(
+                unrelated,
+                &unrelated_snapshot,
+                wall + Duration::from_secs(1),
+                Instant::now()
+            ),
+            Err(ProgramRecoveryError::OutstandingRecovery { .. })
+        ));
+
+        let package = store.prepare(candidate.id, 8.0).unwrap();
+        let prepared_program =
+            parse_program_with_options(package.request.clone(), ProgramParseOptions::default())
+                .unwrap();
+        let mut approved = seed(&snapshot);
+        approved.source_name = package.request.source_name.clone();
+        approved.source = package.request.source;
+        approved.program_fingerprint = program_fingerprint(&prepared_program);
+        let mut approved_snapshot = snapshot;
+        approved_snapshot.source_name = Some(approved.source_name.clone());
+        approved_snapshot.executing_source_line = None;
+
+        let replacement = store
+            .arm(
+                approved,
+                &approved_snapshot,
+                wall + Duration::from_secs(2),
+                Instant::now(),
+            )
+            .unwrap();
+        assert_ne!(replacement.id, candidate.id);
+        store.rollback_arm(replacement.id).unwrap();
+        assert_eq!(store.candidate().unwrap().unwrap().id, candidate.id);
+    }
+
+    #[test]
+    fn reload_restores_the_parent_if_a_recovery_run_has_no_physical_line_yet() {
+        let unique = format!(
+            "millo-recovery-parent-{}-{}.json",
+            std::process::id(),
+            unix_micros(SystemTime::now())
+        );
+        let path = std::env::temp_dir().join(unique);
+        let snapshot = running_snapshot();
+        let wall = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let mut store = ProgramRecoveryStore::load(&path).unwrap();
+        let parent = store
+            .arm(seed(&snapshot), &snapshot, wall, Instant::now())
+            .unwrap();
+        store.commit_arm(parent.id).unwrap();
+        let package = store.prepare(parent.id, 8.0).unwrap();
+        let prepared_program =
+            parse_program_with_options(package.request.clone(), ProgramParseOptions::default())
+                .unwrap();
+        let mut approved = seed(&snapshot);
+        approved.source_name = package.request.source_name.clone();
+        approved.source = package.request.source;
+        approved.program_fingerprint = program_fingerprint(&prepared_program);
+        let mut approved_snapshot = snapshot;
+        approved_snapshot.source_name = Some(approved.source_name.clone());
+        approved_snapshot.executing_source_line = None;
+        store
+            .arm(
+                approved,
+                &approved_snapshot,
+                wall + Duration::from_secs(1),
+                Instant::now(),
+            )
+            .unwrap();
+        drop(store);
+
+        let restored = ProgramRecoveryStore::load(&path).unwrap();
+        assert_eq!(restored.candidate().unwrap().unwrap().id, parent.id);
+
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
+        let _ = fs::remove_file(millo_storage::temporary_path(&path));
+    }
+
+    #[test]
+    fn failed_recovery_before_its_first_physical_line_restores_the_parent() {
+        let snapshot = running_snapshot();
+        let mut store = ProgramRecoveryStore::in_memory();
+        let wall = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let parent = store
+            .arm(seed(&snapshot), &snapshot, wall, Instant::now())
+            .unwrap();
+        store.commit_arm(parent.id).unwrap();
+        let package = store.prepare(parent.id, 8.0).unwrap();
+        let prepared_program =
+            parse_program_with_options(package.request.clone(), ProgramParseOptions::default())
+                .unwrap();
+        let mut approved = seed(&snapshot);
+        approved.source_name = package.request.source_name.clone();
+        approved.source = package.request.source;
+        approved.program_fingerprint = program_fingerprint(&prepared_program);
+        let mut child_snapshot = snapshot;
+        child_snapshot.source_name = Some(approved.source_name.clone());
+        child_snapshot.executing_source_line = None;
+        let child = store
+            .arm(
+                approved,
+                &child_snapshot,
+                wall + Duration::from_secs(1),
+                Instant::now(),
+            )
+            .unwrap();
+        store.commit_arm(child.id).unwrap();
+        child_snapshot.state = SenderState::Failed;
+
+        store
+            .observe(
+                &child_snapshot,
+                wall + Duration::from_secs(2),
+                Instant::now() + Duration::from_secs(2),
+            )
+            .unwrap();
+        assert_eq!(store.candidate().unwrap().unwrap().id, parent.id);
     }
 }

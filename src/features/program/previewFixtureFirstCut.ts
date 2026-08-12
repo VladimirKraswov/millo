@@ -83,6 +83,11 @@ let fixtureSourceName = previewFixtureFirstCutProgram.sourceName;
 const fixtureIsAirSquare = () => fixtureSourceName === "air-square-20mm.nc";
 
 export const previewFixtureFirstCutGateway: RealRunPreflightGateway = {
+  recoveryCandidate: async () => null,
+  prepareRecovery: async () => {
+    throw new Error("Fixture has no interrupted run");
+  },
+  dismissRecovery: async () => undefined,
   preflight: async (request, intent, executionOptions) => {
     fixtureIntent = intent;
     fixtureSourceName = request.sourceName;
@@ -197,5 +202,24 @@ export const previewFixtureFirstCutGateway: RealRunPreflightGateway = {
     estimatedCompletedSeconds: 38,
     estimatedRemainingSeconds: 31,
     estimatedTotalSeconds: 69,
+  }),
+};
+
+export const previewFixtureRecoveryGateway: RealRunPreflightGateway = {
+  ...previewFixtureFirstCutGateway,
+  recoveryCandidate: async () => ({
+    id: 1_786_500_000_000_001,
+    sourceName: "engraving-interrupted.nc",
+    intent: "cutting",
+    state: "running",
+    updatedAtUnixMs: 1_786_500_000_000,
+    totalLines: 1_420,
+    acknowledgedLines: 936,
+    executingSourceLine: 911,
+    restartSourceLine: 884,
+    restartPosition: { x: 48.2, y: 31.7, z: 5 },
+    minimumSafeZMm: 5,
+    ready: true,
+    detail: "Restart from source line 884 replays 27 line(s) before the interrupted line",
   }),
 };

@@ -48,6 +48,7 @@ export interface SenderSnapshot {
   readonly progressSequence?: number;
   readonly lastAcknowledgedSourceLine?: number;
   readonly lastAcknowledgedCommand?: string;
+  readonly executingSourceLine?: number;
   readonly secondsSinceAcknowledgement?: number;
   readonly shutdownCommandsAcknowledged?: boolean;
   readonly lastError?: string;

@@ -111,6 +111,11 @@ export const previewFixturePreflight: RunPreflightReport = {
 };
 
 export const previewFixturePreflightGateway: RealRunPreflightGateway = {
+  recoveryCandidate: async () => null,
+  prepareRecovery: async () => {
+    throw new Error("Blocked fixture has no interrupted run");
+  },
+  dismissRecovery: async () => undefined,
   preflight: async (_request, intent, executionOptions) => ({
     ...previewFixturePreflight,
     intent,

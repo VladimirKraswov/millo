@@ -1137,6 +1137,86 @@ select:focus-visible {
   background: #11181c;
 }
 
+.program-recovery-banner {
+  display: grid;
+  min-height: 66px;
+  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px 9px 18px;
+  border-bottom: 1px solid #765d32;
+  color: #e4b765;
+  background: #201b12;
+}
+
+.program-recovery-banner.is-blocked {
+  border-color: #774348;
+  color: #e89494;
+  background: #211619;
+}
+
+.program-recovery-banner > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.program-recovery-banner span,
+.program-recovery-banner dt {
+  color: #968a76;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.program-recovery-banner strong {
+  overflow: hidden;
+  color: #eee7da;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.program-recovery-banner small {
+  overflow: hidden;
+  color: #a89e8d;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.program-recovery-banner dl {
+  display: grid;
+  grid-template-columns: repeat(2, auto);
+  gap: 14px;
+  margin: 0;
+}
+
+.program-recovery-banner dl > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.program-recovery-banner dd {
+  margin: 0;
+  color: #e2c389;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+}
+
+.program-recovery-banner > button {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid #9c7940;
+  border-radius: 4px;
+  color: #f1d39e;
+  background: #332819;
+  font-size: 9px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
 .program-identity {
   display: flex;
   min-width: 0;
@@ -1744,6 +1824,218 @@ select:focus-visible {
 
 .first-cut-dialog {
   width: min(680px, 100%);
+}
+
+.recovery-backdrop {
+  z-index: 72;
+}
+
+.recovery-dialog {
+  width: min(720px, 100%);
+  max-height: min(820px, calc(100vh - 32px));
+}
+
+.recovery-evidence {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 18px;
+  border-bottom: 1px solid #534529;
+  color: #e0ad57;
+  background: #1d1911;
+}
+
+.recovery-evidence.is-blocked {
+  border-color: #5d3438;
+  color: #e68484;
+  background: #211619;
+}
+
+.recovery-evidence > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recovery-evidence strong {
+  overflow: hidden;
+  color: #ede7dd;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recovery-evidence span {
+  color: #978d7d;
+  font-size: 9px;
+  line-height: 13px;
+}
+
+.recovery-evidence dl {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 14px;
+  margin: 0;
+}
+
+.recovery-evidence dl > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recovery-evidence dt {
+  color: #81796e;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.recovery-evidence dd {
+  margin: 0;
+  color: #d9b777;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+}
+
+.recovery-evidence .recovery-restart-position {
+  grid-column: 1 / -1;
+}
+
+.recovery-warning {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 9px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #403722;
+  color: #d5a957;
+  background: #171711;
+}
+
+.recovery-warning.is-blocked {
+  border-color: #543337;
+  color: #e68484;
+  background: #1c1416;
+}
+
+.recovery-warning p {
+  margin: 0;
+  color: #a8a093;
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.recovery-safe-z {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 18px;
+  border-bottom: 1px solid #27323a;
+  background: #10171b;
+}
+
+.recovery-safe-z > span {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recovery-safe-z > span:last-child {
+  align-items: center;
+  flex-direction: row;
+}
+
+.recovery-safe-z strong {
+  color: #dce4e8;
+  font-size: 11px;
+}
+
+.recovery-safe-z small {
+  color: #7f8c93;
+  font-size: 8px;
+}
+
+.recovery-safe-z input {
+  width: 110px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #46545d;
+  border-radius: 4px;
+  color: #e6ecef;
+  background: #0d1418;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+}
+
+.recovery-safe-z code {
+  color: #7f8c93;
+  font-size: 9px;
+}
+
+.recovery-checklist {
+  min-height: 0;
+  overflow: auto;
+}
+
+.recovery-checklist label {
+  position: relative;
+  display: grid;
+  min-height: 54px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  border-bottom: 1px solid #27323a;
+  cursor: pointer;
+}
+
+.recovery-checklist input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.recovery-checklist label > span:first-of-type {
+  display: grid;
+  width: 21px;
+  height: 21px;
+  place-items: center;
+  border: 1px solid #526069;
+  border-radius: 4px;
+  color: transparent;
+  background: #0e1418;
+}
+
+.recovery-checklist input:checked + span {
+  border-color: #64b797;
+  color: #09120f;
+  background: #77d6b3;
+}
+
+.recovery-checklist label > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recovery-checklist strong {
+  color: #dce3e6;
+  font-size: 10px;
+}
+
+.recovery-checklist small {
+  color: #7e8b93;
+  font-size: 8px;
+  line-height: 12px;
+}
+
+.recovery-dialog footer {
+  border-top: 1px solid #2b363e;
 }
 
 .first-cut-intro {
@@ -3867,7 +4159,34 @@ kbd {
     max-height: calc(100vh - 20px);
   }
 
+  .recovery-dialog {
+    height: calc(100vh - 20px);
+    max-height: calc(100vh - 20px);
+  }
+
+  .program-recovery-banner {
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+  }
+
+  .program-recovery-banner dl {
+    display: none;
+  }
+
+  .recovery-evidence {
+    grid-template-columns: 22px minmax(0, 1fr);
+  }
+
+  .recovery-evidence dl {
+    grid-column: 1 / -1;
+    justify-content: space-between;
+  }
+
   .first-cut-dialog footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .recovery-dialog footer {
     align-items: stretch;
     flex-direction: column;
   }

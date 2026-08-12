@@ -186,7 +186,23 @@ Each loaded plan also receives a stable process-local run sequence.
 `millo-journal` records a bounded 100-run history at start, state transitions,
 throttled progress checkpoints, and terminal state. Its temp/backup JSON keeps
 the preceding valid checkpoint, while failed/cancelled entries are explicitly
-diagnostic and cannot be used as a resume lease.
+diagnostic and cannot themselves be used as a resume lease.
+
+Physical Air/Cut Start now has a durable commit barrier. The actor prepares the
+sender without dispatching a line; Tauri writes the exact source, SHA-256,
+machine/profile identity, execution options, run sequence, and initial position
+to `active-program-recovery.json` with file and directory `fsync`; only then may
+the actor release the first G-code block. While running, Millo persists GRBL's
+optional physical `Ln:` evidence independently from buffered `ok` responses.
+After a crash, link loss, or power failure, `millo-recovery` verifies the source
+and controller, rewinds to a preceding clearance rapid, and creates a new
+M5/M9-prefixed recovery program with a reviewed Safe Z approach and restored
+WCS/modal/tool/spindle state. It never moves automatically: the generated file
+must pass preview, GRBL Check, preflight, and a new one-use authorization.
+Firmware without `Ln:` remains fail-closed because accepted queue depth cannot
+prove which motion physically executed. An unresolved record also blocks an
+unrelated physical job; it can be replaced only by the exact recovery program
+prepared from that record or by an explicit dismissal.
 
 A separate serial-only Check run validates an approved file through GRBL's
 typed `$C` mode without executing motion. The actor enters only from fresh
@@ -342,6 +358,8 @@ Host-managed tool change is recorded in
 [ADR 0034](docs/decisions/0034-host-managed-tool-change.md).
 Certified Check evidence and the bounded run journal are recorded in
 [ADR 0037](docs/decisions/0037-certified-check-and-run-journal.md).
+Crash-safe guided restart is recorded in
+[ADR 0038](docs/decisions/0038-guided-power-loss-recovery.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).
