@@ -33,6 +33,27 @@ fn parses_metric_compact_words_comments_and_xy_arcs() {
 }
 
 #[test]
+fn parses_the_surface_engraving_rosette_fixture() {
+    let source = include_str!("../../../fixtures/programs/millo-solar-guilloche.nc");
+    let program = parse_fixture("millo-solar-guilloche.nc", source);
+
+    assert!(program.warnings.is_empty());
+    assert!(program.summary.preview_complete);
+    assert!(program.summary.dry_run_eligible);
+    assert!(program.summary.motion_count > 1_000);
+    assert!(!source.contains("M3"));
+    assert!(!source.contains("M4"));
+    assert!(!source.contains("M5"));
+    assert!(!source.contains("G38"));
+
+    let bounds = program.summary.bounds.unwrap();
+    assert!(bounds.min.x >= 0.0 && bounds.max.x <= 60.0);
+    assert!(bounds.min.y >= 0.0 && bounds.max.y <= 60.0);
+    assert!((bounds.min.z - -0.2).abs() < 0.001);
+    assert!((bounds.max.z - 3.0).abs() < 0.001);
+}
+
+#[test]
 fn parses_every_grbl_arc_plane_helices_full_circle_and_dwell() {
     let program = parse_fixture(
         "all-arc-planes.nc",

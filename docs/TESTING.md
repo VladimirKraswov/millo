@@ -156,6 +156,12 @@ port names remain untouched.
 
 ## Current G-code and preview coverage
 
+- `fixtures/programs/millo-solar-guilloche.nc` is a 60 x 60 mm surface-
+  engraving sample with four dense parametric contours. Its regression requires
+  more than 1,000 preview motions, zero parser warnings, a complete preview,
+  `Z -0.20..3.00 mm`, bounded XY geometry, and no spindle or probe command. A
+  copy may be opened from the desktop for operator UI checks, but automated
+  tests never dispatch it to hardware.
 - Real `.nc`, `.ngc`, and `.tap` fixtures cover compact words, comments, common
   headers/modal cancels, metric and imperial units, absolute and incremental
   distance, linear moves, all three GRBL arc planes, IJK/R arcs, helices, and
