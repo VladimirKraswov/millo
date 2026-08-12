@@ -46,6 +46,8 @@ interface MachineSettingsDialogProps {
   onWrite: (
     request: ControllerSettingEditRequest,
   ) => Promise<ControllerSettingsState>;
+  initialView?: SettingsView;
+  initialQuery?: string;
 }
 
 const settingValue = (
@@ -65,6 +67,8 @@ export function MachineSettingsDialog({
   onLocalUpdate,
   onRollback,
   onWrite,
+  initialView = "local",
+  initialQuery = "",
 }: MachineSettingsDialogProps) {
   const [view, setView] = useState<SettingsView>("local");
   const [query, setQuery] = useState("");
@@ -85,6 +89,12 @@ export function MachineSettingsDialog({
   const writeQueue = useRef(Promise.resolve());
   const lifecycle = useRef(0);
   const settingsIdentity = controllerSettingsIdentity(settings);
+
+  useEffect(() => {
+    if (!open) return;
+    setView(initialView);
+    setQuery(initialQuery);
+  }, [initialQuery, initialView, open]);
 
   useEffect(() => {
     if (!settings) return;
@@ -317,6 +327,38 @@ export function MachineSettingsDialog({
                 </strong>
                 <small>$130 · $131 · $132 редактируются во вкладке «Контроллер»</small>
               </div>
+              <label className="machine-jog-limit-field">
+                <span>
+                  <strong>Максимальный jog</strong>
+                  <small>
+                    Локальный предел одного перемещения · не больше {Math.max(
+                      localDraft.travelMm.x,
+                      localDraft.travelMm.y,
+                      localDraft.travelMm.z,
+                    )} mm
+                  </small>
+                </span>
+                <span>
+                  <input
+                    max={Math.max(
+                      localDraft.travelMm.x,
+                      localDraft.travelMm.y,
+                      localDraft.travelMm.z,
+                    )}
+                    min="0.01"
+                    onChange={(event) =>
+                      updateLocalDraft({
+                        ...localDraft,
+                        maxJogDistanceMm: Number(event.target.value),
+                      })
+                    }
+                    step="0.01"
+                    type="number"
+                    value={localDraft.maxJogDistanceMm}
+                  />
+                  <code>mm</code>
+                </span>
+              </label>
               <fieldset className="spindle-mode">
                 <legend>Управление шпинделем</legend>
                 {(["manual", "controller"] as const).map((mode) => (

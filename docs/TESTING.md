@@ -11,9 +11,9 @@ It runs TypeScript type checking, all Rust workspace tests, the production Vite
 build, Rust formatting checks, and Clippy with warnings denied.
 
 `npm run test:ui` runs Vitest policy tests for TypeScript feature modules. The
-jog-pad suite verifies one signed fixed-step gateway call per press, rejects a
-non-preset value before IPC, and rejects a concurrent press while the first call
-is unresolved.
+jog-pad suite verifies one signed bounded gateway call per press, rejects values
+outside the technical envelope before IPC, scales presets to the machine, and
+rejects a concurrent press while the first call is unresolved.
 
 The work-zero feature suite rejects an unconfirmed request before the gateway
 and delegates only a typed X/Y/Z request. Registry tests also verify that the
@@ -532,8 +532,12 @@ new one-use authorization.
   authorization.
 - Test-jog authorization is single-use and is invalidated by expiry, alarm,
   reset-count change, reconnect-count change, disconnect, or non-idle state.
-- The GRBL encoder accepts only X/Y/Z, one signed `0.01..1.00 mm` axis word, and
-  `10..100 mm/min`; it always injects `G91 G21` and never trusts UI formatting.
+- The GRBL encoder accepts only X/Y/Z, one finite signed
+  `0.01..100000 mm` axis word, and `10..100000 mm/min`; it always injects
+  `G91 G21` and never trusts UI formatting.
+- Command actor tests prove that machine-profile distance, selected-axis travel,
+  and live `$110/$111/$112` maximum rate remain authoritative below the encoder's
+  technical envelope.
 - Actor tests prove a lease produces at most one `$J=` write and remains consumed
   after validation failure. Missing, stale, or reused leases produce no motion.
 - Mock step jog changes exactly one coordinate, reports `Jog`, completes to
@@ -543,8 +547,10 @@ new one-use authorization.
   acknowledgement, preflight, one step-jog write, lease relock, and an exact
   single-axis position update. Rust actor/mock tests cover Jog Cancel gating.
 - Jog-pad actor tests prove that every press begins with a fresh status and full
-  Inspector, always uses `10 mm/min`, accepts only `0.01` and `0.10 mm`, and does
-  not issue another `$J` while the refreshed controller state is `Jog`.
+  Inspector, forwards the selected bounded feed, accepts profile-approved
+  distances, and does not issue another `$J` while the refreshed controller
+  state is `Jog`. UI model tests cover a default `50 mm` desktop profile and a
+  `3000 mm` large-router profile.
 
 CI does not require a physical controller. For a hardware smoke test, launch
 `npm run tauri dev`, refresh the device list, connect at the controller's baud

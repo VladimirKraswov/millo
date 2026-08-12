@@ -3,6 +3,7 @@ import type { MachineProfileDraft } from "../../shared/profile";
 export const emptyMachineProfileDraft = (): MachineProfileDraft => ({
   name: "",
   travelMm: { x: 0, y: 0, z: 0 },
+  maxJogDistanceMm: 50,
   spindleControl: "manual",
   homingInstalled: false,
   limitSwitchesInstalled: false,
@@ -19,6 +20,14 @@ export const validateMachineProfileDraft = (
     if (!Number.isFinite(value) || value <= 0 || value > 100_000) {
       return `Укажите положительный ход ${axis.toUpperCase()}`;
     }
+  }
+  const maximumTravel = Math.max(draft.travelMm.x, draft.travelMm.y, draft.travelMm.z);
+  if (
+    !Number.isFinite(draft.maxJogDistanceMm) ||
+    draft.maxJogDistanceMm < 0.01 ||
+    draft.maxJogDistanceMm > maximumTravel
+  ) {
+    return "Максимальный jog должен быть от 0.01 mm до наибольшего хода оси";
   }
   return undefined;
 };

@@ -3,7 +3,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use millo_domain::{DeviceInspection, HardwareProfile, MachineTravel, SpindleControl};
+use millo_domain::{
+    DEFAULT_MAX_JOG_DISTANCE_MM, DeviceInspection, HardwareProfile, MachineTravel, SpindleControl,
+    default_max_jog_distance_mm,
+};
 use millo_storage::{backup_path, write_atomically};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -53,6 +56,8 @@ pub struct MachineProfile {
     pub id: String,
     pub name: String,
     pub travel_mm: MachineTravel,
+    #[serde(default = "default_max_jog_distance_mm")]
+    pub max_jog_distance_mm: f64,
     pub spindle_control: SpindleControl,
     pub homing_installed: bool,
     pub limit_switches_installed: bool,
@@ -70,6 +75,7 @@ impl MachineProfile {
             name: self.name.clone(),
             axes: vec!["X".to_owned(), "Y".to_owned(), "Z".to_owned()],
             travel_mm: Some(self.travel_mm),
+            max_jog_distance_mm: self.max_jog_distance_mm,
             spindle_control: self.spindle_control,
             homing_installed: self.homing_installed,
             limit_switches_installed: self.limit_switches_installed,
@@ -84,6 +90,8 @@ impl MachineProfile {
 pub struct MachineProfileDraft {
     pub name: String,
     pub travel_mm: MachineTravel,
+    #[serde(default = "default_max_jog_distance_mm")]
+    pub max_jog_distance_mm: f64,
     #[serde(default)]
     pub spindle_control: SpindleControl,
     #[serde(default)]
@@ -104,6 +112,7 @@ pub struct MachineProfileDraft {
 #[serde(rename_all = "camelCase")]
 pub struct MachineLocalSettingsUpdate {
     pub name: String,
+    pub max_jog_distance_mm: f64,
     pub spindle_control: SpindleControl,
     pub homing_installed: bool,
     pub limit_switches_installed: bool,
@@ -117,13 +126,15 @@ impl MachineProfileDraft {
         inspection: &DeviceInspection,
         connection: MachineConnectionPreset,
     ) -> Result<Self, ProfileError> {
+        let travel_mm = MachineTravel {
+            x: positive_setting(inspection, "$130")?,
+            y: positive_setting(inspection, "$131")?,
+            z: positive_setting(inspection, "$132")?,
+        };
         Ok(Self {
             name: suggested_name.into(),
-            travel_mm: MachineTravel {
-                x: positive_setting(inspection, "$130")?,
-                y: positive_setting(inspection, "$131")?,
-                z: positive_setting(inspection, "$132")?,
-            },
+            travel_mm,
+            max_jog_distance_mm: DEFAULT_MAX_JOG_DISTANCE_MM.min(max_travel(travel_mm)),
             spindle_control: SpindleControl::Manual,
             homing_installed: false,
             limit_switches_installed: false,
@@ -253,6 +264,7 @@ impl MachineProfileStore {
             id: format!("machine-{:04}", next.next_id),
             name: draft.name.trim().to_owned(),
             travel_mm: draft.travel_mm,
+            max_jog_distance_mm: draft.max_jog_distance_mm,
             spindle_control: draft.spindle_control,
             homing_installed: draft.homing_installed,
             limit_switches_installed: draft.limit_switches_installed,
@@ -304,6 +316,8 @@ impl MachineProfileStore {
             .find(|profile| profile.id == profile_id)
             .ok_or_else(|| ProfileError::UnknownProfile(profile_id.to_owned()))?;
         profile.name = update.name.trim().to_owned();
+        validate_max_jog_distance(profile.travel_mm, update.max_jog_distance_mm)?;
+        profile.max_jog_distance_mm = update.max_jog_distance_mm;
         profile.spindle_control = update.spindle_control;
         profile.homing_installed = update.homing_installed;
         profile.limit_switches_installed = update.limit_switches_installed;
@@ -354,6 +368,8 @@ pub enum ProfileError {
     NameTooLong,
     #[error("{0} travel must be finite and between 0 and {MAX_TRAVEL_MM} mm")]
     InvalidTravel(&'static str),
+    #[error("maximum jog distance must be finite and between 0.01 mm and the largest machine axis")]
+    InvalidMaxJogDistance,
     #[error("machine profile already exists: {0}")]
     DuplicateName(String),
     #[error("machine profile limit reached: {0}")]
@@ -390,6 +406,7 @@ fn validate_document(document: &StoredProfiles) -> Result<(), ProfileError> {
         validate_draft(&MachineProfileDraft {
             name: profile.name.clone(),
             travel_mm: profile.travel_mm,
+            max_jog_distance_mm: profile.max_jog_distance_mm,
             spindle_control: profile.spindle_control,
             homing_installed: profile.homing_installed,
             limit_switches_installed: profile.limit_switches_installed,
@@ -414,7 +431,20 @@ fn validate_draft(draft: &MachineProfileDraft) -> Result<(), ProfileError> {
     validate_name(&draft.name)?;
     validate_travel("X", draft.travel_mm.x)?;
     validate_travel("Y", draft.travel_mm.y)?;
-    validate_travel("Z", draft.travel_mm.z)
+    validate_travel("Z", draft.travel_mm.z)?;
+    validate_max_jog_distance(draft.travel_mm, draft.max_jog_distance_mm)
+}
+
+fn max_travel(travel: MachineTravel) -> f64 {
+    travel.x.max(travel.y).max(travel.z)
+}
+
+fn validate_max_jog_distance(travel: MachineTravel, value: f64) -> Result<(), ProfileError> {
+    if value.is_finite() && value >= 0.01 && value <= max_travel(travel) {
+        Ok(())
+    } else {
+        Err(ProfileError::InvalidMaxJogDistance)
+    }
 }
 
 fn validate_name(name: &str) -> Result<(), ProfileError> {
@@ -493,6 +523,7 @@ mod tests {
                 y: 180.0,
                 z: 80.0,
             },
+            max_jog_distance_mm: 50.0,
             spindle_control: SpindleControl::Manual,
             homing_installed: false,
             limit_switches_installed: false,
@@ -629,6 +660,7 @@ mod tests {
                 &id,
                 MachineLocalSettingsUpdate {
                     name: "Workshop router".to_owned(),
+                    max_jog_distance_mm: 75.0,
                     spindle_control: SpindleControl::Controller,
                     homing_installed: false,
                     limit_switches_installed: false,
@@ -642,7 +674,26 @@ mod tests {
         assert_eq!(profile.name, "Workshop router");
         assert!(profile.probe_installed);
         assert_eq!(profile.travel_mm.x, 300.0);
+        assert_eq!(profile.max_jog_distance_mm, 75.0);
         assert!(profile.connection.is_none());
+    }
+
+    #[test]
+    fn accepts_large_machine_jog_limits_and_rejects_limits_beyond_travel() {
+        let mut large = draft("Large router");
+        large.travel_mm = MachineTravel {
+            x: 2_000.0,
+            y: 3_000.0,
+            z: 250.0,
+        };
+        large.max_jog_distance_mm = 3_000.0;
+        assert!(validate_draft(&large).is_ok());
+
+        large.max_jog_distance_mm = 3_000.01;
+        assert!(matches!(
+            validate_draft(&large),
+            Err(ProfileError::InvalidMaxJogDistance)
+        ));
     }
 
     #[test]

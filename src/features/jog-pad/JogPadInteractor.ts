@@ -5,10 +5,47 @@ import type {
   OperatorConfirmation,
 } from "../../shared/machine";
 
-export const JOG_PAD_STEPS_MM = [0.01, 0.1] as const;
-export const JOG_PAD_FEED_MM_PER_MIN = 10;
+export const MIN_JOG_DISTANCE_MM = 0.01;
+export const MAX_JOG_DISTANCE_MM = 100_000;
+export const MIN_JOG_FEED_MM_PER_MIN = 10;
+export const MAX_JOG_FEED_MM_PER_MIN = 100_000;
 
-export type JogPadStepMm = (typeof JOG_PAD_STEPS_MM)[number];
+export const JOG_MOTION_PROFILE_IDS = ["precision", "position", "traverse"] as const;
+
+export type JogMotionProfileId = (typeof JOG_MOTION_PROFILE_IDS)[number];
+export interface JogMotionProfile {
+  readonly id: JogMotionProfileId;
+  readonly label: string;
+  readonly distanceMm: number;
+  readonly feedMmPerMin: number;
+}
+
+export const jogMotionProfiles = (
+  maxDistanceMm: number,
+  maxFeedMmPerMin: number,
+): readonly JogMotionProfile[] => [
+  {
+    id: "precision",
+    label: "Точно",
+    distanceMm: Math.min(0.1, maxDistanceMm),
+    feedMmPerMin: Math.min(100, maxFeedMmPerMin),
+  },
+  {
+    id: "position",
+    label: "Позиция",
+    distanceMm: Math.min(1, maxDistanceMm),
+    feedMmPerMin: Math.min(300, maxFeedMmPerMin),
+  },
+  {
+    id: "traverse",
+    label: "Быстро",
+    distanceMm: Math.min(maxDistanceMm, Math.max(10, maxDistanceMm * 0.1)),
+    feedMmPerMin: Math.max(
+      MIN_JOG_FEED_MM_PER_MIN,
+      Math.min(maxFeedMmPerMin, maxFeedMmPerMin * 0.8),
+    ),
+  },
+];
 export type JogDirection = -1 | 1;
 
 export const jogOperatorConfirmation = (
@@ -28,13 +65,27 @@ export class JogPadInteractor {
     confirmation: OperatorConfirmation,
     axis: JogAxis,
     direction: JogDirection,
-    stepMm: JogPadStepMm,
+    distanceMm: number,
+    feedMmPerMin: number,
   ): Promise<JogPadStepOutcome> {
     if (this.inFlight) {
       throw new Error("jog pad command is already in progress");
     }
-    if (!JOG_PAD_STEPS_MM.includes(stepMm)) {
-      throw new Error(`unsupported jog pad step: ${stepMm}`);
+    if (
+      !Number.isFinite(distanceMm) ||
+      distanceMm < MIN_JOG_DISTANCE_MM ||
+      distanceMm > MAX_JOG_DISTANCE_MM
+    ) {
+      throw new Error(`jog distance must be ${MIN_JOG_DISTANCE_MM}..${MAX_JOG_DISTANCE_MM} mm`);
+    }
+    if (
+      !Number.isFinite(feedMmPerMin) ||
+      feedMmPerMin < MIN_JOG_FEED_MM_PER_MIN ||
+      feedMmPerMin > MAX_JOG_FEED_MM_PER_MIN
+    ) {
+      throw new Error(
+        `jog feed must be ${MIN_JOG_FEED_MM_PER_MIN}..${MAX_JOG_FEED_MM_PER_MIN} mm/min`,
+      );
     }
 
     this.inFlight = true;
@@ -42,7 +93,8 @@ export class JogPadInteractor {
       return await this.gateway.jogPadStep({
         confirmation,
         axis,
-        distanceMm: direction * stepMm,
+        distanceMm: direction * distanceMm,
+        feedMmPerMin,
       });
     } finally {
       this.inFlight = false;

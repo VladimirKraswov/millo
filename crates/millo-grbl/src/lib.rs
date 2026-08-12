@@ -6,9 +6,9 @@ use millo_domain::{
 use thiserror::Error;
 
 pub const MIN_STEP_JOG_DISTANCE_MM: f64 = 0.01;
-pub const MAX_STEP_JOG_DISTANCE_MM: f64 = 1.0;
+pub const MAX_STEP_JOG_DISTANCE_MM: f64 = 100_000.0;
 pub const MIN_STEP_JOG_FEED_MM_PER_MIN: f64 = 10.0;
-pub const MAX_STEP_JOG_FEED_MM_PER_MIN: f64 = 100.0;
+pub const MAX_STEP_JOG_FEED_MM_PER_MIN: f64 = 100_000.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IncomingLine {
@@ -599,13 +599,13 @@ mod tests {
         };
 
         assert!(encode_step_jog(request(0.01, 10.0)).is_ok());
-        assert!(encode_step_jog(request(-1.0, 100.0)).is_ok());
+        assert!(encode_step_jog(request(-100_000.0, 100_000.0)).is_ok());
         assert_eq!(
             encode_step_jog(request(0.0, 50.0)),
             Err(JogValidationError::InvalidDistance)
         );
         assert!(matches!(
-            encode_step_jog(request(1.001, 50.0)),
+            encode_step_jog(request(100_000.001, 50.0)),
             Err(JogValidationError::DistanceOutOfRange { .. })
         ));
         assert_eq!(
@@ -617,7 +617,7 @@ mod tests {
             Err(JogValidationError::FeedOutOfRange { .. })
         ));
         assert!(matches!(
-            encode_step_jog(request(0.1, 100.001)),
+            encode_step_jog(request(0.1, 100_000.001)),
             Err(JogValidationError::FeedOutOfRange { .. })
         ));
         assert_eq!(

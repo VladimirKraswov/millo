@@ -20,7 +20,9 @@ use millo_dry_run::{
 };
 use millo_gcode::GcodeProgram;
 use millo_grbl::{
-    active_work_coordinate_system, build_device_inspection, work_coordinate_parameter,
+    MAX_STEP_JOG_DISTANCE_MM, MAX_STEP_JOG_FEED_MM_PER_MIN, MIN_STEP_JOG_DISTANCE_MM,
+    MIN_STEP_JOG_FEED_MM_PER_MIN, active_work_coordinate_system, build_device_inspection,
+    work_coordinate_parameter,
 };
 use millo_readiness::assess;
 use millo_run::program_fingerprint;
@@ -47,8 +49,6 @@ use tokio::{
 };
 
 const REQUEST_CAPACITY: usize = 32;
-pub const JOG_PAD_STEPS_MM: [f64; 2] = [0.01, 0.1];
-pub const JOG_PAD_FEED_MM_PER_MIN: f64 = 10.0;
 const WORK_ZERO_TOLERANCE_MM: f64 = 0.002;
 const SENDER_RESPONSE_SLICE: Duration = Duration::from_millis(10);
 
@@ -66,8 +66,22 @@ pub enum ArbiterError {
     JogCancelUnavailable(MachineMode),
     #[error("unhomed configuration verification failed: {0}")]
     ConfigurationVerification(String),
-    #[error("jog pad distance {0} mm is not one of the fixed presets")]
-    UnsupportedJogPadDistance(f64),
+    #[error("jog distance must be between 0.01 and 100000 mm")]
+    JogPadDistanceOutOfRange,
+    #[error("jog feed must be between 10 and 100000 mm/min")]
+    JogPadFeedOutOfRange,
+    #[error("jog feed {requested:.0} mm/min exceeds {axis:?} maximum rate {maximum:.0} mm/min")]
+    JogPadFeedExceedsAxisRate {
+        axis: millo_domain::JogAxis,
+        requested: f64,
+        maximum: f64,
+    },
+    #[error("jog distance {requested:.3} mm exceeds the {axis:?} profile limit {maximum:.3} mm")]
+    JogPadDistanceExceedsProfile {
+        axis: millo_domain::JogAxis,
+        requested: f64,
+        maximum: f64,
+    },
     #[error("work zero requires explicit operator position confirmation")]
     WorkZeroConfirmationRequired,
     #[error("active work coordinate system is not one of G54-G59")]
@@ -2216,8 +2230,15 @@ async fn execute_jog_pad_step(
     safety: &mut SafetyManager,
     request: JogPadStepRequest,
 ) -> Result<JogPadStepOutcome, ArbiterError> {
-    if !is_supported_jog_pad_distance(request.distance_mm) {
-        return Err(ArbiterError::UnsupportedJogPadDistance(request.distance_mm));
+    validate_jog_pad_motion(request.distance_mm, request.feed_mm_per_min)?;
+    let distance_limit =
+        axis_travel_limit(hardware_profile, request.axis).min(hardware_profile.max_jog_distance_mm);
+    if request.distance_mm.abs() > distance_limit {
+        return Err(ArbiterError::JogPadDistanceExceedsProfile {
+            axis: request.axis,
+            requested: request.distance_mm.abs(),
+            maximum: distance_limit,
+        });
     }
 
     let preparation =
@@ -2228,11 +2249,20 @@ async fn execute_jog_pad_step(
             receipt: None,
         });
     };
+    if let Some(maximum) = axis_max_rate(&preparation.inspection.device, request.axis)
+        && request.feed_mm_per_min > maximum
+    {
+        return Err(ArbiterError::JogPadFeedExceedsAxisRate {
+            axis: request.axis,
+            requested: request.feed_mm_per_min,
+            maximum,
+        });
+    }
     let step = StepJogRequest {
         authorization_id: authorization.id,
         axis: request.axis,
         distance_mm: request.distance_mm,
-        feed_mm_per_min: JOG_PAD_FEED_MM_PER_MIN,
+        feed_mm_per_min: request.feed_mm_per_min,
     };
 
     safety.consume_test_jog(
@@ -2247,11 +2277,42 @@ async fn execute_jog_pad_step(
     })
 }
 
-fn is_supported_jog_pad_distance(distance_mm: f64) -> bool {
-    distance_mm.is_finite()
-        && JOG_PAD_STEPS_MM
-            .iter()
-            .any(|preset| distance_mm.abs() == *preset)
+fn validate_jog_pad_motion(distance_mm: f64, feed_mm_per_min: f64) -> Result<(), ArbiterError> {
+    if !distance_mm.is_finite()
+        || !(MIN_STEP_JOG_DISTANCE_MM..=MAX_STEP_JOG_DISTANCE_MM).contains(&distance_mm.abs())
+    {
+        return Err(ArbiterError::JogPadDistanceOutOfRange);
+    }
+    if !feed_mm_per_min.is_finite()
+        || !(MIN_STEP_JOG_FEED_MM_PER_MIN..=MAX_STEP_JOG_FEED_MM_PER_MIN).contains(&feed_mm_per_min)
+    {
+        return Err(ArbiterError::JogPadFeedOutOfRange);
+    }
+    Ok(())
+}
+
+fn axis_max_rate(device: &DeviceInspection, axis: millo_domain::JogAxis) -> Option<f64> {
+    let key = match axis {
+        millo_domain::JogAxis::X => "$110",
+        millo_domain::JogAxis::Y => "$111",
+        millo_domain::JogAxis::Z => "$112",
+    };
+    device
+        .settings
+        .get(key)
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+}
+
+fn axis_travel_limit(profile: &HardwareProfile, axis: millo_domain::JogAxis) -> f64 {
+    let Some(travel) = profile.travel_mm else {
+        return profile.max_jog_distance_mm;
+    };
+    match axis {
+        millo_domain::JogAxis::X => travel.x,
+        millo_domain::JogAxis::Y => travel.y,
+        millo_domain::JogAxis::Z => travel.z,
+    }
 }
 
 fn publish(snapshots: &watch::Sender<ControllerSnapshot>, controller: &Controller<BoxedTransport>) {
@@ -2920,7 +2981,7 @@ mod tests {
             .step_jog(StepJogRequest {
                 authorization_id: authorization.id,
                 axis: millo_domain::JogAxis::Z,
-                distance_mm: 1.01,
+                distance_mm: MAX_STEP_JOG_DISTANCE_MM + 0.01,
                 feed_mm_per_min: 50.0,
             })
             .await
@@ -3053,7 +3114,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn jog_pad_rechecks_motion_and_uses_only_its_fixed_feed() {
+    async fn jog_pad_rechecks_motion_and_forwards_selected_feed() {
         let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
         let task = tokio::spawn(worker);
         arbiter.connect().await.unwrap();
@@ -3063,16 +3124,18 @@ mod tests {
                 confirmation: operator_confirmation(),
                 axis: millo_domain::JogAxis::Y,
                 distance_mm: 0.1,
+                feed_mm_per_min: 300.0,
             })
             .await
             .unwrap();
-        assert_eq!(first.receipt.unwrap().command, "$J=G91 G21 Y0.100 F10.000");
+        assert_eq!(first.receipt.unwrap().command, "$J=G91 G21 Y0.100 F300.000");
 
         let blocked_while_moving = arbiter
             .jog_pad_step(JogPadStepRequest {
                 confirmation: operator_confirmation(),
                 axis: millo_domain::JogAxis::Z,
                 distance_mm: 0.01,
+                feed_mm_per_min: 100.0,
             })
             .await
             .unwrap();
@@ -3089,12 +3152,13 @@ mod tests {
                 confirmation: operator_confirmation(),
                 axis: millo_domain::JogAxis::Z,
                 distance_mm: -0.01,
+                feed_mm_per_min: 100.0,
             })
             .await
             .unwrap();
         assert_eq!(
             second.receipt.unwrap().command,
-            "$J=G91 G21 Z-0.010 F10.000"
+            "$J=G91 G21 Z-0.010 F100.000"
         );
 
         let writes = control.writes();
@@ -3111,15 +3175,15 @@ mod tests {
                 .filter(|write| write.starts_with(b"$J="))
                 .collect::<Vec<_>>(),
             vec![
-                b"$J=G91 G21 Y0.100 F10.000\n".to_vec(),
-                b"$J=G91 G21 Z-0.010 F10.000\n".to_vec()
+                b"$J=G91 G21 Y0.100 F300.000\n".to_vec(),
+                b"$J=G91 G21 Z-0.010 F100.000\n".to_vec()
             ]
         );
         task.abort();
     }
 
     #[tokio::test]
-    async fn jog_pad_rejects_non_preset_distance_before_controller_io() {
+    async fn jog_pad_rejects_distance_above_machine_profile_before_controller_io() {
         let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
         let task = tokio::spawn(worker);
         arbiter.connect().await.unwrap();
@@ -3128,16 +3192,90 @@ mod tests {
             .jog_pad_step(JogPadStepRequest {
                 confirmation: operator_confirmation(),
                 axis: millo_domain::JogAxis::X,
-                distance_mm: 0.5,
+                distance_mm: 50.01,
+                feed_mm_per_min: 100.0,
             })
             .await
             .unwrap_err();
 
         assert!(matches!(
             error,
-            ArbiterError::UnsupportedJogPadDistance(distance) if distance == 0.5
+            ArbiterError::JogPadDistanceExceedsProfile {
+                axis: millo_domain::JogAxis::X,
+                requested,
+                maximum,
+            } if requested == 50.01 && maximum == 50.0
         ));
         assert!(control.writes().is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn jog_pad_rejects_distance_above_selected_axis_travel() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let mut profile = HardwareProfile::first_machine();
+        profile.travel_mm = Some(millo_domain::MachineTravel {
+            x: 300.0,
+            y: 180.0,
+            z: 20.0,
+        });
+        profile.max_jog_distance_mm = 50.0;
+        let task = tokio::spawn(worker);
+        arbiter.set_hardware_profile(profile).await.unwrap();
+        arbiter.connect().await.unwrap();
+
+        let error = arbiter
+            .jog_pad_step(JogPadStepRequest {
+                confirmation: operator_confirmation(),
+                axis: millo_domain::JogAxis::Z,
+                distance_mm: 20.01,
+                feed_mm_per_min: 100.0,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArbiterError::JogPadDistanceExceedsProfile {
+                axis: millo_domain::JogAxis::Z,
+                requested,
+                maximum,
+            } if requested == 20.01 && maximum == 20.0
+        ));
+        assert!(control.writes().is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn jog_pad_rejects_feed_above_selected_axis_rate() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let error = arbiter
+            .jog_pad_step(JogPadStepRequest {
+                confirmation: operator_confirmation(),
+                axis: millo_domain::JogAxis::X,
+                distance_mm: 1.0,
+                feed_mm_per_min: 1_001.0,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArbiterError::JogPadFeedExceedsAxisRate {
+                axis: millo_domain::JogAxis::X,
+                requested,
+                maximum,
+            } if requested == 1_001.0 && maximum == 1_000.0
+        ));
+        assert!(
+            control
+                .writes()
+                .into_iter()
+                .all(|write| !write.starts_with(b"$J="))
+        );
         task.abort();
     }
 

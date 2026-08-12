@@ -7,8 +7,10 @@ import type {
 } from "../../shared/machine";
 import {
   JogPadInteractor,
+  MAX_JOG_DISTANCE_MM,
+  MAX_JOG_FEED_MM_PER_MIN,
+  jogMotionProfiles,
   jogOperatorConfirmation,
-  type JogPadStepMm,
 } from "./JogPadInteractor";
 
 const confirmation: OperatorConfirmation = {
@@ -54,27 +56,45 @@ describe("JogPadInteractor", () => {
     });
   });
 
-  it("turns one press into one signed fixed-step gateway call", async () => {
+  it("turns one press into one signed bounded gateway call", async () => {
     const jogPadStep = vi.fn(async () => outcome);
     const interactor = new JogPadInteractor({ jogPadStep });
 
-    await interactor.move(confirmation, "y", -1, 0.1);
+    await interactor.move(confirmation, "y", -1, 10, 800);
 
     expect(jogPadStep).toHaveBeenCalledOnce();
     expect(jogPadStep).toHaveBeenCalledWith({
       confirmation,
       axis: "y",
-      distanceMm: -0.1,
+      distanceMm: -10,
+      feedMmPerMin: 800,
     });
   });
 
-  it("rejects a value outside the pad presets before the gateway", async () => {
+  it("scales motion profiles to the selected machine", () => {
+    expect(jogMotionProfiles(50, 1_000)).toEqual([
+      { id: "precision", label: "Точно", distanceMm: 0.1, feedMmPerMin: 100 },
+      { id: "position", label: "Позиция", distanceMm: 1, feedMmPerMin: 300 },
+      { id: "traverse", label: "Быстро", distanceMm: 10, feedMmPerMin: 800 },
+    ]);
+    expect(jogMotionProfiles(3_000, 6_000)[2]).toEqual({
+      id: "traverse",
+      label: "Быстро",
+      distanceMm: 300,
+      feedMmPerMin: 4_800,
+    });
+  });
+
+  it("rejects values outside the technical envelope before the gateway", async () => {
     const jogPadStep = vi.fn(async () => outcome);
     const interactor = new JogPadInteractor({ jogPadStep });
 
     await expect(
-      interactor.move(confirmation, "x", 1, 0.5 as JogPadStepMm),
-    ).rejects.toThrow("unsupported jog pad step");
+      interactor.move(confirmation, "x", 1, MAX_JOG_DISTANCE_MM + 0.01, 300),
+    ).rejects.toThrow("jog distance");
+    await expect(
+      interactor.move(confirmation, "x", 1, 1, MAX_JOG_FEED_MM_PER_MIN + 1),
+    ).rejects.toThrow("jog feed");
     expect(jogPadStep).not.toHaveBeenCalled();
   });
 
@@ -89,10 +109,10 @@ describe("JogPadInteractor", () => {
       ),
     };
     const interactor = new JogPadInteractor(gateway);
-    const first = interactor.move(confirmation, "z", 1, 0.01);
+    const first = interactor.move(confirmation, "z", 1, 1, 300);
 
     await expect(
-      interactor.move(confirmation, "z", -1, 0.01),
+      interactor.move(confirmation, "z", -1, 1, 300),
     ).rejects.toThrow("already in progress");
     expect(gateway.jogPadStep).toHaveBeenCalledOnce();
 

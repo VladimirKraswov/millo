@@ -236,6 +236,7 @@ export interface JogPadStepRequest {
   confirmation: OperatorConfirmation;
   axis: JogAxis;
   distanceMm: number;
+  feedMmPerMin: number;
 }
 
 export interface JogPadStepOutcome {

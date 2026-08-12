@@ -15,6 +15,7 @@ describe("machine profile model", () => {
     expect(draft.limitSwitchesInstalled).toBe(false);
     expect(draft.probeInstalled).toBe(false);
     expect(draft.emergencyStopInstalled).toBe(false);
+    expect(draft.maxJogDistanceMm).toBe(50);
   });
 
   it("requires only a name and finite positive XYZ travel", () => {
@@ -28,5 +29,12 @@ describe("machine profile model", () => {
     draft.travelMm.z = 45;
     expect(validateMachineProfileDraft(draft)).toBeUndefined();
     expect(formatMachineTravel(draft)).toBe("300 × 180 × 45 mm");
+
+    draft.maxJogDistanceMm = 301;
+    expect(validateMachineProfileDraft(draft)).toContain("Максимальный jog");
+
+    draft.travelMm = { x: 2_000, y: 3_000, z: 250 };
+    draft.maxJogDistanceMm = 3_000;
+    expect(validateMachineProfileDraft(draft)).toBeUndefined();
   });
 });

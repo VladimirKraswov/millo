@@ -382,6 +382,7 @@ fn hardware_profile() -> HardwareProfile {
             y: 500.0,
             z: 200.0,
         }),
+        max_jog_distance_mm: 50.0,
         spindle_control: SpindleControl::Manual,
         homing_installed: false,
         limit_switches_installed: false,

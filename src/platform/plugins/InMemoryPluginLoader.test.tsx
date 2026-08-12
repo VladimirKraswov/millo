@@ -132,6 +132,7 @@ describe("InMemoryPluginLoader", () => {
       },
       axis: "x",
       distanceMm: 0.01,
+      feedMmPerMin: 100,
     };
     const outcome = {} as JogPadStepOutcome;
     const jogPadStep = vi.fn(async () => outcome);

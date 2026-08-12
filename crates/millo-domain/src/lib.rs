@@ -225,6 +225,12 @@ pub struct MachineTravel {
     pub z: f64,
 }
 
+pub const DEFAULT_MAX_JOG_DISTANCE_MM: f64 = 50.0;
+
+pub const fn default_max_jog_distance_mm() -> f64 {
+    DEFAULT_MAX_JOG_DISTANCE_MM
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HardwareProfile {
@@ -232,6 +238,8 @@ pub struct HardwareProfile {
     pub axes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub travel_mm: Option<MachineTravel>,
+    #[serde(default = "default_max_jog_distance_mm")]
+    pub max_jog_distance_mm: f64,
     pub spindle_control: SpindleControl,
     pub homing_installed: bool,
     pub limit_switches_installed: bool,
@@ -245,6 +253,7 @@ impl HardwareProfile {
             name: "First XYZ router".to_owned(),
             axes: vec!["X".to_owned(), "Y".to_owned(), "Z".to_owned()],
             travel_mm: None,
+            max_jog_distance_mm: DEFAULT_MAX_JOG_DISTANCE_MM,
             spindle_control: SpindleControl::Manual,
             homing_installed: false,
             limit_switches_installed: false,
@@ -359,6 +368,7 @@ pub struct JogPadStepRequest {
     pub confirmation: OperatorConfirmation,
     pub axis: JogAxis,
     pub distance_mm: f64,
+    pub feed_mm_per_min: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

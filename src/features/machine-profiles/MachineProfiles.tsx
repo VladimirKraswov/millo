@@ -249,6 +249,29 @@ export function MachineProfiles({
                 ))}
               </fieldset>
 
+              <label className="machine-jog-limit-field">
+                <span>
+                  <strong>Максимальный jog</strong>
+                  <small>Предел одного ручного перемещения для этой машины</small>
+                </span>
+                <span>
+                  <input
+                    max={Math.max(draft.travelMm.x, draft.travelMm.y, draft.travelMm.z) || undefined}
+                    min="0.01"
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        maxJogDistanceMm: Number(event.target.value),
+                      }))
+                    }
+                    step="0.01"
+                    type="number"
+                    value={draft.maxJogDistanceMm}
+                  />
+                  <code>mm</code>
+                </span>
+              </label>
+
               <fieldset className="spindle-mode">
                 <legend>Шпиндель</legend>
                 <label>

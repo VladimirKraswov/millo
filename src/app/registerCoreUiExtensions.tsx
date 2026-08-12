@@ -22,6 +22,9 @@ export function registerCoreUiExtensions(registry: UiExtensionRegistry): void {
         gateway={context.machineCommands}
         onError={context.reportError}
         onInspection={context.updateInspection}
+        onOpenMotionSettings={context.openControllerMotionSettings}
+        maxDistanceMm={context.maxJogDistanceMm}
+        maxFeedMmPerMin={context.maxJogFeedMmPerMin}
         snapshot={context.snapshot}
       />
     ),

@@ -2151,6 +2151,7 @@ mod tests {
                 y: 200.0,
                 z: 80.0,
             },
+            max_jog_distance_mm: 50.0,
             spindle_control: millo_domain::SpindleControl::Manual,
             homing_installed: false,
             limit_switches_installed: false,

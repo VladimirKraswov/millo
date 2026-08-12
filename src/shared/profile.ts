@@ -22,6 +22,7 @@ export interface DetectedController {
 export interface MachineProfileDraft {
   name: string;
   travelMm: MachineTravel;
+  maxJogDistanceMm: number;
   spindleControl: SpindleControl;
   homingInstalled: boolean;
   limitSwitchesInstalled: boolean;
@@ -42,6 +43,7 @@ export interface MachineProfileState {
 
 export interface MachineLocalSettingsUpdate {
   name: string;
+  maxJogDistanceMm: number;
   spindleControl: SpindleControl;
   homingInstalled: boolean;
   limitSwitchesInstalled: boolean;

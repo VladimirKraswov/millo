@@ -542,17 +542,22 @@ does not schedule or execute controller I/O.
 - The typed step-jog endpoint consumes the lease inside the actor before the
   controller validates and writes the command. Validation or transport failure
   does not restore the lease.
-- The GRBL encoder always emits `$J=G91 G21` with exactly one of X/Y/Z. Absolute
-  distance is limited to `0.01..1.00 mm`; feed is limited to
-  `10..100 mm/min`. UI values cannot widen this backend envelope.
+- The GRBL encoder always emits `$J=G91 G21` with exactly one of X/Y/Z. Its
+  finite technical envelope is `0.01..100000 mm` and `10..100000 mm/min`; this
+  prevents malformed or unbounded IPC values but is not operational permission.
+- The command actor independently limits distance to the smaller of the
+  selected machine's `maxJogDistanceMm` and selected-axis travel. It limits feed
+  to that axis' inspected `$110/$111/$112` value. UI values cannot widen either
+  backend boundary.
 - A successful `ok` means GRBL accepted the jog for execution; periodic status
   remains authoritative for `Jog` and final position. The jog pad never receives
   or stores its actor-local lease.
 - The operator jog pad uses one higher-level actor request per click. That
   request performs status, Inspector, readiness, lease issue, lease consumption,
-  and one typed step without exposing the authorization to React. It accepts
-  only `0.01` or `0.10 mm` and always uses `10 mm/min`; the broader typed
-  step-jog envelope remains available to explicit hardware tooling.
+  and one typed step without exposing the authorization to React. Motion Deck
+  provides three scale-aware presets and explicit distance/feed controls. The
+  per-machine distance limit defaults to `50 mm` and may be configured from
+  `0.01 mm` through the machine's largest axis.
 - Jog Cancel is the named `0x85` realtime operation and is accepted by the actor
   only while its current snapshot reports `Jog`.
 - First-machine setup exposes no general `$n=value` endpoint. A narrow

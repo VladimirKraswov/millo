@@ -55,9 +55,10 @@ until they are read from the controller or measured before cutting.
 - Serial Check run may send a parser-approved program through GRBL `$C` with no
   motion. It uses one outstanding line and verifies the return to `Idle` on
   every terminal path; it is not permission for a physical Air or Cutting run.
-- Step jog is deliberately limited to `0.01..1.00 mm` at `10..100 mm/min`, with
-  one fresh preflight lease required for every attempt and the operator present
-  at the machine power control.
+- Step jog requires one fresh preflight lease per attempt and the operator at
+  the machine power control. This profile defaults to a `50 mm` maximum per
+  press. The actor also applies selected-axis travel and live GRBL maximum-rate
+  limits, so a larger profile value cannot exceed physical configuration.
 - Software Hold/Reset is not a replacement for a physical emergency stop.
 - The spindle is still operated manually for this profile. Cutting-file
   `M3/M4/S` words are accepted by policy only after the operator confirms that

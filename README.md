@@ -57,20 +57,24 @@ into the three typed physical facts required by test-jog preflight. The actor
 runs a fresh Inspector transaction and can issue a 15-second single-use backend
 authorization. The low-level typed motion use case consumes that authorization
 inside the same Rust actor and emits one `$J=G91 G21` step on exactly one XYZ
-axis. Distance is limited to `0.01..1.00 mm` and feed to `10..100 mm/min` in the
-backend. Every attempt consumes its lease before writing; another step requires
-another full preflight. GRBL Jog Cancel (`0x85`) is a separate named safety
-action.
+axis. The operator chooses distance and feed in the Motion Deck. A machine-local
+maximum distance defaults to `50 mm`, is editable from `0.01 mm` through the
+largest configured axis, and can represent desktop and multi-meter routers. The
+actor clamps each request again to the selected axis travel and to that axis'
+live GRBL `$110/$111/$112` maximum rate. Every attempt consumes its lease before
+writing; another step requires another full preflight. GRBL Jog Cancel (`0x85`)
+is a separate named safety action.
 Physical smoke tests have now disabled profile-inconsistent `$21/$22`, verified
 the persisted values, and completed separate X, Y, and Z `+0.100 mm` steps at
 `10 mm/min`. Every run returned to `Idle`, and only its selected coordinate
 changed.
 
-The first operator jog pad is a separate feature module. It exposes only fixed
-`0.01` and `0.10 mm` XYZ steps at `10 mm/min`; every press executes a new status,
-Inspector, readiness, and one-use authorization cycle inside the Rust actor.
-React reaches it through a platform-neutral `MachineCommandGateway`, establishing
-the same capability boundary planned for plugins.
+The first operator jog pad is a separate feature module. Its Motion Deck offers
+precision, positioning, and machine-scaled traverse presets plus explicit
+distance and feed controls. Every press executes a new status, Inspector,
+readiness, and one-use authorization cycle inside the Rust actor. React reaches
+it through a platform-neutral `MachineCommandGateway`, establishing the same
+capability boundary planned for plugins.
 
 Manual work-zero controls are another narrow typed use case. Zero X, Y, and Z
 are available only for a connected, stable `Idle` controller after an explicit
@@ -347,7 +351,8 @@ See [Architecture](docs/ARCHITECTURE.md), the decisions for the
 [command arbiter](docs/decisions/0005-command-arbiter-device-inspector.md), plus
 [hardware readiness](docs/decisions/0006-hardware-readiness.md) and
 [realtime safety controls](docs/decisions/0007-realtime-safety-controls.md), then
-the [guarded step jog](docs/decisions/0008-guarded-step-jog.md) and
+the [guarded step jog](docs/decisions/0008-guarded-step-jog.md),
+[machine-scaled Motion Deck](docs/decisions/0040-machine-scaled-motion-deck.md), and
 [verified unhomed configuration](docs/decisions/0009-unhomed-controller-configuration.md),
 then the [extension host boundary](docs/decisions/0010-extension-host-boundaries.md)
 and [versioned plugin manifest](docs/decisions/0011-versioned-plugin-manifest.md),

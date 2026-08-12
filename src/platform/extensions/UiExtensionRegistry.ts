@@ -24,6 +24,9 @@ export interface UiHostContext {
   readonly updateSnapshot: (snapshot: ControllerSnapshot) => void;
   readonly updateInspection: (inspection?: HardwareInspection) => void;
   readonly reportError: (error?: string) => void;
+  readonly openControllerMotionSettings: () => void;
+  readonly maxJogDistanceMm: number;
+  readonly maxJogFeedMmPerMin: number;
 }
 
 export type UiExtension = (context: UiHostContext) => ReactNode;

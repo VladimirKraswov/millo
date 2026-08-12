@@ -22,13 +22,17 @@ signed distance, and a feed. The command actor consumes the authorization before
 calling the controller, while its current snapshot must still be connected,
 stable `Idle`, free of Alarm, and in the same reset/reconnect session.
 
-The Rust GRBL encoder is the authoritative validation boundary:
+The Rust GRBL encoder is the final syntax and finite-value boundary:
 
 - exactly one axis selected by enum;
 - incremental metric mode injected as `G91 G21` on every command;
-- absolute distance from `0.01` through `1.00 mm`;
-- feed from `10` through `100 mm/min`;
+- absolute distance from `0.01` through `100000 mm`;
+- feed from `10` through `100000 mm/min`;
 - finite, non-zero numeric values only.
+
+Those are technical bounds, not operator permission. The command actor also
+enforces selected-machine profile distance, selected-axis travel, and inspected
+GRBL maximum rate. ADR 0040 defines the scalable operator policy.
 
 The lease is not restored after validation rejection, controller rejection,
 timeout, or transport failure. This fail-closed rule prevents a retry from

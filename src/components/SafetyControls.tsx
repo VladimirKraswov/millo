@@ -30,6 +30,9 @@ interface SafetyControlsProps {
   onSnapshot: (snapshot: ControllerSnapshot) => void;
   onInspection: (inspection?: HardwareInspection) => void;
   onError: (error?: string) => void;
+  onOpenMotionSettings: () => void;
+  maxJogDistanceMm: number;
+  maxJogFeedMmPerMin: number;
 }
 
 const secondsRemaining = (deadline: number | undefined, now: number): number =>
@@ -45,6 +48,9 @@ export function SafetyControls({
   onSnapshot,
   onInspection,
   onError,
+  onOpenMotionSettings,
+  maxJogDistanceMm,
+  maxJogFeedMmPerMin,
 }: SafetyControlsProps) {
   const [busy, setBusy] = useState(false);
   const [holdPending, setHoldPending] = useState(false);
@@ -182,6 +188,9 @@ export function SafetyControls({
           updateSnapshot: onSnapshot,
           updateInspection: onInspection,
           reportError: onError,
+          openControllerMotionSettings: onOpenMotionSettings,
+          maxJogDistanceMm,
+          maxJogFeedMmPerMin,
         }}
         registry={extensionRegistry}
         slot={uiSlots.controlMachine}
@@ -201,6 +210,9 @@ export function SafetyControls({
             updateSnapshot: onSnapshot,
             updateInspection: onInspection,
             reportError: onError,
+            openControllerMotionSettings: onOpenMotionSettings,
+            maxJogDistanceMm,
+            maxJogFeedMmPerMin,
           }}
           registry={extensionRegistry}
           slot={uiSlots.controlCoordinates}

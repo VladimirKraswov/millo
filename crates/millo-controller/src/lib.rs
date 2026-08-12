@@ -1169,7 +1169,7 @@ mod tests {
             .step_jog(StepJogRequest {
                 authorization_id: 8,
                 axis: millo_domain::JogAxis::X,
-                distance_mm: 1.1,
+                distance_mm: millo_grbl::MAX_STEP_JOG_DISTANCE_MM + 0.01,
                 feed_mm_per_min: 25.0,
             })
             .await

@@ -109,12 +109,31 @@ const developmentFirstCutFixture =
   developmentFixture === "tool-change" ||
   developmentFixture === "recovery" ||
   developmentFixture === "air-square";
+const developmentJogFixture = developmentFixture === "jog";
+const developmentJogSnapshot: ControllerSnapshot = {
+  ...emptySnapshot,
+  connection: "connected",
+  machine: {
+    ...emptySnapshot.machine,
+    mode: "idle",
+    reportedMode: "Idle",
+    machinePosition: { x: 152.4, y: 91.2, z: -4.75 },
+    workPosition: { x: 12.4, y: 8.2, z: 5.25 },
+    feedRate: 0,
+    spindleSpeed: 0,
+  },
+  pollSequence: 42,
+  pollIntervalMs: 250,
+  statusTimeoutMs: 500,
+  failureThreshold: 2,
+};
 const developmentProfileFixture: MachineProfileState = {
   profiles: [
     {
       id: "machine-0001",
       name: "LUNYEE CNC",
       travelMm: { x: 500, y: 500, z: 200 },
+      maxJogDistanceMm: 50,
       spindleControl: "manual",
       homingInstalled: false,
       limitSwitchesInstalled: false,
@@ -192,7 +211,7 @@ export default function App() {
   const pluginHost = useMemo(
     () =>
       bootstrapPluginHost({
-        initialSnapshot: emptySnapshot,
+        initialSnapshot: developmentJogFixture ? developmentJogSnapshot : emptySnapshot,
         machineCommands: tauriMachineCommandGateway,
       }),
     [],
@@ -212,17 +231,22 @@ export default function App() {
   const [likelyGrblOnly, setLikelyGrblOnly] = useState(true);
   const [inspection, setInspection] = useState<HardwareInspection>();
   const [machineProfiles, setMachineProfiles] = useState<MachineProfileState>(
-    developmentFixture === "profiles" || developmentFixture === "settings"
+    developmentFixture === "profiles" ||
+    developmentFixture === "settings" ||
+    developmentJogFixture
       ? developmentProfileFixture
       : { profiles: [] },
   );
   const [profileBusy, setProfileBusy] = useState(false);
   const [controllerSettings, setControllerSettings] =
     useState<ControllerSettingsState | undefined>(
-      developmentFixture === "settings" ? developmentSettingsFixture : undefined,
+      developmentFixture === "settings" || developmentJogFixture
+        ? developmentSettingsFixture
+        : undefined,
     );
   const [onboardingDraft, setOnboardingDraft] = useState<MachineProfileDraft>();
   const [settingsOpen, setSettingsOpen] = useState(developmentFixture === "settings");
+  const [settingsFocus, setSettingsFocus] = useState<"local" | "motion">("local");
   const [inspecting, setInspecting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
@@ -370,6 +394,17 @@ export default function App() {
   const selectedMachine = selectedMachineProfile(effectiveMachineProfiles);
   const machineBound =
     activeTransport.kind === "mock" || controllerSettings?.profileId !== undefined;
+  const jogAxisRates = ["$110", "$111", "$112"]
+    .map((key) =>
+      Number(
+        controllerSettings?.snapshot.values.find((setting) => setting.key === key)
+          ?.value,
+      ),
+    )
+    .filter((value) => Number.isFinite(value) && value >= 10);
+  const maxJogFeedMmPerMin =
+    jogAxisRates.length > 0 ? Math.min(...jogAxisRates) : 1_000;
+  const maxJogDistanceMm = selectedMachine?.maxJogDistanceMm ?? 50;
 
   useEffect(() => {
     if (transportLocked || !selectedMachine?.connection) return;
@@ -478,6 +513,7 @@ export default function App() {
   ): Promise<MachineProfileState> => {
     const next = await updateMachineLocalSettings(profile.id, {
       name: profile.name,
+      maxJogDistanceMm: profile.maxJogDistanceMm,
       spindleControl: profile.spindleControl,
       homingInstalled: profile.homingInstalled,
       limitSwitchesInstalled: profile.limitSwitchesInstalled,
@@ -514,6 +550,7 @@ export default function App() {
         return {
           name: fixture.name,
           travelMm: { ...fixture.travelMm },
+          maxJogDistanceMm: fixture.maxJogDistanceMm,
           spindleControl: fixture.spindleControl,
           homingInstalled: fixture.homingInstalled,
           limitSwitchesInstalled: fixture.limitSwitchesInstalled,
@@ -549,7 +586,10 @@ export default function App() {
           locked={transportLocked}
           onCreate={addMachineProfile}
           onDetect={detectSelectedMachine}
-          onEdit={() => setSettingsOpen(true)}
+          onEdit={() => {
+            setSettingsFocus("local");
+            setSettingsOpen(true);
+          }}
           onOnboardingDismiss={() => setOnboardingDraft(undefined)}
           onSelect={chooseMachineProfile}
           onboardingDraft={onboardingDraft}
@@ -883,9 +923,15 @@ export default function App() {
               workCoordinateGateway={tauriWorkCoordinateGateway}
               onError={setUiError}
               onInspection={setInspection}
+              onOpenMotionSettings={() => {
+                setSettingsFocus("motion");
+                setSettingsOpen(true);
+              }}
               onSnapshot={pluginHost.machineState.publish}
               snapshot={snapshot}
               machineBound={machineBound}
+              maxJogDistanceMm={maxJogDistanceMm}
+              maxJogFeedMmPerMin={maxJogFeedMmPerMin}
             />
           )}
 
@@ -1056,6 +1102,8 @@ export default function App() {
       </main>
 
       <MachineSettingsDialog
+        initialQuery={settingsFocus === "motion" ? "acceleration" : ""}
+        initialView={settingsFocus === "motion" ? "controller" : "local"}
         onClose={() => setSettingsOpen(false)}
         onLocalUpdate={updateLocalMachine}
         onRollback={rollbackSetting}
