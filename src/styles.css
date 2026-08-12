@@ -1920,10 +1920,16 @@ select:focus-visible {
 }
 
 .toolpath-preview {
+  position: relative;
   min-width: 0;
   min-height: 160px;
   overflow: hidden;
   background: #0b1013;
+}
+
+.toolpath-canvas {
+  position: absolute;
+  inset: 0;
 }
 
 .toolpath-preview.is-loading {
@@ -1939,6 +1945,101 @@ select:focus-visible {
   width: 100%;
   height: 100%;
   outline: none;
+}
+
+.tool-position-hud {
+  position: absolute;
+  z-index: 3;
+  bottom: 12px;
+  left: 12px;
+  display: grid;
+  max-width: calc(100% - 24px);
+  min-height: 46px;
+  grid-template-columns: 20px minmax(112px, auto) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 8px;
+  border: 1px solid #4b7567;
+  border-radius: 4px;
+  color: #dce7e3;
+  background: #0d1714ed;
+  box-shadow: 0 5px 18px #00000052;
+  backdrop-filter: blur(8px);
+}
+
+.tool-position-hud > svg {
+  color: #ffca73;
+}
+
+.tool-position-hud.is-outside {
+  border-color: #8a693d;
+  background: #1a1610ed;
+}
+
+.tool-position-title {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.tool-position-title strong,
+.tool-position-title small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-position-title strong {
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.tool-position-title small {
+  color: #809089;
+  font-size: 8px;
+}
+
+.tool-position-hud.is-outside .tool-position-title small {
+  color: #d8a962;
+}
+
+.tool-position-hud > code {
+  display: grid;
+  grid-template-columns: repeat(3, 74px);
+  color: #eef3f5;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-position-hud > code span {
+  padding: 0 7px;
+  border-left: 1px solid #34423d;
+  white-space: nowrap;
+}
+
+.tool-position-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.tool-position-actions button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #3c4b47;
+  border-radius: 3px;
+  color: #b9c6c1;
+  background: #131e1a;
+  cursor: pointer;
+}
+
+.tool-position-actions button:hover {
+  border-color: #74b59d;
+  color: #f4f7f8;
+  background: #1b2a24;
 }
 
 .preview-legend {
@@ -5967,6 +6068,24 @@ kbd {
 
   .program-preview-stage {
     grid-template-rows: minmax(0, 1fr) auto;
+  }
+
+  .tool-position-hud {
+    right: 8px;
+    bottom: 8px;
+    left: 8px;
+    max-width: none;
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+  }
+
+  .tool-position-hud > code {
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-row: 2;
+  }
+
+  .tool-position-hud > code span:first-child {
+    border-left: 0;
   }
 
   .program-diagnostics {

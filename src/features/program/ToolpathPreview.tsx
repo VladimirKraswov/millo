@@ -1,11 +1,13 @@
-import { useEffect, useRef } from "react";
+import { Crosshair, ScanSearch } from "lucide-react";
+import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-import type { GcodeProgram } from "../../shared/program";
+import type { GcodeProgram, ProgramPoint } from "../../shared/program";
 import {
   buildToolpathHighlightReadModel,
   buildToolpathReadModel,
+  buildToolPositionReadModel,
   type ToolpathReadModel,
 } from "./toolpathReadModel";
 
@@ -14,6 +16,8 @@ export type PreviewView = "top" | "iso";
 interface ToolpathPreviewProps {
   readonly program: GcodeProgram;
   readonly selectedSourceLine?: number;
+  readonly toolCoordinateSystem?: string;
+  readonly toolPosition?: ProgramPoint;
   readonly view: PreviewView;
 }
 
@@ -22,17 +26,74 @@ interface PreviewRuntime {
   readonly renderer: THREE.WebGLRenderer;
   readonly rapidMaterial?: THREE.LineBasicMaterial;
   readonly cuttingMaterial?: THREE.LineBasicMaterial;
+  readonly focusProgram: () => void;
+  readonly focusTool: () => void;
   readonly selectionLine: THREE.LineSegments;
   readonly selectionPoints: THREE.Points;
+  readonly toolMarker: THREE.Points;
+  readonly toolMarkerTexture: THREE.CanvasTexture;
+  readonly toolProjection: THREE.Points;
+  readonly toolProjectionLine: THREE.Line;
 }
+
+const formatCoordinate = (value: number): string =>
+  `${value < 0 ? "−" : ""}${Math.abs(value).toFixed(3)}`;
+
+const createToolMarkerTexture = (): THREE.CanvasTexture => {
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const context = canvas.getContext("2d");
+  if (context) {
+    context.clearRect(0, 0, 64, 64);
+    context.strokeStyle = "#0b1013";
+    context.lineWidth = 10;
+    context.beginPath();
+    context.arc(32, 32, 18, 0, Math.PI * 2);
+    context.stroke();
+    context.strokeStyle = "#ffca73";
+    context.lineWidth = 5;
+    context.beginPath();
+    context.arc(32, 32, 18, 0, Math.PI * 2);
+    context.moveTo(32, 4);
+    context.lineTo(32, 20);
+    context.moveTo(32, 44);
+    context.lineTo(32, 60);
+    context.moveTo(4, 32);
+    context.lineTo(20, 32);
+    context.moveTo(44, 32);
+    context.lineTo(60, 32);
+    context.stroke();
+    context.fillStyle = "#f4f7f8";
+    context.beginPath();
+    context.arc(32, 32, 4, 0, Math.PI * 2);
+    context.fill();
+  }
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+};
 
 export function ToolpathPreview({
   program,
   selectedSourceLine,
+  toolCoordinateSystem = "G54",
+  toolPosition,
   view,
 }: ToolpathPreviewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<PreviewRuntime | undefined>(undefined);
+  const toolOverProgram = useMemo(() => {
+    const bounds = program.summary.bounds;
+    return Boolean(
+      toolPosition &&
+      bounds &&
+      toolPosition.x >= bounds.min.x &&
+      toolPosition.x <= bounds.max.x &&
+      toolPosition.y >= bounds.min.y &&
+      toolPosition.y <= bounds.max.y,
+    );
+  }, [program.summary.bounds, toolPosition]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -114,6 +175,52 @@ export function ToolpathPreview({
     selectionPoints.visible = false;
     scene.add(selectionLine, selectionPoints);
 
+    const toolMarkerTexture = createToolMarkerTexture();
+    const createToolPoint = (size: number, opacity: number) => {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute(
+        "position",
+        new THREE.BufferAttribute(new Float32Array(3), 3),
+      );
+      const point = new THREE.Points(
+        geometry,
+        new THREE.PointsMaterial({
+          alphaTest: 0.05,
+          color: 0xffffff,
+          depthTest: false,
+          depthWrite: false,
+          map: toolMarkerTexture,
+          opacity,
+          size,
+          sizeAttenuation: false,
+          transparent: true,
+        }),
+      );
+      point.visible = false;
+      return point;
+    };
+    const toolProjection = createToolPoint(18, 0.38);
+    toolProjection.renderOrder = 20;
+    const toolProjectionLine = new THREE.Line(
+      new THREE.BufferGeometry().setAttribute(
+        "position",
+        new THREE.BufferAttribute(new Float32Array(6), 3),
+      ),
+      new THREE.LineDashedMaterial({
+        color: 0xffca73,
+        dashSize: Math.max(model.gridSize * 0.018, 0.3),
+        depthTest: false,
+        gapSize: Math.max(model.gridSize * 0.012, 0.2),
+        opacity: 0.55,
+        transparent: true,
+      }),
+    );
+    toolProjectionLine.visible = false;
+    toolProjectionLine.renderOrder = 21;
+    const toolMarker = createToolPoint(34, 1);
+    toolMarker.renderOrder = 22;
+    scene.add(toolProjection, toolProjectionLine, toolMarker);
+
     const axes = new THREE.AxesHelper(Math.min(model.gridSize * 0.12, 8));
     scene.add(axes);
 
@@ -124,6 +231,29 @@ export function ToolpathPreview({
     controls.screenSpacePanning = true;
     controls.minZoom = 0.3;
     controls.maxZoom = 30;
+
+    const frameAt = (target: THREE.Vector3) => {
+      camera.up.set(0, 0, 1);
+      if (view === "top") {
+        camera.position.set(
+          target.x,
+          target.y,
+          target.z + model.frameRadius * 3,
+        );
+        camera.up.set(0, 1, 0);
+      } else {
+        camera.position.set(
+          target.x + model.frameRadius * 1.25,
+          target.y - model.frameRadius * 1.45,
+          target.z + model.frameRadius * 1.2,
+        );
+      }
+      camera.zoom = 1;
+      camera.lookAt(target);
+      camera.updateProjectionMatrix();
+      controls.target.copy(target);
+      controls.update();
+    };
 
     const resize = () => {
       const width = Math.max(host.clientWidth, 1);
@@ -152,8 +282,17 @@ export function ToolpathPreview({
       renderer,
       rapidMaterial,
       cuttingMaterial,
+      focusProgram: () => frameAt(new THREE.Vector3()),
+      focusTool: () => {
+        if (!toolMarker.visible) return;
+        frameAt(toolMarker.position);
+      },
       selectionLine,
       selectionPoints,
+      toolMarker,
+      toolMarkerTexture,
+      toolProjection,
+      toolProjectionLine,
     };
     runtimeRef.current = runtime;
 
@@ -185,6 +324,7 @@ export function ToolpathPreview({
       });
       renderer.dispose();
       renderer.forceContextLoss();
+      toolMarkerTexture.dispose();
       renderer.domElement.remove();
       if (runtimeRef.current === runtime) runtimeRef.current = undefined;
     };
@@ -225,5 +365,103 @@ export function ToolpathPreview({
     );
   }, [program, selectedSourceLine, view]);
 
-  return <div className="toolpath-preview" ref={hostRef} />;
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    if (!toolPosition) {
+      runtime.toolMarker.visible = false;
+      runtime.toolProjection.visible = false;
+      runtime.toolProjectionLine.visible = false;
+      return;
+    }
+
+    const position = buildToolPositionReadModel(
+      toolPosition,
+      runtime.model,
+      program.summary.bounds,
+    );
+    const visibleMarkerPosition = view === "top"
+      ? {
+          ...position.scenePosition,
+          z: runtime.model.gridZ + runtime.model.gridSize * 0.004,
+        }
+      : position.scenePosition;
+    runtime.toolMarker.position.set(
+      visibleMarkerPosition.x,
+      visibleMarkerPosition.y,
+      visibleMarkerPosition.z,
+    );
+    runtime.toolProjection.position.set(
+      position.gridProjection.x,
+      position.gridProjection.y,
+      position.gridProjection.z,
+    );
+    const lineAttribute = runtime.toolProjectionLine.geometry.getAttribute(
+      "position",
+    ) as THREE.BufferAttribute;
+    lineAttribute.setXYZ(
+      0,
+      position.scenePosition.x,
+      position.scenePosition.y,
+      position.scenePosition.z,
+    );
+    lineAttribute.setXYZ(
+      1,
+      position.gridProjection.x,
+      position.gridProjection.y,
+      position.gridProjection.z,
+    );
+    lineAttribute.needsUpdate = true;
+    runtime.toolProjectionLine.computeLineDistances();
+    runtime.toolMarker.visible = true;
+    runtime.toolProjection.visible = view === "iso";
+    runtime.toolProjectionLine.visible =
+      view === "iso" &&
+      Math.abs(position.scenePosition.z - position.gridProjection.z) > 0.001;
+    runtime.renderer.domElement.setAttribute(
+      "aria-label",
+      `Предпросмотр траектории G-code${selectedSourceLine === undefined ? "" : `, выбрана строка ${selectedSourceLine}`}, фреза ${toolCoordinateSystem} X ${toolPosition.x.toFixed(3)}, Y ${toolPosition.y.toFixed(3)}, Z ${toolPosition.z.toFixed(3)}`,
+    );
+  }, [program, selectedSourceLine, toolCoordinateSystem, toolPosition, view]);
+
+  return (
+    <div className="toolpath-preview">
+      <div className="toolpath-canvas" ref={hostRef} />
+      {toolPosition && (
+        <aside
+          className={`tool-position-hud${toolOverProgram ? "" : " is-outside"}`}
+          aria-label="Текущее положение фрезы"
+        >
+          <Crosshair aria-hidden="true" size={18} />
+          <div className="tool-position-title">
+            <strong>Фреза · {toolCoordinateSystem}</strong>
+            <small>{toolOverProgram ? "Над заданием" : "Вне границ задания"}</small>
+          </div>
+          <code>
+            <span>X {formatCoordinate(toolPosition.x)}</span>
+            <span>Y {formatCoordinate(toolPosition.y)}</span>
+            <span>Z {formatCoordinate(toolPosition.z)}</span>
+          </code>
+          <div className="tool-position-actions">
+            <button
+              aria-label="Показать всю программу"
+              onClick={() => runtimeRef.current?.focusProgram()}
+              title="Показать всю программу"
+              type="button"
+            >
+              <ScanSearch aria-hidden="true" size={15} />
+            </button>
+            <button
+              aria-label="Центрировать на фрезе"
+              onClick={() => runtimeRef.current?.focusTool()}
+              title="Центрировать на фрезе"
+              type="button"
+            >
+              <Crosshair aria-hidden="true" size={15} />
+            </button>
+          </div>
+        </aside>
+      )}
+    </div>
+  );
 }

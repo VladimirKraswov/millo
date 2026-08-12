@@ -36,8 +36,9 @@ and assert both the exact typed parse request and retained original source.
 Dry-run read-model tests prove that Mock availability and policy eligibility are
 both required, expose only state-valid controls, and clamp untrusted display
 progress. Toolpath read-model tests verify rapid and cutting buffers, centering,
-framing, grid placement, and exact selected-line geometry independently from
-WebGL. Program-line window tests prove that a large source mounts only a small
+framing, grid placement, exact selected-line geometry, live tool-coordinate
+mapping, grid projection, and inside/outside job classification independently
+from WebGL. Program-line window tests prove that a large source mounts only a small
 overscanned slice and that source-line lookup remains stable.
 
 Extension-registry tests cover deterministic slot ordering, duplicate and

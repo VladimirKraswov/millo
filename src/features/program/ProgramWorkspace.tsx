@@ -899,6 +899,8 @@ export function ProgramWorkspace({
               <ToolpathPreview
                 program={program}
                 selectedSourceLine={selectedSourceLine}
+                toolCoordinateSystem={machineContext?.activeCoordinateSystem}
+                toolPosition={machineContext?.workPosition}
                 view={view}
               />
             </Suspense>

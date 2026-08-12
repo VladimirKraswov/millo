@@ -280,6 +280,13 @@ does not schedule or execute controller I/O.
   `В этой строке нет движения` state rather than borrowing adjacent geometry.
 - The scene contains one XY grid, functional rapid/cut colors, top and
   isometric views, bounded zoom/pan, and no machine-state mutation.
+- A separate read-only tool-position adapter maps the active GRBL work
+  position into the same centered scene coordinates as the parsed program.
+  Three.js renders a fixed-pixel crosshair above all path layers; the
+  isometric view also draws a dashed projection to the program grid. The HUD
+  keeps the active WCS and X/Y/Z visible, reports whether XY is inside the job
+  bounds, and offers explicit frame-program and locate-tool camera actions.
+  Position updates never recreate the path buffers or gain access to motion.
 - `Задание` and `Контроллер` are separate retained workbench views. Program
   state survives tab changes; Device Inspector remains available without being
   mixed into preview diagnostics.

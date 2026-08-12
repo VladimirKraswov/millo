@@ -1,4 +1,8 @@
-import type { GcodeProgram, ProgramPoint } from "../../shared/program";
+import type {
+  GcodeProgram,
+  ProgramBounds,
+  ProgramPoint,
+} from "../../shared/program";
 
 export interface ToolpathReadModel {
   readonly rapidPositions: Float32Array;
@@ -14,6 +18,12 @@ export interface ToolpathHighlightReadModel {
   readonly positions: Float32Array;
   readonly segmentCount: number;
   readonly pointCount: number;
+}
+
+export interface ToolPositionReadModel {
+  readonly scenePosition: ProgramPoint;
+  readonly gridProjection: ProgramPoint;
+  readonly overProgram: boolean;
 }
 
 export function buildToolpathReadModel(program: GcodeProgram): ToolpathReadModel {
@@ -99,5 +109,31 @@ export function buildToolpathHighlightReadModel(
     positions: new Float32Array(positions),
     segmentCount,
     pointCount,
+  };
+}
+
+export function buildToolPositionReadModel(
+  position: ProgramPoint,
+  model: Pick<ToolpathReadModel, "center" | "gridZ">,
+  bounds?: ProgramBounds,
+): ToolPositionReadModel {
+  const scenePosition = {
+    x: position.x - model.center.x,
+    y: position.y - model.center.y,
+    z: position.z - model.center.z,
+  };
+  return {
+    scenePosition,
+    gridProjection: {
+      x: scenePosition.x,
+      y: scenePosition.y,
+      z: model.gridZ,
+    },
+    overProgram:
+      bounds !== undefined &&
+      position.x >= bounds.min.x &&
+      position.x <= bounds.max.x &&
+      position.y >= bounds.min.y &&
+      position.y <= bounds.max.y,
   };
 }

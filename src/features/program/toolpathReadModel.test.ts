@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { previewFixtureProgram } from "./previewFixtureProgram";
 import {
   buildToolpathHighlightReadModel,
+  buildToolPositionReadModel,
   buildToolpathReadModel,
 } from "./toolpathReadModel";
 
@@ -45,5 +46,32 @@ describe("buildToolpathReadModel", () => {
 
     expect(selected.positions).toHaveLength(0);
     expect(selected.segmentCount).toBe(0);
+  });
+
+  it("places the live tool in the same centered coordinate space as the program", () => {
+    const model = buildToolpathReadModel(previewFixtureProgram);
+
+    const tool = buildToolPositionReadModel(
+      { x: 15, y: 3, z: 2 },
+      model,
+      previewFixtureProgram.summary.bounds,
+    );
+
+    expect(tool.scenePosition).toEqual({ x: 5, y: -4.5, z: 2 });
+    expect(tool.gridProjection).toEqual({ x: 5, y: -4.5, z: 0 });
+    expect(tool.overProgram).toBe(true);
+  });
+
+  it("reports a tool outside the job without clamping its real position", () => {
+    const model = buildToolpathReadModel(previewFixtureProgram);
+
+    const tool = buildToolPositionReadModel(
+      { x: 31, y: -4, z: 8 },
+      model,
+      previewFixtureProgram.summary.bounds,
+    );
+
+    expect(tool.scenePosition).toEqual({ x: 21, y: -11.5, z: 8 });
+    expect(tool.overProgram).toBe(false);
   });
 });
