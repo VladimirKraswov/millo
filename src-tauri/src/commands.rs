@@ -21,7 +21,10 @@ use millo_domain::{
     ResetChallenge, ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest, StepJogReceipt,
     StepJogRequest, TestJogPreparation, WorkZeroOutcome, WorkZeroRequest,
 };
-use millo_dry_run::{DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, build_dry_run_plan};
+use millo_dry_run::{
+    DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy, build_dry_run_plan,
+    build_program_run_plan_with_options,
+};
 use millo_gcode::{
     GcodeProgram, ProgramParseOptions, ProgramParseRequest, parse_program,
     parse_program_with_options,
@@ -37,6 +40,7 @@ use millo_recovery::{
     ProgramRecoveryCandidate, ProgramRecoveryPackage, ProgramRecoveryStore, RecoveryContinuity,
     RecoverySeed,
 };
+use millo_restart::{SafeStartIntent, SafeStartPackage, SafeStartRequest, build_safe_start};
 use millo_run::{
     FirstCutConfirmation, FirstCutPreparation, ProgramRunIntent, RunPreflightReport,
     ToolChangeConfirmation, program_fingerprint,
@@ -76,6 +80,16 @@ pub struct GeneratedGcodeSaveRequest {
 pub struct GeneratedGcodeSaveOutcome {
     pub path: String,
     pub bytes_written: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectedRunPreparationRequest {
+    pub request: ProgramParseRequest,
+    pub selected_source_line: usize,
+    pub safe_z_mm: f64,
+    pub intent: ProgramRunIntent,
+    pub execution_options: ProgramExecutionOptions,
 }
 
 fn audit_operation<T>(
@@ -2009,6 +2023,74 @@ fn valid_generated_gcode_name(value: &str) -> bool {
 }
 
 #[tauri::command]
+pub async fn prepare_selected_program_run(
+    request: SelectedRunPreparationRequest,
+    state: State<'_, AppState>,
+) -> Result<SafeStartPackage, String> {
+    let context = json!({
+        "sourceName": &request.request.source_name,
+        "selectedSourceLine": request.selected_source_line,
+        "safeZMm": request.safe_z_mm,
+        "intent": request.intent,
+        "executionOptions": request.execution_options,
+    });
+    let result = tokio::task::spawn_blocking(move || prepare_selected_run(request))
+        .await
+        .map_err(|error| format!("selected-run planner task failed: {error}"))?;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Program,
+        "program.selected_run.prepare",
+        "Safe selected-line program prepared",
+        context,
+        &result,
+    );
+    result
+}
+
+fn prepare_selected_run(
+    request: SelectedRunPreparationRequest,
+) -> Result<SafeStartPackage, String> {
+    let program = parse_program_with_options(
+        request.request.clone(),
+        ProgramParseOptions {
+            block_delete: request.execution_options.block_delete,
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let package = build_safe_start(
+        &program,
+        &request.request.source,
+        SafeStartRequest {
+            selected_source_line: request.selected_source_line,
+            safe_z_mm: request.safe_z_mm,
+            intent: match request.intent {
+                ProgramRunIntent::AirRun => SafeStartIntent::AirRun,
+                ProgramRunIntent::Cutting => SafeStartIntent::Cutting,
+            },
+        },
+    )
+    .map_err(|error| error.to_string())?;
+    let prepared = parse_program_with_options(
+        package.request.clone(),
+        ProgramParseOptions {
+            block_delete: request.execution_options.block_delete,
+        },
+    )
+    .map_err(|error| format!("prepared selected-run source is invalid: {error}"))?;
+    build_program_run_plan_with_options(
+        &prepared,
+        match request.intent {
+            ProgramRunIntent::AirRun => ProgramRunPolicy::AirRun,
+            ProgramRunIntent::Cutting => ProgramRunPolicy::Cutting,
+        },
+        request.execution_options,
+    )
+    .map_err(|error| format!("prepared selected-run policy failed: {error}"))?;
+    Ok(package)
+}
+
+#[tauri::command]
 pub async fn preflight_real_run(
     request: ProgramParseRequest,
     intent: ProgramRunIntent,
@@ -2898,6 +2980,29 @@ mod tests {
         assert_eq!(plan.lines().get(1).unwrap().command(), "M9");
         assert_eq!(plan.lines().get(5).unwrap().command(), "M5");
         assert_eq!(plan.lines().last().unwrap().command(), "M9");
+    }
+
+    #[test]
+    fn selected_run_adapter_builds_a_policy_valid_exact_remainder() {
+        let source = "G21 G90 G94 G17 G54\nG0 Z5\nG0 X0 Y0\nG1 Z-0.2 F100\nG1 X10\nG0 Z5\nG0 X20 Y0\nG1 Z-0.2 F100\nG1 X30\nM30";
+        let package = prepare_selected_run(SelectedRunPreparationRequest {
+            request: ProgramParseRequest {
+                source_name: "two-features.nc".to_owned(),
+                source: source.to_owned(),
+            },
+            selected_source_line: 9,
+            safe_z_mm: 8.0,
+            intent: ProgramRunIntent::Cutting,
+            execution_options: ProgramExecutionOptions::default(),
+        })
+        .unwrap();
+
+        assert_eq!(package.selected_source_line, 9);
+        assert_eq!(package.restart_source_line, 7);
+        assert_eq!(package.replayed_executable_lines, 2);
+        assert!(package.request.source_name.starts_with("safe-start-L9-"));
+        assert!(package.request.source.contains("G0 Z8.0000"));
+        assert!(package.request.source.ends_with("G1 X30\nM30"));
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import type { GcodeProgram } from "../../shared/program";
+import type { ProgramGateway } from "../../platform/program/ProgramGateway";
 import { idleSenderSnapshot } from "../../shared/dryRun";
 import type { DryRunGateway, SenderSnapshot } from "../../shared/dryRun";
 import type {
@@ -24,6 +25,14 @@ export const previewFixtureFirstCutProgram: GcodeProgram = {
     executableLineCount: previewFixtureProgram.summary.executableLineCount - 1,
     dryRunEligible: true,
   },
+};
+
+export const previewFixtureProgramGateway: ProgramGateway = {
+  parse: async (request, options) => ({
+    ...previewFixtureFirstCutProgram,
+    sourceName: request.sourceName,
+    blockDeleteEnabled: options?.blockDelete ?? false,
+  }),
 };
 
 export const previewFixtureToolChangeSender: SenderSnapshot = {
@@ -138,6 +147,22 @@ let fixtureSourceName = previewFixtureFirstCutProgram.sourceName;
 const fixtureIsAirSquare = () => fixtureSourceName === "air-square-20mm.nc";
 
 export const previewFixtureFirstCutGateway: RealRunPreflightGateway = {
+  prepareSelectedRun: async (request) => ({
+    originalSourceName: request.request.sourceName,
+    selectedSourceLine: request.selectedSourceLine,
+    restartSourceLine: request.selectedSourceLine,
+    restartPosition: { x: 0, y: 0, z: request.safeZMm },
+    safeZMm: request.safeZMm,
+    minimumSafeZMm: 0,
+    replayedExecutableLines: 0,
+    remainingExecutableLines: 1,
+    workCoordinateSystem: "g54",
+    spindleMode: "off",
+    request: {
+      sourceName: `safe-start-L${request.selectedSourceLine}-${request.request.sourceName}`,
+      source: request.request.source,
+    },
+  }),
   recoveryCandidate: async () => null,
   prepareRecovery: async () => {
     throw new Error("Fixture has no interrupted run");

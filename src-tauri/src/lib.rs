@@ -10,12 +10,12 @@ use commands::{
     list_transports, machine_profiles, mock_clear_alarm, mock_start_run, mock_trigger_alarm,
     mock_trigger_disconnect, mock_trigger_reset, mock_trigger_timeout, parse_gcode_program,
     pause_dry_run, pause_program_run, preflight_real_run, prepare_program_recovery,
-    prepare_test_jog, program_recovery_candidate, refresh_status, request_soft_reset,
-    restore_cutting_tool_presets, resume_dry_run, resume_program_run, return_to_work_zero,
-    rollback_controller_setting, save_generated_gcode, select_machine_profile, sender_run_history,
-    sender_snapshot, set_rapid_override, set_work_zero, start_check_run, start_mock_dry_run,
-    start_program_run, step_jog, tool_library, unlock_alarm, update_controller_setting,
-    update_cutting_tool, update_machine_local_settings,
+    prepare_selected_program_run, prepare_test_jog, program_recovery_candidate, refresh_status,
+    request_soft_reset, restore_cutting_tool_presets, resume_dry_run, resume_program_run,
+    return_to_work_zero, rollback_controller_setting, save_generated_gcode, select_machine_profile,
+    sender_run_history, sender_snapshot, set_rapid_override, set_work_zero, start_check_run,
+    start_mock_dry_run, start_program_run, step_jog, tool_library, unlock_alarm,
+    update_controller_setting, update_cutting_tool, update_machine_local_settings,
 };
 use tauri::Manager;
 
@@ -64,6 +64,7 @@ pub fn run() {
             generate_surfacing_job,
             save_generated_gcode,
             preflight_real_run,
+            prepare_selected_program_run,
             authorize_first_cut,
             start_program_run,
             start_check_run,

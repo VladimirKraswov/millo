@@ -24,6 +24,7 @@ millo-journal = { path = "../crates/millo-journal" }
 millo-mock = { path = "../crates/millo-mock" }
 millo-profile = { path = "../crates/millo-profile" }
 millo-recovery = { path = "../crates/millo-recovery" }
+millo-restart = { path = "../crates/millo-restart" }
 millo-run = { path = "../crates/millo-run" }
 millo-serial = { path = "../crates/millo-serial" }
 millo-settings = { path = "../crates/millo-settings" }

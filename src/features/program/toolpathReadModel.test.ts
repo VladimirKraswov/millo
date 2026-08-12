@@ -5,6 +5,7 @@ import {
   buildToolpathHighlightReadModel,
   buildToolPositionReadModel,
   buildToolpathReadModel,
+  sourceLineForIntersection,
 } from "./toolpathReadModel";
 
 describe("buildToolpathReadModel", () => {
@@ -13,10 +14,19 @@ describe("buildToolpathReadModel", () => {
 
     expect([...model.rapidPositions]).toEqual([-10, -7.5, 4, -10, -7.5, 0]);
     expect(model.cuttingPositions.length).toBeGreaterThan(12);
+    expect(model.rapidSourceLines).toEqual([3]);
+    expect(model.cuttingSourceLines[0]).toBe(4);
     expect(model.center).toEqual({ x: 10, y: 7.5, z: 0 });
     expect(model.gridSize).toBe(30);
     expect(model.gridZ).toBe(0);
     expect(model.pointCount).toBeGreaterThan(4);
+  });
+
+  it("maps Three.js line-segment vertex indices back to source lines", () => {
+    expect(sourceLineForIntersection([4, 8, 12], 0)).toBe(4);
+    expect(sourceLineForIntersection([4, 8, 12], 2)).toBe(8);
+    expect(sourceLineForIntersection([4, 8, 12], 4)).toBe(12);
+    expect(sourceLineForIntersection([4, 8, 12], undefined)).toBeUndefined();
   });
 
   it("isolates only the selected source-line geometry around the same center", () => {

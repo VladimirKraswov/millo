@@ -6,7 +6,9 @@ import type {
 
 export interface ToolpathReadModel {
   readonly rapidPositions: Float32Array;
+  readonly rapidSourceLines: readonly number[];
   readonly cuttingPositions: Float32Array;
+  readonly cuttingSourceLines: readonly number[];
   readonly center: ProgramPoint;
   readonly gridSize: number;
   readonly gridZ: number;
@@ -36,11 +38,15 @@ export function buildToolpathReadModel(program: GcodeProgram): ToolpathReadModel
       }
     : { x: 0, y: 0, z: 0 };
   const rapid: number[] = [];
+  const rapidSourceLines: number[] = [];
   const cutting: number[] = [];
+  const cuttingSourceLines: number[] = [];
   let pointCount = 0;
 
   for (const segment of program.toolpath) {
     const positions = segment.kind === "rapid" ? rapid : cutting;
+    const sourceLines =
+      segment.kind === "rapid" ? rapidSourceLines : cuttingSourceLines;
     for (let index = 1; index < segment.points.length; index += 1) {
       const start = segment.points[index - 1];
       const end = segment.points[index];
@@ -52,6 +58,7 @@ export function buildToolpathReadModel(program: GcodeProgram): ToolpathReadModel
         end.y - center.y,
         end.z - center.z,
       );
+      sourceLines.push(segment.sourceLine);
       pointCount += 2;
     }
   }
@@ -62,13 +69,23 @@ export function buildToolpathReadModel(program: GcodeProgram): ToolpathReadModel
   const gridSize = Math.ceil((span * 1.3) / 10) * 10;
   return {
     rapidPositions: new Float32Array(rapid),
+    rapidSourceLines,
     cuttingPositions: new Float32Array(cutting),
+    cuttingSourceLines,
     center,
     gridSize,
     gridZ: (bounds?.min.z ?? 0) - center.z,
     frameRadius: Math.max(span * 0.72, 7),
     pointCount,
   };
+}
+
+export function sourceLineForIntersection(
+  sourceLines: readonly number[],
+  vertexIndex: number | undefined,
+): number | undefined {
+  if (vertexIndex === undefined || vertexIndex < 0) return undefined;
+  return sourceLines[Math.floor(vertexIndex / 2)];
 }
 
 export function buildToolpathHighlightReadModel(

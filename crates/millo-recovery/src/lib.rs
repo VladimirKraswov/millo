@@ -7,11 +7,10 @@ use std::{
 use millo_domain::Position;
 use millo_dry_run::ProgramExecutionOptions;
 use millo_gcode::{
-    GcodeProgram, ProgramDistanceMode, ProgramExecutionCheckpoint, ProgramFeedMode,
-    ProgramMotionMode, ProgramParseOptions, ProgramParseRequest, ProgramPlane, ProgramPoint,
-    ProgramSpindleMode, ProgramUnitMode, ProgramWorkCoordinateSystem, ToolpathKind,
-    parse_program_with_options,
+    GcodeProgram, ProgramExecutionCheckpoint, ProgramParseOptions, ProgramParseRequest,
+    ProgramPoint, ProgramSpindleMode, ToolpathKind, parse_program_with_options,
 };
+use millo_restart::{modal_restore, wcs_word};
 use millo_run::{ProgramRunIntent, program_fingerprint};
 use millo_sender::{SenderFailure, SenderFailureKind, SenderMode, SenderSnapshot, SenderState};
 use millo_storage::{backup_path, write_atomically};
@@ -730,60 +729,6 @@ fn build_full_restart_source(
     ];
     lines.extend(record.source.lines().map(str::to_owned));
     lines.join("\n")
-}
-
-fn modal_restore(checkpoint: ProgramExecutionCheckpoint) -> String {
-    let units = match checkpoint.units {
-        ProgramUnitMode::Millimeters => "G21",
-        ProgramUnitMode::Inches => "G20",
-    };
-    let distance = match checkpoint.distance {
-        ProgramDistanceMode::Absolute => "G90",
-        ProgramDistanceMode::Incremental => "G91",
-    };
-    let arc_distance = match checkpoint.arc_distance {
-        ProgramDistanceMode::Absolute => "G90.1",
-        ProgramDistanceMode::Incremental => "G91.1",
-    };
-    let feed_mode = match checkpoint.feed_mode {
-        ProgramFeedMode::InverseTime => "G93",
-        ProgramFeedMode::UnitsPerMinute => "G94",
-    };
-    let plane = match checkpoint.plane {
-        ProgramPlane::Xy => "G17",
-        ProgramPlane::Xz => "G18",
-        ProgramPlane::Yz => "G19",
-    };
-    let motion = match checkpoint.motion {
-        ProgramMotionMode::None => "G80",
-        ProgramMotionMode::Rapid => "G0",
-        ProgramMotionMode::Linear => "G1",
-        ProgramMotionMode::ArcClockwise => "G2",
-        ProgramMotionMode::ArcCounterclockwise => "G3",
-    };
-    let mut words = vec![units, distance, arc_distance, feed_mode, plane, motion]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if let Some(feed) = checkpoint.feed_rate {
-        let native_feed = match (checkpoint.units, checkpoint.feed_mode) {
-            (ProgramUnitMode::Inches, ProgramFeedMode::UnitsPerMinute) => feed / 25.4,
-            _ => feed,
-        };
-        words.push(format!("F{native_feed:.4}"));
-    }
-    words.join(" ")
-}
-
-const fn wcs_word(wcs: ProgramWorkCoordinateSystem) -> &'static str {
-    match wcs {
-        ProgramWorkCoordinateSystem::G54 => "G54",
-        ProgramWorkCoordinateSystem::G55 => "G55",
-        ProgramWorkCoordinateSystem::G56 => "G56",
-        ProgramWorkCoordinateSystem::G57 => "G57",
-        ProgramWorkCoordinateSystem::G58 => "G58",
-        ProgramWorkCoordinateSystem::G59 => "G59",
-    }
 }
 
 fn recovery_source_name(id: u64, original: &str) -> String {

@@ -1,0 +1,11 @@
+[package]
+name = "millo-restart"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Safe selected-line restart planning for Millo"
+
+[dependencies]
+millo-gcode = { path = "../millo-gcode" }
+serde.workspace = true
+thiserror.workspace = true

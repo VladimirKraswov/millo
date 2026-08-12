@@ -8,12 +8,14 @@ import {
   buildToolpathHighlightReadModel,
   buildToolpathReadModel,
   buildToolPositionReadModel,
+  sourceLineForIntersection,
   type ToolpathReadModel,
 } from "./toolpathReadModel";
 
 export type PreviewView = "top" | "iso";
 
 interface ToolpathPreviewProps {
+  readonly onSelectSourceLine?: (sourceLine: number) => void;
   readonly program: GcodeProgram;
   readonly selectedSourceLine?: number;
   readonly toolCoordinateSystem?: string;
@@ -24,7 +26,9 @@ interface ToolpathPreviewProps {
 interface PreviewRuntime {
   readonly model: ToolpathReadModel;
   readonly renderer: THREE.WebGLRenderer;
+  readonly rapidLine?: THREE.LineSegments;
   readonly rapidMaterial?: THREE.LineBasicMaterial;
+  readonly cuttingLine?: THREE.LineSegments;
   readonly cuttingMaterial?: THREE.LineBasicMaterial;
   readonly focusProgram: () => void;
   readonly focusTool: () => void;
@@ -75,6 +79,7 @@ const createToolMarkerTexture = (): THREE.CanvasTexture => {
 };
 
 export function ToolpathPreview({
+  onSelectSourceLine,
   program,
   selectedSourceLine,
   toolCoordinateSystem = "G54",
@@ -137,7 +142,9 @@ export function ToolpathPreview({
       positions: Float32Array,
       color: number,
       opacity: number,
-    ): THREE.LineBasicMaterial | undefined => {
+    ):
+      | { readonly line: THREE.LineSegments; readonly material: THREE.LineBasicMaterial }
+      | undefined => {
       if (positions.length === 0) return undefined;
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
@@ -146,11 +153,12 @@ export function ToolpathPreview({
         opacity,
         transparent: true,
       });
-      scene.add(new THREE.LineSegments(geometry, material));
-      return material;
+      const line = new THREE.LineSegments(geometry, material);
+      scene.add(line);
+      return { line, material };
     };
-    const rapidMaterial = addPath(model.rapidPositions, 0xffb454, 0.68);
-    const cuttingMaterial = addPath(model.cuttingPositions, 0x77d6b3, 1);
+    const rapidPath = addPath(model.rapidPositions, 0xffb454, 0.68);
+    const cuttingPath = addPath(model.cuttingPositions, 0x77d6b3, 1);
 
     const selectionLine = new THREE.LineSegments(
       new THREE.BufferGeometry(),
@@ -232,6 +240,45 @@ export function ToolpathPreview({
     controls.minZoom = 0.3;
     controls.maxZoom = 30;
 
+    const raycaster = new THREE.Raycaster();
+    let pointerStart: { x: number; y: number } | undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button === 0) {
+        pointerStart = { x: event.clientX, y: event.clientY };
+      }
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      if (!pointerStart || event.button !== 0) return;
+      const distance = Math.hypot(
+        event.clientX - pointerStart.x,
+        event.clientY - pointerStart.y,
+      );
+      pointerStart = undefined;
+      if (distance > 4) return;
+      const rectangle = renderer.domElement.getBoundingClientRect();
+      if (rectangle.width <= 0 || rectangle.height <= 0) return;
+      const pointer = new THREE.Vector2(
+        ((event.clientX - rectangle.left) / rectangle.width) * 2 - 1,
+        -((event.clientY - rectangle.top) / rectangle.height) * 2 + 1,
+      );
+      raycaster.params.Line.threshold =
+        Math.max(model.gridSize * 0.008, 0.12) / camera.zoom;
+      raycaster.setFromCamera(pointer, camera);
+      const paths = [rapidPath?.line, cuttingPath?.line].filter(
+        (line): line is THREE.LineSegments => line !== undefined,
+      );
+      const hit = raycaster.intersectObjects(paths, false)[0];
+      if (!hit) return;
+      const sourceLines =
+        hit.object === rapidPath?.line
+          ? model.rapidSourceLines
+          : model.cuttingSourceLines;
+      const sourceLine = sourceLineForIntersection(sourceLines, hit.index);
+      if (sourceLine !== undefined) onSelectSourceLine?.(sourceLine);
+    };
+    renderer.domElement.addEventListener("pointerdown", onPointerDown);
+    renderer.domElement.addEventListener("pointerup", onPointerUp);
+
     const frameAt = (target: THREE.Vector3) => {
       camera.up.set(0, 0, 1);
       if (view === "top") {
@@ -280,8 +327,10 @@ export function ToolpathPreview({
     const runtime: PreviewRuntime = {
       model,
       renderer,
-      rapidMaterial,
-      cuttingMaterial,
+      rapidLine: rapidPath?.line,
+      rapidMaterial: rapidPath?.material,
+      cuttingLine: cuttingPath?.line,
+      cuttingMaterial: cuttingPath?.material,
       focusProgram: () => frameAt(new THREE.Vector3()),
       focusTool: () => {
         if (!toolMarker.visible) return;
@@ -307,6 +356,8 @@ export function ToolpathPreview({
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
+      renderer.domElement.removeEventListener("pointerdown", onPointerDown);
+      renderer.domElement.removeEventListener("pointerup", onPointerUp);
       controls.dispose();
       scene.traverse((object) => {
         if (
@@ -328,7 +379,7 @@ export function ToolpathPreview({
       renderer.domElement.remove();
       if (runtimeRef.current === runtime) runtimeRef.current = undefined;
     };
-  }, [program, view]);
+  }, [onSelectSourceLine, program, view]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;

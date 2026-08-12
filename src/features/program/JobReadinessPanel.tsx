@@ -23,6 +23,7 @@ interface JobReadinessPanelProps {
   readonly busy: boolean;
   readonly details: Readonly<Record<JobReadinessStepId, string>>;
   readonly intent: "airRun" | "cutting";
+  readonly intentLocked?: boolean;
   readonly onIntent: (intent: "airRun" | "cutting") => void;
   readonly onOpenOrigin: () => void;
   readonly onPrimary: (action: JobReadinessAction) => void;
@@ -57,6 +58,7 @@ export function JobReadinessPanel({
   busy,
   details,
   intent,
+  intentLocked = false,
   onIntent,
   onOpenOrigin,
   onPrimary,
@@ -79,7 +81,7 @@ export function JobReadinessPanel({
         <div aria-label="Режим выполнения" className="program-run-intent" role="group">
           <button
             aria-pressed={intent === "airRun"}
-            disabled={busy}
+            disabled={busy || intentLocked}
             onClick={() => onIntent("airRun")}
             type="button"
           >
@@ -87,7 +89,7 @@ export function JobReadinessPanel({
           </button>
           <button
             aria-pressed={intent === "cutting"}
-            disabled={busy}
+            disabled={busy || intentLocked}
             onClick={() => onIntent("cutting")}
             type="button"
           >

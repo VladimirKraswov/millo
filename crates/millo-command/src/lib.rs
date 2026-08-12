@@ -1449,13 +1449,23 @@ async fn execute_real_run_preflight(
         intent,
         execution_options,
     );
-    if require_check_certificate && intent == ProgramRunIntent::Cutting {
+    if require_check_certificate
+        && (intent == ProgramRunIntent::Cutting || requires_safe_start_check(&program))
+    {
         apply_program_check_requirement(
             &mut report,
             program_check.validate(&binding, &snapshot, Instant::now()),
         );
     }
     Ok(report)
+}
+
+fn requires_safe_start_check(program: &GcodeProgram) -> bool {
+    program.source_name.starts_with("safe-start-L")
+        && program
+            .lines
+            .first()
+            .is_some_and(|line| line.source.trim().starts_with("(Millo safe start from L"))
 }
 
 fn apply_program_check_requirement(
@@ -2662,6 +2672,14 @@ mod tests {
         .unwrap()
     }
 
+    fn safe_start_program(source: &str) -> GcodeProgram {
+        parse_program(ProgramParseRequest {
+            source_name: "safe-start-L42-original.nc".to_owned(),
+            source: source.to_owned(),
+        })
+        .unwrap()
+    }
+
     fn parsed_program_with_options(
         source: &str,
         execution_options: ProgramExecutionOptions,
@@ -3797,6 +3815,39 @@ mod tests {
             write.as_slice(),
             b"?" | b"$I\n" | b"$$\n" | b"$G\n" | b"$#\n"
         )));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn safe_selected_line_air_run_also_requires_its_exact_check_certificate() {
+        let source =
+            "(Millo safe start from L42 of original.nc)\nG21 G90 G94 G17\nG0 Z5\nG1 X1 F10\nM5";
+        let (arbiter, _control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let blocked = arbiter
+            .preflight_real_run(safe_start_program(source), ProgramRunIntent::AirRun)
+            .await
+            .unwrap();
+        assert!(!blocked.ready);
+        assert!(blocked.checks.iter().any(|check| {
+            check.id == "grbl-check-certificate" && check.level == RunPreflightLevel::Blocker
+        }));
+
+        arbiter
+            .start_check_run(safe_start_program(source))
+            .await
+            .unwrap();
+        wait_for_sender(&arbiter, SenderState::Completed).await;
+        let certified = arbiter
+            .preflight_real_run(safe_start_program(source), ProgramRunIntent::AirRun)
+            .await
+            .unwrap();
+        assert!(certified.ready);
+        assert!(certified.checks.iter().any(|check| {
+            check.id == "grbl-check-certificate" && check.level == RunPreflightLevel::Pass
+        }));
         task.abort();
     }
 

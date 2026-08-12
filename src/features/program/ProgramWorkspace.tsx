@@ -9,6 +9,7 @@ import {
   Pause,
   Play,
   RotateCcw,
+  Route,
   ScanSearch,
   ShieldAlert,
   SlidersHorizontal,
@@ -55,6 +56,7 @@ import type {
   ProgramRunIntent,
   RealRunPreflightGateway,
   RunPreflightReport,
+  SafeStartPackage,
   ToolChangeConfirmation,
 } from "../../shared/realRun";
 import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
@@ -63,6 +65,7 @@ import { ProgramFilePicker } from "./ProgramFilePicker";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramLineTable } from "./ProgramLineTable";
 import { ProgramRecoveryDialog } from "./ProgramRecoveryDialog";
+import { SafeStartDialog } from "./SafeStartDialog";
 import { ToolChangeDialog } from "./ToolChangeDialog";
 import { canStartCheckRun } from "./checkRunReadModel";
 import {
@@ -83,6 +86,7 @@ import {
   type JobReadinessAction,
 } from "./jobReadinessModel";
 import type { PreviewView } from "./ToolpathPreview";
+import { suggestedSafeZ } from "./safeStartModel";
 
 const ToolpathPreview = lazy(async () => {
   const module = await import("./ToolpathPreview");
@@ -118,6 +122,11 @@ interface ProgramWorkspaceProps {
   readonly realRunAvailable?: boolean;
   readonly realRunGateway?: RealRunPreflightGateway;
   readonly realRunTarget?: boolean;
+}
+
+interface SafeStartContext {
+  readonly original: LoadedProgram;
+  readonly package: SafeStartPackage;
 }
 
 const formatDistance = (value: number): string =>
@@ -233,6 +242,8 @@ export function ProgramWorkspace({
   const [programExecutionOptions, setProgramExecutionOptions] =
     useState<ProgramExecutionOptions>(defaultProgramExecutionOptions);
   const [firstCutOpen, setFirstCutOpen] = useState(false);
+  const [safeStartOpen, setSafeStartOpen] = useState(false);
+  const [safeStartContext, setSafeStartContext] = useState<SafeStartContext>();
   const [toolChangeOpen, setToolChangeOpen] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [recoveryCandidate, setRecoveryCandidate] =
@@ -266,6 +277,8 @@ export function ProgramWorkspace({
     setDiagnosticsOpen(incomingJob.job.program.warnings.length > 0);
     setRealRunReport(undefined);
     setFirstCutOpen(false);
+    setSafeStartOpen(false);
+    setSafeStartContext(undefined);
     setToolChangeOpen(false);
     setError(undefined);
   }, [incomingJob, sender.runSequence, senderActive]);
@@ -359,6 +372,7 @@ export function ProgramWorkspace({
     if (!realRunTarget || !realRunAvailable) {
       setRealRunReport(undefined);
       setFirstCutOpen(false);
+      setSafeStartOpen(false);
       setToolChangeOpen(false);
     }
   }, [realRunAvailable, realRunTarget]);
@@ -435,6 +449,8 @@ export function ProgramWorkspace({
       setDiagnosticsOpen(false);
       setRealRunReport(undefined);
       setFirstCutOpen(false);
+      setSafeStartOpen(false);
+      setSafeStartContext(undefined);
       setRecoveryCandidate(undefined);
     } catch (reason) {
       setError(String(reason));
@@ -442,6 +458,66 @@ export function ProgramWorkspace({
     } finally {
       setLoading(false);
     }
+  };
+
+  const prepareSelectedRun = (safeZMm: number): Promise<SafeStartPackage> => {
+    if (!loaded || !realRunGateway || selectedSourceLine === undefined) {
+      throw new Error("Safe selected-line start is unavailable");
+    }
+    return realRunGateway.prepareSelectedRun({
+      request: {
+        sourceName: loaded.program.sourceName,
+        source: loaded.source,
+      },
+      selectedSourceLine,
+      safeZMm,
+      intent: programRunIntent,
+      executionOptions: programExecutionOptions,
+    });
+  };
+
+  const loadSafeStartPackage = async (prepared: SafeStartPackage) => {
+    if (!loaded || !realRunGateway) return;
+    setLoading(true);
+    setError(undefined);
+    try {
+      const nextProgram = await gateway.parse(prepared.request, {
+        blockDelete: programExecutionOptions.blockDelete,
+      });
+      const checkSnapshot = await realRunGateway.startCheck(
+        prepared.request,
+        programExecutionOptions,
+      );
+      const original = safeStartContext?.original ?? loaded;
+      setLoaded({ program: nextProgram, source: prepared.request.source });
+      setSafeStartContext({ original, package: prepared });
+      setClearedSenderRunSequence(undefined);
+      setSender(checkSnapshot);
+      setSelectedSourceLine(undefined);
+      setDiagnosticView("lines");
+      setDiagnosticsOpen(false);
+      setRealRunReport(undefined);
+      setFirstCutOpen(false);
+      setRecoveryCandidate(undefined);
+    } catch (reason) {
+      setError(String(reason));
+      throw reason;
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const restoreFullProgram = () => {
+    if (!safeStartContext || senderActive) return;
+    setLoaded(safeStartContext.original);
+    setSafeStartContext(undefined);
+    setSafeStartOpen(false);
+    setClearedSenderRunSequence(sender.runSequence || undefined);
+    setSender(idleSenderSnapshot);
+    setSelectedSourceLine(undefined);
+    setRealRunReport(undefined);
+    setDiagnosticsOpen(false);
+    setError(undefined);
   };
 
   const dismissRecovery = async (recoveryId: number) => {
@@ -753,6 +829,19 @@ export function ProgramWorkspace({
   const programRunVisible =
     senderForProgram && (sender.mode === "airRun" || sender.mode === "cutRun");
   const checkRunVisible = senderForProgram && sender.mode === "checkRun";
+  const safeStartCheckPassed =
+    reportForProgram?.checks.some(
+      (check) => check.id === "grbl-check-certificate" && check.level === "pass",
+    ) ?? false;
+  const safeStartCheckLabel = checkRunVisible
+    ? displayedSender.state === "completed"
+      ? "GRBL Check завершён"
+      : displayedSender.state === "failed" || displayedSender.state === "cancelled"
+        ? "GRBL Check не пройден"
+      : "GRBL Check идёт"
+    : safeStartCheckPassed
+      ? "GRBL Check пройден"
+      : "Требуется GRBL Check";
   const checkRunAvailable = canStartCheckRun(displayedSender, {
     gatewayAvailable: realRunGateway !== undefined,
     loading,
@@ -854,6 +943,8 @@ export function ProgramWorkspace({
                 setSelectedSourceLine(undefined);
                 setRealRunReport(undefined);
                 setFirstCutOpen(false);
+                setSafeStartOpen(false);
+                setSafeStartContext(undefined);
                 setDiagnosticsOpen(false);
                 setError(undefined);
               }}
@@ -905,6 +996,42 @@ export function ProgramWorkspace({
         </aside>
       )}
 
+      {safeStartContext && program && (
+        <aside className="safe-start-banner" role="status">
+          <Route aria-hidden="true" size={18} />
+          <div>
+            <span>Безопасный частичный запуск</span>
+            <strong>
+              Выбрано L{safeStartContext.package.selectedSourceLine} · вход с L
+              {safeStartContext.package.restartSourceLine}
+            </strong>
+            <small>
+              Safe Z {safeStartContext.package.safeZMm.toFixed(3)} mm · {safeStartContext.package.workCoordinateSystem.toUpperCase()}
+              {safeStartContext.package.selectedTool === undefined
+                ? ""
+                : ` · T${safeStartContext.package.selectedTool}`}
+              {safeStartContext.package.replayedExecutableLines > 0
+                ? ` · повтор ${safeStartContext.package.replayedExecutableLines} строк до выбранной`
+                : " · вход точно с выбранной строки"}
+            </small>
+          </div>
+          <span
+            className={`safe-start-check-badge${safeStartCheckPassed ? " is-pass" : ""}`}
+          >
+            <ScanSearch aria-hidden="true" size={13} />
+            {safeStartCheckLabel}
+          </span>
+          <button
+            disabled={senderActive}
+            onClick={restoreFullProgram}
+            type="button"
+          >
+            <RotateCcw aria-hidden="true" size={13} />
+            Вся программа
+          </button>
+        </aside>
+      )}
+
       {program ? (
         <div className="program-body">
           <div className="program-preview-stage">
@@ -912,6 +1039,7 @@ export function ProgramWorkspace({
               fallback={<div className="toolpath-preview is-loading">Загрузка траектории...</div>}
             >
               <ToolpathPreview
+                onSelectSourceLine={setSelectedSourceLine}
                 program={program}
                 selectedSourceLine={selectedSourceLine}
                 toolCoordinateSystem={machineContext?.activeCoordinateSystem}
@@ -934,6 +1062,22 @@ export function ProgramWorkspace({
                     ? formatSegmentCount(selectedMotionCount)
                     : "В этой строке нет движения"}
                 </small>
+                {realRunTarget &&
+                  realRunGateway &&
+                  realRunAvailable &&
+                  selectedMotionCount > 0 &&
+                  !recoveryCandidate &&
+                  !senderActive && (
+                    <button
+                      className="preview-safe-start"
+                      onClick={() => setSafeStartOpen(true)}
+                      title="Сформировать безопасный запуск с этого участка"
+                      type="button"
+                    >
+                      <Play aria-hidden="true" size={12} />
+                      С этого участка
+                    </button>
+                  )}
                 <button
                   aria-label="Очистить выбор строки"
                   onClick={() => setSelectedSourceLine(undefined)}
@@ -1186,6 +1330,7 @@ export function ProgramWorkspace({
                     validation: validationDetail,
                   }}
                   intent={programRunIntent}
+                  intentLocked={safeStartContext !== undefined}
                   onIntent={(intent) => {
                     setProgramRunIntent(intent);
                     setRealRunReport(undefined);
@@ -1506,6 +1651,20 @@ export function ProgramWorkspace({
           />
           <code>.nc · .ngc · .gcode · .tap · .cnc</code>
         </div>
+      )}
+
+      {selectedProgramLine && (
+        <SafeStartDialog
+          minimumSafeZ={bounds?.max.z ?? 0}
+          motionCount={selectedMotionCount}
+          onClose={() => setSafeStartOpen(false)}
+          onPrepare={prepareSelectedRun}
+          onPrepared={loadSafeStartPackage}
+          open={safeStartOpen}
+          selectedCommand={selectedProgramLine.source || selectedProgramLine.normalized}
+          sourceLine={selectedProgramLine.sourceLine}
+          suggestedSafeZ={suggestedSafeZ(bounds?.max.z)}
+        />
       )}
 
       <FirstCutAuthorizationDialog

@@ -2126,6 +2126,7 @@ dependencies = [
  "millo-mock",
  "millo-profile",
  "millo-recovery",
+ "millo-restart",
  "millo-run",
  "millo-sender",
  "millo-serial",
@@ -2223,11 +2224,21 @@ dependencies = [
  "millo-domain",
  "millo-dry-run",
  "millo-gcode",
+ "millo-restart",
  "millo-run",
  "millo-sender",
  "millo-storage",
  "serde",
  "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "millo-restart"
+version = "0.1.0"
+dependencies = [
+ "millo-gcode",
+ "serde",
  "thiserror 2.0.20",
 ]
 

@@ -2831,6 +2831,85 @@ select:focus-visible {
   cursor: pointer;
 }
 
+.safe-start-banner {
+  position: absolute;
+  z-index: 8;
+  top: 48px;
+  right: 0;
+  left: 0;
+  display: grid;
+  min-height: 60px;
+  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px 8px 18px;
+  border-bottom: 1px solid #3f8069;
+  color: #77d6b3;
+  background: #112019f2;
+  box-shadow: 0 8px 18px #05090c80;
+}
+
+.safe-start-banner > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.safe-start-banner > div > span {
+  color: #7d9b90;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.safe-start-banner strong,
+.safe-start-banner small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.safe-start-banner strong {
+  color: #e4ece9;
+  font-size: 11px;
+}
+
+.safe-start-banner small {
+  color: #91a59d;
+  font-size: 8px;
+}
+
+.safe-start-check-badge,
+.safe-start-banner > button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid #426e60;
+  border-radius: 4px;
+  color: #aaddca;
+  background: #172821;
+  font-size: 8px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.safe-start-banner > button {
+  cursor: pointer;
+}
+
+.safe-start-check-badge.is-pass {
+  border-color: #4b8f76;
+  color: #bcebd9;
+  background: #183027;
+}
+
+.safe-start-banner > button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
 .program-identity {
   display: flex;
   min-width: 0;
@@ -2990,6 +3069,7 @@ select:focus-visible {
   width: 100%;
   height: 100%;
   outline: none;
+  cursor: crosshair;
 }
 
 .tool-position-hud {
@@ -3122,7 +3202,7 @@ select:focus-visible {
   display: grid;
   max-width: min(52%, 360px);
   min-height: 30px;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 7px;
   padding: 5px 6px 5px 8px;
@@ -3167,6 +3247,22 @@ select:focus-visible {
 .preview-selection > button:hover {
   color: #eef3f5;
   background: #27323a;
+}
+
+.preview-selection > button.preview-safe-start {
+  display: inline-flex;
+  width: auto;
+  min-width: 108px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid #3f8069;
+  color: #b9e7d6;
+  background: #172821;
+  font-size: 8px;
+  font-weight: 650;
+  white-space: nowrap;
 }
 
 .program-metrics {
@@ -3605,6 +3701,152 @@ select:focus-visible {
 .recovery-dialog {
   width: min(720px, 100%);
   max-height: min(820px, calc(100vh - 32px));
+}
+
+.safe-start-backdrop {
+  z-index: 74;
+}
+
+.safe-start-dialog {
+  width: min(620px, 100%);
+}
+
+.safe-start-body {
+  display: grid;
+  min-height: 0;
+  gap: 12px;
+  padding: 16px 18px;
+  overflow: auto;
+}
+
+.safe-start-selection {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid #34434b;
+  border-radius: 5px;
+  color: #77d6b3;
+  background: #0d1418;
+}
+
+.safe-start-selection > div {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 3px 9px;
+}
+
+.safe-start-selection span,
+.safe-start-selection small {
+  color: #7f8d95;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.safe-start-selection strong {
+  color: #ffca73;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+}
+
+.safe-start-selection code {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: #dfe6e9;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.safe-start-z {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 10px 12px;
+  border: 1px solid #34434b;
+  border-radius: 5px;
+  background: #131b20;
+}
+
+.safe-start-z > span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.safe-start-z > span:last-child {
+  position: relative;
+  width: 128px;
+}
+
+.safe-start-z strong {
+  color: #e5ebee;
+  font-size: 11px;
+  text-transform: none;
+}
+
+.safe-start-z small {
+  color: #85929a;
+  font-size: 8px;
+  text-transform: none;
+}
+
+.safe-start-z input {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 38px 0 10px;
+  border: 1px solid #466158;
+  border-radius: 4px;
+  color: #edf3f1;
+  background: #0c1316;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.safe-start-z > span:last-child code {
+  position: absolute;
+  top: 12px;
+  right: 9px;
+  color: #75858d;
+  font-size: 8px;
+}
+
+.safe-start-route,
+.safe-start-next {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border-left: 2px solid #4a675d;
+  color: #91aa9f;
+  background: #101b18;
+}
+
+.safe-start-route p {
+  margin: 0;
+  color: #aab6b1;
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.safe-start-next span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.safe-start-next strong {
+  color: #dfe8e4;
+  font-size: 10px;
+}
+
+.safe-start-next small {
+  color: #819089;
+  font-size: 8px;
 }
 
 .recovery-dialog-body {
@@ -7153,8 +7395,20 @@ kbd {
     max-height: calc(100vh - 20px);
   }
 
+  .safe-start-dialog {
+    max-height: calc(100vh - 20px);
+  }
+
   .program-recovery-banner {
     grid-template-columns: 20px minmax(0, 1fr) auto;
+  }
+
+  .safe-start-banner {
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+  }
+
+  .safe-start-check-badge {
+    display: none;
   }
 
   .program-recovery-banner dl {
@@ -7176,6 +7430,11 @@ kbd {
   }
 
   .recovery-dialog footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .safe-start-dialog footer {
     align-items: stretch;
     flex-direction: column;
   }
@@ -7246,8 +7505,24 @@ kbd {
     top: 88px;
   }
 
+  .safe-start-banner {
+    top: 88px;
+  }
+
   .program-actions {
     width: 100%;
+  }
+
+  .preview-selection {
+    top: 42px;
+    right: 8px;
+    left: 8px;
+    max-width: none;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+  }
+
+  .preview-selection > small {
+    display: none;
   }
 
   .program-load {

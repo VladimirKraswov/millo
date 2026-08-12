@@ -54,6 +54,7 @@ import {
   previewFixtureCheckRunningSender,
   previewFixtureFirstCutGateway,
   previewFixtureFirstCutProgram,
+  previewFixtureProgramGateway,
   previewFixtureRecoveryGateway,
   previewFixtureToolChangeSender,
 } from "./features/program/previewFixtureFirstCut";
@@ -880,7 +881,11 @@ export default function App() {
                     ? tauriDryRunGateway
                     : undefined
               }
-              gateway={tauriProgramGateway}
+              gateway={
+                developmentPreviewFixture
+                  ? previewFixtureProgramGateway
+                  : tauriProgramGateway
+              }
               initialProgram={developmentPreviewFixture}
               incomingJob={generatedJob}
               initialRunIntent={

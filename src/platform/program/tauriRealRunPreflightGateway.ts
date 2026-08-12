@@ -5,11 +5,15 @@ import type {
   FirstCutPreparation,
   RealRunPreflightGateway,
   RunPreflightReport,
+  SafeStartPackage,
+  SelectedRunPreparationRequest,
   ToolChangeConfirmation,
 } from "../../shared/realRun";
 import type { SenderSnapshot } from "../../shared/dryRun";
 
 export const tauriRealRunPreflightGateway: RealRunPreflightGateway = {
+  prepareSelectedRun: (request: SelectedRunPreparationRequest) =>
+    invoke<SafeStartPackage>("prepare_selected_program_run", { request }),
   recoveryCandidate: () =>
     invoke<import("../../shared/recovery").ProgramRecoveryCandidate | null>(
       "program_recovery_candidate",

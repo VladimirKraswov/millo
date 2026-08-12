@@ -13,6 +13,39 @@ export interface ProgramExecutionOptions {
   readonly blockDelete: boolean;
 }
 
+export type ProgramWorkCoordinateSystem =
+  | "g54"
+  | "g55"
+  | "g56"
+  | "g57"
+  | "g58"
+  | "g59";
+
+export type ProgramSpindleMode = "off" | "clockwise" | "counterclockwise";
+
+export interface SelectedRunPreparationRequest {
+  readonly request: ProgramParseRequest;
+  readonly selectedSourceLine: number;
+  readonly safeZMm: number;
+  readonly intent: ProgramRunIntent;
+  readonly executionOptions: ProgramExecutionOptions;
+}
+
+export interface SafeStartPackage {
+  readonly originalSourceName: string;
+  readonly selectedSourceLine: number;
+  readonly restartSourceLine: number;
+  readonly restartPosition: { readonly x: number; readonly y: number; readonly z: number };
+  readonly safeZMm: number;
+  readonly minimumSafeZMm: number;
+  readonly replayedExecutableLines: number;
+  readonly remainingExecutableLines: number;
+  readonly workCoordinateSystem: ProgramWorkCoordinateSystem;
+  readonly selectedTool?: number;
+  readonly spindleMode: ProgramSpindleMode;
+  readonly request: ProgramParseRequest;
+}
+
 export const defaultProgramExecutionOptions: ProgramExecutionOptions = {
   optionalStop: false,
   blockDelete: false,
@@ -90,6 +123,9 @@ export interface ToolChangeConfirmation {
 }
 
 export interface RealRunPreflightGateway {
+  prepareSelectedRun(
+    request: SelectedRunPreparationRequest,
+  ): Promise<SafeStartPackage>;
   recoveryCandidate(): Promise<ProgramRecoveryCandidate | null>;
   prepareRecovery(
     request: ProgramRecoveryPreparationRequest,

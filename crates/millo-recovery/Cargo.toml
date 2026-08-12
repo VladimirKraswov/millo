@@ -10,6 +10,7 @@ millo-domain = { path = "../millo-domain" }
 millo-dry-run = { path = "../millo-dry-run" }
 millo-gcode = { path = "../millo-gcode" }
 millo-run = { path = "../millo-run" }
+millo-restart = { path = "../millo-restart" }
 millo-sender = { path = "../millo-sender" }
 millo-storage = { path = "../millo-storage" }
 serde.workspace = true

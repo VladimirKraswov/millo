@@ -111,6 +111,9 @@ export const previewFixturePreflight: RunPreflightReport = {
 };
 
 export const previewFixturePreflightGateway: RealRunPreflightGateway = {
+  prepareSelectedRun: async () => {
+    throw new Error("Blocked fixture cannot prepare a selected-line run");
+  },
   recoveryCandidate: async () => null,
   prepareRecovery: async () => {
     throw new Error("Blocked fixture has no interrupted run");

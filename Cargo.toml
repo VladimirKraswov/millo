@@ -14,6 +14,7 @@ members = [
   "crates/millo-profile",
   "crates/millo-readiness",
   "crates/millo-recovery",
+  "crates/millo-restart",
   "crates/millo-run",
   "crates/millo-safety",
   "crates/millo-settings",

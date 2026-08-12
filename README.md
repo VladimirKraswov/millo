@@ -268,6 +268,17 @@ match the exact source fingerprint, Optional Stop/Block Delete options, reset
 count, and reconnect count. Air run remains available without it as the
 spindle-off physical validation path.
 
+Long jobs also support a safe selected-line repeat. A motion can be selected in
+the line table or directly on the Three.js path. `millo-restart` does not seek
+blindly to that source offset: it rewinds to the latest provable clearance
+rapid, creates an M5/M9-prefixed Safe Z approach, and restores WCS, units,
+distance/arc/feed/plane/motion modes, feed, tool, and spindle state before the
+remaining source. The generated remainder is reparsed as a separate immutable
+program and must earn its own GRBL Check certificate, preflight, one-use
+authorization, and recovery journal. The UI reports both the requested line
+and actual restart line, including how many lead-in blocks will repeat. See
+[ADR 0048](docs/decisions/0048-safe-selected-line-start.md).
+
 The first dense physical Cutting fixture, `millo-solar-guilloche.nc`, completed
 1045/1045 sender commands in 226.5 seconds after a same-session 1045/1045 Check.
 Its earlier line-44 false timeout led to a silence-based response watchdog:
@@ -402,6 +413,7 @@ successful GRBL status exchange.
 | `millo-gcode` | Immutable G-code program, warnings, parser, and preview geometry |
 | `millo-journal` | Bounded crash-diagnostic history with throttled atomic JSON checkpoints |
 | `millo-recovery` | Crash-safe interrupted-job evidence and conservative restart program builder |
+| `millo-restart` | Safe selected-line planner with clearance rewind and modal/WCS/tool restoration |
 | `millo-grbl` | GRBL wire-format parsing and encoding |
 | `millo-transport` | Controller-independent I/O contract |
 | `millo-mock` | Deterministic virtual machine for tests |
