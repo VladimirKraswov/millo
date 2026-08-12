@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import type { ToolChangeConfirmation } from "../../shared/realRun";
 import {
   emptyToolChangeConfirmation,
+  setToolChangeReadiness,
   toolChangeConfirmationProgress,
   type ToolChangeChecklistKey,
 } from "./toolChangeConfirmationModel";
@@ -126,7 +127,7 @@ export function ToolChangeDialog({
             <strong>Sender остановлен перед M6</strong>
             <span>GRBL не получал M6. Продолжение потребует свежий Idle и проверку G54-G59.</span>
           </div>
-          <code>{progress.completed}/{progress.total}</code>
+          <code>M6</code>
         </div>
 
         <div className="tool-change-identity">
@@ -136,34 +137,45 @@ export function ToolChangeDialog({
           <code>L{sourceLine}</code>
         </div>
 
-        <div className="first-cut-checklist">
-          {checklist.map((item) => (
-            <label key={item.key}>
-              <input
-                checked={confirmation[item.key]}
-                disabled={busy}
-                onChange={(event) =>
-                  setConfirmation((current) => ({
-                    ...current,
-                    [item.key]: event.target.checked,
-                  }))
-                }
-                type="checkbox"
-              />
-              <span aria-hidden="true" className="first-cut-checkmark">
-                <Check size={13} />
-              </span>
-              <span>
-                <strong>{item.title}</strong>
-                <small>{item.detail}</small>
-              </span>
-            </label>
-          ))}
+        <div className="first-cut-checklist is-compact">
+          <label>
+            <input
+              checked={progress.complete}
+              disabled={busy}
+              onChange={(event) =>
+                setConfirmation((current) =>
+                  setToolChangeReadiness(current, event.target.checked),
+                )
+              }
+              type="checkbox"
+            />
+            <span aria-hidden="true" className="first-cut-checkmark">
+              <Check size={13} />
+            </span>
+            <span>
+              <strong>Смена инструмента завершена</strong>
+              <small>Инструмент закреплён, Z-ноль и свободный путь проверены, шпиндель запущен</small>
+            </span>
+          </label>
         </div>
+        <details className="confirmation-details">
+          <summary>Что входит в подтверждение</summary>
+          <div>
+            {checklist.map((item) => (
+              <span key={item.key}>
+                <Check aria-hidden="true" size={12} />
+                <span>
+                  <strong>{item.title}</strong>
+                  <small>{item.detail}</small>
+                </span>
+              </span>
+            ))}
+          </div>
+        </details>
 
         {error && <p className="first-cut-error">{error}</p>}
         <footer>
-          <span>Подтверждение привязано к текущей строке и номеру инструмента.</span>
+          <span>Sender повторно проверит Idle и рабочую систему координат.</span>
           <button
             className="first-cut-authorize"
             disabled={!progress.complete || busy}

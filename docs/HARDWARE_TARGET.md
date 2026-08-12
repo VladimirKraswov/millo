@@ -83,12 +83,13 @@ clear report still does not establish physical travel bounds. Stock dimensions,
 cutter, verified XYZ work zero, safe Z, cutting depth/feed, manual spindle state,
 and a reachable power control remain required before a future run authorization.
 
-The implemented launch dialog records the intent-specific confirmations and then
-repeats the whole preflight in the command actor. Its single-use lease is bound
-to the parsed program fingerprint, controller session, and observed positions.
-It expires after 30 seconds and does not itself send G-code. Start consumes it
-once inside the actor. Cutting depth and feed remain properties of the reviewed
-program, not operator-checkbox overrides.
+The implemented launch dialog records one intent-specific readiness decision,
+expands it into every typed physical confirmation, and repeats the whole
+preflight in the command actor. Its single-use lease is bound to the parsed
+program fingerprint, controller session, and observed positions. The same UI
+action immediately consumes it once inside the actor; a failed preflight or
+consume writes no source block. Cutting depth and feed remain properties of the
+reviewed program, not operator-checkbox overrides.
 
 ## Readiness interpretation
 

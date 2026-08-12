@@ -40,6 +40,28 @@ export const firstCutConfirmationKeys = (
   ...(intent === "airRun" ? airRunConfirmationKeys : cuttingConfirmationKeys),
 ];
 
+export const setFirstCutReadiness = (
+  confirmation: FirstCutConfirmation,
+  ready: boolean,
+): FirstCutConfirmation => {
+  const keys = firstCutConfirmationKeys(confirmation.intent);
+  const confirmed = (
+    key: Exclude<keyof FirstCutConfirmation, "intent" | "executionOptions">,
+  ) => ready && keys.includes(key);
+  return {
+    ...confirmation,
+    stockSecured: confirmed("stockSecured"),
+    toolSecured: confirmed("toolSecured"),
+    toolRemoved: confirmed("toolRemoved"),
+    xyzZeroVerified: confirmed("xyzZeroVerified"),
+    safeZVerified: confirmed("safeZVerified"),
+    manualSpindleRunning: confirmed("manualSpindleRunning"),
+    manualSpindleOff: confirmed("manualSpindleOff"),
+    pathClear: confirmed("pathClear"),
+    powerControlReachable: confirmed("powerControlReachable"),
+  };
+};
+
 export interface FirstCutAuthorizationControls {
   readonly completedCount: number;
   readonly totalCount: number;

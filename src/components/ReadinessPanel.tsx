@@ -105,6 +105,23 @@ function localizedCheck(check: ReadinessCheck): { title: string; detail: string 
 }
 
 export function ReadinessPanel({ report }: { report: ReadinessReport }) {
+  const attentionChecks = report.checks.filter((check) => check.level !== "pass");
+  const passedChecks = report.checks.filter((check) => check.level === "pass");
+
+  const renderCheck = (check: ReadinessCheck) => {
+    const copy = localizedCheck(check);
+    return (
+      <div className={`readiness-check is-${check.level}`} key={check.id}>
+        <i aria-hidden="true" />
+        <div>
+          <strong>{copy.title}</strong>
+          <span>{copy.detail}</span>
+          {check.evidence && <code>{check.evidence}</code>}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <section
       className={`readiness-panel ${report.testJogReady ? "is-ready" : "is-blocked"}`}
@@ -121,11 +138,6 @@ export function ReadinessPanel({ report }: { report: ReadinessReport }) {
               ? "Готов к безопасному test jog"
               : "Движение заблокировано"}
           </h3>
-          <div className="profile-facts">
-            {profileFacts(report.profile).map((fact) => (
-              <small key={fact}>{fact}</small>
-            ))}
-          </div>
         </div>
         <dl>
           <div>
@@ -136,28 +148,28 @@ export function ReadinessPanel({ report }: { report: ReadinessReport }) {
             <dt>Cautions</dt>
             <dd>{report.cautionCount}</dd>
           </div>
-          <div>
-            <dt>Probe</dt>
-            <dd>{report.probeReady ? "Ready" : "Locked"}</dd>
-          </div>
         </dl>
       </div>
 
-      <div className="readiness-checks">
-        {report.checks.map((check) => {
-          const copy = localizedCheck(check);
-          return (
-            <div className={`readiness-check is-${check.level}`} key={check.id}>
-              <i aria-hidden="true" />
-              <div>
-                <strong>{copy.title}</strong>
-                <span>{copy.detail}</span>
-                {check.evidence && <code>{check.evidence}</code>}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      {attentionChecks.length > 0 && (
+        <div className="readiness-checks is-attention">
+          {attentionChecks.map(renderCheck)}
+        </div>
+      )}
+      <details className="readiness-details">
+        <summary>
+          Пройденные проверки <span>{passedChecks.length}</span>
+        </summary>
+        <div className="profile-facts">
+          {profileFacts(report.profile).map((fact) => (
+            <small key={fact}>{fact}</small>
+          ))}
+          <small>{report.probeReady ? "Probe готов" : "Probe недоступен"}</small>
+        </div>
+        <div className="readiness-checks">
+          {passedChecks.map(renderCheck)}
+        </div>
+      </details>
     </section>
   );
 }

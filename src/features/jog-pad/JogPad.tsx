@@ -12,21 +12,10 @@ import {
   JOG_PAD_FEED_MM_PER_MIN,
   JOG_PAD_STEPS_MM,
   JogPadInteractor,
+  jogOperatorConfirmation,
   type JogDirection,
   type JogPadStepMm,
 } from "./JogPadInteractor";
-
-const emptyConfirmation: OperatorConfirmation = {
-  spindleOff: false,
-  toolClear: false,
-  powerControlReachable: false,
-};
-
-const checklist = [
-  ["spindleOff", "Шпиндель физически выключен"],
-  ["toolClear", "Инструмент свободен"],
-  ["powerControlReachable", "Питание доступно оператору"],
-] as const;
 
 interface JogPadProps {
   snapshot: ControllerSnapshot;
@@ -46,8 +35,8 @@ export function JogPad({
   onError,
 }: JogPadProps) {
   const interactor = useMemo(() => new JogPadInteractor(gateway), [gateway]);
-  const [confirmation, setConfirmation] =
-    useState<OperatorConfirmation>(emptyConfirmation);
+  const [jogArmed, setJogArmed] = useState(false);
+  const confirmation: OperatorConfirmation = jogOperatorConfirmation(jogArmed);
   const [stepMm, setStepMm] = useState<JogPadStepMm>(0.1);
   const [busy, setBusy] = useState(false);
   const [lastJog, setLastJog] = useState<StepJogReceipt>();
@@ -59,17 +48,16 @@ export function JogPad({
     snapshot.machine.mode === "idle" &&
     snapshot.alarm === undefined &&
     snapshot.resetNotice === undefined;
-  const confirmationComplete = Object.values(confirmation).every(Boolean);
   const canMove =
     desktopRuntime &&
     stableIdle &&
-    confirmationComplete &&
+    jogArmed &&
     !disabled &&
     !busy;
 
   useEffect(() => {
     if (!connected) {
-      setConfirmation(emptyConfirmation);
+      setJogArmed(false);
       setLastJog(undefined);
       setBlockedCount(undefined);
     }
@@ -103,15 +91,6 @@ export function JogPad({
     }
   };
 
-  const updateConfirmation = (
-    key: keyof OperatorConfirmation,
-    checked: boolean,
-  ) => {
-    setConfirmation((current) => ({ ...current, [key]: checked }));
-    setLastJog(undefined);
-    setBlockedCount(undefined);
-  };
-
   const moveButton = (
     axis: JogAxis,
     direction: JogDirection,
@@ -142,19 +121,22 @@ export function JogPad({
         <code>F{JOG_PAD_FEED_MM_PER_MIN}</code>
       </div>
 
-      <div className="operator-checklist">
-        {checklist.map(([key, label]) => (
-          <label key={key}>
-            <input
-              checked={confirmation[key]}
-              disabled={!connected || disabled || busy}
-              onChange={(event) => updateConfirmation(key, event.target.checked)}
-              type="checkbox"
-            />
-            <span>{label}</span>
-          </label>
-        ))}
-      </div>
+      <label className="jog-arm-control">
+        <input
+          checked={jogArmed}
+          disabled={!connected || disabled || busy}
+          onChange={(event) => {
+            setJogArmed(event.target.checked);
+            setLastJog(undefined);
+            setBlockedCount(undefined);
+          }}
+          type="checkbox"
+        />
+        <span>
+          <strong>Разрешить jog</strong>
+          <small>Шпиндель выключен, зона свободна, питание доступно</small>
+        </span>
+      </label>
 
       <div className="jog-step-selector" role="group" aria-label="Шаг jog">
         {JOG_PAD_STEPS_MM.map((value) => (

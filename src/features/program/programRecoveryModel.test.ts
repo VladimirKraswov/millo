@@ -5,6 +5,7 @@ import {
   canPrepareRecovery,
   emptyRecoveryPreparation,
   recoverySafeZDefault,
+  setRecoveryReadiness,
 } from "./programRecoveryModel";
 
 const candidate: ProgramRecoveryCandidate = {
@@ -27,6 +28,16 @@ const candidate: ProgramRecoveryCandidate = {
 };
 
 describe("program recovery model", () => {
+  it("expands the compact UI decision into every backend recovery fact", () => {
+    const confirmed = setRecoveryReadiness(emptyRecoveryPreparation(candidate), true);
+    expect(confirmed.machineReferenceRestored).toBe(true);
+    expect(confirmed.workZeroRestored).toBe(true);
+    expect(confirmed.motionPowerRestored).toBe(true);
+    expect(confirmed.restartPointInspected).toBe(true);
+    expect(confirmed.pathClear).toBe(true);
+    expect(confirmed.powerControlReachable).toBe(true);
+  });
+
   it("defaults clearance above the proven program envelope", () => {
     expect(recoverySafeZDefault(candidate)).toBe(7);
   });

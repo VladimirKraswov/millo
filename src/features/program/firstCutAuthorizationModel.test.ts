@@ -7,6 +7,7 @@ import type {
 import {
   emptyFirstCutConfirmation,
   firstCutAuthorizationControls,
+  setFirstCutReadiness,
 } from "./firstCutAuthorizationModel";
 
 const complete: FirstCutConfirmation = {
@@ -26,6 +27,24 @@ const complete: FirstCutConfirmation = {
 const clearReport = { ready: true } as RunPreflightReport;
 
 describe("firstCutAuthorizationControls", () => {
+  it("expands one operator readiness decision into intent-specific typed facts", () => {
+    const airRun = setFirstCutReadiness(emptyFirstCutConfirmation, true);
+    expect(airRun.toolRemoved).toBe(true);
+    expect(airRun.manualSpindleOff).toBe(true);
+    expect(airRun.stockSecured).toBe(false);
+    expect(firstCutAuthorizationControls(airRun, {
+      report: clearReport,
+      gatewayAvailable: true,
+      busy: false,
+    }).complete).toBe(true);
+
+    const cutting = setFirstCutReadiness({ ...emptyFirstCutConfirmation, intent: "cutting" }, true);
+    expect(cutting.stockSecured).toBe(true);
+    expect(cutting.toolSecured).toBe(true);
+    expect(cutting.manualSpindleRunning).toBe(true);
+    expect(cutting.toolRemoved).toBe(false);
+  });
+
   it("requires the physical confirmations for the selected intent", () => {
     expect(
       firstCutAuthorizationControls(emptyFirstCutConfirmation, {

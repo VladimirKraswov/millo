@@ -1,5 +1,6 @@
 import {
   Box,
+  ChevronDown,
   CircleAlert,
   CircleCheck,
   FileCode2,
@@ -10,6 +11,7 @@ import {
   ScanSearch,
   ShieldAlert,
   ShieldCheck,
+  SlidersHorizontal,
   Square,
   Trash2,
   TriangleAlert,
@@ -169,6 +171,9 @@ export function ProgramWorkspace({
   const [diagnosticView, setDiagnosticView] = useState<
     "lines" | "warnings" | "preflight"
   >("lines");
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(
+    (initialProgram?.warnings.length ?? 0) > 0,
+  );
   const [selectedSourceLine, setSelectedSourceLine] = useState<number>();
   const [realRunReport, setRealRunReport] = useState<RunPreflightReport>();
   const [programRunIntent, setProgramRunIntent] =
@@ -180,8 +185,6 @@ export function ProgramWorkspace({
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [recoveryCandidate, setRecoveryCandidate] =
     useState<ProgramRecoveryCandidate>();
-  const [firstCutPreparation, setFirstCutPreparation] =
-    useState<FirstCutPreparation>();
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [error, setError] = useState<string>();
   const program = loaded?.program;
@@ -258,7 +261,6 @@ export function ProgramWorkspace({
   useEffect(() => {
     if (!realRunTarget || !realRunAvailable) {
       setRealRunReport(undefined);
-      setFirstCutPreparation(undefined);
       setFirstCutOpen(false);
       setToolChangeOpen(false);
     }
@@ -277,12 +279,13 @@ export function ProgramWorkspace({
     setLoading(true);
     setError(undefined);
     try {
-      setLoaded(await loader.load(file));
+      const next = await loader.load(file);
+      setLoaded(next);
       setSender(idleSenderSnapshot);
       setSelectedSourceLine(undefined);
-      setDiagnosticView("lines");
+      setDiagnosticView(next.program.warnings.length > 0 ? "warnings" : "lines");
+      setDiagnosticsOpen(next.program.warnings.length > 0);
       setRealRunReport(undefined);
-      setFirstCutPreparation(undefined);
       setFirstCutOpen(false);
       setToolChangeOpen(false);
     } catch (reason) {
@@ -324,8 +327,8 @@ export function ProgramWorkspace({
       setSender(idleSenderSnapshot);
       setSelectedSourceLine(prepared.restartSourceLine);
       setDiagnosticView("lines");
+      setDiagnosticsOpen(false);
       setRealRunReport(undefined);
-      setFirstCutPreparation(undefined);
       setFirstCutOpen(false);
       setRecoveryCandidate(undefined);
     } catch (reason) {
@@ -374,6 +377,7 @@ export function ProgramWorkspace({
   };
   const startDryRun = () => {
     if (!loaded || !dryRunGateway) return;
+    setDiagnosticsOpen(false);
     void runSenderAction(() =>
       dryRunGateway.start({
         sourceName: loaded.program.sourceName,
@@ -395,7 +399,6 @@ export function ProgramWorkspace({
     value: boolean,
   ) => {
     setRealRunReport(undefined);
-    setFirstCutPreparation(undefined);
     if (key !== "blockDelete" || !loaded) {
       setProgramExecutionOptions((current) => ({ ...current, [key]: value }));
       return;
@@ -439,7 +442,6 @@ export function ProgramWorkspace({
     setPreflightLoading(true);
     setError(undefined);
     setRealRunReport(undefined);
-    setFirstCutPreparation(undefined);
     try {
       const report = await realRunGateway.preflight(
         {
@@ -452,6 +454,7 @@ export function ProgramWorkspace({
       setRealRunReport(report);
       onInspection?.(report.hardware);
       setDiagnosticView("preflight");
+      setDiagnosticsOpen(!report.ready);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -489,6 +492,7 @@ export function ProgramWorkspace({
   };
   const startCheckRun = () => {
     if (!loaded || !realRunGateway) return;
+    setDiagnosticsOpen(false);
     void runSenderAction(() =>
       realRunGateway.startCheck(
         {
@@ -563,8 +567,8 @@ export function ProgramWorkspace({
                 setSender(idleSenderSnapshot);
                 setSelectedSourceLine(undefined);
                 setRealRunReport(undefined);
-                setFirstCutPreparation(undefined);
                 setFirstCutOpen(false);
+                setDiagnosticsOpen(false);
                 setError(undefined);
               }}
               title="Закрыть программу"
@@ -790,7 +794,6 @@ export function ProgramWorkspace({
                     onClick={() => {
                       setProgramRunIntent("airRun");
                       setRealRunReport(undefined);
-                      setFirstCutPreparation(undefined);
                     }}
                     type="button"
                   >
@@ -802,36 +805,11 @@ export function ProgramWorkspace({
                     onClick={() => {
                       setProgramRunIntent("cutting");
                       setRealRunReport(undefined);
-                      setFirstCutPreparation(undefined);
                     }}
                     type="button"
                   >
                     Обработка
                   </button>
-                </div>
-                <div className="program-execution-options">
-                  <label title="M1 Optional Stop">
-                    <input
-                      checked={programExecutionOptions.optionalStop}
-                      disabled={preflightLoading || loading || senderActive}
-                      onChange={(event) =>
-                        void updateExecutionOption("optionalStop", event.target.checked)
-                      }
-                      type="checkbox"
-                    />
-                    <span>M1 Stop</span>
-                  </label>
-                  <label title="Optional Block Delete">
-                    <input
-                      checked={programExecutionOptions.blockDelete}
-                      disabled={preflightLoading || loading || senderActive}
-                      onChange={(event) =>
-                        void updateExecutionOption("blockDelete", event.target.checked)
-                      }
-                      type="checkbox"
-                    />
-                    <span>/ Delete</span>
-                  </label>
                 </div>
                 <div className="real-run-preflight-heading">
                   <div>
@@ -856,15 +834,6 @@ export function ProgramWorkspace({
                   />
                   {reportForProgram ? "Проверить снова" : "Проверить готовность"}
                 </button>
-                <button
-                  disabled={!checkRunAvailable}
-                  onClick={startCheckRun}
-                  title="Проверить файл встроенным режимом GRBL $C без движения"
-                  type="button"
-                >
-                  <ScanSearch aria-hidden="true" size={13} />
-                  GRBL Check
-                </button>
                 {reportForProgram?.ready && (
                   <button
                     className="first-cut-open"
@@ -872,18 +841,57 @@ export function ProgramWorkspace({
                     type="button"
                   >
                     <ShieldCheck aria-hidden="true" size={13} />
-                    {firstCutPreparation ? "Разрешение выпущено" : "Подтвердить запуск"}
+                    Запустить программу
                   </button>
                 )}
                 <small>
-                  {firstCutPreparation
-                    ? `Lease #${firstCutPreparation.authorization.id} · максимум 30 секунд · ожидает Start`
-                    : reportForProgram?.ready
+                  {reportForProgram?.ready
                     ? `${reportForProgram.cautionCount} caution · готов к авторизации`
                     : reportForProgram
                       ? `${reportForProgram.blockerCount} blocker · ${reportForProgram.cautionCount} caution`
                       : "Проверка файла и свежего состояния GRBL"}
                 </small>
+                <details className="execution-settings">
+                  <summary>
+                    <SlidersHorizontal aria-hidden="true" size={13} />
+                    <span>Дополнительные параметры</span>
+                    <ChevronDown aria-hidden="true" size={13} />
+                  </summary>
+                  <div className="program-execution-options">
+                    <label title="M1 Optional Stop">
+                      <input
+                        checked={programExecutionOptions.optionalStop}
+                        disabled={preflightLoading || loading || senderActive}
+                        onChange={(event) =>
+                          void updateExecutionOption("optionalStop", event.target.checked)
+                        }
+                        type="checkbox"
+                      />
+                      <span>M1 Optional Stop</span>
+                    </label>
+                    <label title="Optional Block Delete">
+                      <input
+                        checked={programExecutionOptions.blockDelete}
+                        disabled={preflightLoading || loading || senderActive}
+                        onChange={(event) =>
+                          void updateExecutionOption("blockDelete", event.target.checked)
+                        }
+                        type="checkbox"
+                      />
+                      <span>/ Block Delete</span>
+                    </label>
+                  </div>
+                  <button
+                    className="check-run-action"
+                    disabled={!checkRunAvailable}
+                    onClick={startCheckRun}
+                    title="Проверить файл встроенным режимом GRBL $C без движения"
+                    type="button"
+                  >
+                    <ScanSearch aria-hidden="true" size={13} />
+                    Проверить через GRBL $C
+                  </button>
+                </details>
               </div>
             ) : (
               <div className={`dry-run-card is-${displayedSender.state}`}>
@@ -969,11 +977,26 @@ export function ProgramWorkspace({
                 )}
               </div>
             )}
-            <div
-              aria-label="Program diagnostics view"
-              className={`program-diagnostic-tabs${realRunTarget ? " has-preflight" : ""}`}
-              role="tablist"
+            <details
+              className="program-inspection"
+              onToggle={(event) => setDiagnosticsOpen(event.currentTarget.open)}
+              open={diagnosticsOpen}
             >
+              <summary>
+                <span>Программа и диагностика</span>
+                <code>
+                  {program.lines.length} строк
+                  {program.warnings.length > 0
+                    ? ` · ${program.warnings.length} предупреждений`
+                    : ""}
+                </code>
+                <ChevronDown aria-hidden="true" size={13} />
+              </summary>
+              <div
+                aria-label="Program diagnostics view"
+                className={`program-diagnostic-tabs${realRunTarget ? " has-preflight" : ""}`}
+                role="tablist"
+              >
               <button
                 aria-controls="program-lines-panel"
                 aria-selected={diagnosticView === "lines"}
@@ -1007,8 +1030,8 @@ export function ProgramWorkspace({
                   Preflight <strong>{reportForProgram?.blockerCount ?? "--"}</strong>
                 </button>
               )}
-            </div>
-            <div
+              </div>
+              <div
               aria-labelledby="program-lines-tab"
               className="program-lines-panel"
               hidden={diagnosticView !== "lines"}
@@ -1025,8 +1048,8 @@ export function ProgramWorkspace({
                 }
                 selectedSourceLine={selectedSourceLine}
               />
-            </div>
-            <div
+              </div>
+              <div
               aria-labelledby="program-warnings-tab"
               className="program-warnings"
               hidden={diagnosticView !== "warnings"}
@@ -1057,9 +1080,9 @@ export function ProgramWorkspace({
                   </button>
                 ))
               )}
-            </div>
-            {realRunTarget && (
-              <div
+              </div>
+              {realRunTarget && (
+                <div
                 aria-labelledby="program-preflight-tab"
                 className="real-run-checks"
                 hidden={diagnosticView !== "preflight"}
@@ -1103,8 +1126,9 @@ export function ProgramWorkspace({
                     </div>
                   );
                 })}
-              </div>
-            )}
+                </div>
+              )}
+            </details>
           </aside>
         </div>
       ) : senderActive && dryRunGateway ? (
@@ -1142,7 +1166,6 @@ export function ProgramWorkspace({
         intent={programRunIntent}
         onAuthorize={authorizeFirstCut}
         onAuthorized={(preparation) => {
-          setFirstCutPreparation(preparation);
           setRealRunReport(preparation.report);
           onInspection?.(preparation.report.hardware);
         }}
@@ -1150,7 +1173,7 @@ export function ProgramWorkspace({
         onStart={startProgramRun}
         onStarted={(snapshot) => {
           setSender(snapshot);
-          setFirstCutPreparation(undefined);
+          setDiagnosticsOpen(false);
           setRecoveryCandidate(undefined);
         }}
         open={firstCutOpen}

@@ -2,7 +2,6 @@ import {
   Check,
   CircleAlert,
   Power,
-  ShieldCheck,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -18,6 +17,7 @@ import type { SenderSnapshot } from "../../shared/dryRun";
 import {
   emptyFirstCutConfirmation,
   firstCutAuthorizationControls,
+  setFirstCutReadiness,
   type FirstCutAuthorizationControls,
 } from "./firstCutAuthorizationModel";
 
@@ -122,14 +122,12 @@ export function FirstCutAuthorizationDialog({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [preparation, setPreparation] = useState<FirstCutPreparation>();
 
   useEffect(() => {
     if (!open) return;
     setConfirmation({ ...emptyFirstCutConfirmation, intent, executionOptions });
     setBusy(false);
     setError(undefined);
-    setPreparation(undefined);
   }, [executionOptions, open, intent, report?.programFingerprint]);
 
   if (!open) return null;
@@ -139,30 +137,16 @@ export function FirstCutAuthorizationDialog({
     { report, gatewayAvailable: true, busy },
   );
 
-  const authorize = async () => {
+  const authorizeAndStart = async () => {
     if (!controls.canAuthorize) return;
     setBusy(true);
     setError(undefined);
     try {
       const next = await onAuthorize(confirmation);
-      setPreparation(next);
       onAuthorized(next);
-    } catch (reason) {
-      setError(String(reason));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const start = async () => {
-    if (!preparation || busy) return;
-    setBusy(true);
-    setError(undefined);
-    try {
-      onStarted(await onStart(preparation));
+      onStarted(await onStart(next));
       onClose();
     } catch (reason) {
-      setPreparation(undefined);
       setError(String(reason));
     } finally {
       setBusy(false);
@@ -198,90 +182,74 @@ export function FirstCutAuthorizationDialog({
           </button>
         </header>
 
-        {preparation ? (
-          <div className="first-cut-authorized" role="status">
-            <ShieldCheck aria-hidden="true" size={30} />
-            <strong>Одноразовое разрешение выпущено</strong>
-            <span>
-              Authorization #{preparation.authorization.id} ·{" "}
-              {Math.round(preparation.authorization.expiresInMs / 1_000)} секунд
-            </span>
-            <p>
-              Оно привязано к этой программе и текущей позиции. Любое движение,
-              reset, reconnect или истечение времени отменит его.
-            </p>
-            <small>G-code ещё не отправлялся. Следующее нажатие атомарно потребит разрешение.</small>
-            <button
-              className="program-run-start"
-              disabled={busy}
-              onClick={() => void start()}
-              type="button"
-            >
-              <Power aria-hidden="true" size={15} />
-              {busy
-                ? "Запуск..."
-                : preparation.authorization.intent === "airRun"
-                  ? "Начать Air run"
-                  : "Начать обработку"}
-            </button>
+        <div className="first-cut-intro">
+          <CircleAlert aria-hidden="true" size={18} />
+          <div>
+            <strong>Последняя проверка перед движением</strong>
+            <span>Контроллер будет повторно проверен автоматически.</span>
           </div>
-        ) : (
-          <>
-            <div className="first-cut-intro">
-              <CircleAlert aria-hidden="true" size={18} />
-              <div>
-                <strong>Проверьте станок непосредственно перед запуском</strong>
+          <code>{intent === "airRun" ? "AIR" : "CUT"}</code>
+        </div>
+        <div className="program-run-mode-summary">
+          <span>Режим</span>
+          <strong>{intent === "airRun" ? "Air run" : "Обработка с инструментом"}</strong>
+        </div>
+        <div className="first-cut-checklist is-compact">
+          <label>
+            <input
+              checked={controls.complete}
+              disabled={busy}
+              onChange={(event) =>
+                setConfirmation((current) =>
+                  setFirstCutReadiness(current, event.target.checked),
+                )
+              }
+              type="checkbox"
+            />
+            <span aria-hidden="true" className="first-cut-checkmark">
+              <Check size={13} />
+            </span>
+            <span>
+              <strong>Станок и рабочая зона готовы</strong>
+              <small>
+                {intent === "airRun"
+                  ? "Инструмент снят, шпиндель выключен, ноль и траектория проверены"
+                  : "Заготовка и инструмент закреплены, шпиндель запущен, ноль и траектория проверены"}
+              </small>
+            </span>
+          </label>
+        </div>
+        <details className="confirmation-details">
+          <summary>Что входит в подтверждение</summary>
+          <div>
+            {checklist.map((item) => (
+              <span key={item.key}>
+                <Check aria-hidden="true" size={12} />
                 <span>
-                  После подтверждения backend повторит полный serial preflight.
+                  <strong>{item.title}</strong>
+                  <small>{item.detail}</small>
                 </span>
-              </div>
-              <code>{controls.completedCount}/{controls.totalCount}</code>
-            </div>
-            <div className="program-run-mode-summary">
-              <span>Режим</span>
-              <strong>{intent === "airRun" ? "Air run" : "Обработка с инструментом"}</strong>
-            </div>
-            <div className="first-cut-checklist">
-              {checklist.map((item) => (
-                <label key={item.key}>
-                  <input
-                    checked={confirmation[item.key]}
-                    disabled={busy}
-                    onChange={(event) =>
-                      setConfirmation((current) => ({
-                        ...current,
-                        [item.key]: event.target.checked,
-                      }))
-                    }
-                    type="checkbox"
-                  />
-                  <span aria-hidden="true" className="first-cut-checkmark">
-                    <Check size={13} />
-                  </span>
-                  <span>
-                    <strong>{item.title}</strong>
-                    <small>{item.detail}</small>
-                  </span>
-                </label>
-              ))}
-            </div>
-            {error && <p className="first-cut-error">{error}</p>}
-            <footer>
-              <span>
-                Разрешение одноразовое и действует 30 секунд. Движения сейчас не будет.
               </span>
-              <button
-                className="first-cut-authorize"
-                disabled={!controls.canAuthorize}
-                onClick={() => void authorize()}
-                type="button"
-              >
-                <Power aria-hidden="true" size={15} />
-                {busy ? "Повторная проверка..." : "Авторизовать запуск"}
-              </button>
-            </footer>
-          </>
-        )}
+            ))}
+          </div>
+        </details>
+        {error && <p className="first-cut-error">{error}</p>}
+        <footer>
+          <span>Разрешение создаётся и потребляется одним действием.</span>
+          <button
+            className="first-cut-authorize"
+            disabled={!controls.canAuthorize}
+            onClick={() => void authorizeAndStart()}
+            type="button"
+          >
+            <Power aria-hidden="true" size={15} />
+            {busy
+              ? "Проверка и запуск..."
+              : intent === "airRun"
+                ? "Проверить и начать Air run"
+                : "Проверить и начать обработку"}
+          </button>
+        </footer>
       </section>
     </div>
   );

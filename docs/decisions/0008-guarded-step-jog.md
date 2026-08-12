@@ -48,8 +48,9 @@ GRBL protocol reference:
 ## Consequences
 
 - A single authorization can cause at most one port write.
-- Every operator click requires a fresh physical checklist and controller
-  inspection, making this deliberately slow but auditable first-motion path.
+- The operator arms jog with one explicit readiness decision. The UI maps it to
+  the unchanged spindle-off, tool-clear, and reachable-power backend facts;
+  every movement click still creates a fresh authorization and inspection.
 - Backend limits remain effective if IPC is called without the React UI.
 - `ok` records command acceptance, not physical completion. Status polling is
   authoritative for machine mode and final coordinates.

@@ -63,9 +63,11 @@ metric absolute mode, the recorded WCS, Z clearance, XY approach, Z return,
 tool/spindle state when applicable, and the parser modal checkpoint before
 replaying original source from the anchor. It performs no movement itself.
 
-The operator must confirm restored machine reference, restored G54-G59 work
-zero, restored motion power and checked physical position, inspected restart
-point, clear Safe-Z/replay path, and reachable power control. The generated
+The operator makes one explicit recovery-readiness decision; the UI expands it
+into restored machine reference, restored G54-G59 work zero, restored motion
+power and checked physical position, inspected restart point, clear
+Safe-Z/replay path, and reachable power control. The full list remains visible
+on demand and the backend contract is unchanged. The generated
 program then passes normal preview, GRBL Check, preflight, and one-use launch
 authorization. Dismissal is bound to the recovery record ID. Completion hides
 the record; failure/cancellation retains it. An

@@ -18,6 +18,7 @@ import type {
 import {
   canPrepareRecovery,
   emptyRecoveryPreparation,
+  setRecoveryReadiness,
   type RecoveryConfirmationKey,
 } from "./programRecoveryModel";
 
@@ -124,6 +125,10 @@ export function ProgramRecoveryDialog({
   }, [candidate, open]);
 
   if (!open) return null;
+  const readinessConfirmed = checklist.every((item) => request[item.key]);
+  const continuityLabel = continuityOptions.find(
+    (option) => option.value === request.continuity,
+  )?.title;
 
   const prepare = async () => {
     if (!canPrepareRecovery(candidate, request, busy)) return;
@@ -221,50 +226,47 @@ export function ProgramRecoveryDialog({
 
           {candidate.ready ? (
             <>
-              <div className="recovery-warning">
-                <CircleAlert aria-hidden="true" size={17} />
-                <p>
-                  GRBL может питаться от USB и продолжать увеличивать{" "}
-                  <code>Ln:</code>, даже если драйверы двигателей обесточены. Поэтому
-                  тип сбоя выбирается явно; при сомнении Millo начинает программу с
-                  начала.
-                </p>
-              </div>
-              <fieldset className="recovery-continuity">
-                <legend>Что оставалось под питанием</legend>
-                {continuityOptions.map((option) => {
-                  const checkpointOption =
-                    option.value !== "motionPowerLostOrUnknown";
-                  const disabled =
-                    busy ||
-                    (checkpointOption && !candidate.checkpointRestartAvailable);
-                  return (
-                    <label key={option.value}>
-                      <input
-                        checked={request.continuity === option.value}
-                        disabled={disabled}
-                        name="recovery-continuity"
-                        onChange={() =>
-                          setRequest((current) => ({
-                            ...current,
-                            continuity: option.value,
-                          }))
-                        }
-                        type="radio"
-                        value={option.value}
-                      />
-                      <span>
-                        <strong>{option.title}</strong>
-                        <small>
-                          {disabled && checkpointOption
-                            ? "Недоступно: прошивка не сохранила физический Ln."
-                            : option.detail}
-                        </small>
-                      </span>
-                    </label>
-                  );
-                })}
-              </fieldset>
+              <details className="recovery-continuity-disclosure">
+                <summary>
+                  <span>Сценарий: {continuityLabel}</span>
+                  <small>Изменить</small>
+                </summary>
+                <fieldset className="recovery-continuity">
+                  <legend>Что оставалось под питанием</legend>
+                  {continuityOptions.map((option) => {
+                    const checkpointOption =
+                      option.value !== "motionPowerLostOrUnknown";
+                    const disabled =
+                      busy ||
+                      (checkpointOption && !candidate.checkpointRestartAvailable);
+                    return (
+                      <label key={option.value}>
+                        <input
+                          checked={request.continuity === option.value}
+                          disabled={disabled}
+                          name="recovery-continuity"
+                          onChange={() =>
+                            setRequest((current) => ({
+                              ...current,
+                              continuity: option.value,
+                            }))
+                          }
+                          type="radio"
+                          value={option.value}
+                        />
+                        <span>
+                          <strong>{option.title}</strong>
+                          <small>
+                            {disabled && checkpointOption
+                              ? "Недоступно: прошивка не сохранила физический Ln."
+                              : option.detail}
+                          </small>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </fieldset>
+              </details>
               <label className="recovery-safe-z">
                 <span>
                   <strong>Safe Z</strong>
@@ -289,30 +291,52 @@ export function ProgramRecoveryDialog({
                   <code>mm</code>
                 </span>
               </label>
-              <div className="recovery-checklist">
-                {checklist.map((item) => (
-                  <label key={item.key}>
-                    <input
-                      checked={request[item.key]}
-                      disabled={busy}
-                      onChange={(event) =>
-                        setRequest((current) => ({
-                          ...current,
-                          [item.key]: event.target.checked,
-                        }))
-                      }
-                      type="checkbox"
-                    />
-                    <span aria-hidden="true">
-                      <Check size={13} />
-                    </span>
-                    <span>
-                      <strong>{item.title}</strong>
-                      <small>{item.detail}</small>
-                    </span>
-                  </label>
-                ))}
+              <div className="recovery-checklist is-compact">
+                <label>
+                  <input
+                    checked={readinessConfirmed}
+                    disabled={busy}
+                    onChange={(event) =>
+                      setRequest((current) =>
+                        setRecoveryReadiness(current, event.target.checked),
+                      )
+                    }
+                    type="checkbox"
+                  />
+                  <span aria-hidden="true">
+                    <Check size={13} />
+                  </span>
+                  <span>
+                    <strong>Станок готов к восстановлению</strong>
+                    <small>Координаты, питание, точка возврата и свободный маршрут проверены</small>
+                  </span>
+                </label>
               </div>
+              <details className="confirmation-details recovery-confirmation-details">
+                <summary>Что входит в подтверждение</summary>
+                <div>
+                  {checklist.map((item) => (
+                    <span key={item.key}>
+                      <Check aria-hidden="true" size={12} />
+                      <span>
+                        <strong>{item.title}</strong>
+                        <small>{item.detail}</small>
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              </details>
+              <details className="recovery-explanation">
+                <summary>Почему по умолчанию выбран полный restart</summary>
+                <div>
+                  <CircleAlert aria-hidden="true" size={17} />
+                  <p>
+                    GRBL может питаться от USB и увеличивать <code>Ln:</code>, пока
+                    драйверы двигателей обесточены. При сомнении Millo начинает
+                    программу с начала.
+                  </p>
+                </div>
+              </details>
             </>
           ) : (
             <div className="recovery-warning is-blocked">

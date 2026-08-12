@@ -5,7 +5,11 @@ import type {
   JogPadStepOutcome,
   OperatorConfirmation,
 } from "../../shared/machine";
-import { JogPadInteractor, type JogPadStepMm } from "./JogPadInteractor";
+import {
+  JogPadInteractor,
+  jogOperatorConfirmation,
+  type JogPadStepMm,
+} from "./JogPadInteractor";
 
 const confirmation: OperatorConfirmation = {
   spindleOff: true,
@@ -41,6 +45,15 @@ const outcome: JogPadStepOutcome = {
 };
 
 describe("JogPadInteractor", () => {
+  it("expands the single operator arm into the typed backend facts", () => {
+    expect(jogOperatorConfirmation(true)).toEqual(confirmation);
+    expect(jogOperatorConfirmation(false)).toEqual({
+      spindleOff: false,
+      toolClear: false,
+      powerControlReachable: false,
+    });
+  });
+
   it("turns one press into one signed fixed-step gateway call", async () => {
     const jogPadStep = vi.fn(async () => outcome);
     const interactor = new JogPadInteractor({ jogPadStep });

@@ -2,10 +2,21 @@ import { describe, expect, it } from "vitest";
 
 import {
   emptyToolChangeConfirmation,
+  setToolChangeReadiness,
   toolChangeConfirmationProgress,
 } from "./toolChangeConfirmationModel";
 
 describe("tool change confirmation", () => {
+  it("expands one operator decision into every resume-critical fact", () => {
+    const confirmation = setToolChangeReadiness(
+      emptyToolChangeConfirmation(18, 4),
+      true,
+    );
+    expect(toolChangeConfirmationProgress(confirmation).complete).toBe(true);
+    expect(confirmation.sourceLine).toBe(18);
+    expect(confirmation.requestedTool).toBe(4);
+  });
+
   it("binds the operator facts to the active source line and tool", () => {
     const confirmation = emptyToolChangeConfirmation(18, 4);
 

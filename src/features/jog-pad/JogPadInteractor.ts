@@ -11,6 +11,14 @@ export const JOG_PAD_FEED_MM_PER_MIN = 10;
 export type JogPadStepMm = (typeof JOG_PAD_STEPS_MM)[number];
 export type JogDirection = -1 | 1;
 
+export const jogOperatorConfirmation = (
+  ready: boolean,
+): OperatorConfirmation => ({
+  spindleOff: ready,
+  toolClear: ready,
+  powerControlReachable: ready,
+});
+
 export class JogPadInteractor {
   private inFlight = false;
 

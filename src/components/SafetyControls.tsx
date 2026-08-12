@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChevronDown, Pause, RotateCcw, Square } from "lucide-react";
 
 import {
   cancelJog,
@@ -132,8 +133,8 @@ export function SafetyControls({
     <section className="safety-controls" aria-labelledby="safety-title">
       <div className="safety-heading">
         <div>
-          <span>Realtime safety</span>
-          <strong id="safety-title">Safety controls</strong>
+          <span>Управление</span>
+          <strong id="safety-title">Движение и остановка</strong>
         </div>
         <small>{stableIdle ? "Idle" : snapshot.machine.reportedMode}</small>
       </div>
@@ -145,17 +146,18 @@ export function SafetyControls({
           onClick={() => void sendHold()}
           type="button"
         >
-          <span aria-hidden="true">II</span>
-          Feed Hold
+          <Pause aria-hidden="true" size={14} />
+          Hold
         </button>
         <button
-          className="reset-action"
+          className={`reset-action${challenge ? " is-confirming" : ""}`}
           disabled={!desktopRuntime || !connected || busy}
-          onClick={() => void beginReset()}
+          onClick={() => void (challenge ? executeReset() : beginReset())}
+          title={challenge ? "Повторное нажатие выполнит Ctrl-X Reset" : "Soft Reset"}
           type="button"
         >
-          <span aria-hidden="true">↻</span>
-          Soft Reset
+          <RotateCcw aria-hidden="true" size={14} />
+          {challenge ? `Подтвердить · ${challengeSeconds}с` : "Reset"}
         </button>
         {snapshot.machine.mode === "jog" && (
           <button
@@ -164,35 +166,11 @@ export function SafetyControls({
             onClick={() => void sendJogCancel()}
             type="button"
           >
-            <span aria-hidden="true">■</span>
-            Jog Cancel
+            <Square aria-hidden="true" size={13} />
+            Отменить jog
           </button>
         )}
       </div>
-
-      {challenge && (
-        <div className="reset-confirmation" role="alert">
-          <div>
-            <strong>Подтвердить Ctrl-X Reset</strong>
-            <span>{challengeSeconds} сек</span>
-          </div>
-          <div>
-            <button disabled={busy} onClick={() => void executeReset()} type="button">
-              Подтвердить
-            </button>
-            <button
-              disabled={busy}
-              onClick={() => {
-                setChallenge(undefined);
-                setChallengeDeadline(undefined);
-              }}
-              type="button"
-            >
-              Отмена
-            </button>
-          </div>
-        </div>
-      )}
 
       <UiExtensionSlot
         context={{
@@ -208,20 +186,26 @@ export function SafetyControls({
         registry={extensionRegistry}
         slot={uiSlots.controlMachine}
       />
-      <UiExtensionSlot
-        context={{
-          snapshot,
-          desktopRuntime,
-          controlsDisabled: busy || holdPending || !machineBound,
-          machineCommands: machineGateway,
-          workCoordinates: workCoordinateGateway,
-          updateSnapshot: onSnapshot,
-          updateInspection: onInspection,
-          reportError: onError,
-        }}
-        registry={extensionRegistry}
-        slot={uiSlots.controlCoordinates}
-      />
+      <details className="control-disclosure coordinate-disclosure">
+        <summary>
+          <span>Рабочий ноль</span>
+          <ChevronDown aria-hidden="true" size={14} />
+        </summary>
+        <UiExtensionSlot
+          context={{
+            snapshot,
+            desktopRuntime,
+            controlsDisabled: busy || holdPending || !machineBound,
+            machineCommands: machineGateway,
+            workCoordinates: workCoordinateGateway,
+            updateSnapshot: onSnapshot,
+            updateInspection: onInspection,
+            reportError: onError,
+          }}
+          registry={extensionRegistry}
+          slot={uiSlots.controlCoordinates}
+        />
+      </details>
     </section>
   );
 }

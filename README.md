@@ -52,8 +52,9 @@ lifecycle tests without hardware.
 The first safety controls are now available without opening a G-code endpoint.
 Feed Hold sends the GRBL realtime `!` byte when the controller reports active
 motion. Soft Reset sends `Ctrl-X` only after a short-lived actor-issued challenge
-is confirmed. Test-jog preflight requires three physical operator confirmations,
-runs a fresh Inspector transaction, and can issue a 15-second single-use backend
+is confirmed. The jog UI asks for one explicit readiness decision and expands it
+into the three typed physical facts required by test-jog preflight. The actor
+runs a fresh Inspector transaction and can issue a 15-second single-use backend
 authorization. The low-level typed motion use case consumes that authorization
 inside the same Rust actor and emits one `$J=G91 G21` step on exactly one XYZ
 axis. Distance is limited to `0.01..1.00 mm` and feed to `10..100 mm/min` in the
@@ -122,15 +123,15 @@ the operator separately confirms the physical spindle workflow. Coolant,
 probing, coordinate mutation, and machine/reference-coordinate motion remain
 blocked until their own hardware-aware workflows exist. The report
 links blockers to exact source lines and keeps unhomed travel, manual spindle,
-and physical setup visible as cautions. A clear report opens a separate
-mode-specific checklist. Air run requires a removed tool and stopped spindle;
-cutting requires secured stock and tool plus a running manually controlled
-spindle. Both require verified XYZ work zero, safe Z, clear path, and immediately
-reachable power control. Submission does not trust the displayed report: the
-actor repeats the complete serial preflight and then issues a 30-second,
-program-bound, position-bound, single-use lease. A separate Start action reparses
-the original file, refreshes status, and atomically consumes that lease before
-the first line can be dispatched. The run contract also
+and physical setup visible as cautions. A clear report opens one mode-specific
+readiness decision; its disclosure lists every physical fact behind that
+decision. Air run still requires a removed tool and stopped spindle; cutting
+still requires secured stock and tool plus a running manually controlled
+spindle. Both still require verified XYZ work zero, safe Z, clear path, and
+immediately reachable power control. Submission does not trust the displayed
+report: one UI action repeats the complete serial preflight, issues a 30-second
+program/position-bound lease, reparses the source, refreshes status, and
+atomically consumes the lease before the first line can be dispatched. The run contract also
 requires explicit `G21`, `G90`, either `G93` or `G94`, and an explicit
 `G17/G18/G19` before arcs, so preview cannot silently rely on ambient controller
 modes.
@@ -138,9 +139,9 @@ modes.
 Cutting programs may contain an isolated `M6`. Millo sends and acknowledges its
 bounded `Tn` selection, drains the sender FIFO, and then stops at a host-only
 tool-change barrier; `M6` itself never reaches GRBL. The operator dialog is
-bound to the exact source line and tool and requires the replacement tool,
-Z zero, safe Z, remaining path, running manual spindle, and reachable power to
-be confirmed. The actor then repeats fresh `Idle`, Inspector, G54-G59, and
+bound to the exact source line and tool. One readiness decision expands into
+the unchanged typed facts for replacement tool, Z zero, safe Z, remaining path,
+running manual spindle, and reachable power. The actor then repeats fresh `Idle`, Inspector, G54-G59, and
 final `Idle` verification. Ordinary Resume cannot bypass this workflow, and
 Air runs continue to reject `M6`.
 
@@ -280,7 +281,14 @@ npm run tauri dev
 The Vite-only preview (`npm run dev`) renders the interface, but controller
 commands are enabled only inside Tauri.
 
-The mock panel can inject reset, alarm, timeout, and link-drop scenarios. Alarm
+The operator shell uses progressive disclosure: connection, controller state,
+coordinates, preview, run actions, Hold/Reset, and jog stay primary. Port tuning,
+passed readiness evidence, G-code rows, optional stream semantics, lifecycle
+metrics, and Mock scenarios open only on demand. Parser warnings and failed
+preflight evidence open their diagnostics automatically. This hierarchy is
+recorded in [ADR 0039](docs/decisions/0039-progressive-operator-shell.md).
+
+The Mock diagnostics disclosure can inject reset, alarm, timeout, and link-drop scenarios. Alarm
 remains active until `Clear alarm`; two consecutive silent polls exercise the
 automatic recovery path.
 
@@ -372,6 +380,8 @@ Certified Check evidence and the bounded run journal are recorded in
 [ADR 0037](docs/decisions/0037-certified-check-and-run-journal.md).
 Crash-safe guided restart is recorded in
 [ADR 0038](docs/decisions/0038-guided-power-loss-recovery.md).
+The progressive operator shell and compact confirmation mapping are recorded in
+[ADR 0039](docs/decisions/0039-progressive-operator-shell.md).
 The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).

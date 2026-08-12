@@ -28,6 +28,21 @@ export const emptyToolChangeConfirmation = (
   powerControlReachable: false,
 });
 
+export const setToolChangeReadiness = (
+  confirmation: ToolChangeConfirmation,
+  ready: boolean,
+): ToolChangeConfirmation => {
+  return {
+    ...confirmation,
+    toolSecured: ready,
+    zZeroVerified: ready,
+    safeZVerified: ready,
+    pathClear: ready,
+    manualSpindleRunning: ready,
+    powerControlReachable: ready,
+  };
+};
+
 export const toolChangeConfirmationProgress = (
   confirmation: ToolChangeConfirmation,
 ): { readonly completed: number; readonly total: number; readonly complete: boolean } => {

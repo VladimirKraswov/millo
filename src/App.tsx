@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { ChevronDown, PlugZap, RefreshCw, Unplug } from "lucide-react";
 
 import { bootstrapPluginHost } from "./app/bootstrapPluginHost";
 import {
@@ -834,7 +835,7 @@ export default function App() {
 
         <aside className="control-panel" aria-label="Connection controls">
           <div className="panel-title">
-            <span>Transport</span>
+            <span>Подключение</span>
             <strong>{displayedTransport.label}</strong>
             <small>
               {selectedMachine
@@ -843,190 +844,209 @@ export default function App() {
             </small>
           </div>
 
-          <SafetyControls
-            desktopRuntime={desktopRuntime}
-            extensionRegistry={pluginHost.uiRegistry}
-            machineGateway={tauriMachineCommandGateway}
-            workCoordinateGateway={tauriWorkCoordinateGateway}
-            onError={setUiError}
-            onInspection={setInspection}
-            onSnapshot={pluginHost.machineState.publish}
-            snapshot={snapshot}
-            machineBound={machineBound}
-          />
-
-          <div className="transport-config">
-            <label className="transport-filter">
-              <input
-                checked={likelyGrblOnly}
-                disabled={controlsBusy || discovering}
-                onChange={(event) => setLikelyGrblOnly(event.target.checked)}
-                type="checkbox"
-              />
-              <span>Только вероятные GRBL</span>
-            </label>
-            <label htmlFor="transport-select">Device</label>
-            <div className="transport-select-row">
-              <select
-                id="transport-select"
-                disabled={
-                  transportLocked || controlsBusy || discovering || !desktopRuntime
-                }
-                onChange={(event) => setSelectedTransportId(event.target.value)}
-                value={selectedTransport.id}
-              >
-                {visibleTransports.map((transport) => (
-                  <option key={transport.id} value={transport.id}>
-                    {transport.label}
-                  </option>
-                ))}
-              </select>
+          <div className="connection-primary">
+            {hasConnection ? (
+              <>
+                <div className={`connection-inline is-${snapshot.connection}`}>
+                  <i aria-hidden="true" />
+                  <span>{connectionLabels[snapshot.connection]}</span>
+                </div>
+                <button
+                  aria-label="Отключить"
+                  className="disconnect-action"
+                  disabled={controlsBusy || !canDisconnect}
+                  onClick={() => void disconnectController()}
+                  title="Отключить"
+                  type="button"
+                >
+                  <Unplug aria-hidden="true" size={15} />
+                </button>
+              </>
+            ) : (
               <button
-                aria-label="Обновить список портов"
-                disabled={
-                  transportLocked || controlsBusy || discovering || !desktopRuntime
-                }
-                onClick={() => void discoverTransports()}
-                title="Обновить список портов"
+                className="primary-action"
+                disabled={controlsBusy || !desktopRuntime}
+                onClick={() => void connectSelectedTransport()}
                 type="button"
               >
-                ↻
+                <PlugZap aria-hidden="true" size={15} />
+                Подключить
               </button>
-            </div>
-            <small>
-              {selectedTransport.detail}
-              {selectedTransport.kind === "serial" &&
-                selectedTransport.matchReason &&
-                ` · ${selectedTransport.matchReason}`}
-            </small>
-
-            {selectedTransport.kind === "serial" && (
-              <label className="baud-field" htmlFor="baud-rate">
-                <span>Baud rate</span>
-                <select
-                  id="baud-rate"
-                  disabled={transportLocked || controlsBusy}
-                  onChange={(event) => setBaudRate(Number(event.target.value))}
-                  value={baudRate}
-                >
-                  {baudRates.map((rate) => (
-                    <option key={rate} value={rate}>
-                      {rate.toLocaleString("en-US", { useGrouping: false })}
-                    </option>
-                  ))}
-                </select>
-              </label>
             )}
           </div>
 
-          <div className="lifecycle-metrics">
-            <div>
-              <span>Polling</span>
-              <strong>{snapshot.pollIntervalMs || "--"} ms</strong>
-            </div>
-            <div>
-              <span>Timeout</span>
-              <strong>{snapshot.statusTimeoutMs || "--"} ms</strong>
-            </div>
-            <div>
-              <span>Failures</span>
-              <strong>
-                {snapshot.consecutiveFailures}/{snapshot.failureThreshold || "--"}
-              </strong>
-            </div>
-            <div>
-              <span>Reconnects</span>
-              <strong>{snapshot.reconnectCount}</strong>
-            </div>
-          </div>
-
-          <div className="actions">
-            <button
-              className="primary-action"
-              disabled={
-                controlsBusy || hasConnection || !desktopRuntime
-              }
-              onClick={() => void connectSelectedTransport()}
-              type="button"
-            >
-              {hasConnection ? connectionLabels[snapshot.connection] : "Подключить"}
-            </button>
-            <button
-              disabled={controlsBusy || !isConnected}
-              onClick={() => void runAction(refreshStatus)}
-              type="button"
-            >
-              Запросить статус
-              <kbd>?</kbd>
-            </button>
-            <button
-              disabled={controlsBusy || !canDisconnect}
-              onClick={() => void disconnectController()}
-              type="button"
-            >
-              Отключить
-            </button>
-          </div>
-
-          {displayedTransport.kind === "mock" && (
-            <div className="mock-scenarios">
-              <span>Mock scenarios</span>
-              <div>
-                <button
-                  disabled={controlsBusy || !isConnected}
-                  onClick={() => void runMockAction(triggerMockRun)}
-                  type="button"
-                >
-                  Run state
-                </button>
-                <button
-                  disabled={controlsBusy || !isConnected}
-                  onClick={() => void runMockAction(triggerMockReset)}
-                  type="button"
-                >
-                  Reset banner
-                </button>
-                <button
-                  disabled={controlsBusy || !isConnected}
-                  onClick={() => void runMockAction(() => triggerMockAlarm(3))}
-                  type="button"
-                >
-                  ALARM:3
-                </button>
-                <button
-                  disabled={controlsBusy || !isConnected || !snapshot.alarm}
-                  onClick={() => void runMockAction(clearMockAlarm)}
-                  type="button"
-                >
-                  Clear alarm
-                </button>
-                <button
-                  disabled={controlsBusy || !isConnected}
-                  onClick={() => void runMockAction(triggerMockTimeout)}
-                  type="button"
-                >
-                  Timeout ×2
-                </button>
-                <button
-                  disabled={controlsBusy || !isConnected}
-                  onClick={() => void runMockAction(triggerMockDisconnect)}
-                  type="button"
-                >
-                  Link drop
-                </button>
-              </div>
-            </div>
+          {hasConnection && (
+            <SafetyControls
+              desktopRuntime={desktopRuntime}
+              extensionRegistry={pluginHost.uiRegistry}
+              machineGateway={tauriMachineCommandGateway}
+              workCoordinateGateway={tauriWorkCoordinateGateway}
+              onError={setUiError}
+              onInspection={setInspection}
+              onSnapshot={pluginHost.machineState.publish}
+              snapshot={snapshot}
+              machineBound={machineBound}
+            />
           )}
 
-          <div className="pipeline" aria-label="Active data path">
-            <span>{displayedTransport.kind === "serial" ? "Serial" : "Mock"}</span>
-            <i />
-            <span>GRBL</span>
-            <i />
-            <span>State</span>
-            <i />
-            <span>UI</span>
-          </div>
+          <details className="control-disclosure" open={!hasConnection}>
+            <summary>
+              <span>Параметры подключения</span>
+              <ChevronDown aria-hidden="true" size={14} />
+            </summary>
+            <div className="transport-config">
+              <label className="transport-filter">
+                <input
+                  checked={likelyGrblOnly}
+                  disabled={controlsBusy || discovering}
+                  onChange={(event) => setLikelyGrblOnly(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Только вероятные GRBL</span>
+              </label>
+              <label htmlFor="transport-select">Устройство</label>
+              <div className="transport-select-row">
+                <select
+                  id="transport-select"
+                  disabled={
+                    transportLocked || controlsBusy || discovering || !desktopRuntime
+                  }
+                  onChange={(event) => setSelectedTransportId(event.target.value)}
+                  value={selectedTransport.id}
+                >
+                  {visibleTransports.map((transport) => (
+                    <option key={transport.id} value={transport.id}>
+                      {transport.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  aria-label="Обновить список портов"
+                  disabled={
+                    transportLocked || controlsBusy || discovering || !desktopRuntime
+                  }
+                  onClick={() => void discoverTransports()}
+                  title="Обновить список портов"
+                  type="button"
+                >
+                  <RefreshCw aria-hidden="true" size={15} />
+                </button>
+              </div>
+              <small>
+                {selectedTransport.detail}
+                {selectedTransport.kind === "serial" &&
+                  selectedTransport.matchReason &&
+                  ` · ${selectedTransport.matchReason}`}
+              </small>
+
+              {selectedTransport.kind === "serial" && (
+                <label className="baud-field" htmlFor="baud-rate">
+                  <span>Baud rate</span>
+                  <select
+                    id="baud-rate"
+                    disabled={transportLocked || controlsBusy}
+                    onChange={(event) => setBaudRate(Number(event.target.value))}
+                    value={baudRate}
+                  >
+                    {baudRates.map((rate) => (
+                      <option key={rate} value={rate}>
+                        {rate.toLocaleString("en-US", { useGrouping: false })}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+          </details>
+
+          {hasConnection && (
+            <details className="control-disclosure diagnostics-disclosure">
+              <summary>
+                <span>Диагностика соединения</span>
+                <ChevronDown aria-hidden="true" size={14} />
+              </summary>
+              <div className="lifecycle-metrics">
+                <div>
+                  <span>Polling</span>
+                  <strong>{snapshot.pollIntervalMs || "--"} ms</strong>
+                </div>
+                <div>
+                  <span>Timeout</span>
+                  <strong>{snapshot.statusTimeoutMs || "--"} ms</strong>
+                </div>
+                <div>
+                  <span>Failures</span>
+                  <strong>
+                    {snapshot.consecutiveFailures}/{snapshot.failureThreshold || "--"}
+                  </strong>
+                </div>
+                <div>
+                  <span>Reconnects</span>
+                  <strong>{snapshot.reconnectCount}</strong>
+                </div>
+              </div>
+              <button
+                className="status-request-action"
+                disabled={controlsBusy || !isConnected}
+                onClick={() => void runAction(refreshStatus)}
+                type="button"
+              >
+                <RefreshCw aria-hidden="true" size={14} />
+                Запросить статус
+                <kbd>?</kbd>
+              </button>
+
+              {displayedTransport.kind === "mock" && (
+                <div className="mock-scenarios">
+                  <span>Mock scenarios</span>
+                  <div>
+                    <button
+                      disabled={controlsBusy || !isConnected}
+                      onClick={() => void runMockAction(triggerMockRun)}
+                      type="button"
+                    >
+                      Run state
+                    </button>
+                    <button
+                      disabled={controlsBusy || !isConnected}
+                      onClick={() => void runMockAction(triggerMockReset)}
+                      type="button"
+                    >
+                      Reset banner
+                    </button>
+                    <button
+                      disabled={controlsBusy || !isConnected}
+                      onClick={() => void runMockAction(() => triggerMockAlarm(3))}
+                      type="button"
+                    >
+                      ALARM:3
+                    </button>
+                    <button
+                      disabled={controlsBusy || !isConnected || !snapshot.alarm}
+                      onClick={() => void runMockAction(clearMockAlarm)}
+                      type="button"
+                    >
+                      Clear alarm
+                    </button>
+                    <button
+                      disabled={controlsBusy || !isConnected}
+                      onClick={() => void runMockAction(triggerMockTimeout)}
+                      type="button"
+                    >
+                      Timeout ×2
+                    </button>
+                    <button
+                      disabled={controlsBusy || !isConnected}
+                      onClick={() => void runMockAction(triggerMockDisconnect)}
+                      type="button"
+                    >
+                      Link drop
+                    </button>
+                  </div>
+                </div>
+              )}
+            </details>
+          )}
 
           {!desktopRuntime && (
             <p className="runtime-note">Управление доступно в окне Tauri.</p>
@@ -1034,12 +1054,6 @@ export default function App() {
           {displayedError && <p className="error-note">{displayedError}</p>}
         </aside>
       </main>
-
-      <footer className="statusbar">
-        <span>Protocol: GRBL status v1.1</span>
-        <span>Poll: #{snapshot.pollSequence}</span>
-        <span>Core: Rust</span>
-      </footer>
 
       <MachineSettingsDialog
         onClose={() => setSettingsOpen(false)}

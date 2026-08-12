@@ -8,6 +8,15 @@ export type RecoveryConfirmationKey = Exclude<
   "recoveryId" | "safeZMm" | "continuity"
 >;
 
+export const recoveryConfirmationKeys: readonly RecoveryConfirmationKey[] = [
+  "machineReferenceRestored",
+  "workZeroRestored",
+  "motionPowerRestored",
+  "restartPointInspected",
+  "pathClear",
+  "powerControlReachable",
+];
+
 export const recoverySafeZDefault = (
   candidate: ProgramRecoveryCandidate,
 ): number => Math.ceil(((candidate.minimumSafeZMm ?? 0) + 2) * 10) / 10;
@@ -25,6 +34,21 @@ export const emptyRecoveryPreparation = (
   pathClear: false,
   powerControlReachable: false,
 });
+
+export const setRecoveryReadiness = (
+  request: ProgramRecoveryPreparationRequest,
+  ready: boolean,
+): ProgramRecoveryPreparationRequest => {
+  return {
+    ...request,
+    machineReferenceRestored: ready,
+    workZeroRestored: ready,
+    motionPowerRestored: ready,
+    restartPointInspected: ready,
+    pathClear: ready,
+    powerControlReachable: ready,
+  };
+};
 
 export const canPrepareRecovery = (
   candidate: ProgramRecoveryCandidate,
