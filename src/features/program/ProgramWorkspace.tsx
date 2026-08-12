@@ -66,6 +66,7 @@ import {
   senderTiming,
 } from "./dryRunReadModel";
 import { realRunPreflightControls } from "./realRunPreflightReadModel";
+import { senderActionLayout } from "./operatorLayoutModel";
 import type { PreviewView } from "./ToolpathPreview";
 
 const ToolpathPreview = lazy(async () => {
@@ -124,7 +125,9 @@ function SenderTiming({ sender }: { readonly sender: SenderSnapshot }) {
         <code>
           {heartbeat.lastLine} · {heartbeat.age}
         </code>
-        {heartbeat.shutdownAcknowledged && <strong>M5 · M9 OK</strong>}
+        <strong className={heartbeat.shutdownAcknowledged ? undefined : "is-placeholder"}>
+          M5 · M9 OK
+        </strong>
       </div>
     </>
   );
@@ -520,6 +523,27 @@ export function ProgramWorkspace({
     programLoaded: loaded !== undefined,
     serialAvailable: realRunAvailable,
   });
+  const mockActions = senderActionLayout(displayedSender.state);
+  const mockStatus = displayedSenderFailure
+    ? displayedSenderFailure
+    : !dryRunAvailable
+      ? "Подключите Mock GRBL в состоянии Idle"
+      : displayedSender.state === "completed"
+        ? "Все строки подтверждены Mock GRBL"
+        : displayedSender.state === "cancelled"
+          ? "Sender остановлен оператором"
+          : "Каждая строка сопоставляется с ответом контроллера";
+
+  const runMockPrimaryAction = () => {
+    if (!dryRunGateway) return;
+    if (mockActions.primary === "start") startDryRun();
+    if (mockActions.primary === "pause") {
+      void runSenderAction(dryRunGateway.pause);
+    }
+    if (mockActions.primary === "resume") {
+      void runSenderAction(dryRunGateway.resume);
+    }
+  };
 
   useEffect(() => {
     if ((programRunVisible || checkRunVisible) && sender.currentSourceLine !== undefined) {
@@ -834,16 +858,17 @@ export function ProgramWorkspace({
                   />
                   {reportForProgram ? "Проверить снова" : "Проверить готовность"}
                 </button>
-                {reportForProgram?.ready && (
-                  <button
-                    className="first-cut-open"
-                    onClick={() => setFirstCutOpen(true)}
-                    type="button"
-                  >
-                    <ShieldCheck aria-hidden="true" size={13} />
-                    Запустить программу
-                  </button>
-                )}
+                <button
+                  aria-hidden={!reportForProgram?.ready}
+                  className={`first-cut-open${reportForProgram?.ready ? "" : " is-placeholder"}`}
+                  disabled={!reportForProgram?.ready}
+                  onClick={() => setFirstCutOpen(true)}
+                  tabIndex={reportForProgram?.ready ? 0 : -1}
+                  type="button"
+                >
+                  <ShieldCheck aria-hidden="true" size={13} />
+                  Запустить программу
+                </button>
                 <small>
                   {reportForProgram?.ready
                     ? `${reportForProgram.cautionCount} caution · готов к авторизации`
@@ -924,57 +949,54 @@ export function ProgramWorkspace({
                 </div>
                 <SenderTiming sender={displayedSender} />
                 <div className="dry-run-actions">
-                  {!senderActive && displayedSender.state !== "running" && (
-                    <button
-                      disabled={!dryRunGateway || !controls.canStart}
-                      onClick={startDryRun}
-                      title={
-                        dryRunAvailable
-                          ? "Запустить на Mock GRBL"
-                          : "Подключите Mock GRBL в состоянии Idle"
-                      }
-                      type="button"
-                    >
-                      <Play aria-hidden="true" size={13} />
-                      Mock dry run
-                    </button>
-                  )}
-                  {displayedSender.state === "running" && dryRunGateway && (
-                    <button
-                      onClick={() => void runSenderAction(dryRunGateway.pause)}
-                      type="button"
-                    >
+                  <button
+                    aria-hidden={mockActions.primary === "none"}
+                    className={mockActions.primary === "none" ? "is-placeholder" : undefined}
+                    disabled={
+                      !dryRunGateway ||
+                      mockActions.primary === "none" ||
+                      (mockActions.primary === "start" && !controls.canStart) ||
+                      (mockActions.primary === "resume" && !controls.canResume)
+                    }
+                    onClick={runMockPrimaryAction}
+                    tabIndex={mockActions.primary === "none" ? -1 : 0}
+                    title={
+                      mockActions.primary === "start" && !dryRunAvailable
+                        ? "Подключите Mock GRBL в состоянии Idle"
+                        : undefined
+                    }
+                    type="button"
+                  >
+                    {mockActions.primary === "pause" ? (
                       <Pause aria-hidden="true" size={13} />
-                      Pause
-                    </button>
-                  )}
-                  {displayedSender.state === "paused" && dryRunGateway && (
-                    <button
-                      disabled={!controls.canResume}
-                      onClick={() => void runSenderAction(dryRunGateway.resume)}
-                      type="button"
-                    >
+                    ) : (
                       <Play aria-hidden="true" size={13} />
-                      Resume
-                    </button>
-                  )}
-                  {senderActive && dryRunGateway && (
-                    <button
-                      className="is-cancel"
-                      onClick={() => void runSenderAction(dryRunGateway.cancel)}
-                      type="button"
-                    >
-                      <X aria-hidden="true" size={13} />
-                      Cancel
-                    </button>
-                  )}
+                    )}
+                    {mockActions.primary === "pause"
+                      ? "Pause"
+                      : mockActions.primary === "resume"
+                        ? "Resume"
+                        : "Mock dry run"}
+                  </button>
+                  <button
+                    aria-hidden={!mockActions.cancelVisible}
+                    className={`is-cancel${mockActions.cancelVisible ? "" : " is-placeholder"}`}
+                    disabled={!dryRunGateway || !mockActions.cancelVisible}
+                    onClick={() => {
+                      if (dryRunGateway && mockActions.cancelVisible) {
+                        void runSenderAction(dryRunGateway.cancel);
+                      }
+                    }}
+                    tabIndex={mockActions.cancelVisible ? 0 : -1}
+                    type="button"
+                  >
+                    <X aria-hidden="true" size={13} />
+                    Cancel
+                  </button>
                 </div>
-                {!dryRunAvailable && (
-                  <small>Подключите Mock GRBL в состоянии Idle</small>
-                )}
-                {displayedSenderFailure && (
-                  <small className="is-error">{displayedSenderFailure}</small>
-                )}
+                <small className={displayedSenderFailure ? "is-error" : undefined}>
+                  {mockStatus}
+                </small>
               </div>
             )}
             <details

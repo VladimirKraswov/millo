@@ -342,7 +342,12 @@ export function MachineProfiles({
                 </div>
               )}
 
-              {formError && <p className="machine-form-error">{formError}</p>}
+              <p
+                aria-hidden={!formError}
+                className={`machine-form-error${formError ? "" : " is-empty"}`}
+              >
+                {formError ?? "Нет ошибок"}
+              </p>
             </div>
 
             <footer>

@@ -109,14 +109,27 @@ const developmentFirstCutFixture =
   developmentFixture === "tool-change" ||
   developmentFixture === "recovery" ||
   developmentFixture === "air-square";
-const developmentJogFixture = developmentFixture === "jog";
+const developmentJogFixture = ["jog", "jog-active", "alarm", "reset"].includes(
+  developmentFixture ?? "",
+);
+const developmentMachineMode =
+  developmentFixture === "jog-active"
+    ? "jog"
+    : developmentFixture === "alarm"
+      ? "alarm"
+      : "idle";
 const developmentJogSnapshot: ControllerSnapshot = {
   ...emptySnapshot,
   connection: "connected",
   machine: {
     ...emptySnapshot.machine,
-    mode: "idle",
-    reportedMode: "Idle",
+    mode: developmentMachineMode,
+    reportedMode:
+      developmentMachineMode === "jog"
+        ? "Jog"
+        : developmentMachineMode === "alarm"
+          ? "Alarm"
+          : "Idle",
     machinePosition: { x: 152.4, y: 91.2, z: -4.75 },
     workPosition: { x: 12.4, y: 8.2, z: 5.25 },
     feedRate: 0,
@@ -126,6 +139,14 @@ const developmentJogSnapshot: ControllerSnapshot = {
   pollIntervalMs: 250,
   statusTimeoutMs: 500,
   failureThreshold: 2,
+  alarm:
+    developmentFixture === "alarm"
+      ? { code: 3, message: "Reset while in motion" }
+      : undefined,
+  resetNotice:
+    developmentFixture === "reset"
+      ? { banner: "Grbl 1.1f ['$' for help]", version: "1.1f", sequence: 4 }
+      : undefined,
 };
 const developmentProfileFixture: MachineProfileState = {
   profiles: [
@@ -620,36 +641,37 @@ export default function App() {
                   : ""}
               </h1>
             </div>
-            <span className={`mode-indicator is-${snapshot.machine.mode}`}>
-              {snapshot.machine.mode}
-            </span>
+            <div className="machine-heading-status">
+              {snapshot.alarm ? (
+                <div className="operator-notice alarm-notice" role="alert">
+                  <div>
+                    <span>Alarm</span>
+                    <strong>
+                      {snapshot.alarm.code !== undefined
+                        ? `ALARM:${snapshot.alarm.code}`
+                        : snapshot.alarm.message}
+                    </strong>
+                  </div>
+                  <small>Проверить станок</small>
+                </div>
+              ) : snapshot.resetNotice ? (
+                <div className="operator-notice reset-notice" role="status">
+                  <div>
+                    <span>Controller reset</span>
+                    <strong>{snapshot.resetNotice.banner}</strong>
+                  </div>
+                  <button type="button" onClick={() => void runAction(acknowledgeReset)}>
+                    OK
+                  </button>
+                </div>
+              ) : (
+                <div aria-hidden="true" className="operator-notice is-empty" />
+              )}
+              <span className={`mode-indicator is-${snapshot.machine.mode}`}>
+                {snapshot.machine.mode}
+              </span>
+            </div>
           </div>
-
-          {snapshot.resetNotice && (
-            <div className="operator-notice reset-notice" role="status">
-              <div>
-                <span>Controller reset</span>
-                <strong>{snapshot.resetNotice.banner}</strong>
-              </div>
-              <button type="button" onClick={() => void runAction(acknowledgeReset)}>
-                Подтвердить
-              </button>
-            </div>
-          )}
-
-          {snapshot.alarm && (
-            <div className="operator-notice alarm-notice" role="alert">
-              <div>
-                <span>Alarm</span>
-                <strong>
-                  {snapshot.alarm.code !== undefined
-                    ? `ALARM:${snapshot.alarm.code}`
-                    : snapshot.alarm.message}
-                </strong>
-              </div>
-              <small>Требуется проверка состояния станка</small>
-            </div>
-          )}
 
           <div className="readout-section">
             <div className="readout-label">

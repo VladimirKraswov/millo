@@ -348,7 +348,12 @@ export function ProgramRecoveryDialog({
             </div>
           )}
 
-          {error && <p className="first-cut-error">{error}</p>}
+          <p
+            aria-hidden={!error}
+            className={`first-cut-error${error ? "" : " is-empty"}`}
+          >
+            {error ?? "Нет ошибок"}
+          </p>
         </div>
         <footer>
           <button disabled={busy} onClick={() => void dismiss()} type="button">

@@ -4283,7 +4283,9 @@ mod tests {
     async fn physical_sender_parses_interleaved_status_while_waiting_for_ok() {
         let transport = MockTransport::default();
         let control = transport.control();
-        control.queue_program_delay(12);
+        // Keep the acknowledgement pending long enough to observe a poll frame
+        // deterministically, even when the test runner is under light load.
+        control.queue_program_delay(80);
         let (arbiter, worker) = CommandArbiter::new_with_execution_target(
             Box::new(transport),
             ControllerConfig {

@@ -233,7 +233,12 @@ export function FirstCutAuthorizationDialog({
             ))}
           </div>
         </details>
-        {error && <p className="first-cut-error">{error}</p>}
+        <p
+          aria-hidden={!error}
+          className={`first-cut-error${error ? "" : " is-empty"}`}
+        >
+          {error ?? "Нет ошибок"}
+        </p>
         <footer>
           <span>Разрешение создаётся и потребляется одним действием.</span>
           <button

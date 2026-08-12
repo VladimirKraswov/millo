@@ -173,7 +173,12 @@ export function ToolChangeDialog({
           </div>
         </details>
 
-        {error && <p className="first-cut-error">{error}</p>}
+        <p
+          aria-hidden={!error}
+          className={`first-cut-error${error ? "" : " is-empty"}`}
+        >
+          {error ?? "Нет ошибок"}
+        </p>
         <footer>
           <span>Sender повторно проверит Idle и рабочую систему координат.</span>
           <button

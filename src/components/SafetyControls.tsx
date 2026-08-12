@@ -163,19 +163,22 @@ export function SafetyControls({
           type="button"
         >
           <RotateCcw aria-hidden="true" size={14} />
-          {challenge ? `Подтвердить · ${challengeSeconds}с` : "Reset"}
+          <span>{challenge ? "Ещё раз" : "Reset"}</span>
+          <code className={`reset-countdown${challenge ? "" : " is-empty"}`}>
+            {challengeSeconds}s
+          </code>
         </button>
-        {snapshot.machine.mode === "jog" && (
-          <button
-            className="jog-cancel-action"
-            disabled={!desktopRuntime || busy}
-            onClick={() => void sendJogCancel()}
-            type="button"
-          >
-            <Square aria-hidden="true" size={13} />
-            Отменить jog
-          </button>
-        )}
+        <button
+          aria-label="Отменить jog"
+          className="jog-cancel-action"
+          disabled={!desktopRuntime || busy || snapshot.machine.mode !== "jog"}
+          onClick={() => void sendJogCancel()}
+          title={snapshot.machine.mode === "jog" ? "Отменить текущее jog-движение" : "Jog не выполняется"}
+          type="button"
+        >
+          <Square aria-hidden="true" size={13} />
+          <span>Cancel</span>
+        </button>
       </div>
 
       <UiExtensionSlot

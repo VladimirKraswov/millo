@@ -434,12 +434,18 @@ select:focus-visible {
 }
 
 .machine-form-error {
+  min-height: 39px;
   margin: 0;
   padding: 9px 10px;
   border-left: 2px solid #d65e5e;
   color: #e8a0a0;
   background: #2b1819;
   font-size: 11px;
+}
+
+.machine-form-error.is-empty,
+.first-cut-error.is-empty {
+  visibility: hidden;
 }
 
 .machine-dialog footer {
@@ -605,6 +611,14 @@ select:focus-visible {
   font-size: 10px;
 }
 
+.autosave-icon-slot {
+  display: grid;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+  place-items: center;
+}
+
 .autosave-state.is-saved,
 .setting-write-state.is-saved {
   color: #77d6b3;
@@ -712,6 +726,10 @@ select:focus-visible {
   background: #251d14;
   font-size: 10px;
   line-height: 15px;
+}
+
+.controller-write-warning.is-empty {
+  visibility: hidden;
 }
 
 .settings-groups {
@@ -837,11 +855,8 @@ select:focus-visible {
   color: #d7b179;
 }
 
-.setting-error {
-  grid-column: 2 / -1;
+.setting-row > span small.is-error {
   color: #ef8585;
-  font-size: 9px;
-  line-height: 13px;
 }
 
 .settings-history {
@@ -1135,6 +1150,15 @@ select:focus-visible {
   border-bottom: 1px solid #27323a;
 }
 
+.machine-heading-status {
+  display: grid;
+  width: min(470px, 64%);
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 76px;
+  align-items: center;
+  gap: 10px;
+}
+
 .section-heading > div,
 .panel-title {
   display: flex;
@@ -1186,12 +1210,19 @@ select:focus-visible {
 
 .operator-notice {
   display: flex;
+  height: 42px;
+  min-width: 0;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  min-height: 62px;
-  padding: 10px 22px;
-  border-bottom: 1px solid #27323a;
+  gap: 10px;
+  padding: 6px 9px;
+  overflow: hidden;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+}
+
+.operator-notice.is-empty {
+  visibility: hidden;
 }
 
 .operator-notice > div {
@@ -1203,22 +1234,28 @@ select:focus-visible {
 
 .operator-notice span,
 .operator-notice small {
-  font-size: 10px;
+  overflow: hidden;
+  font-size: 7px;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .operator-notice strong {
   overflow: hidden;
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
+  font-size: 9px;
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .operator-notice button {
+  width: 30px;
+  height: 30px;
   min-height: 30px;
-  padding: 0 10px;
+  flex: 0 0 30px;
+  padding: 0;
   border: 1px solid currentColor;
   border-radius: 4px;
   color: inherit;
@@ -1237,6 +1274,7 @@ select:focus-visible {
 }
 
 .alarm-notice > small {
+  max-width: 86px;
   color: #ca7e7e;
   text-align: right;
 }
@@ -1309,6 +1347,7 @@ select:focus-visible {
 }
 
 .program-workspace {
+  position: relative;
   display: flex;
   height: 100%;
   min-height: 0;
@@ -1328,8 +1367,13 @@ select:focus-visible {
 }
 
 .program-recovery-banner {
+  position: absolute;
+  z-index: 8;
+  top: 48px;
+  right: 0;
+  left: 0;
   display: grid;
-  min-height: 66px;
+  height: 66px;
   grid-template-columns: 22px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 12px;
@@ -1337,6 +1381,7 @@ select:focus-visible {
   border-bottom: 1px solid #765d32;
   color: #e4b765;
   background: #201b12;
+  box-shadow: 0 8px 18px #05090c80;
 }
 
 .program-recovery-banner.is-blocked {
@@ -1724,32 +1769,6 @@ select:focus-visible {
   background: #10171b;
 }
 
-.dry-run-card.is-idle {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  padding-top: 8px;
-  padding-bottom: 8px;
-}
-
-.dry-run-card.is-idle .dry-run-heading {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.dry-run-card.is-idle .dry-run-heading > code,
-.dry-run-card.is-idle .dry-run-progress,
-.dry-run-card.is-idle .dry-run-line,
-.dry-run-card.is-idle > small {
-  display: none;
-}
-
-.dry-run-card.is-idle .dry-run-actions {
-  grid-column: 2;
-  grid-row: 1;
-}
-
 .dry-run-heading,
 .dry-run-line,
 .dry-run-actions {
@@ -1861,12 +1880,16 @@ select:focus-visible {
 }
 
 .sender-heartbeat strong {
+  min-width: 56px;
   color: #77d6b3;
   font-size: 7px;
   white-space: nowrap;
 }
 
 .dry-run-actions {
+  display: grid;
+  min-height: 28px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 
@@ -1884,6 +1907,18 @@ select:focus-visible {
   font-size: 9px;
   font-weight: 600;
   cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.program-run-card .dry-run-actions button {
+  grid-column: 1 / -1;
+}
+
+.is-placeholder {
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .dry-run-actions button.is-cancel {
@@ -2006,6 +2041,10 @@ select:focus-visible {
   border-color: #477965;
   color: #bfe9d8;
   background: #183025;
+}
+
+.real-run-preflight > button.first-cut-open.is-placeholder {
+  visibility: hidden;
 }
 
 .first-cut-backdrop {
@@ -2727,6 +2766,7 @@ select:focus-visible {
 }
 
 .first-cut-error {
+  min-height: 32px;
   margin: 0;
   padding: 9px 18px;
   border-top: 1px solid #673b3e;
@@ -3144,12 +3184,18 @@ button.real-run-check:hover {
 }
 
 .program-error {
-  flex: 0 0 auto;
+  position: absolute;
+  z-index: 12;
+  right: 10px;
+  bottom: 10px;
+  left: 10px;
   margin: 0;
   padding: 7px 12px;
-  border-top: 1px solid #6d373a;
+  border: 1px solid #6d373a;
+  border-radius: 4px;
   color: #ee9696;
   background: #281719;
+  box-shadow: 0 8px 24px #05090ca6;
   font-size: 9px;
 }
 
@@ -3713,10 +3759,12 @@ button.real-run-check:hover {
 }
 
 .control-panel {
+  position: relative;
   display: flex;
   flex-direction: column;
   overflow: auto;
   padding: 16px;
+  scrollbar-gutter: stable;
 }
 
 .panel-title {
@@ -3781,14 +3829,15 @@ button.real-run-check:hover {
 
 .safety-actions {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px;
 }
 
 .safety-actions button {
+  position: relative;
   display: flex;
+  height: 38px;
   min-width: 0;
-  min-height: 38px;
   align-items: center;
   justify-content: center;
   gap: 7px;
@@ -3800,11 +3849,14 @@ button.real-run-check:hover {
   cursor: pointer;
   font-size: 10px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
-.safety-actions button span {
+.safety-actions button > span {
+  overflow: hidden;
   font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 12px;
+  font-size: 9px;
+  text-overflow: ellipsis;
 }
 
 .safety-actions .hold-action:not(:disabled) {
@@ -3825,14 +3877,25 @@ button.real-run-check:hover {
   background: #6c2a30;
 }
 
-.safety-actions .jog-cancel-action {
-  grid-column: 1 / -1;
-}
-
 .safety-actions .jog-cancel-action:not(:disabled) {
   border-color: #a87334;
   color: #ffbd6a;
   background: #271f16;
+}
+
+.reset-countdown {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  min-width: 20px;
+  color: #ffd0d0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 6px;
+  text-align: right;
+}
+
+.reset-countdown.is-empty {
+  visibility: hidden;
 }
 
 .safety-actions button:disabled {
@@ -4605,11 +4668,6 @@ kbd {
     border-bottom: 0;
   }
 
-  .operator-notice {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
   .inspector-content,
   .inspector-registers {
     grid-template-columns: 1fr;
@@ -4622,9 +4680,6 @@ kbd {
     border-bottom: 1px solid #29353d;
   }
 
-  .alarm-notice > small {
-    text-align: left;
-  }
 }
 
 @media (max-width: 1120px) {
@@ -4642,6 +4697,28 @@ kbd {
 }
 
 @media (max-width: 700px) {
+  .section-heading {
+    gap: 8px;
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .machine-heading-status {
+    width: min(260px, 72%);
+    grid-template-columns: minmax(0, 1fr) 64px;
+    gap: 6px;
+  }
+
+  .mode-indicator {
+    min-width: 64px;
+    padding-right: 5px;
+    padding-left: 5px;
+  }
+
+  .alarm-notice > small {
+    display: none;
+  }
+
   .machine-switcher {
     grid-template-columns: 22px minmax(100px, 1fr) 30px 30px;
   }
@@ -4762,6 +4839,10 @@ kbd {
     align-items: flex-start;
     flex-direction: column;
     justify-content: center;
+  }
+
+  .program-recovery-banner {
+    top: 88px;
   }
 
   .program-actions {

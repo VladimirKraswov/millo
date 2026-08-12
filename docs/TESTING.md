@@ -15,6 +15,14 @@ jog-pad suite verifies one signed bounded gateway call per press, rejects values
 outside the technical envelope before IPC, scales presets to the machine, and
 rejects a concurrent press while the first call is unresolved.
 
+Operator-layout tests keep transient controller state from moving primary
+controls. Safety controls render fixed Hold, Reset, and Cancel slots in both
+Idle and Jog. Sender tests map every state to one primary slot and one cancel
+slot. Browser fixtures compare element bounding boxes across Idle, Jog, Alarm,
+and reset; the accepted delta for the controller heading, coordinate readout,
+workbench tabs, safety actions, jog pad, and coordinate disclosure is exactly
+zero pixels.
+
 The work-zero feature suite rejects an unconfirmed request before the gateway
 and delegates only a typed X/Y/Z request. Registry tests also verify that the
 core panel occupies the separate `control.coordinates` slot.

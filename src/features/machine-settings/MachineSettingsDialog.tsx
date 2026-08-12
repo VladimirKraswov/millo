@@ -308,7 +308,7 @@ export function MachineSettingsDialog({
           {view === "local" && localDraft && (
             <section className="local-machine-settings">
               <div className={`autosave-state is-${localStatus}`}>
-                {statusIcon(localStatus)}
+                <span className="autosave-icon-slot">{statusIcon(localStatus)}</span>
                 <span>Локальные данные сохраняются автоматически</span>
               </div>
               <label className="machine-name-field">
@@ -419,12 +419,13 @@ export function MachineSettingsDialog({
                       <span>Разрешить запись в GRBL</span>
                     </label>
                   </div>
-                  {!controllerEditing && (
-                    <div className="controller-write-warning">
-                      <ShieldAlert aria-hidden="true" size={17} />
-                      <span>Поля доступны только после явного разрешения. Каждая запись проверяется повторным `$$`.</span>
-                    </div>
-                  )}
+                  <div
+                    aria-hidden={controllerEditing}
+                    className={`controller-write-warning${controllerEditing ? " is-empty" : ""}`}
+                  >
+                    <ShieldAlert aria-hidden="true" size={17} />
+                    <span>Поля доступны только после явного разрешения. Каждая запись проверяется повторным `$$`.</span>
+                  </div>
                   <div className="settings-groups">
                     {grouped.map(({ group, values }) => (
                       <section className="settings-group" key={group}>
@@ -442,7 +443,12 @@ export function MachineSettingsDialog({
                                 <code>{setting.key}</code>
                                 <span>
                                   <strong>{setting.title}</strong>
-                                  <small>{setting.known ? setting.unit ?? "GRBL" : "Unknown firmware setting"}</small>
+                                  <small className={errors[setting.key] ? "is-error" : undefined}>
+                                    {errors[setting.key] ||
+                                      (setting.known
+                                        ? setting.unit ?? "GRBL"
+                                        : "Unknown firmware setting")}
+                                  </small>
                                 </span>
                                 {setting.kind === "boolean" ? (
                                   <input
@@ -496,7 +502,6 @@ export function MachineSettingsDialog({
                                 >
                                   <History aria-hidden="true" size={14} />
                                 </button>
-                                {errors[setting.key] && <small className="setting-error">{errors[setting.key]}</small>}
                               </label>
                             );
                           })}
