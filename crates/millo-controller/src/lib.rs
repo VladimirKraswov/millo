@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use millo_domain::{
     AlarmState, CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot,
-    DeviceInspection, MachineMode, MachineState, OverrideAdjustment, RapidOverrideTarget,
+    DeviceInspection, MachineMode, MachineState, OverrideAdjustment, Position, RapidOverrideTarget,
     ResetNotice, StepJogReceipt, StepJogRequest, WorkAxis, WorkCoordinateSystem,
 };
 use millo_dry_run::DryRunLine;
@@ -804,7 +804,7 @@ impl<T: Transport> Controller<T> {
         Ok(response)
     }
 
-    fn apply_status(&mut self, state: MachineState) {
+    fn apply_status(&mut self, mut state: MachineState) {
         if state.mode == MachineMode::Alarm {
             self.snapshot.alarm.get_or_insert_with(|| AlarmState {
                 code: None,
@@ -813,6 +813,7 @@ impl<T: Transport> Controller<T> {
         } else {
             self.snapshot.alarm = None;
         }
+        reconcile_sparse_status(&mut state, &self.snapshot.machine);
         self.snapshot.machine = state;
     }
 
@@ -864,6 +865,48 @@ impl<T: Transport> Controller<T> {
     }
 }
 
+fn reconcile_sparse_status(state: &mut MachineState, previous: &MachineState) {
+    if state.work_coordinate_offset.is_none() {
+        state.work_coordinate_offset = state
+            .machine_position
+            .zip(state.work_position)
+            .map(|(machine, work)| subtract_position(machine, work))
+            .or(previous.work_coordinate_offset);
+    }
+    if state.overrides.is_none() {
+        state.overrides = previous.overrides;
+    }
+
+    if let Some(offset) = state.work_coordinate_offset {
+        if state.work_position.is_none() {
+            state.work_position = state
+                .machine_position
+                .map(|machine| subtract_position(machine, offset));
+        }
+        if state.machine_position.is_none() {
+            state.machine_position = state.work_position.map(|work| add_position(work, offset));
+        }
+    }
+}
+
+fn subtract_position(left: Position, right: Position) -> Position {
+    Position {
+        x: left.x - right.x,
+        y: left.y - right.y,
+        z: left.z - right.z,
+        a: left.a.zip(right.a).map(|(left, right)| left - right),
+    }
+}
+
+fn add_position(left: Position, right: Position) -> Position {
+    Position {
+        x: left.x + right.x,
+        y: left.y + right.y,
+        z: left.z + right.z,
+        a: left.a.zip(right.a).map(|(left, right)| left + right),
+    }
+}
+
 fn duration_ms(duration: Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
@@ -906,6 +949,55 @@ mod tests {
         assert_eq!(snapshot.machine.feed_rate, 300.0);
         assert_eq!(snapshot.machine.spindle_speed, 8000.0);
         assert_eq!(snapshot.poll_sequence, 1);
+    }
+
+    #[tokio::test]
+    async fn retains_sparse_wco_and_derives_stable_positions_between_reports() {
+        let (mut controller, control) = test_controller();
+        controller.connect().await.unwrap();
+        control.set_status(
+            "<Idle|MPos:10.000,20.000,30.000|WCO:1.000,2.000,3.000|Ov:90,50,80|FS:0,0>",
+        );
+
+        let first = controller.refresh_status().await.unwrap();
+        assert_eq!(
+            first.machine.work_position,
+            Some(Position {
+                x: 9.0,
+                y: 18.0,
+                z: 27.0,
+                a: None,
+            })
+        );
+
+        control.set_status("<Idle|MPos:11.000,22.000,33.000|FS:0,0>");
+        let sparse = controller.refresh_status().await.unwrap();
+        assert_eq!(
+            sparse.machine.work_coordinate_offset,
+            first.machine.work_coordinate_offset
+        );
+        assert_eq!(
+            sparse.machine.work_position,
+            Some(Position {
+                x: 10.0,
+                y: 20.0,
+                z: 30.0,
+                a: None,
+            })
+        );
+        assert_eq!(sparse.machine.overrides, first.machine.overrides);
+
+        control.set_status("<Idle|MPos:20.000,30.000,40.000|WPos:5.000,6.000,7.000|FS:0,0>");
+        let refreshed = controller.refresh_status().await.unwrap();
+        assert_eq!(
+            refreshed.machine.work_coordinate_offset,
+            Some(Position {
+                x: 15.0,
+                y: 24.0,
+                z: 33.0,
+                a: None,
+            })
+        );
     }
 
     #[tokio::test]
@@ -959,6 +1051,23 @@ mod tests {
         let second_snapshot = controller.lifecycle_tick().await.unwrap();
         assert_eq!(second_snapshot.reset_notice.unwrap().sequence, 2);
         assert_eq!(second_snapshot.reset_count, 2);
+    }
+
+    #[tokio::test]
+    async fn reset_drops_the_cached_work_offset_before_the_next_sparse_status() {
+        let (mut controller, control) = test_controller();
+        controller.connect().await.unwrap();
+        control.set_status("<Idle|MPos:10.000,20.000,30.000|WCO:1.000,2.000,3.000|FS:0,0>");
+        controller.refresh_status().await.unwrap();
+        control.set_status("<Idle|MPos:10.000,20.000,30.000|FS:0,0>");
+        control.queue_reset("1.1h");
+
+        let reset = controller.lifecycle_tick().await.unwrap();
+
+        assert!(reset.reset_notice.is_some());
+        assert_eq!(reset.machine.machine_position.unwrap().x, 10.0);
+        assert!(reset.machine.work_coordinate_offset.is_none());
+        assert!(reset.machine.work_position.is_none());
     }
 
     #[tokio::test]

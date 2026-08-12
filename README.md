@@ -314,6 +314,10 @@ context remains visible and experienced operators can open origin or diagnostics
 directly. G54-G59 work position is primary while G53 remains compact secondary
 evidence. The contract is recorded in
 [ADR 0043](docs/decisions/0043-job-centered-operator-workflow.md).
+GRBL's periodic `WCO`/override fields are reconciled in the Rust controller, so
+work coordinates and readiness remain stable between sparse status frames while
+reset and reconnect still discard stale evidence. See
+[ADR 0044](docs/decisions/0044-sparse-grbl-status-reconciliation.md).
 
 The Mock diagnostics disclosure can inject reset, alarm, timeout, and link-drop scenarios. Alarm
 remains active until `Clear alarm`; two consecutive silent polls exercise the

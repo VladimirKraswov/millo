@@ -273,6 +273,10 @@ does not schedule or execute controller I/O.
   prefers controller WPos and otherwise derives it from MPos plus WCO or fresh
   Inspector G5x/G92/TLO evidence. G53 is retained as a compact secondary
   diagnostic coordinate.
+- The controller reconciles GRBL's sparse status protocol before publishing a
+  snapshot. Periodic WCO and override values are retained only inside the active
+  controller session; missing MPos/WPos is derived from the current observation
+  and WCO. Reset and disconnect clear this evidence. See ADR 0044.
 - Alarm Unlock and work-zero actions remain typed actor requests. The Program
   surface can invoke them contextually, but cannot write `$X`, `G10`, or raw
   serial bytes itself. See ADR 0043.

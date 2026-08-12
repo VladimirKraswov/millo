@@ -123,6 +123,9 @@ mobile sizes.
 - Transient timeout counting and threshold transition to recovery.
 - Reconnect plus status synchronization before returning to connected.
 - Reset acknowledgement and non-alarm status behavior.
+- Sparse GRBL status reconciliation retains periodic WCO/override evidence,
+  derives a continuously updated WPos from each MPos, accepts a fresh offset
+  derived from MPos+WPos, and clears the cache across reset.
 
 ## Current native serial coverage
 
