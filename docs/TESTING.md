@@ -51,6 +51,17 @@ guarded-jog proxy exposure; owner namespace enforcement; activation rollback;
 and complete UI cleanup on unload. A linked test plugin replaces
 `core.jog-pad`, then proves that unloading restores the core contribution.
 
+Image-job tests cover both sides of the plugin boundary. `millo-cam` fixtures
+verify transformed/cubic SVG paths, PNG-to-SVG tracing through VTracer, physical
+scaling, curve flattening, blank-image rejection, bounded input/geometry, and a
+spindle-free result that reparses as dry-run-eligible G-code. Vitest verifies
+that `JobCreationService` freezes core results and rejects fabricated jobs,
+`jobs.create` proxies close on unload, and the bundled plugin registers only in
+`workspace.tools` after both required grants. The browser fixture
+`/?fixture=image-job` opens the modal for desktop/mobile layout checks; upload a
+local PNG to inspect its progressive vectorization controls without dispatching
+machine I/O.
+
 Machine-state host tests prove that mutable controller DTOs are cloned and
 deeply frozen, publication stops after an idempotent unsubscribe, and a state
 source does not imply a grant. Loader tests cover current/future read access,

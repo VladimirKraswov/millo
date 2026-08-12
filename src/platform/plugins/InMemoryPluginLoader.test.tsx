@@ -14,7 +14,9 @@ import {
 } from "../extensions/UiExtensionRegistry";
 import type { MachineCommandGateway } from "../machine/MachineCommandGateway";
 import { MachineSnapshotStore } from "../machine/MachineStateSource";
+import type { JobCreationCapability } from "../jobs/JobCreationService";
 import type {
+  PluginActivationContext,
   PluginMachineJogCapability,
   PluginMachineReadCapability,
 } from "./InMemoryPluginLoader";
@@ -24,6 +26,7 @@ import type {
   JogPadStepRequest,
 } from "../../shared/machine";
 import { emptySnapshot } from "../../shared/machine";
+import type { GeneratedImageJob, ImageJobRequest } from "../../shared/jobs";
 import { CapabilityGrantStore } from "./CapabilityGrantStore";
 import {
   InMemoryPluginLoader,
@@ -366,6 +369,38 @@ describe("InMemoryPluginLoader", () => {
       "missing required capabilities: jobs.create",
     );
     expect(activate).not.toHaveBeenCalled();
+  });
+
+  it("scopes jobs.create to the host generation service and closes it on unload", async () => {
+    const pluginId = "dev.millo.jobs-service";
+    const generated = Object.freeze({}) as GeneratedImageJob;
+    const generateImage = vi.fn(async () => generated);
+    const open = vi.fn();
+    const save = vi.fn(async () => undefined);
+    const jobs: JobCreationCapability = { generateImage, open, save };
+    const loader = new InMemoryPluginLoader({
+      uiRegistry: createUiExtensionRegistry(),
+      jobs,
+      grants: new CapabilityGrantStore([
+        { pluginId, capabilities: ["jobs.create"] },
+      ]),
+    });
+    let capability: PluginActivationContext["jobs"];
+    const plugin = moduleWith(pluginId, ["jobs.create"], (context) => {
+      capability = context.jobs;
+    });
+    const request = {} as ImageJobRequest;
+
+    await loader.load(plugin);
+    await expect(capability?.generateImage(request)).resolves.toBe(generated);
+    capability?.open(generated);
+    await expect(capability?.save(generated)).resolves.toBeUndefined();
+
+    expect(generateImage).toHaveBeenCalledWith(request);
+    expect(open).toHaveBeenCalledWith(generated);
+    expect(save).toHaveBeenCalledWith(generated);
+    await loader.unload(pluginId);
+    expect(() => capability?.open(generated)).toThrow("no longer active");
   });
 
   it("rejects API mismatch before activation", async () => {

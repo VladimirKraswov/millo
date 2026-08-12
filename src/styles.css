@@ -41,12 +41,41 @@ select:focus-visible {
 
 .topbar {
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) minmax(320px, 440px) minmax(170px, 1fr);
+  grid-template-columns: minmax(150px, 1fr) minmax(320px, 440px) auto minmax(150px, 1fr);
   align-items: center;
   gap: 18px;
   padding: 0 22px;
   border-bottom: 1px solid #263039;
   background: #11171b;
+}
+
+.topbar-tools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.image-job-launcher {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid #3b5e52;
+  border-radius: 4px;
+  color: #bfe4d6;
+  background: #16231f;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.image-job-launcher:hover {
+  border-color: #68ba9c;
+  color: #e3f7ef;
+  background: #1b2c26;
 }
 
 .brand,
@@ -482,6 +511,311 @@ select:focus-visible {
 .machine-settings-dialog {
   width: min(940px, 100%);
   height: min(780px, calc(100vh - 40px));
+}
+
+.image-job-dialog {
+  width: min(980px, 100%);
+  height: min(720px, calc(100vh - 40px));
+}
+
+.image-job-body {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: minmax(320px, 1.15fr) minmax(320px, 0.85fr);
+  overflow: hidden;
+}
+
+.image-job-preview,
+.image-job-settings {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.image-job-preview {
+  gap: 10px;
+  padding: 18px;
+  border-right: 1px solid #2b363e;
+  background: #0e1418;
+}
+
+.image-drop-zone {
+  display: grid;
+  min-height: 280px;
+  flex: 1 1 auto;
+  place-items: center;
+  overflow: hidden;
+  border: 1px dashed #41515b;
+  border-radius: 5px;
+  background:
+    linear-gradient(#1d282e 1px, transparent 1px),
+    linear-gradient(90deg, #1d282e 1px, transparent 1px),
+    #0a1013;
+  background-size: 16px 16px;
+}
+
+.image-drop-zone.is-dragging {
+  border-color: #77d6b3;
+  background-color: #12211c;
+}
+
+.image-drop-zone > div {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 7px;
+  color: #829099;
+  font-size: 10px;
+}
+
+.image-drop-zone > div svg {
+  color: #5f786f;
+}
+
+.image-drop-zone > div strong {
+  color: #cbd4d9;
+  font-size: 12px;
+}
+
+.image-drop-zone img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-height: 430px;
+  padding: 18px;
+  object-fit: contain;
+  background: #f6f7f7;
+}
+
+.image-file-action {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  align-self: flex-start;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid #3a4851;
+  border-radius: 4px;
+  color: #c7d0d5;
+  background: #172026;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.image-source-meta {
+  display: flex;
+  min-height: 19px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #98a5ad;
+  font-size: 10px;
+}
+
+.image-source-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-source-meta code {
+  flex: 0 0 auto;
+  color: #719386;
+  font-size: 9px;
+}
+
+.image-job-result {
+  display: grid;
+  min-height: 48px;
+  margin: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid #2d3b43;
+  border-radius: 4px;
+}
+
+.image-job-result > div {
+  display: flex;
+  min-width: 0;
+  padding: 7px 8px;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid #2d3b43;
+}
+
+.image-job-result > div:last-child {
+  border-right: 0;
+}
+
+.image-job-result dt {
+  color: #73818a;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.image-job-result dd {
+  margin: 0;
+  overflow: hidden;
+  color: #d8e1e5;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-job-settings {
+  padding: 18px;
+  overflow: auto;
+}
+
+.image-job-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.image-number-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.image-number-field > div {
+  display: grid;
+  min-height: 38px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #35434c;
+  border-radius: 4px;
+  background: #0d1317;
+}
+
+.image-number-field input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 8px;
+  border: 0;
+  color: #e4eaed;
+  background: transparent;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.image-number-field small {
+  padding: 0 8px;
+  color: #73828b;
+  font-size: 8px;
+}
+
+.image-trace-settings {
+  margin-top: 14px;
+  border-top: 1px solid #2c383f;
+  border-bottom: 1px solid #2c383f;
+}
+
+.image-trace-settings summary {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  justify-content: space-between;
+  color: #aab6bd;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+  list-style: none;
+}
+
+.image-trace-settings[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.image-trace-settings > div {
+  display: grid;
+  padding: 2px 0 14px;
+  grid-template-columns: minmax(0, 1fr) 130px;
+  gap: 12px;
+}
+
+.image-range-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.image-range-field > span {
+  display: flex;
+  justify-content: space-between;
+  color: #9eabb2;
+  font-size: 9px;
+}
+
+.image-range-field code {
+  color: #77d6b3;
+}
+
+.image-range-field input {
+  accent-color: #77d6b3;
+}
+
+.image-invert-field {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: center;
+  gap: 8px;
+  color: #a7b3ba;
+  font-size: 10px;
+}
+
+.image-invert-field input {
+  width: 16px;
+  height: 16px;
+  accent-color: #77d6b3;
+}
+
+.image-job-status {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 7px;
+  margin-top: auto;
+  padding-top: 14px;
+  color: #7f8d95;
+  font-size: 10px;
+}
+
+.image-job-status.is-ready {
+  color: #8ed8bb;
+}
+
+.image-job-status.is-error {
+  color: #efa0a0;
+}
+
+.machine-dialog footer.image-job-footer {
+  justify-content: space-between;
+}
+
+.image-job-footer > div {
+  display: flex;
+  gap: 8px;
+}
+
+.machine-dialog footer .image-generate-action {
+  border-color: #4d7164;
+  color: #c6eadc;
+  background: #182a24;
+}
+
+.machine-dialog footer.image-job-footer .primary-action {
+  border-color: #64caa1;
+  color: #0b1712;
+  background: #77d6b3;
+  font-weight: 700;
 }
 
 .settings-tabs {
@@ -5272,7 +5606,7 @@ kbd {
   }
 
   .topbar {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     grid-template-rows: 54px 58px;
     gap: 0 12px;
     padding: 0 14px;
@@ -5285,6 +5619,31 @@ kbd {
     border-right: 0;
     border-left: 0;
     border-top: 1px solid #263039;
+  }
+
+  .topbar-tools {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .connection-state {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .image-job-dialog {
+    height: min(820px, calc(100vh - 40px));
+  }
+
+  .image-job-body {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .image-job-preview {
+    min-height: 390px;
+    border-right: 0;
+    border-bottom: 1px solid #2b363e;
   }
 
   .workspace {
@@ -5342,6 +5701,54 @@ kbd {
 }
 
 @media (max-width: 700px) {
+  .image-job-backdrop {
+    padding: 8px;
+  }
+
+  .image-job-dialog {
+    height: calc(100vh - 16px);
+  }
+
+  .image-job-launcher span {
+    display: none;
+  }
+
+  .image-job-launcher {
+    width: 34px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .image-job-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .image-job-result {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .image-job-result > div:nth-child(2) {
+    border-right: 0;
+  }
+
+  .image-job-result > div:nth-child(-n + 2) {
+    border-bottom: 1px solid #2d3b43;
+  }
+
+  .machine-dialog footer.image-job-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .image-job-footer > div,
+  .image-job-footer > button {
+    width: 100%;
+  }
+
+  .image-job-footer > div > button {
+    flex: 1 1 0;
+  }
+
   .log-viewer-backdrop {
     padding: 8px;
   }

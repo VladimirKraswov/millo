@@ -6,6 +6,12 @@ import type {
   UiSlotId,
 } from "../extensions/UiExtensionRegistry";
 import type { MachineCommandGateway } from "../machine/MachineCommandGateway";
+import type { JobCreationCapability } from "../jobs/JobCreationService";
+import type {
+  GeneratedGcodeSaveOutcome,
+  GeneratedImageJob,
+  ImageJobRequest,
+} from "../../shared/jobs";
 import type {
   MachineStateListener,
   MachineStateSource,
@@ -44,6 +50,12 @@ export interface PluginMachineReadCapability {
   subscribe(listener: MachineStateListener): () => void;
 }
 
+export interface PluginJobsCapability {
+  generateImage(request: ImageJobRequest): Promise<GeneratedImageJob>;
+  open(job: GeneratedImageJob): void;
+  save(job: GeneratedImageJob): Promise<GeneratedGcodeSaveOutcome | undefined>;
+}
+
 export interface PluginActivationContext {
   readonly manifest: PluginManifestV1;
   readonly grantedCapabilities: readonly PluginCapability[];
@@ -51,6 +63,7 @@ export interface PluginActivationContext {
   readonly ui?: PluginUiCapability;
   readonly machineRead?: PluginMachineReadCapability;
   readonly machineJog?: PluginMachineJogCapability;
+  readonly jobs?: PluginJobsCapability;
 }
 
 export interface InMemoryPluginModule {
@@ -83,6 +96,7 @@ interface InMemoryPluginLoaderOptions {
   readonly uiRegistry: UiExtensionRegistry;
   readonly machineCommands?: MachineCommandGateway;
   readonly machineState?: MachineStateSource;
+  readonly jobs?: JobCreationCapability;
   readonly grants?: CapabilityGrantStore;
   readonly onPluginError?: (pluginId: string, error: unknown) => void;
 }
@@ -98,6 +112,7 @@ export class InMemoryPluginLoader {
   private readonly uiRegistry: UiExtensionRegistry;
   private readonly machineCommands?: MachineCommandGateway;
   private readonly machineState?: MachineStateSource;
+  private readonly jobs?: JobCreationCapability;
   private readonly grants: CapabilityGrantStore;
   private readonly onPluginError?: (pluginId: string, error: unknown) => void;
   private readonly active = new Map<string, ActivePlugin>();
@@ -107,6 +122,7 @@ export class InMemoryPluginLoader {
     this.uiRegistry = options.uiRegistry;
     this.machineCommands = options.machineCommands;
     this.machineState = options.machineState;
+    this.jobs = options.jobs;
     this.grants = options.grants ?? new CapabilityGrantStore();
     this.onPluginError = options.onPluginError;
   }
@@ -247,7 +263,7 @@ export class InMemoryPluginLoader {
       case "machine.read":
         return this.machineState !== undefined;
       case "jobs.create":
-        return false;
+        return this.jobs !== undefined;
     }
   }
 
@@ -274,6 +290,27 @@ export class InMemoryPluginLoader {
             },
           })
         : undefined;
+    const jobs =
+      hasCapability("jobs.create") && this.jobs
+        ? Object.freeze({
+            generateImage: async (request: ImageJobRequest) => {
+              resources.assertOpen();
+              const job = await this.jobs!.generateImage(request);
+              resources.assertOpen();
+              return job;
+            },
+            open: (job: GeneratedImageJob) => {
+              resources.assertOpen();
+              this.jobs!.open(job);
+            },
+            save: async (job: GeneratedImageJob) => {
+              resources.assertOpen();
+              const outcome = await this.jobs!.save(job);
+              resources.assertOpen();
+              return outcome;
+            },
+          })
+        : undefined;
 
     return Object.freeze({
       manifest,
@@ -282,6 +319,7 @@ export class InMemoryPluginLoader {
       ui,
       machineRead,
       machineJog,
+      jobs,
     });
   }
 
@@ -329,7 +367,7 @@ export class InMemoryPluginLoader {
           slot: contribution.slot,
           order: contribution.order,
           replaces: contribution.replaces,
-          extension: () => contribution.render(),
+          extension: { kind: "global", render: contribution.render },
         });
       },
     });

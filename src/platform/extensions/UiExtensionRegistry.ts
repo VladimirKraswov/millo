@@ -9,6 +9,7 @@ import type {
 import { ExtensionRegistry } from "./ExtensionRegistry";
 
 export const uiSlots = {
+  workspaceTools: "workspace.tools",
   controlMachine: "control.machine",
   controlCoordinates: "control.coordinates",
 } as const;
@@ -29,7 +30,15 @@ export interface UiHostContext {
   readonly maxJogFeedMmPerMin: number;
 }
 
-export type UiExtension = (context: UiHostContext) => ReactNode;
+export type UiExtension =
+  | {
+      readonly kind: "contextual";
+      readonly render: (context: UiHostContext) => ReactNode;
+    }
+  | {
+      readonly kind: "global";
+      readonly render: () => ReactNode;
+    };
 export type UiExtensionRegistry = ExtensionRegistry<UiSlotId, UiExtension>;
 
 export const createUiExtensionRegistry = (): UiExtensionRegistry =>

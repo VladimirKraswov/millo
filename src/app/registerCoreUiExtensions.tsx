@@ -15,8 +15,9 @@ export function registerCoreUiExtensions(registry: UiExtensionRegistry): void {
     owner: CORE_EXTENSION_OWNER,
     slot: uiSlots.controlMachine,
     order: 100,
-    extension: (context) => (
-      <JogPad
+    extension: {
+      kind: "contextual",
+      render: (context) => <JogPad
         desktopRuntime={context.desktopRuntime}
         disabled={context.controlsDisabled}
         gateway={context.machineCommands}
@@ -26,23 +27,24 @@ export function registerCoreUiExtensions(registry: UiExtensionRegistry): void {
         maxDistanceMm={context.maxJogDistanceMm}
         maxFeedMmPerMin={context.maxJogFeedMmPerMin}
         snapshot={context.snapshot}
-      />
-    ),
+      />,
+    },
   });
   registry.register({
     id: CORE_WORK_ZERO_CONTRIBUTION,
     owner: CORE_EXTENSION_OWNER,
     slot: uiSlots.controlCoordinates,
     order: 100,
-    extension: (context) => (
-      <WorkZeroPanel
+    extension: {
+      kind: "contextual",
+      render: (context) => <WorkZeroPanel
         desktopRuntime={context.desktopRuntime}
         disabled={context.controlsDisabled}
         gateway={context.workCoordinates}
         onError={context.reportError}
         onSnapshot={context.updateSnapshot}
         snapshot={context.snapshot}
-      />
-    ),
+      />,
+    },
   });
 }

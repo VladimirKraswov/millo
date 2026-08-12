@@ -1,0 +1,18 @@
+[package]
+name = "millo-cam"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Deterministic image-to-G-code generation core for Millo"
+
+[dependencies]
+base64 = "0.22"
+image = { version = "=0.25.8", default-features = false, features = ["png"] }
+millo-gcode = { path = "../millo-gcode" }
+serde.workspace = true
+thiserror.workspace = true
+usvg = { version = "=0.45.1", default-features = false }
+vtracer = "=0.6.5"
+
+[dev-dependencies]
+image = { version = "=0.25.8", default-features = false, features = ["png"] }

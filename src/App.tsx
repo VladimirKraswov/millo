@@ -9,6 +9,10 @@ import {
 } from "lucide-react";
 
 import { bootstrapPluginHost } from "./app/bootstrapPluginHost";
+import { UiExtensionSlot } from "./platform/extensions/UiExtensionSlot";
+import { uiSlots } from "./platform/extensions/UiExtensionRegistry";
+import { CapabilityGrantStore } from "./platform/plugins/CapabilityGrantStore";
+import { createImageToGcodePlugin, IMAGE_TO_GCODE_PLUGIN_ID } from "./plugins/image-to-gcode/createImageToGcodePlugin";
 import {
   acknowledgeReset,
   clearMockAlarm,
@@ -61,6 +65,7 @@ import { tauriMachineCommandGateway } from "./platform/machine/tauriMachineComma
 import { tauriMachineStateEventStream } from "./platform/machine/tauriMachineStateEventStream";
 import { tauriWorkCoordinateGateway } from "./platform/machine/tauriWorkCoordinateGateway";
 import { tauriProgramGateway } from "./platform/program/tauriProgramGateway";
+import { tauriImageJobGateway } from "./platform/jobs/tauriImageJobGateway";
 import { tauriDryRunGateway } from "./platform/program/tauriDryRunGateway";
 import { tauriRealRunPreflightGateway } from "./platform/program/tauriRealRunPreflightGateway";
 import {
@@ -297,6 +302,16 @@ export default function App() {
       bootstrapPluginHost({
         initialSnapshot: developmentMachineFixture ? developmentJogSnapshot : emptySnapshot,
         machineCommands: tauriMachineCommandGateway,
+        imageJobs: tauriImageJobGateway,
+        grants: new CapabilityGrantStore([
+          {
+            pluginId: IMAGE_TO_GCODE_PLUGIN_ID,
+            capabilities: ["ui.contribute", "jobs.create"],
+          },
+        ]),
+        bundledPlugins: [
+          createImageToGcodePlugin({ initialOpen: developmentFixture === "image-job" }),
+        ],
       }),
     [],
   );
@@ -341,6 +356,19 @@ export default function App() {
     "program",
   );
   const desktopRuntime = useMemo(isDesktopRuntime, []);
+  const generatedJob = useSyncExternalStore(
+    pluginHost.generatedJobs.subscribe,
+    pluginHost.generatedJobs.current,
+    pluginHost.generatedJobs.current,
+  );
+
+  useEffect(() => {
+    void pluginHost.ready.catch((error: unknown) => setUiError(String(error)));
+  }, [pluginHost]);
+
+  useEffect(() => {
+    if (generatedJob) setWorkbenchView("program");
+  }, [generatedJob]);
 
   useEffect(() => {
     if (!desktopRuntime) {
@@ -683,6 +711,10 @@ export default function App() {
           state={effectiveMachineProfiles}
         />
 
+        <div className="topbar-tools" aria-label="Инструменты задания">
+          <UiExtensionSlot registry={pluginHost.uiRegistry} slot={uiSlots.workspaceTools} />
+        </div>
+
         <div className={`connection-state is-${snapshot.connection}`}>
           <span className="state-dot" />
           <div>
@@ -809,6 +841,7 @@ export default function App() {
               }
               gateway={tauriProgramGateway}
               initialProgram={developmentPreviewFixture}
+              incomingJob={generatedJob}
               initialRunIntent={
                 developmentFixture === "check-complete" ? "cutting" : undefined
               }

@@ -47,6 +47,24 @@ File API -> ProgramGateway -> typed Tauri parse command -> millo-gcode
 It does not pass through the command actor because parsing owns no controller
 state and cannot produce transport writes.
 
+Generated image jobs are another motion-free path. The plugin is a client of
+the application core, not the owner of CAM behavior:
+
+```text
+Bundled/third-party UI -> jobs.create proxy -> millo-cam
+                                             | PNG -> VTracer -> SVG
+                                             | SVG -> usvg -> paths
+                                             + paths -> G-code -> millo-gcode reparse
+                                                                  |
+                                                        immutable generated job
+                                                                  |
+                                                        Program workspace/sender gates
+```
+
+Generation never touches the command actor. Opening a generated job does not
+authorize or dispatch it; it only publishes the same source/program pair that a
+file load would produce.
+
 Mock dry-run execution is a separate, explicitly gated path:
 
 ```text
@@ -663,7 +681,9 @@ does not schedule or execute controller I/O.
 - The generic `ExtensionRegistry` composes named slots and gives each
   contribution an ID, owner, order, replacement list, and deterministic unload
   lifecycle. It has no React, Tauri, or machine dependency.
-- The React bridge exposes `control.machine` and `control.coordinates`. Jog Pad
+- The React bridge exposes `workspace.tools`, `control.machine`, and
+  `control.coordinates`. Global tool contributions receive no machine UI
+  context. Jog Pad
   and Work Zero are separate `core` contributions, so coordinate controls do not
   become part of the guarded motion capability by accident. A later plugin can
   replace a contribution, and unloading it restores core UI without remounting
@@ -677,10 +697,11 @@ does not schedule or execute controller I/O.
   both are version `1`. Required capabilities fail activation when absent, while
   denied optional capabilities are reported and omitted from the activation
   context.
-- The current in-memory loader supports `ui.contribute`, `machine.jog`, and
-  `machine.read` when their typed host services are supplied. `jobs.create`
-  remains a reserved catalog entry. Unknown capabilities and API versions are
-  rejected.
+- The current in-memory loader supports `ui.contribute`, `machine.jog`,
+  `machine.read`, and `jobs.create` when their typed host services are supplied.
+  `jobs.create` exposes only generate/save/open operations for immutable jobs
+  returned by the host generator; fabricated objects are rejected. Unknown
+  capabilities and API versions are rejected.
 - `MachineSnapshotStore` clones each controller DTO and freezes the snapshot,
   machine state, positions, alarms, and reset notices before exposing them.
   `machine.read` provides only `current()` and future-update `subscribe()`; it
@@ -702,9 +723,10 @@ does not schedule or execute controller I/O.
   not read plugin files, dynamically import code, or establish a sandbox or
   signature trust model.
 - `bootstrapPluginHost` is the application composition root for the UI registry,
-  `MachineSnapshotStore`, and in-memory loader. It registers core UI but does not
-  discover or activate plugins. Grants therefore remain empty unless the host
-  explicitly supplies them.
+  machine/job stores, and in-memory loader. It registers core UI and activates
+  only modules explicitly linked and granted by the host. The Image-to-G-code
+  module is the first bundled default; there is still no dynamic external-code
+  discovery or implicit grant.
 - React reads the shared machine store through `useSyncExternalStore`. Typed
   command results publish back to that store instead of maintaining a second
   component-owned controller snapshot.

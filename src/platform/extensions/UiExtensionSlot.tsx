@@ -9,7 +9,7 @@ import type {
 interface UiExtensionSlotProps {
   registry: UiExtensionRegistry;
   slot: UiSlotId;
-  context: UiHostContext;
+  context?: UiHostContext;
 }
 
 export function UiExtensionSlot({
@@ -27,7 +27,11 @@ export function UiExtensionSlot({
     <>
       {registry.list(slot).map((contribution) => (
         <Fragment key={contribution.id}>
-          {contribution.extension(context)}
+          {contribution.extension.kind === "global"
+            ? contribution.extension.render()
+            : context
+              ? contribution.extension.render(context)
+              : null}
         </Fragment>
       ))}
     </>

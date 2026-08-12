@@ -13,6 +13,7 @@ The current slices form this path:
 ```text
 Serial / Mock -> command arbiter -> GRBL lifecycle/parser -> typed Tauri IPC -> React
 File source -> millo-gcode parser -> immutable program DTO -> Three.js preview
+SVG/PNG -> millo-cam (VTracer/usvg) -> validated G-code -> normal Program workflow
 File source -> intent-aware policy -> one-use authorization -> bounded GRBL sender
 Physical run -> bounded RX FIFO -> ok/error correlation -> fresh Idle completion
 ```
@@ -334,6 +335,18 @@ work coordinates and readiness remain stable between sparse status frames while
 reset and reconnect still discard stale evidence. See
 [ADR 0044](docs/decisions/0044-sparse-grbl-status-reconciliation.md).
 
+The bundled `Image to G-code` plugin is enabled by default in the
+`workspace.tools` slot. It accepts SVG directly and vectorizes PNG through the
+open-source Rust VTracer pipeline before any CAM work. The independent
+`millo-cam` core normalizes paths into physical millimetres, flattens curves to
+the requested tolerance, emits spindle-free engraving G-code, and reparses that
+output through `millo-gcode`. The plugin owns only the modal workflow; its
+`jobs.create` capability may generate, save, or open an immutable core-issued
+job, but cannot submit raw source or reach the sender. Generated jobs enter the
+same preview, GRBL Check, preflight, authorization, and sender flow as files.
+See [Image jobs](docs/IMAGE_JOBS.md) and
+[ADR 0045](docs/decisions/0045-generated-jobs-capability.md).
+
 The Mock diagnostics disclosure can inject reset, alarm, timeout, and link-drop scenarios. Alarm
 remains active until `Clear alarm`; two consecutive silent polls exercise the
 automatic recovery path.
@@ -363,6 +376,7 @@ successful GRBL status exchange.
 | Package | Responsibility |
 | --- | --- |
 | `millo-audit` | Bounded structured JSONL diagnostics, rotation, tail, and export |
+| `millo-cam` | Bounded SVG/PNG vectorization and validated engraving G-code generation |
 | `millo-domain` | Stable machine and controller types |
 | `millo-gcode` | Immutable G-code program, warnings, parser, and preview geometry |
 | `millo-journal` | Bounded crash-diagnostic history with throttled atomic JSON checkpoints |

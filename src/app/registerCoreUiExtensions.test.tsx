@@ -19,7 +19,7 @@ describe("core UI extensions", () => {
       owner: "plugin.example",
       slot: uiSlots.controlMachine,
       replaces: [CORE_JOG_PAD_CONTRIBUTION],
-      extension: () => null,
+      extension: { kind: "global", render: () => null },
     });
 
     expect(registry.list(uiSlots.controlMachine).map(({ id }) => id)).toEqual([

@@ -22,6 +22,7 @@ import {
   Suspense,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type DragEvent,
 } from "react";
@@ -39,6 +40,7 @@ import {
   type SenderState,
 } from "../../shared/dryRun";
 import type { GcodeProgram, ProgramWarning } from "../../shared/program";
+import type { PublishedJob } from "../../shared/jobs";
 import type {
   ProgramRecoveryCandidate,
   ProgramRecoveryPackage,
@@ -108,6 +110,7 @@ interface ProgramWorkspaceProps {
   readonly initialRunIntent?: ProgramRunIntent;
   readonly initialSender?: SenderSnapshot;
   readonly initialSource?: string;
+  readonly incomingJob?: PublishedJob;
   readonly machineContext?: ProgramMachineContext;
   readonly onInspection?: (inspection: HardwareInspection) => void;
   readonly realRunAvailable?: boolean;
@@ -198,6 +201,7 @@ export function ProgramWorkspace({
   initialRunIntent = "airRun",
   initialSender,
   initialSource = "",
+  incomingJob,
   machineContext,
   onInspection,
   realRunAvailable = false,
@@ -237,10 +241,32 @@ export function ProgramWorkspace({
   const [clearedSenderRunSequence, setClearedSenderRunSequence] = useState<number>();
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const handledIncomingJob = useRef(0);
   const program = loaded?.program;
   const senderActive = ["running", "paused", "toolChange", "draining"].includes(
     sender.state,
   );
+
+  useEffect(() => {
+    if (!incomingJob || incomingJob.sequence === handledIncomingJob.current) return;
+    handledIncomingJob.current = incomingJob.sequence;
+    if (senderActive) {
+      setError("Новое задание не открыто: сначала остановите текущее выполнение");
+      return;
+    }
+    setLoaded({ program: incomingJob.job.program, source: incomingJob.job.source });
+    setProgramRunIntent("cutting");
+    setProgramExecutionOptions(defaultProgramExecutionOptions);
+    setClearedSenderRunSequence(sender.runSequence || undefined);
+    setSender(idleSenderSnapshot);
+    setSelectedSourceLine(undefined);
+    setDiagnosticView(incomingJob.job.program.warnings.length > 0 ? "warnings" : "lines");
+    setDiagnosticsOpen(incomingJob.job.program.warnings.length > 0);
+    setRealRunReport(undefined);
+    setFirstCutOpen(false);
+    setToolChangeOpen(false);
+    setError(undefined);
+  }, [incomingJob, sender.runSequence, senderActive]);
 
   useEffect(() => {
     if (!desktopRuntime || !dryRunGateway) return;

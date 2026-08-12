@@ -8,6 +8,9 @@ use std::{
 use millo_audit::{
     AuditCategory, AuditExportFormat, AuditExportOutcome, AuditLevel, AuditLog, AuditLogSnapshot,
 };
+use millo_cam::{
+    GeneratedImageJob, ImageJobRequest, generate_image_job as generate_image_job_core,
+};
 use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
@@ -57,6 +60,20 @@ use tokio::{
 
 const MOCK_TRANSPORT_ID: &str = "mock";
 const SERIAL_TRANSPORT_PREFIX: &str = "serial:";
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedGcodeSaveRequest {
+    pub source_name: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GeneratedGcodeSaveOutcome {
+    pub path: String,
+    pub bytes_written: usize,
+}
 
 fn audit_operation<T>(
     audit: &AuditLog,
@@ -1731,6 +1748,97 @@ pub async fn parse_gcode_program(
 }
 
 #[tauri::command]
+pub async fn generate_image_job(
+    request: ImageJobRequest,
+    state: State<'_, AppState>,
+) -> Result<GeneratedImageJob, String> {
+    let context = json!({
+        "sourceName": &request.source_name,
+        "format": request.format,
+        "encodedBytes": request.source_base64.len(),
+        "settings": &request.settings,
+    });
+    let result = tokio::task::spawn_blocking(move || generate_image_job_core(request))
+        .await
+        .map_err(|error| format!("image job generation task failed: {error}"))?
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Program,
+        "program.image_job_generated",
+        "Image job generated and reparsed",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn save_generated_gcode(
+    request: GeneratedGcodeSaveRequest,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<GeneratedGcodeSaveOutcome>, String> {
+    let source_name = request.source_name.trim();
+    if !valid_generated_gcode_name(&request.source_name) {
+        return Err("generated G-code file name is invalid".to_owned());
+    }
+    parse_program(ProgramParseRequest {
+        source_name: source_name.to_owned(),
+        source: request.source.clone(),
+    })
+    .map_err(|error| format!("generated G-code is invalid: {error}"))?;
+
+    let (selection, selected) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_file_name(source_name)
+        .add_filter("G-code", &["nc", "ngc", "gcode"])
+        .save_file(move |path| {
+            let _ = selection.send(path);
+        });
+    let Some(path) = selected
+        .await
+        .map_err(|_| "G-code save dialog closed unexpectedly".to_owned())?
+    else {
+        return Ok(None);
+    };
+    let path = path.into_path().map_err(|error| error.to_string())?;
+    let bytes_written = request.source.len();
+    let output_path = path.clone();
+    tokio::task::spawn_blocking(move || std::fs::write(output_path, request.source))
+        .await
+        .map_err(|error| format!("G-code save task failed: {error}"))?
+        .map_err(|error| format!("failed to save G-code: {error}"))?;
+    let outcome = GeneratedGcodeSaveOutcome {
+        path: path.to_string_lossy().into_owned(),
+        bytes_written,
+    };
+    state.audit.record(
+        AuditLevel::Info,
+        AuditCategory::Storage,
+        "storage.generated_gcode_saved",
+        "Generated G-code saved",
+        json!({ "path": &outcome.path, "bytesWritten": outcome.bytes_written }),
+    );
+    Ok(Some(outcome))
+}
+
+fn valid_generated_gcode_name(value: &str) -> bool {
+    let trimmed = value.trim();
+    let extension = std::path::Path::new(trimmed)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    !trimmed.is_empty()
+        && value == trimmed
+        && !trimmed.contains('/')
+        && !trimmed.contains('\\')
+        && matches!(extension.as_str(), "nc" | "ngc" | "gcode")
+}
+
+#[tauri::command]
 pub async fn preflight_real_run(
     request: ProgramParseRequest,
     intent: ProgramRunIntent,
@@ -2487,6 +2595,16 @@ mod tests {
         assert_eq!(entry.event, "sender.test.failed");
         assert_eq!(entry.data["context"]["sourceLine"], 18);
         assert_eq!(entry.data["context"]["command"], "G1 Z-0.200 F80");
+    }
+
+    #[test]
+    fn generated_gcode_export_accepts_only_leaf_program_names() {
+        assert!(valid_generated_gcode_name("engraving.nc"));
+        assert!(valid_generated_gcode_name("engraving.GCODE"));
+        assert!(!valid_generated_gcode_name("../engraving.nc"));
+        assert!(!valid_generated_gcode_name("folder\\engraving.nc"));
+        assert!(!valid_generated_gcode_name("engraving.svg"));
+        assert!(!valid_generated_gcode_name(" engraving.nc"));
     }
 
     #[test]
