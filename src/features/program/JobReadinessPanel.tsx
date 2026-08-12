@@ -4,6 +4,7 @@ import {
   CircleDashed,
   Crosshair,
   FileWarning,
+  History,
   KeyRound,
   Play,
   PlugZap,
@@ -47,6 +48,7 @@ function PrimaryIcon({ action, busy }: { readonly action: JobReadinessAction; re
   if (action === "unlock") return <KeyRound aria-hidden="true" size={16} />;
   if (action === "setWorkZero") return <Crosshair aria-hidden="true" size={16} />;
   if (action === "runGrblCheck") return <ScanSearch aria-hidden="true" size={16} />;
+  if (action === "resolveRecovery") return <History aria-hidden="true" size={16} />;
   if (action === "reviewProgram") return <FileWarning aria-hidden="true" size={16} />;
   return <Play aria-hidden="true" size={16} />;
 }
@@ -60,6 +62,13 @@ export function JobReadinessPanel({
   onPrimary,
   view,
 }: JobReadinessPanelProps) {
+  const primaryLabel =
+    view.primaryAction === "startProgram"
+      ? intent === "cutting"
+        ? "Начать гравировку"
+        : "Запустить без резания"
+      : view.primaryLabel;
+
   return (
     <section className="job-readiness" aria-labelledby="job-readiness-title">
       <header>
@@ -117,7 +126,7 @@ export function JobReadinessPanel({
         type="button"
       >
         <PrimaryIcon action={view.primaryAction} busy={busy} />
-        {view.primaryLabel}
+        {primaryLabel}
       </button>
     </section>
   );

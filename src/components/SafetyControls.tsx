@@ -177,7 +177,7 @@ export function SafetyControls({
           type="button"
         >
           <Square aria-hidden="true" size={13} />
-          <span>Cancel</span>
+          <span>Стоп jog</span>
         </button>
       </div>
 

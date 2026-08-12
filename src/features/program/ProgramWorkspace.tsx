@@ -7,6 +7,7 @@ import {
   History,
   Pause,
   Play,
+  RotateCcw,
   ScanSearch,
   ShieldAlert,
   SlidersHorizontal,
@@ -68,7 +69,11 @@ import {
   senderTiming,
 } from "./dryRunReadModel";
 import { realRunPreflightControls } from "./realRunPreflightReadModel";
-import { senderActionLayout } from "./operatorLayoutModel";
+import {
+  physicalSenderActionLayout,
+  senderActionLayout,
+  senderRunIsVisibleForProgram,
+} from "./operatorLayoutModel";
 import {
   jobReadinessModel,
   type JobReadinessAction,
@@ -99,6 +104,7 @@ interface ProgramWorkspaceProps {
   readonly dryRunGateway?: DryRunGateway;
   readonly gateway: ProgramGateway;
   readonly initialProgram?: GcodeProgram;
+  readonly initialRunIntent?: ProgramRunIntent;
   readonly initialSender?: SenderSnapshot;
   readonly initialSource?: string;
   readonly machineContext?: ProgramMachineContext;
@@ -174,6 +180,7 @@ export function ProgramWorkspace({
   dryRunGateway,
   gateway,
   initialProgram,
+  initialRunIntent = "airRun",
   initialSender,
   initialSource = "",
   machineContext,
@@ -201,7 +208,7 @@ export function ProgramWorkspace({
   const [selectedSourceLine, setSelectedSourceLine] = useState<number>();
   const [realRunReport, setRealRunReport] = useState<RunPreflightReport>();
   const [programRunIntent, setProgramRunIntent] =
-    useState<ProgramRunIntent>("airRun");
+    useState<ProgramRunIntent>(initialRunIntent);
   const [programExecutionOptions, setProgramExecutionOptions] =
     useState<ProgramExecutionOptions>(defaultProgramExecutionOptions);
   const [firstCutOpen, setFirstCutOpen] = useState(false);
@@ -209,6 +216,10 @@ export function ProgramWorkspace({
   const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [recoveryCandidate, setRecoveryCandidate] =
     useState<ProgramRecoveryCandidate>();
+  const [recoveryChecked, setRecoveryChecked] = useState(realRunGateway === undefined);
+  const [stopConfirming, setStopConfirming] = useState(false);
+  const [senderCommandBusy, setSenderCommandBusy] = useState(false);
+  const [clearedSenderRunSequence, setClearedSenderRunSequence] = useState<number>();
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [error, setError] = useState<string>();
   const program = loaded?.program;
@@ -246,15 +257,26 @@ export function ProgramWorkspace({
   }, [desktopRuntime, dryRunGateway]);
 
   useEffect(() => {
-    if (!realRunGateway) return;
+    if (!realRunGateway) {
+      setRecoveryChecked(true);
+      return;
+    }
     let active = true;
+    setRecoveryChecked(false);
+    setRecoveryCandidate(undefined);
     void realRunGateway
       .recoveryCandidate()
       .then((candidate) => {
-        if (active) setRecoveryCandidate(candidate ?? undefined);
+        if (active) {
+          setRecoveryCandidate(candidate ?? undefined);
+          setRecoveryChecked(true);
+        }
       })
       .catch((reason: unknown) => {
-        if (active) setError(String(reason));
+        if (active) {
+          setError(String(reason));
+          setRecoveryChecked(true);
+        }
       });
     return () => {
       active = false;
@@ -269,13 +291,20 @@ export function ProgramWorkspace({
       return;
     }
     let active = true;
+    setRecoveryChecked(false);
     void realRunGateway
       .recoveryCandidate()
       .then((candidate) => {
-        if (active) setRecoveryCandidate(candidate ?? undefined);
+        if (active) {
+          setRecoveryCandidate(candidate ?? undefined);
+          setRecoveryChecked(true);
+        }
       })
       .catch((reason: unknown) => {
-        if (active) setError(String(reason));
+        if (active) {
+          setError(String(reason));
+          setRecoveryChecked(true);
+        }
       });
     return () => {
       active = false;
@@ -298,6 +327,18 @@ export function ProgramWorkspace({
     }
   }, [sender.currentSourceLine, sender.requestedTool, sender.state]);
 
+  useEffect(() => {
+    if (!stopConfirming) return;
+    const timer = window.setTimeout(() => setStopConfirming(false), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [stopConfirming]);
+
+  useEffect(() => {
+    if (!["running", "paused", "toolChange", "draining"].includes(sender.state)) {
+      setStopConfirming(false);
+    }
+  }, [sender.state]);
+
   const loadFile = async (file?: File) => {
     if (!file || loading || !desktopRuntime) return;
     setLoading(true);
@@ -305,6 +346,7 @@ export function ProgramWorkspace({
     try {
       const next = await loader.load(file);
       setLoaded(next);
+      setClearedSenderRunSequence(sender.runSequence || undefined);
       setSender(idleSenderSnapshot);
       setSelectedSourceLine(undefined);
       setDiagnosticView(next.program.warnings.length > 0 ? "warnings" : "lines");
@@ -342,6 +384,7 @@ export function ProgramWorkspace({
       setLoaded({ program, source: prepared.request.source });
       setProgramRunIntent(prepared.intent);
       setProgramExecutionOptions(prepared.executionOptions);
+      setClearedSenderRunSequence(sender.runSequence || undefined);
       setSender(idleSenderSnapshot);
       setSelectedSourceLine(prepared.restartSourceLine);
       setDiagnosticView("lines");
@@ -361,6 +404,13 @@ export function ProgramWorkspace({
     if (!realRunGateway) throw new Error("Recovery gateway is unavailable");
     await realRunGateway.dismissRecovery(recoveryId);
     setRecoveryCandidate(undefined);
+    setRecoveryChecked(true);
+    setClearedSenderRunSequence(sender.runSequence || undefined);
+    setSender((current) => ({
+      ...idleSenderSnapshot,
+      runSequence: current.runSequence,
+    }));
+    setRealRunReport(undefined);
   };
 
   const bounds = program?.summary.bounds;
@@ -386,11 +436,40 @@ export function ProgramWorkspace({
     [program, selectedSourceLine],
   );
   const runSenderAction = async (action: () => Promise<SenderSnapshot>) => {
+    if (senderCommandBusy) return;
+    setSenderCommandBusy(true);
     setError(undefined);
     try {
       setSender(await action());
     } catch (reason) {
       setError(String(reason));
+    } finally {
+      setSenderCommandBusy(false);
+    }
+  };
+
+  const stopProgramRun = async () => {
+    if (!realRunGateway || senderCommandBusy) return;
+    if (!stopConfirming) {
+      setStopConfirming(true);
+      return;
+    }
+    setSenderCommandBusy(true);
+    setError(undefined);
+    setRecoveryChecked(false);
+    try {
+      setSender(await realRunGateway.abortProgram());
+      setRealRunReport(undefined);
+      const candidate = await realRunGateway.recoveryCandidate();
+      setRecoveryCandidate(candidate ?? undefined);
+      setRecoveryChecked(true);
+      setRecoveryOpen(candidate !== null);
+    } catch (reason) {
+      setError(String(reason));
+      setRecoveryChecked(true);
+    } finally {
+      setStopConfirming(false);
+      setSenderCommandBusy(false);
     }
   };
   const startDryRun = () => {
@@ -403,7 +482,11 @@ export function ProgramWorkspace({
       }),
     );
   };
-  const senderForProgram = sender.sourceName === program?.sourceName;
+  const senderForProgram = senderRunIsVisibleForProgram(
+    sender,
+    program?.sourceName,
+    clearedSenderRunSequence,
+  );
   const displayedSender = senderForProgram ? sender : idleSenderSnapshot;
   const displayedSenderFailure = senderFailureSummary(displayedSender);
   const controls = dryRunControls(displayedSender, {
@@ -467,6 +550,11 @@ export function ProgramWorkspace({
     parserEligible: program?.summary.dryRunEligible ?? false,
     preflightStatus: preflightControls.status,
     resetPending: machineContext?.snapshot.resetNotice !== undefined,
+    recoveryStatus: !recoveryChecked
+      ? "checking"
+      : recoveryCandidate
+        ? "outstanding"
+        : "clear",
     requiresGrblCheck,
     workPositionAvailable: machineContext?.workPosition !== undefined,
   });
@@ -486,15 +574,19 @@ export function ProgramWorkspace({
     ? `${machineContext.activeCoordinateSystem} · X ${machineContext.workPosition.x.toFixed(3)} · Y ${machineContext.workPosition.y.toFixed(3)} · Z ${machineContext.workPosition.z.toFixed(3)}`
     : `${machineContext?.activeCoordinateSystem ?? "G54"} · не установлен`;
   const validationDetail =
-    preflightControls.status === "ready"
-      ? `Готово · ${reportForProgram?.cautionCount ?? 0} замечаний`
-      : preflightControls.status === "blocked"
-        ? requiresGrblCheck
-          ? "Нужна проверка контроллером"
-          : `${reportForProgram?.blockerCount ?? 0} блокирующих замечаний`
-        : preflightControls.status === "checking"
-          ? "Читаем состояние GRBL"
-          : "Еще не выполнялась";
+    !recoveryChecked
+      ? "Проверяем историю запусков"
+      : recoveryCandidate
+        ? `Нужно решение: ${recoveryCandidate.sourceName}`
+        : preflightControls.status === "ready"
+          ? `Готово · ${reportForProgram?.cautionCount ?? 0} замечаний`
+          : preflightControls.status === "blocked"
+            ? requiresGrblCheck
+              ? "Нужна проверка контроллером"
+              : `${reportForProgram?.blockerCount ?? 0} блокирующих замечаний`
+            : preflightControls.status === "checking"
+              ? "Читаем состояние GRBL"
+              : "Еще не выполнялась";
   const runRealPreflight = async () => {
     if (!loaded || !realRunGateway || !preflightControls.canCheck) return;
     setPreflightLoading(true);
@@ -539,14 +631,29 @@ export function ProgramWorkspace({
     if (!loaded || !realRunGateway) {
       throw new Error("Program-run gateway is unavailable");
     }
-    return realRunGateway.startProgram(
-      {
-        sourceName: loaded.program.sourceName,
-        source: loaded.source,
-      },
-      preparation.authorization.id,
-      programExecutionOptions,
-    );
+    try {
+      return await realRunGateway.startProgram(
+        {
+          sourceName: loaded.program.sourceName,
+          source: loaded.source,
+        },
+        preparation.authorization.id,
+        programExecutionOptions,
+      );
+    } catch (reason) {
+      if (String(reason).includes("unfinished recovery record")) {
+        try {
+          const candidate = await realRunGateway.recoveryCandidate();
+          setRecoveryCandidate(candidate ?? undefined);
+          setRecoveryChecked(true);
+          setFirstCutOpen(false);
+          setRecoveryOpen(candidate !== null);
+        } catch {
+          setRecoveryChecked(true);
+        }
+      }
+      throw reason;
+    }
   };
   const startCheckRun = () => {
     if (!loaded || !realRunGateway) return;
@@ -571,6 +678,7 @@ export function ProgramWorkspace({
       setRealRunReport(undefined);
       startCheckRun();
     }
+    if (action === "resolveRecovery") setRecoveryOpen(true);
     if (action === "startProgram") setFirstCutOpen(true);
     if (action === "reviewProgram") {
       setDiagnosticView(reportForProgram ? "preflight" : "warnings");
@@ -595,6 +703,7 @@ export function ProgramWorkspace({
     serialAvailable: realRunAvailable,
   });
   const mockActions = senderActionLayout(displayedSender.state);
+  const physicalActions = physicalSenderActionLayout(displayedSender.state);
   const mockStatus = displayedSenderFailure
     ? displayedSenderFailure
     : !dryRunAvailable
@@ -623,11 +732,17 @@ export function ProgramWorkspace({
   }, [checkRunVisible, programRunVisible, sender.currentSourceLine]);
 
   useEffect(() => {
-    if (!checkRunVisible || sender.state !== "completed") return;
-    setSender({ ...idleSenderSnapshot, runSequence: sender.runSequence });
+    if (!checkRunVisible || sender.state !== "completed" || !realRunAvailable) return;
+    setClearedSenderRunSequence(sender.runSequence);
     setRealRunReport(undefined);
     void runRealPreflight();
-  }, [checkRunVisible, sender.runSequence, sender.state]);
+  }, [checkRunVisible, realRunAvailable, sender.runSequence, sender.state]);
+
+  useEffect(() => {
+    if (!recoveryCandidate || !firstCutOpen) return;
+    setFirstCutOpen(false);
+    setRecoveryOpen(true);
+  }, [firstCutOpen, recoveryCandidate]);
 
   return (
     <section className="program-workspace" aria-labelledby="program-title">
@@ -666,6 +781,7 @@ export function ProgramWorkspace({
               disabled={senderActive}
               onClick={() => {
                 setLoaded(undefined);
+                setClearedSenderRunSequence(sender.runSequence || undefined);
                 setSender(idleSenderSnapshot);
                 setSelectedSourceLine(undefined);
                 setRealRunReport(undefined);
@@ -697,7 +813,7 @@ export function ProgramWorkspace({
         >
           <History aria-hidden="true" size={18} />
           <div>
-            <span>Незавершённая программа</span>
+            <span>Нет подтверждения завершения</span>
             <strong>{recoveryCandidate.sourceName}</strong>
             <small>{recoveryCandidate.detail}</small>
           </div>
@@ -716,7 +832,7 @@ export function ProgramWorkspace({
             </div>
           </dl>
           <button onClick={() => setRecoveryOpen(true)} type="button">
-            {recoveryCandidate.ready ? "Восстановить" : "Подробнее"}
+            Решить
           </button>
         </aside>
       )}
@@ -827,24 +943,105 @@ export function ProgramWorkspace({
                 </div>
                 <SenderTiming sender={displayedSender} />
                 <div className="dry-run-actions">
-                  {displayedSender.state === "paused" && realRunGateway && (
+                  {programRunVisible &&
+                    physicalActions.primary === "pause" &&
+                    realRunGateway && (
                     <button
+                      disabled={senderCommandBusy}
+                      onClick={() =>
+                        void runSenderAction(realRunGateway.pauseProgram)
+                      }
+                      type="button"
+                    >
+                      <Pause aria-hidden="true" size={13} />
+                      Пауза
+                    </button>
+                  )}
+                  {programRunVisible &&
+                    physicalActions.primary === "resume" &&
+                    realRunGateway && (
+                    <button
+                      disabled={senderCommandBusy}
                       onClick={() =>
                         void runSenderAction(realRunGateway.resumeProgram)
                       }
                       type="button"
                     >
                       <Play aria-hidden="true" size={13} />
-                      Resume
+                      Продолжить
                     </button>
                   )}
-                  {displayedSender.state === "toolChange" && realRunGateway && (
+                  {programRunVisible &&
+                    physicalActions.primary === "toolChange" &&
+                    realRunGateway && (
                     <button
+                      disabled={senderCommandBusy}
                       onClick={() => setToolChangeOpen(true)}
                       type="button"
                     >
                       <Wrench aria-hidden="true" size={13} />
                       Подтвердить замену
+                    </button>
+                  )}
+                  {programRunVisible && physicalActions.stopVisible && realRunGateway && (
+                    <button
+                      aria-label={
+                        stopConfirming
+                          ? "Подтвердить завершение задания"
+                          : "Завершить текущее задание"
+                      }
+                      className={`is-cancel${stopConfirming ? " is-confirming" : ""}`}
+                      disabled={senderCommandBusy}
+                      onClick={() => void stopProgramRun()}
+                      title="Feed Hold, затем Soft Reset; незавершённую работу можно восстановить или закрыть"
+                      type="button"
+                    >
+                      <Square aria-hidden="true" size={13} />
+                      {stopConfirming ? "Ещё раз: завершить" : "Завершить задание"}
+                    </button>
+                  )}
+                  {programRunVisible &&
+                    physicalActions.primary === "prepareRerun" && (
+                    <button
+                      className="is-terminal-action"
+                      onClick={() => {
+                        setSender((current) => ({
+                          ...idleSenderSnapshot,
+                          runSequence: current.runSequence,
+                        }));
+                        setClearedSenderRunSequence(sender.runSequence);
+                        setRealRunReport(undefined);
+                      }}
+                      type="button"
+                    >
+                      <RotateCcw aria-hidden="true" size={13} />
+                      Подготовить повторный запуск
+                    </button>
+                  )}
+                  {programRunVisible &&
+                    physicalActions.primary === "resolveInterruption" && (
+                    <button
+                      className="is-terminal-action"
+                      disabled={!recoveryChecked}
+                      onClick={() => {
+                        if (recoveryCandidate) {
+                          setRecoveryOpen(true);
+                        } else {
+                          setClearedSenderRunSequence(sender.runSequence);
+                          setSender((current) => ({
+                            ...idleSenderSnapshot,
+                            runSequence: current.runSequence,
+                          }));
+                        }
+                      }}
+                      type="button"
+                    >
+                      <History aria-hidden="true" size={13} />
+                      {!recoveryChecked
+                        ? "Сохраняем остановку..."
+                        : recoveryCandidate
+                          ? "Продолжить или начать заново"
+                          : "Подготовить новый запуск"}
                     </button>
                   )}
                 </div>
@@ -857,9 +1054,13 @@ export function ProgramWorkspace({
                       ? displayedSenderFailure
                       : displayedSender.state === "toolChange"
                         ? `M6 удерживается приложением${displayedSender.requestedTool === undefined ? "" : ` · требуется T${displayedSender.requestedTool}`}`
+                      : displayedSender.state === "paused"
+                        ? "Задание на паузе: продолжите его или завершите, чтобы освободить Jog"
+                      : displayedSender.state === "cancelled"
+                        ? "Задание завершено оператором; выберите восстановление или новый запуск"
                       : checkRunVisible
                         ? "По одной строке · без движения и включения выходов"
-                        : "Остановка: Feed Hold, затем подтверждаемый Soft Reset справа"}
+                        : "Пауза сохраняет продолжение; завершение останавливает поток через Hold и Reset"}
                 </small>
               </div>
             ) : realRunTarget ? (
@@ -1211,6 +1412,7 @@ export function ProgramWorkspace({
         onClose={() => setFirstCutOpen(false)}
         onStart={startProgramRun}
         onStarted={(snapshot) => {
+          setClearedSenderRunSequence(undefined);
           setSender(snapshot);
           setDiagnosticsOpen(false);
           setRecoveryCandidate(undefined);

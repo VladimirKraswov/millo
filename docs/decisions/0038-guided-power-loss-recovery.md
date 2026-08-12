@@ -78,6 +78,18 @@ first physical `Ln:`. Commit failure rolls it back immediately; process loss or
 an early failed/cancelled recovery restores the cryptographically linked parent
 instead of stranding a no-line child record.
 
+The job-readiness model queries recovery before it can expose Start. While the
+query is pending it fails closed; an unresolved record becomes the primary
+`Разобраться с прошлым запуском` action. Because persisted evidence may lag a
+physically completed controller, the dialog says completion was not confirmed
+and offers `Работа уже завершена` instead of asserting that the machine stopped.
+A deliberate operator stop is a typed
+actor transaction that writes Feed Hold then Soft Reset and leaves a terminal
+record. The run card immediately offers continuation or a new start; explicitly
+closing the exact record returns the loaded file to normal work-zero and
+preflight preparation. Raw persistence errors are diagnostic evidence, not the
+operator workflow.
+
 ## Consequences
 
 - Millo can survive process or power loss without trusting buffered `ok` depth.
@@ -94,6 +106,8 @@ instead of stranding a no-line child record.
 - Arbitrary send-from-line remains unavailable. This workflow applies only to a
   Millo-started run with matching durable evidence.
 - Starting another file cannot silently erase unresolved recovery evidence.
+- Pause, program finish, recovery dismissal, and Jog cancellation are distinct
+  named actions; a disabled Jog Cancel cannot be mistaken for stopping a job.
 
 ## Verification
 
@@ -102,5 +116,6 @@ instead of stranding a no-line child record.
   loss produces terminal quarantine and manual reconnect.
 - `millo-recovery`: atomic/backup persistence, conservative rewind, Safe-Z
   bounds, source/machine binding, full/checkpoint strategies, terminal cause.
-- React: continuity/confirmation/Safe-Z model tests and responsive browser fixture.
+- React: continuity/confirmation/Safe-Z and job-readiness priority tests plus
+  responsive recovery and physical-run browser fixtures.
 - Full repository gate: `npm run verify`.

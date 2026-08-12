@@ -2057,6 +2057,32 @@ async fn start_check_run_impl(
 }
 
 #[tauri::command]
+pub async fn pause_program_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
+    let _transition = state.transition_lock.lock().await;
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        if state.active_transport.lock().await.kind != TransportKind::Serial {
+            return Err("program pause requires an active serial transport".to_owned());
+        }
+        state
+            .arbiter
+            .pause_program_run()
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Sender,
+        "sender.pause",
+        "Physical sender paused",
+        Value::Null,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
 pub async fn resume_program_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
     let _transition = state.transition_lock.lock().await;
     let result = async {
@@ -2076,6 +2102,32 @@ pub async fn resume_program_run(state: State<'_, AppState>) -> Result<SenderSnap
         AuditCategory::Sender,
         "sender.resume",
         "Physical sender resumed",
+        Value::Null,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn abort_program_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
+    let _transition = state.transition_lock.lock().await;
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        if state.active_transport.lock().await.kind != TransportKind::Serial {
+            return Err("program stop requires an active serial transport".to_owned());
+        }
+        state
+            .arbiter
+            .abort_program_run()
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Safety,
+        "sender.abort",
+        "Physical sender stopped with Feed Hold and Soft Reset",
         Value::Null,
         &result,
     );

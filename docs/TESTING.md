@@ -100,7 +100,8 @@ mobile sizes.
 ## Job-centered operator workflow
 
 - `jobReadinessModel` tests the complete primary-action priority, including
-  disconnected, Alarm, missing work zero, required GRBL Check, and ready Start.
+  disconnected, Alarm, pending/outstanding recovery, missing work zero,
+  required GRBL Check, and ready Start.
 - `workPositionModel` verifies direct WPos and conservative MPos derivation from
   active G5x, G92, and TLO evidence.
 - React server-render tests preserve four readiness facts, exactly one primary
@@ -109,6 +110,13 @@ mobile sizes.
   readiness, run preflight, confirm that Start replaces the previous action,
   open Work zero, and open the final confirmation. The fixture must show a bound
   connected machine so its states do not contradict the job surface.
+- `/?fixture=check-complete` starts from a recurring terminal Check snapshot and
+  must render ready validation plus the intent-specific `Начать гравировку`
+  action, never the old Completed card.
+- The same fixture exercises `Start -> Pause -> Finish job -> Prepare new run`.
+  The physical sender action model keeps two stable action slots, and the actor
+  regression proves typed stop writes `!` then `Ctrl-X`, becomes `Cancelled`,
+  and refuses a second stop.
 - The typed Unlock boundary remains covered by the actor test
   `alarm_unlock_requires_confirmation_and_verifies_idle_in_the_actor`; the Tauri
   adapter only forwards explicit UI intent and records the result in audit.
@@ -494,7 +502,11 @@ additional two steps are the typed M5/M9 shutdown epilogue before M30.
   explicit reconnect cannot revive the failed FIFO.
 - React model tests require all six recovery confirmations, finite Safe Z at or
   above the parser envelope, availability of the selected strategy, and atomic
-  busy-state consumption. The recovery fixture is inspected at desktop and
+  busy-state consumption. Component markup also keeps the explicit
+  `Работа уже завершена` versus `Подготовить повторный запуск` decision and
+  excludes the backend persistence wording from operator copy. The recovery
+  fixture verifies that outstanding evidence replaces Start with
+  `Разобраться с прошлым запуском` and is inspected at desktop and
   390 x 844: conservative default, continuity choices, banner, checklist,
   disabled/enabled action, low-Safe-Z rejection, and browser console.
 

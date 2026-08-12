@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { SenderState } from "../../shared/dryRun";
-import { senderActionLayout } from "./operatorLayoutModel";
+import {
+  physicalSenderActionLayout,
+  senderActionLayout,
+  senderRunIsVisibleForProgram,
+} from "./operatorLayoutModel";
 
 describe("operator layout model", () => {
   it("keeps one primary and one cancel slot through every sender state", () => {
@@ -28,5 +32,36 @@ describe("operator layout model", () => {
       ["failed", { primary: "start", cancelVisible: false }],
       ["cancelled", { primary: "start", cancelVisible: false }],
     ]);
+  });
+
+  it("keeps physical run controls explicit through pause and interruption", () => {
+    expect(physicalSenderActionLayout("running")).toEqual({
+      primary: "pause",
+      stopVisible: true,
+    });
+    expect(physicalSenderActionLayout("paused")).toEqual({
+      primary: "resume",
+      stopVisible: true,
+    });
+    expect(physicalSenderActionLayout("toolChange")).toEqual({
+      primary: "toolChange",
+      stopVisible: true,
+    });
+    expect(physicalSenderActionLayout("cancelled")).toEqual({
+      primary: "resolveInterruption",
+      stopVisible: false,
+    });
+    expect(physicalSenderActionLayout("completed")).toEqual({
+      primary: "prepareRerun",
+      stopVisible: false,
+    });
+  });
+
+  it("does not resurrect a terminal run after the UI consumed its sequence", () => {
+    const terminal = { runSequence: 42, sourceName: "engraving.nc" };
+
+    expect(senderRunIsVisibleForProgram(terminal, "engraving.nc", undefined)).toBe(true);
+    expect(senderRunIsVisibleForProgram(terminal, "engraving.nc", 42)).toBe(false);
+    expect(senderRunIsVisibleForProgram(terminal, "next.nc", undefined)).toBe(false);
   });
 });

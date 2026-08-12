@@ -422,7 +422,21 @@ does not schedule or execute controller I/O.
   response failure triggers best-effort realtime Hold followed by Soft Reset to
   flush the controller receive and planner queues.
 - Physical modes cannot use plain Cancel. Operator stop is Feed Hold followed by
-  challenge-confirmed Soft Reset.
+  Soft Reset in one typed actor request. React uses a short two-press inline
+  confirmation, while the actor verifies that an Air/Cut sender is active,
+  writes `!` then `Ctrl-X`, and changes the sender to `Cancelled` only after
+  both bytes are delivered. The generic emergency Reset remains a separate
+  expiring challenge.
+- Job readiness treats the durable recovery query as controller evidence. It
+  fails closed while that asynchronous query is pending and promotes an
+  unresolved record ahead of parser/preflight/Start. A cancelled sender remains
+  visible until the operator prepares recovery or explicitly dismisses the
+  record; dismissal resets only the UI sender view and never silently erases a
+  record without its exact ID.
+- React records the run sequence of a completed GRBL Check after consuming it.
+  Subsequent event-stream copies of that terminal snapshot are presentation-idempotent:
+  they cannot resurrect the Completed card after automatic preflight has exposed
+  the next Start action.
 
 ### Lifecycle invariants
 

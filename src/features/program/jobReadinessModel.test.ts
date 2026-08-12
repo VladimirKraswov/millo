@@ -10,6 +10,7 @@ const readyInput: JobReadinessInput = {
   parserEligible: true,
   preflightStatus: "ready",
   resetPending: false,
+  recoveryStatus: "clear",
   requiresGrblCheck: false,
   workPositionAvailable: true,
 };
@@ -57,6 +58,26 @@ describe("jobReadinessModel", () => {
     });
 
     expect(view.primaryAction).toBe("runGrblCheck");
+  });
+
+  it("blocks a new start until persisted recovery is resolved", () => {
+    const view = jobReadinessModel({
+      ...readyInput,
+      recoveryStatus: "outstanding",
+    });
+
+    expect(view.primaryAction).toBe("resolveRecovery");
+    expect(view.steps[3]).toEqual({ id: "validation", state: "blocked" });
+  });
+
+  it("does not expose Start while recovery evidence is still loading", () => {
+    const view = jobReadinessModel({
+      ...readyInput,
+      recoveryStatus: "checking",
+    });
+
+    expect(view.primaryAction).toBe("resolveRecovery");
+    expect(view.primaryDisabled).toBe(true);
   });
 
   it("exposes one start action only after all readiness facts pass", () => {

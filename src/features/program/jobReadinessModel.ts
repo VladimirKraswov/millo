@@ -10,6 +10,7 @@ export type JobReadinessAction =
   | "reviewProgram"
   | "runPreflight"
   | "runGrblCheck"
+  | "resolveRecovery"
   | "startProgram";
 
 export type JobReadinessStepId = "machine" | "file" | "origin" | "validation";
@@ -35,6 +36,7 @@ export interface JobReadinessInput {
   readonly parserEligible: boolean;
   readonly preflightStatus: RealRunPreflightStatus;
   readonly resetPending: boolean;
+  readonly recoveryStatus: "checking" | "clear" | "outstanding";
   readonly requiresGrblCheck: boolean;
   readonly workPositionAvailable: boolean;
 }
@@ -69,13 +71,17 @@ export function jobReadinessModel(input: JobReadinessInput): JobReadinessView {
     step("origin", originReady ? "ready" : connected ? "action" : "pending"),
     step(
       "validation",
-      validationReady
-        ? "ready"
-        : input.preflightStatus === "checking"
-          ? "pending"
-          : input.preflightStatus === "blocked"
-            ? "blocked"
-            : "action",
+      input.recoveryStatus === "checking"
+        ? "pending"
+        : input.recoveryStatus === "outstanding"
+          ? "blocked"
+          : validationReady
+            ? "ready"
+            : input.preflightStatus === "checking"
+              ? "pending"
+              : input.preflightStatus === "blocked"
+                ? "blocked"
+                : "action",
     ),
   ];
 
@@ -117,6 +123,22 @@ export function jobReadinessModel(input: JobReadinessInput): JobReadinessView {
       primaryAction: "waitForIdle",
       primaryLabel: "Дождитесь состояния Idle",
       primaryDisabled: true,
+    };
+  }
+  if (input.recoveryStatus === "checking") {
+    return {
+      steps,
+      primaryAction: "resolveRecovery",
+      primaryLabel: "Проверяем предыдущий запуск...",
+      primaryDisabled: true,
+    };
+  }
+  if (input.recoveryStatus === "outstanding") {
+    return {
+      steps,
+      primaryAction: "resolveRecovery",
+      primaryLabel: "Разобраться с прошлым запуском",
+      primaryDisabled: false,
     };
   }
   if (!fileReady) {

@@ -42,6 +42,7 @@ import { previewFixtureProgram } from "./features/program/previewFixtureProgram"
 import { previewFixtureAirSquareProgram } from "./features/program/previewFixtureAirSquare";
 import { previewFixturePreflightGateway } from "./features/program/previewFixturePreflight";
 import {
+  previewFixtureCheckCompleteSender,
   previewFixtureFirstCutGateway,
   previewFixtureFirstCutProgram,
   previewFixtureRecoveryGateway,
@@ -104,6 +105,7 @@ const developmentPreviewFixture =
   developmentFixture === "air-square"
     ? previewFixtureAirSquareProgram
     : developmentFixture === "first-cut" ||
+        developmentFixture === "check-complete" ||
         developmentFixture === "tool-change" ||
         developmentFixture === "recovery"
       ? previewFixtureFirstCutProgram
@@ -113,11 +115,13 @@ const developmentPreviewFixture =
 const developmentPreflightFixture =
   developmentFixture === "preflight" ||
   developmentFixture === "first-cut" ||
+  developmentFixture === "check-complete" ||
   developmentFixture === "tool-change" ||
   developmentFixture === "recovery" ||
   developmentFixture === "air-square";
 const developmentFirstCutFixture =
   developmentFixture === "first-cut" ||
+  developmentFixture === "check-complete" ||
   developmentFixture === "tool-change" ||
   developmentFixture === "recovery" ||
   developmentFixture === "air-square";
@@ -794,9 +798,14 @@ export default function App() {
               dryRunGateway={desktopRuntime ? tauriDryRunGateway : undefined}
               gateway={tauriProgramGateway}
               initialProgram={developmentPreviewFixture}
+              initialRunIntent={
+                developmentFixture === "check-complete" ? "cutting" : undefined
+              }
               initialSender={
                 developmentFixture === "tool-change"
                   ? previewFixtureToolChangeSender
+                  : developmentFixture === "check-complete"
+                    ? previewFixtureCheckCompleteSender
                   : undefined
               }
               machineContext={{

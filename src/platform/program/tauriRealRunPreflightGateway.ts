@@ -40,7 +40,9 @@ export const tauriRealRunPreflightGateway: RealRunPreflightGateway = {
     }),
   startCheck: (request, executionOptions) =>
     invoke<SenderSnapshot>("start_check_run", { request, executionOptions }),
+  pauseProgram: () => invoke<SenderSnapshot>("pause_program_run"),
   resumeProgram: () => invoke<SenderSnapshot>("resume_program_run"),
+  abortProgram: () => invoke<SenderSnapshot>("abort_program_run"),
   completeToolChange: (confirmation: ToolChangeConfirmation) =>
     invoke<SenderSnapshot>("complete_tool_change", { confirmation }),
 };

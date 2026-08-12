@@ -37,4 +37,31 @@ describe("JobReadinessPanel", () => {
     expect(markup).toContain("Проверить готовность");
     expect(markup.match(/job-primary-action/g)).toHaveLength(1);
   });
+
+  it("names the final action after the selected execution intent", () => {
+    const markup = renderToStaticMarkup(
+      <JobReadinessPanel
+        busy={false}
+        details={{ machine: "Idle", file: "ok", origin: "G54", validation: "ok" }}
+        intent="cutting"
+        onIntent={() => undefined}
+        onOpenOrigin={() => undefined}
+        onPrimary={() => undefined}
+        view={{
+          primaryAction: "startProgram",
+          primaryDisabled: false,
+          primaryLabel: "Запустить программу",
+          steps: [
+            { id: "machine", state: "ready" },
+            { id: "file", state: "ready" },
+            { id: "origin", state: "ready" },
+            { id: "validation", state: "ready" },
+          ],
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Начать гравировку");
+    expect(markup).not.toContain(">Запустить программу<");
+  });
 });

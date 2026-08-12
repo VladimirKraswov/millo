@@ -168,8 +168,8 @@ export function ProgramRecoveryDialog({
       >
         <header>
           <div>
-            <span>Interrupted job</span>
-            <h2 id="recovery-title">Восстановление программы</h2>
+            <span>Предыдущий запуск</span>
+            <h2 id="recovery-title">Завершение не подтверждено</h2>
           </div>
           <button
             aria-label="Закрыть"
@@ -196,11 +196,11 @@ export function ProgramRecoveryDialog({
             </div>
             <dl>
               <div>
-                <dt>GRBL Ln</dt>
+                <dt>Последняя строка</dt>
                 <dd>{candidate.executingSourceLine ?? "нет"}</dd>
               </div>
               <div>
-                <dt>Restart</dt>
+                <dt>Продолжение</dt>
                 <dd>
                   {candidate.checkpointRestartAvailable
                     ? candidate.restartSourceLine
@@ -208,7 +208,7 @@ export function ProgramRecoveryDialog({
                 </dd>
               </div>
               <div>
-                <dt>Accepted</dt>
+                <dt>Принято строк</dt>
                 <dd>{candidate.acknowledgedLines}</dd>
               </div>
               {candidate.restartPosition && (
@@ -222,6 +222,17 @@ export function ProgramRecoveryDialog({
                 </div>
               )}
             </dl>
+          </div>
+
+          <div className="recovery-decision">
+            <CircleAlert aria-hidden="true" size={17} />
+            <span>
+              <strong>Что сделать с этой записью?</strong>
+              <small>
+                Даже если станок дошёл до конца, Millo мог не успеть сохранить финальный
+                статус. Подтвердите завершение или подготовьте безопасный повторный запуск.
+              </small>
+            </span>
           </div>
 
           {candidate.ready ? (
@@ -358,7 +369,7 @@ export function ProgramRecoveryDialog({
         <footer>
           <button disabled={busy} onClick={() => void dismiss()} type="button">
             <X aria-hidden="true" size={14} />
-            Не восстанавливать
+            Работа уже завершена
           </button>
           {candidate.ready && (
             <button
@@ -371,8 +382,8 @@ export function ProgramRecoveryDialog({
               {busy
                 ? "Подготовка..."
                 : request.continuity === "motionPowerLostOrUnknown"
-                  ? "Создать полный restart"
-                  : "Создать recovery program"}
+                  ? "Подготовить повторный запуск"
+                  : "Подготовить продолжение"}
             </button>
           )}
         </footer>

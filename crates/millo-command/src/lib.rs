@@ -100,6 +100,10 @@ pub enum ArbiterError {
     CheckRunTransportUnavailable,
     #[error("program run can resume only from GRBL Hold or Idle, current mode is {0:?}")]
     ProgramRunResumeUnavailable(MachineMode),
+    #[error("physical program pause is unavailable while sender is {0:?}")]
+    ProgramRunPauseUnavailable(SenderState),
+    #[error("physical program stop is unavailable while sender is {0:?}")]
+    ProgramRunStopUnavailable(SenderState),
     #[error("tool change can be completed only at an active M6 barrier, sender is {0:?}")]
     ToolChangeUnavailable(SenderState),
     #[error("tool-change confirmation does not match the active source line or requested tool")]
@@ -438,6 +442,16 @@ impl CommandArbiter {
             .await
     }
 
+    pub async fn pause_program_run(&self) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::PauseProgramRun { response })
+            .await
+    }
+
+    pub async fn abort_program_run(&self) -> Result<SenderSnapshot, ArbiterError> {
+        self.call(|response| Request::AbortProgramRun { response })
+            .await
+    }
+
     pub async fn complete_tool_change(
         &self,
         confirmation: ToolChangeConfirmation,
@@ -660,6 +674,12 @@ enum Request {
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
     ResumeProgramRun {
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
+    },
+    PauseProgramRun {
+        response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
+    },
+    AbortProgramRun {
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
     CompleteToolChange {
@@ -1092,6 +1112,33 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             } else {
                 execute_program_run_resume(controller, sender).await
             };
+            publish(snapshots, controller);
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
+        Request::PauseProgramRun { response } => {
+            invalidate_authorizations(safety, first_cut);
+            let result = if *execution_target != ExecutionTarget::Serial {
+                Err(ArbiterError::RealRunTransportUnavailable)
+            } else {
+                execute_program_run_pause(controller, sender).await
+            };
+            publish(snapshots, controller);
+            publish_sender(sender_snapshots, sender);
+            let _ = response.send(result);
+        }
+        Request::AbortProgramRun { response } => {
+            invalidate_authorizations(safety, first_cut);
+            program_check.invalidate();
+            *pending_program_check = None;
+            let result = if *execution_target != ExecutionTarget::Serial {
+                Err(ArbiterError::RealRunTransportUnavailable)
+            } else {
+                execute_program_run_abort(controller, sender).await
+            };
+            if result.is_ok() {
+                *sender_dispatch_enabled = true;
+            }
             publish(snapshots, controller);
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
@@ -1549,6 +1596,62 @@ async fn execute_program_run_resume(
         mode => return Err(ArbiterError::ProgramRunResumeUnavailable(mode)),
     }
     sender.resume().map_err(ArbiterError::from)
+}
+
+fn ensure_active_physical_sender(
+    sender: &Sender,
+    action: &'static str,
+) -> Result<SenderState, ArbiterError> {
+    let snapshot = sender.snapshot();
+    if !matches!(
+        snapshot.mode,
+        Some(millo_sender::SenderMode::AirRun | millo_sender::SenderMode::CutRun)
+    ) {
+        return Err(match action {
+            "pause" => ArbiterError::ProgramRunPauseUnavailable(snapshot.state),
+            _ => ArbiterError::ProgramRunStopUnavailable(snapshot.state),
+        });
+    }
+    Ok(snapshot.state)
+}
+
+async fn execute_program_run_pause(
+    controller: &mut Controller<BoxedTransport>,
+    sender: &mut Sender,
+) -> Result<SenderSnapshot, ArbiterError> {
+    let state = ensure_active_physical_sender(sender, "pause")?;
+    if !matches!(state, SenderState::Running | SenderState::Draining) {
+        return Err(ArbiterError::ProgramRunPauseUnavailable(state));
+    }
+    controller.send_realtime(RealtimeCommand::FeedHold).await?;
+    sender.pause().map_err(ArbiterError::from)
+}
+
+async fn execute_program_run_abort(
+    controller: &mut Controller<BoxedTransport>,
+    sender: &mut Sender,
+) -> Result<SenderSnapshot, ArbiterError> {
+    let state = ensure_active_physical_sender(sender, "stop")?;
+    if !matches!(
+        state,
+        SenderState::Running
+            | SenderState::Paused
+            | SenderState::ToolChange
+            | SenderState::Draining
+    ) {
+        return Err(ArbiterError::ProgramRunStopUnavailable(state));
+    }
+    if let Err(error) = controller.abort_program_stream().await {
+        sender.fail_with(controller_sender_failure(
+            &error,
+            "operator stop could not be delivered",
+        ));
+        if controller_failure_requires_manual_reconnect(&error) {
+            let _ = controller.disconnect().await;
+        }
+        return Err(error.into());
+    }
+    sender.cancel().map_err(ArbiterError::from)
 }
 
 async fn execute_tool_change_completion(
@@ -4157,6 +4260,31 @@ mod tests {
         arbiter.refresh_status().await.unwrap();
         let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
         assert_eq!(completed.mode, Some(millo_sender::SenderMode::CutRun));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn typed_program_pause_and_abort_stop_only_a_physical_sender() {
+        let source = "G21 G90 G94\nG0 Z2\nG1 X2 F20";
+        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        authorize_and_start_serial_fixture(&arbiter, source, false).await;
+
+        let paused = arbiter.pause_program_run().await.unwrap();
+        assert_eq!(paused.state, SenderState::Paused);
+        assert_eq!(control.writes().last(), Some(&b"!".to_vec()));
+
+        let stopped = arbiter.abort_program_run().await.unwrap();
+        assert_eq!(stopped.state, SenderState::Cancelled);
+        assert_eq!(
+            control.writes()[control.writes().len() - 2..],
+            [b"!".to_vec(), b"\x18".to_vec()]
+        );
+        assert!(matches!(
+            arbiter.abort_program_run().await.unwrap_err(),
+            ArbiterError::ProgramRunStopUnavailable(SenderState::Cancelled)
+        ));
         task.abort();
     }
 

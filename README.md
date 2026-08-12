@@ -185,7 +185,10 @@ then removed because GRBL 1.1 does not consume that transport syntax. Corrupt
 or ambiguous checksums fail closed. `M2/M30` end dispatch. After the final `ok`,
 physical runs enter `Draining` and complete only after a fresh GRBL
 `Idle` status. Feed Hold uses realtime `!`, Resume uses `~` when GRBL reports
-Hold, and an operator stop remains challenge-confirmed. A physical `error`,
+Hold. The run card exposes typed Pause/Resume plus a dedicated two-press
+`Завершить задание`; its actor transaction sends Feed Hold followed by Soft
+Reset and marks the sender `Cancelled`. The generic Reset control keeps its
+separate expiring challenge. A physical `error`,
 `ALARM`, response timeout, or write failure automatically sends Hold then Soft
 Reset so already-buffered commands cannot continue. Polling failure, reset
 banner, or disconnect also fails closed. The sender is available only for an
@@ -227,7 +230,11 @@ offered until a power/position signal is wired; the original file must then be
 re-run after inspection. For detected interruptions, the recovery dialog
 defaults to the full-restart policy. An unresolved record blocks an unrelated
 physical job and can be replaced only by its exact prepared recovery program or
-by explicit dismissal.
+by explicit dismissal. Job readiness queries this record before exposing Start,
+so uncertain completion becomes `Разобраться с прошлым запуском` instead of a
+late persistence error in the final confirmation dialog. `Работа уже завершена`
+explicitly dismisses the exact record and returns
+the current file to ordinary preflight, work-zero, and Jog setup.
 
 A separate serial-only Check run validates an approved file through GRBL's
 typed `$C` mode without executing motion. The actor enters only from fresh
@@ -309,11 +316,15 @@ recorded in [ADR 0039](docs/decisions/0039-progressive-operator-shell.md).
 
 Program now presents Machine, File, Work zero, and Validation as persistent job
 facts beside the preview and exposes exactly one next action: Connect, Unlock,
-set zero, validate, run GRBL Check, or Start. This is not a modal wizard; all
+resolve an interrupted run, set zero, validate, run GRBL Check, or Start. Start
+remains hidden while the asynchronous recovery query is pending. This is not a modal wizard; all
 context remains visible and experienced operators can open origin or diagnostics
 directly. G54-G59 work position is primary while G53 remains compact secondary
 evidence. The contract is recorded in
 [ADR 0043](docs/decisions/0043-job-centered-operator-workflow.md).
+Completed GRBL Check run sequences are consumed once by the UI before preflight
+is repeated; recurring terminal snapshots cannot replace the resulting
+`Начать гравировку` or `Запустить без резания` action.
 GRBL's periodic `WCO`/override fields are reconciled in the Rust controller, so
 work coordinates and readiness remain stable between sparse status frames while
 reset and reconnect still discard stale evidence. See

@@ -113,7 +113,9 @@ export interface RealRunPreflightGateway {
     request: ProgramParseRequest,
     executionOptions: ProgramExecutionOptions,
   ): Promise<import("./dryRun").SenderSnapshot>;
+  pauseProgram(): Promise<import("./dryRun").SenderSnapshot>;
   resumeProgram(): Promise<import("./dryRun").SenderSnapshot>;
+  abortProgram(): Promise<import("./dryRun").SenderSnapshot>;
   completeToolChange(
     confirmation: ToolChangeConfirmation,
   ): Promise<import("./dryRun").SenderSnapshot>;
