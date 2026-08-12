@@ -887,6 +887,9 @@ export default function App() {
                   : tauriProgramGateway
               }
               initialProgram={developmentPreviewFixture}
+              initialSource={
+                developmentPreviewFixture?.lines.map((line) => line.source).join("\n")
+              }
               incomingJob={generatedJob}
               initialRunIntent={
                 developmentFixture === "check-complete" ||

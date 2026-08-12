@@ -128,6 +128,16 @@ selectable and explicitly report that they have no preview geometry. The table
 renders only a small overscanned window, so the 200,000-line parser limit does
 not become 200,000 DOM nodes.
 
+The Program header opens a separate syntax-highlighted editor with row
+insert/delete, clipboard operations, and bounded undo/redo. Each settled change
+is reparsed by the Rust core and updates a linked Three.js preview; an invalid
+draft keeps the preceding valid geometry visible but cannot be applied or
+saved. Applying a revision clears stale Check/preflight/safe-start evidence.
+Native export can save the exact draft or a parser-normalized processed copy
+with the current `/` optional-block policy. The latter is intentionally not a
+heightmap/geometric transform. See
+[ADR 0049](docs/decisions/0049-safe-program-editor.md).
+
 The connection panel also opens a persistent structured event journal. It
 correlates controller lifecycle, preflight, safety actions, sender source lines,
 GRBL failures, Hold/Reset/disconnect, and persistence health by session and
@@ -478,7 +488,11 @@ Crash-safe guided restart is recorded in
 The progressive operator shell and compact confirmation mapping are recorded in
 [ADR 0039](docs/decisions/0039-progressive-operator-shell.md).
 The job-centered run flow and contextual action priority are recorded in
-[ADR 0043](docs/decisions/0043-job-centered-operator-workflow.md). The
+[ADR 0043](docs/decisions/0043-job-centered-operator-workflow.md). Safe
+selected-line compilation is recorded in
+[ADR 0048](docs/decisions/0048-safe-selected-line-start.md), and the separate
+draft/parse/apply editor boundary in
+[ADR 0049](docs/decisions/0049-safe-program-editor.md). The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).
 

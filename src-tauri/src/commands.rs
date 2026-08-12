@@ -1963,21 +1963,53 @@ pub async fn save_generated_gcode(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<GeneratedGcodeSaveOutcome>, String> {
+    save_validated_gcode(
+        ProgramParseRequest {
+            source_name: request.source_name,
+            source: request.source,
+        },
+        &app,
+        &state.audit,
+        "storage.generated_gcode_saved",
+        "Generated G-code saved",
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn save_gcode_program(
+    request: ProgramParseRequest,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<GeneratedGcodeSaveOutcome>, String> {
+    save_validated_gcode(
+        request,
+        &app,
+        &state.audit,
+        "storage.gcode_program_saved",
+        "G-code program saved",
+    )
+    .await
+}
+
+async fn save_validated_gcode(
+    request: ProgramParseRequest,
+    app: &AppHandle,
+    audit: &AuditLog,
+    audit_operation: &'static str,
+    audit_message: &'static str,
+) -> Result<Option<GeneratedGcodeSaveOutcome>, String> {
     let source_name = request.source_name.trim();
-    if !valid_generated_gcode_name(&request.source_name) {
-        return Err("generated G-code file name is invalid".to_owned());
+    if !valid_program_gcode_name(&request.source_name) {
+        return Err("G-code file name is invalid".to_owned());
     }
-    parse_program(ProgramParseRequest {
-        source_name: source_name.to_owned(),
-        source: request.source.clone(),
-    })
-    .map_err(|error| format!("generated G-code is invalid: {error}"))?;
+    parse_program(request.clone()).map_err(|error| format!("G-code is invalid: {error}"))?;
 
     let (selection, selected) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
         .set_file_name(source_name)
-        .add_filter("G-code", &["nc", "ngc", "gcode"])
+        .add_filter("G-code", &["nc", "ngc", "gcode", "tap", "cnc"])
         .save_file(move |path| {
             let _ = selection.send(path);
         });
@@ -1998,17 +2030,17 @@ pub async fn save_generated_gcode(
         path: path.to_string_lossy().into_owned(),
         bytes_written,
     };
-    state.audit.record(
+    audit.record(
         AuditLevel::Info,
         AuditCategory::Storage,
-        "storage.generated_gcode_saved",
-        "Generated G-code saved",
+        audit_operation,
+        audit_message,
         json!({ "path": &outcome.path, "bytesWritten": outcome.bytes_written }),
     );
     Ok(Some(outcome))
 }
 
-fn valid_generated_gcode_name(value: &str) -> bool {
+fn valid_program_gcode_name(value: &str) -> bool {
     let trimmed = value.trim();
     let extension = std::path::Path::new(trimmed)
         .extension()
@@ -2019,7 +2051,7 @@ fn valid_generated_gcode_name(value: &str) -> bool {
         && value == trimmed
         && !trimmed.contains('/')
         && !trimmed.contains('\\')
-        && matches!(extension.as_str(), "nc" | "ngc" | "gcode")
+        && matches!(extension.as_str(), "nc" | "ngc" | "gcode" | "tap" | "cnc")
 }
 
 #[tauri::command]
@@ -2850,13 +2882,15 @@ mod tests {
     }
 
     #[test]
-    fn generated_gcode_export_accepts_only_leaf_program_names() {
-        assert!(valid_generated_gcode_name("engraving.nc"));
-        assert!(valid_generated_gcode_name("engraving.GCODE"));
-        assert!(!valid_generated_gcode_name("../engraving.nc"));
-        assert!(!valid_generated_gcode_name("folder\\engraving.nc"));
-        assert!(!valid_generated_gcode_name("engraving.svg"));
-        assert!(!valid_generated_gcode_name(" engraving.nc"));
+    fn program_export_accepts_only_leaf_program_names() {
+        assert!(valid_program_gcode_name("engraving.nc"));
+        assert!(valid_program_gcode_name("engraving.GCODE"));
+        assert!(valid_program_gcode_name("engraving.tap"));
+        assert!(valid_program_gcode_name("engraving.cnc"));
+        assert!(!valid_program_gcode_name("../engraving.nc"));
+        assert!(!valid_program_gcode_name("folder\\engraving.nc"));
+        assert!(!valid_program_gcode_name("engraving.svg"));
+        assert!(!valid_program_gcode_name(" engraving.nc"));
     }
 
     #[test]

@@ -286,6 +286,17 @@ does not schedule or execute controller I/O.
 - Program line selection is component-local read state keyed by the parser's
   one-based `sourceLine`. It never edits `ProgramLine`, normalized source, or
   sender plans.
+- Program editing is a separate draft boundary. Its 200-revision history,
+  clipboard operations, and viewport-bounded syntax lexer can change only the
+  draft string. A sequenced `ProgramGateway.parse` response must match the
+  current draft before Apply or native Save is enabled.
+- The editor preview always consumes an immutable Rust parser DTO. Applying a
+  valid revision replaces source plus DTO together and invalidates previous
+  sender, GRBL Check, preflight, selected-line, and safe-start evidence.
+- Native program export reparses before writing. Exact export retains the
+  draft; processed export joins normalized executable rows and resolves `/`
+  rows through the active block-delete policy. It is not a geometric or
+  heightmap transform. See ADR 0049.
 - `programLineTableModel` computes a fixed-height overscanned window, and the
   React table mounts only that slice. The full line count is represented by a
   spacer inside a bounded desktop/mobile viewport.

@@ -7,6 +7,7 @@ import {
   History,
   LocateFixed,
   Pause,
+  PencilLine,
   Play,
   RotateCcw,
   Route,
@@ -62,6 +63,7 @@ import type {
 import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
 import { JobReadinessPanel } from "./JobReadinessPanel";
 import { ProgramFilePicker } from "./ProgramFilePicker";
+import { ProgramEditor } from "./ProgramEditor";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramLineTable } from "./ProgramLineTable";
 import { ProgramRecoveryDialog } from "./ProgramRecoveryDialog";
@@ -243,6 +245,7 @@ export function ProgramWorkspace({
     useState<ProgramExecutionOptions>(defaultProgramExecutionOptions);
   const [firstCutOpen, setFirstCutOpen] = useState(false);
   const [safeStartOpen, setSafeStartOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
   const [safeStartContext, setSafeStartContext] = useState<SafeStartContext>();
   const [toolChangeOpen, setToolChangeOpen] = useState(false);
   const [recoveryOpen, setRecoveryOpen] = useState(false);
@@ -278,6 +281,7 @@ export function ProgramWorkspace({
     setRealRunReport(undefined);
     setFirstCutOpen(false);
     setSafeStartOpen(false);
+    setEditorOpen(false);
     setSafeStartContext(undefined);
     setToolChangeOpen(false);
     setError(undefined);
@@ -412,6 +416,7 @@ export function ProgramWorkspace({
       setRealRunReport(undefined);
       setFirstCutOpen(false);
       setToolChangeOpen(false);
+      setEditorOpen(false);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -451,6 +456,7 @@ export function ProgramWorkspace({
       setFirstCutOpen(false);
       setSafeStartOpen(false);
       setSafeStartContext(undefined);
+      setEditorOpen(false);
       setRecoveryCandidate(undefined);
     } catch (reason) {
       setError(String(reason));
@@ -517,6 +523,22 @@ export function ProgramWorkspace({
     setSelectedSourceLine(undefined);
     setRealRunReport(undefined);
     setDiagnosticsOpen(false);
+    setError(undefined);
+  };
+
+  const applyEditedProgram = (next: LoadedProgram) => {
+    setLoaded(next);
+    setClearedSenderRunSequence(sender.runSequence || undefined);
+    setSender(idleSenderSnapshot);
+    setSelectedSourceLine(undefined);
+    setDiagnosticView(next.program.warnings.length > 0 ? "warnings" : "lines");
+    setDiagnosticsOpen(next.program.warnings.length > 0);
+    setRealRunReport(undefined);
+    setFirstCutOpen(false);
+    setSafeStartOpen(false);
+    setSafeStartContext(undefined);
+    setToolChangeOpen(false);
+    setEditorOpen(false);
     setError(undefined);
   };
 
@@ -933,6 +955,22 @@ export function ProgramWorkspace({
           )}
           {program && (
             <button
+              aria-label="Редактировать G-code"
+              className="program-icon-action"
+              disabled={senderActive || safeStartContext !== undefined}
+              onClick={() => setEditorOpen(true)}
+              title={
+                safeStartContext
+                  ? "Вернитесь к полной программе перед редактированием"
+                  : "Редактировать G-code"
+              }
+              type="button"
+            >
+              <PencilLine aria-hidden="true" size={14} />
+            </button>
+          )}
+          {program && (
+            <button
               aria-label="Закрыть программу"
               className="program-icon-action"
               disabled={senderActive}
@@ -945,6 +983,7 @@ export function ProgramWorkspace({
                 setFirstCutOpen(false);
                 setSafeStartOpen(false);
                 setSafeStartContext(undefined);
+                setEditorOpen(false);
                 setDiagnosticsOpen(false);
                 setError(undefined);
               }}
@@ -1664,6 +1703,16 @@ export function ProgramWorkspace({
           selectedCommand={selectedProgramLine.source || selectedProgramLine.normalized}
           sourceLine={selectedProgramLine.sourceLine}
           suggestedSafeZ={suggestedSafeZ(bounds?.max.z)}
+        />
+      )}
+
+      {editorOpen && loaded && (
+        <ProgramEditor
+          blockDelete={programExecutionOptions.blockDelete}
+          document={loaded}
+          gateway={gateway}
+          onApply={applyEditedProgram}
+          onClose={() => setEditorOpen(false)}
         />
       )}
 

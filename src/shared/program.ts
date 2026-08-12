@@ -7,6 +7,11 @@ export interface ProgramParseOptions {
   readonly blockDelete: boolean;
 }
 
+export interface ProgramSaveOutcome {
+  readonly path: string;
+  readonly bytesWritten: number;
+}
+
 export interface ProgramPoint {
   readonly x: number;
   readonly y: number;

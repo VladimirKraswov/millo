@@ -49,5 +49,6 @@ describe("ProgramWorkspace completed-run workflow", () => {
     expect(markup).toContain("Вернуть фрезу к Z0");
     expect(markup).toContain("Подготовить повторный запуск");
     expect(markup).toContain("Z0 → Jog Z− → Только Z");
+    expect(markup).toContain("aria-label=\"Редактировать G-code\"");
   });
 });

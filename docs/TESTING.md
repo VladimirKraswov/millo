@@ -33,6 +33,11 @@ core panel occupies the separate `control.coordinates` slot.
 
 Program-loader tests reject unsupported, empty, and oversized files before IPC
 and assert both the exact typed parse request and retained original source.
+Program-editor tests cover bounded undo/redo history, whole-row insert/delete
+and clipboard spans, caret/source-line mapping, G/M/axis/arc/feed/comment syntax
+tokens, deterministic processed export, and the complete editor command
+surface. Type checking keeps Apply bound to a parsed `LoadedProgram`; Rust tests
+keep native export names leaf-only across every supported G-code extension.
 Dry-run read-model tests prove that Mock availability and policy eligibility are
 both required, expose only state-valid controls, and clamp untrusted display
 progress. Toolpath read-model tests verify rapid and cutting buffers, centering,

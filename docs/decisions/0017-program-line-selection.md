@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Accepted; amended by [ADR 0049](0049-safe-program-editor.md).
 
 ## Context
 
@@ -28,7 +28,7 @@ rebuilding the complete Three.js scene on each click is not acceptable.
 ## Consequences
 
 - Table selection and 3D highlighting remain read-only and cannot reorder,
-  skip, edit, or send G-code.
+  skip, edit, or send G-code. Editing is a separate draft/parse/apply workflow.
 - Large files have bounded DOM cost, while their scrollbar still represents the
   complete source.
 - Warning entries can select their exact source line using the same state.
