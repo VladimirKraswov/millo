@@ -15,7 +15,6 @@ import {
   Square,
   Trash2,
   TriangleAlert,
-  Upload,
   Wrench,
   X,
 } from "lucide-react";
@@ -25,7 +24,6 @@ import {
   useEffect,
   useMemo,
   useState,
-  type ChangeEvent,
   type DragEvent,
 } from "react";
 
@@ -54,6 +52,7 @@ import type {
   ToolChangeConfirmation,
 } from "../../shared/realRun";
 import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
+import { ProgramFilePicker } from "./ProgramFilePicker";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramLineTable } from "./ProgramLineTable";
 import { ProgramRecoveryDialog } from "./ProgramRecoveryDialog";
@@ -296,12 +295,6 @@ export function ProgramWorkspace({
     } finally {
       setLoading(false);
     }
-  };
-
-  const selectFile = (event: ChangeEvent<HTMLInputElement>) => {
-    const selected = event.currentTarget.files?.[0];
-    event.currentTarget.value = "";
-    void loadFile(selected);
   };
 
   const dropFile = (event: DragEvent<HTMLDivElement>) => {
@@ -601,16 +594,14 @@ export function ProgramWorkspace({
               <Trash2 aria-hidden="true" size={14} />
             </button>
           )}
-          <label className={`program-load${loading ? " is-loading" : ""}`}>
-            <Upload aria-hidden="true" size={14} />
-            <span>{loading ? "Разбор..." : "Загрузить"}</span>
-            <input
-              accept=".nc,.ngc,.gcode,.tap,.cnc"
-              disabled={!desktopRuntime || loading || senderActive}
-              onChange={selectFile}
-              type="file"
+          {program && (
+            <ProgramFilePicker
+              disabled={!desktopRuntime || senderActive}
+              loading={loading}
+              onSelect={(file) => void loadFile(file)}
+              variant="toolbar"
             />
-          </label>
+          )}
         </div>
       </header>
 
@@ -1178,8 +1169,15 @@ export function ProgramWorkspace({
           onDrop={dropFile}
         >
           <FileCode2 aria-hidden="true" size={28} />
-          <strong>Программа не загружена</strong>
-          <span>.nc · .ngc · .gcode · .tap · .cnc</span>
+          <strong>Откройте программу для станка</strong>
+          <span>Перетащите файл сюда или выберите его на диске</span>
+          <ProgramFilePicker
+            disabled={!desktopRuntime}
+            loading={loading}
+            onSelect={(file) => void loadFile(file)}
+            variant="empty"
+          />
+          <code>.nc · .ngc · .gcode · .tap · .cnc</code>
         </div>
       )}
 

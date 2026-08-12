@@ -1477,7 +1477,7 @@ select:focus-visible {
 
 .program-actions,
 .preview-view,
-.program-load,
+.program-file-picker,
 .program-icon-action {
   display: flex;
   align-items: center;
@@ -1531,21 +1531,25 @@ select:focus-visible {
   border-radius: 4px;
 }
 
-.program-load {
+.program-file-picker {
   position: relative;
-  min-height: 30px;
-  gap: 7px;
-  padding: 0 10px;
+  justify-content: center;
   border: 1px solid #3f8069;
   border-radius: 4px;
   color: #b9e7d6;
   background: #172821;
   cursor: pointer;
-  font-size: 10px;
   font-weight: 600;
 }
 
-.program-load:hover,
+.program-file-picker.is-toolbar {
+  min-height: 30px;
+  gap: 7px;
+  padding: 0 10px;
+  font-size: 10px;
+}
+
+.program-file-picker:hover,
 .program-icon-action:hover,
 .preview-view button:hover {
   border-color: #668078;
@@ -1553,12 +1557,12 @@ select:focus-visible {
   background: #1d292e;
 }
 
-.program-load:has(input:disabled) {
+.program-file-picker:has(input:disabled) {
   opacity: 0.42;
   cursor: default;
 }
 
-.program-load input {
+.program-file-picker input {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -3145,7 +3149,8 @@ button.real-run-check:hover {
   min-height: 180px;
   place-content: center;
   justify-items: center;
-  gap: 6px;
+  gap: 9px;
+  padding: 28px;
   color: #61717a;
   background: #0c1215;
   outline: 1px dashed #314048;
@@ -3175,12 +3180,38 @@ button.real-run-check:hover {
 
 .program-dropzone strong {
   color: #9aa7ae;
-  font-size: 12px;
+  font-size: 14px;
 }
 
-.program-dropzone span {
+.program-dropzone > span,
+.program-dropzone > code {
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 8px;
+}
+
+.program-dropzone > span {
+  color: #7f8d95;
+}
+
+.program-dropzone > code {
+  color: #53626a;
+}
+
+.program-file-picker.is-empty {
+  width: 190px;
+  height: 42px;
+  gap: 9px;
+  margin: 5px 0 1px;
+  color: #092018;
+  background: #78d2ae;
+  box-shadow: 0 8px 22px #03090c59;
+  font-size: 11px;
+}
+
+.program-file-picker.is-empty:hover {
+  border-color: #a5efd2;
+  color: #061a14;
+  background: #91dfbf;
 }
 
 .program-error {

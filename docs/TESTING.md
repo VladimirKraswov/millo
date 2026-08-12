@@ -23,6 +23,10 @@ and reset; the accepted delta for the controller heading, coordinate readout,
 workbench tabs, safety actions, jog pad, and coordinate disclosure is exactly
 zero pixels.
 
+Program file-picker tests require a visible `Open G-code` primary action in the
+empty workspace, the complete supported extension allowlist, and a stable
+`Replace file` toolbar action after loading.
+
 The work-zero feature suite rejects an unconfirmed request before the gateway
 and delegates only a typed X/Y/Z request. Registry tests also verify that the
 core panel occupies the separate `control.coordinates` slot.

@@ -23,6 +23,9 @@ The shell uses progressive disclosure.
 
 - Connection state, selected machine, machine coordinates, preview, run state,
   Hold/Reset, and connected jog controls remain immediately visible.
+- An empty Program workspace presents `Open G-code` as its primary action and
+  accepts the same file types by picker or drag-and-drop. After loading, the
+  action becomes a compact `Replace file` command in the program toolbar.
 - Port selection, baud rate, lifecycle counters, raw status requests, Mock fault
   injection, work-zero controls, passed readiness evidence, G-code rows,
   optional stop/block delete, and GRBL Check are available in named disclosures.
