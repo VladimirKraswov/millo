@@ -92,6 +92,16 @@ observer receives publications from that exact store. Stream-binding tests cover
 initial state, live events, stale initial-response suppression, and cleanup when
 the asynchronous Tauri listener resolves after disposal.
 
+External-plugin tests compile the bundled package in the same bounded Rhai
+engine used for imported code, reject dynamic `eval`, terminate an infinite
+loop at the operation budget, validate command inputs before evaluation, reparse
+generated boundary-check G-code, bind grants to a package digest, and clear old
+trust after an update. UI tests mount workspace buttons and one grouped machine
+panel from declarations, deny commands without their capability, and prove that
+disposing registrations removes all contributed UI.
+Use `/?fixture=plugins` for deterministic desktop/mobile manager screenshots;
+the fixture has no Tauri gateway and cannot execute or persist a command.
+
 The test phase also runs `scripts/check-brand.mjs`, which keeps npm, Cargo,
 Tauri, UI, and documentation naming consistent.
 `scripts/check-security.mjs` requires explicit production/development CSP maps,

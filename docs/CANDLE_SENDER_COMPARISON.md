@@ -33,6 +33,7 @@ cases. Source references describe the audited Candle checkout in
 | Power-loss restart | Send-from-selected-line relies on operator-selected source position and reconstructed parser state | Start is two-phase: exact source/machine/options are synced before dispatch; physical `Ln:` is persisted separately from `ok`; link loss quarantines the sender; recovery explicitly selects bounded checkpoint replay or a full restart for missing/uncertain motion power, then uses ordinary Check/preflight/authorization | Avoids lost crash context, silent reconnect continuation, blind exact-line resume, and false trust in USB-powered GRBL when motor power is absent | `millo-command`, `millo-recovery`, atomic-store fixtures, recovery UI/model checks; ADR 0038 |
 | Selected-line repeat | `From Line` rebuilds parser state and starts from the chosen row | Preview/table selection compiles a new immutable remainder; planner rewinds to a provable clearance rapid, approaches through explicit Safe Z, restores modal/WCS/feed/tool/spindle state, reports repeated lead-in lines, then requires a new Check certificate, preflight, authorization, and recovery journal | A long-job repair does not enter an already active cut with missing physical lead-in or inherit stale controller state | `millo-restart` tests, native adapter/UI tests; ADR 0048 |
 | Testability | Sender behavior depends heavily on `frmMain`, Qt widgets, timers, and dialogs | Parser, policy, lease, sender, actor, GRBL parser, Mock transport, and serial adapter are separate crates | Every state transition can be regression-tested without a window or physical machine | `npm run verify`; deterministic Mock fault injection |
+| Community scripts | QtScript plugins can call broad application/device/sender surfaces and construct Qt widgets | Versioned `.millo-plugin` packages declare buttons, modal fields and capabilities; bounded Rhai returns one typed action, grants are bound to the reviewed SHA-256, machine actions re-enter the guarded actor, and generated source is reparsed | Keeps useful user macros and shareable plugins without letting third-party code race the sender, write arbitrary serial bytes, or retain silent authority after an update | `millo-script` sandbox/store fixtures, external contribution UI tests, ADR 0050 |
 
 ## Deliberate non-parity
 
@@ -47,8 +48,8 @@ The following Candle features are not accepted as raw sender behavior in Millo:
   buffered physical stream after a rejected line is ambiguous and can move from
   an invalid modal or coordinate state.
 - Arbitrary start/end strings and raw console/plugin writes are not part of the
-  execution capability. Future customization must compile into a reviewed,
-  typed plan and preserve authorization.
+  execution capability. External Rhai customization is now supported, but must
+  return a reviewed typed action and preserve ordinary authorization.
 - Candle-style literal seeking to an arbitrary selected row and configurable
   `autoLine` strings are not exposed. Millo now provides selected-line repeat,
   but compiles a separate reviewed program with a conservative clearance

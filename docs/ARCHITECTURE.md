@@ -768,14 +768,27 @@ Returning to an existing zero uses a distinct boundary:
   and enforces an owner-prefixed ID. They do not receive the shell's internal UI
   context. Activation failure and unload remove every contribution owned by the
   plugin.
-- This loader accepts only modules already linked into the application. It does
-  not read plugin files, dynamically import code, or establish a sandbox or
-  signature trust model.
+- The linked `InMemoryPluginLoader` remains the host for first-party React
+  modules. External `.millo-plugin` packages use the separate `millo-script`
+  boundary: versioned JSON, declarative commands/fields/surfaces, visible Rhai
+  source, SHA-256 package identity, explicit grants, bounded evaluation, and an
+  atomic persistent store. The runtime registers no filesystem, network,
+  serial, sender, Tauri, DOM, module-import, or `eval` API.
+- An external command returns exactly one typed action. `createProgram` is
+  reparsed by `millo-gcode` and published as an ordinary Program job. `jog`,
+  `setZero`, and `returnZero` require a fresh operator confirmation and then
+  delegate to existing command-actor use cases. A script cannot issue a raw
+  G-code line or realtime byte. `machine.read` controls whether the detached
+  controller snapshot is passed into evaluation at all.
+- Imported and edited packages are disabled. Enabling binds grants to the exact
+  package digest; any source or manifest update creates a new digest, clears
+  grants, and disables execution. Bundled operator macros use this same runtime
+  and public package format.
 - `bootstrapPluginHost` is the application composition root for the UI registry,
   machine/job stores, and in-memory loader. It registers core UI and activates
-  only modules explicitly linked and granted by the host. The Image-to-G-code
-  module is the first bundled default; there is still no dynamic external-code
-  discovery or implicit grant.
+  only modules explicitly linked and granted by the host. Image-to-G-code and
+  spoilboard surfacing remain linked first-party plugins, while external script
+  packages are explicitly imported and reviewed in their own manager.
 - React reads the shared machine store through `useSyncExternalStore`. Typed
   command results publish back to that store instead of maintaining a second
   component-owned controller snapshot.
@@ -786,7 +799,8 @@ Returning to an existing zero uses a distinct boundary:
 - See `docs/decisions/0010-extension-host-boundaries.md` and
   `docs/decisions/0011-versioned-plugin-manifest.md`, plus
   `docs/decisions/0012-machine-read-capability.md` and
-  `docs/decisions/0013-plugin-host-bootstrap.md` for the accepted boundaries.
+  `docs/decisions/0013-plugin-host-bootstrap.md` for the linked host, and
+  `docs/decisions/0050-sandboxed-external-plugins.md` for external code.
 
 ## Near-term sequence
 

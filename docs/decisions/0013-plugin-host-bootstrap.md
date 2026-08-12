@@ -4,6 +4,9 @@
 
 Accepted on 2026-08-11.
 
+Extended by ADR 0050 on 2026-08-12; this ADR still describes the linked
+first-party host, while external Rhai packages use a separate sandbox boundary.
+
 ## Context
 
 The application previously kept controller state in React while the plugin

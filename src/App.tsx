@@ -3,6 +3,7 @@ import {
   ChevronDown,
   KeyRound,
   PlugZap,
+  Puzzle,
   RefreshCw,
   ScrollText,
   Unplug,
@@ -65,6 +66,9 @@ import { DiagnosticLogViewer } from "./features/diagnostics/DiagnosticLogViewer"
 import { WorkZeroDialog } from "./features/work-zero/WorkZeroDialog";
 import { ToolLibraryDialog } from "./features/tool-library/ToolLibraryDialog";
 import { WorkspaceToolsMenu } from "./components/WorkspaceToolsMenu";
+import { ScriptPluginContributions } from "./features/script-plugins/ScriptPluginContributions";
+import { ScriptPluginManager } from "./features/script-plugins/ScriptPluginManager";
+import { previewFixtureScriptPlugins } from "./features/script-plugins/previewFixtureScriptPlugins";
 import { previewToolLibraryGateway } from "./features/tool-library/previewToolLibraryGateway";
 import { resolveWorkPosition } from "./features/work-zero/workPositionModel";
 import { bindMachineStateStream } from "./platform/machine/MachineStateEventStream";
@@ -74,6 +78,7 @@ import { tauriWorkCoordinateGateway } from "./platform/machine/tauriWorkCoordina
 import { tauriProgramGateway } from "./platform/program/tauriProgramGateway";
 import { tauriImageJobGateway } from "./platform/jobs/tauriImageJobGateway";
 import { tauriToolLibraryGateway } from "./platform/tooling/tauriToolLibraryGateway";
+import { tauriScriptPluginGateway } from "./platform/plugins/tauriScriptPluginGateway";
 import { tauriDryRunGateway } from "./platform/program/tauriDryRunGateway";
 import { tauriRealRunPreflightGateway } from "./platform/program/tauriRealRunPreflightGateway";
 import {
@@ -95,6 +100,7 @@ import type {
   ControllerSettingsState,
 } from "./shared/settings";
 import type { AuditLogSnapshot } from "./shared/audit";
+import type { InstalledScriptPlugin } from "./shared/scriptPlugins";
 
 const connectionLabels = {
   disconnected: "Отключено",
@@ -377,6 +383,12 @@ export default function App() {
   const [toolLibraryOpen, setToolLibraryOpen] = useState(
     developmentFixture === "tools",
   );
+  const [scriptManagerOpen, setScriptManagerOpen] = useState(
+    developmentFixture === "plugins",
+  );
+  const [scriptPlugins, setScriptPlugins] = useState<
+    readonly InstalledScriptPlugin[]
+  >(developmentFixture === "plugins" ? previewFixtureScriptPlugins : []);
   const [workbenchView, setWorkbenchView] = useState<"program" | "controller">(
     "program",
   );
@@ -390,6 +402,14 @@ export default function App() {
   useEffect(() => {
     void pluginHost.ready.catch((error: unknown) => setUiError(String(error)));
   }, [pluginHost]);
+
+  useEffect(() => {
+    if (!desktopRuntime) return;
+    void tauriScriptPluginGateway
+      .list()
+      .then(setScriptPlugins)
+      .catch((error: unknown) => setUiError(String(error)));
+  }, [desktopRuntime]);
 
   useEffect(() => {
     if (generatedJob) setWorkbenchView("program");
@@ -755,6 +775,16 @@ export default function App() {
 
         <div className="topbar-tools" aria-label="Инструменты задания">
           <WorkspaceToolsMenu registry={pluginHost.uiRegistry} />
+          <button
+            aria-label="Макросы и плагины"
+            className="script-manager-trigger"
+            disabled={!desktopRuntime}
+            onClick={() => setScriptManagerOpen(true)}
+            title="Макросы и плагины"
+            type="button"
+          >
+            <Puzzle aria-hidden="true" size={16} />
+          </button>
         </div>
 
         <div className={`connection-state is-${snapshot.connection}`}>
@@ -1370,6 +1400,22 @@ export default function App() {
           service={pluginHost.tools}
         />
       )}
+      <ScriptPluginContributions
+        gateway={tauriScriptPluginGateway}
+        jobs={pluginHost.generatedJobs}
+        machine={pluginHost.machineState}
+        onError={setUiError}
+        plugins={scriptPlugins}
+        registry={pluginHost.uiRegistry}
+      />
+      <ScriptPluginManager
+        gateway={tauriScriptPluginGateway}
+        onChange={setScriptPlugins}
+        onClose={() => setScriptManagerOpen(false)}
+        onError={setUiError}
+        open={scriptManagerOpen}
+        plugins={scriptPlugins}
+      />
     </div>
   );
 }

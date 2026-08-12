@@ -20,6 +20,7 @@ members = [
   "crates/millo-settings",
   "crates/millo-sender",
   "crates/millo-serial",
+  "crates/millo-script",
   "crates/millo-storage",
   "crates/millo-tooling",
   "crates/millo-transport",
@@ -38,3 +39,4 @@ serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "signal", "sync", "time"] }
+rhai = { version = "1.25.1", features = ["serde", "sync"] }

@@ -4,6 +4,8 @@
 
 Accepted on 2026-08-11.
 
+Extended by ADR 0050 on 2026-08-12 for sandboxed external source packages.
+
 ## Context
 
 The extension registry proves that UI contributions can be inserted, replaced,

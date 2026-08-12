@@ -25,6 +25,12 @@ tests, configuration, and direct/transitive dependency reports.
   profile ID. Pending work is invalidated when the operator closes or switches.
 - Plugin unload wins a race with asynchronous activation and immediately closes
   retained UI/read/jog capability proxies.
+- External `.millo-plugin` packages now execute as bounded Rhai scripts. Their
+  declarative UI is mounted only after a digest-bound capability review; source
+  changes disable the package and clear every grant. The runtime exposes no
+  serial, sender, Tauri, DOM, filesystem, network, module import, or dynamic
+  `eval` API. Machine actions return to the typed command actor and generated
+  G-code is reparsed before it reaches Program.
 - Promise rejection paths in application bootstrap/profile refresh are reported.
 - Production and development Tauri CSPs now allow local assets and IPC only;
   a repository check prevents accidental return to null/wildcard/eval policy.
@@ -51,9 +57,11 @@ tests, configuration, and direct/transitive dependency reports.
 
 ## Residual boundaries
 
-- External plugin code is still deliberately unsupported. Before enabling it,
-  Millo needs signature/trust policy, isolated storage/network scopes, and
-  per-command capability grants; the in-memory host is not a sandbox.
+- External native libraries, JavaScript, QtScript compatibility modules, and
+  arbitrary HTML/React injection remain unsupported. Version 1 deliberately
+  accepts auditable Rhai source plus declarative commands only. Sandboxed
+  per-plugin storage/network capabilities and package signing can be added as
+  separate APIs; they must not be inferred from script installation.
 - Tauri's Linux GTK warning remains upstream/transitive. Recheck RustSec on every
   Tauri upgrade and before shipping Linux packages.
 - Physical motion was not needed for this review. Protocol and sender behavior

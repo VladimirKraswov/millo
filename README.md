@@ -321,7 +321,23 @@ registry, machine snapshot store, and in-memory loader. React observes that stor
 through `useSyncExternalStore`; the initial controller query, live Tauri
 `machine-state` events, and typed command results all publish into the same
 source. Bootstrap registers core UI but activates no plugins and performs no
-external code loading.
+implicit external code loading.
+
+External user code is supported through importable `.millo-plugin` packages.
+Each package contains a versioned manifest, declarative button/modal fields, and
+Rhai source. The Plugins manager shows source, requested capabilities, and the
+SHA-256 identity before enabling it; editing any package disables it and clears
+old grants. Scripts run with operation/memory/depth bounds and no serial,
+sender, Tauri, DOM, filesystem, network, module import, or dynamic-eval API.
+They may return only a typed job, guarded jog/work-zero request, or notice. See
+[External plugins and macros](docs/EXTERNAL_PLUGINS.md) and
+[ADR 0050](docs/decisions/0050-sandboxed-external-plugins.md).
+
+The default `Операторские макросы` package is enabled on first start and uses
+that exact external API. It provides Boundary Check, Raise Z, Return Z to work
+zero, and Set Z0 Here. The boundary command creates spindle-free G-code and
+opens it in Program for preview, Check, preflight, and ordinary authorization;
+it never dispatches movement directly.
 
 ## Run
 
