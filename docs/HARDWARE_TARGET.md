@@ -246,6 +246,30 @@ this firmware emits while disabling `$C`, repeated clean status, and issued a
 program/session certificate. A fresh Cutting preflight accepted it. Check mode
 did not grant a run lease or execute machine motion.
 
+## Physical guilloche engraving
+
+On 2026-08-12, `millo-solar-guilloche.nc` exposed a false sender timeout on its
+first physical attempt. The dense planner queue remained live and reported
+realtime status, but the oldest `ok` crossed the generic two-second absolute
+deadline at source line 44. Millo stopped, issued its physical abort sequence,
+and retained the exact failed command in the run journal.
+
+The response watchdog now measures controller silence rather than total time
+since an oldest line began waiting. A valid interleaved status or message
+refreshes liveness without acknowledging that line; a controller that stops
+answering still times out and fails closed. A Mock regression holds a response
+past its configured deadline while status remains live, alongside the existing
+silent-controller timeout fixture.
+
+The same physical board then accepted all `1045/1045` commands in `$C`. In the
+same connection, Cutting preflight accepted the exact-file certificate and the
+production sender engraved all `1045/1045` commands in `226.5 s` through the
+253-byte RX window. The job covered `1034` motions and `1018.317 mm` of cutting
+geometry inside X/Y `0.000..57.400 mm` and Z `-0.200..3.000 mm`. No `error`,
+`ALARM`, reset, disconnect, or timeout occurred. GRBL returned to `Idle` at G54
+WPos X `30.000`, Y `30.000`, Z `3.000 mm`, proving the safe center park and
+shutdown tail on a dense real engraving rather than only an Air or Check run.
+
 At each connection Millo treats the controller's complete `$$` response as the
 truth and keeps a duplicate in
 `~/Library/Application Support/io.millo.desktop/machines/machine-0001.settings.json`.

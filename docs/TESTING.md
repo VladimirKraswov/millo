@@ -311,7 +311,10 @@ port names remain untouched.
 - Delayed-response fixtures prove Feed Hold is serviced within one 10 ms read
   slice instead of waiting for the command timeout. A separate fixture injects
   realtime status ahead of a delayed `ok`, verifies live `Bf/Ov` telemetry, and
-  keeps FIFO acknowledgement counts unchanged.
+  keeps FIFO acknowledgement counts unchanged. It remains active beyond the
+  configured command timeout, proving that valid status refreshes the liveness
+  deadline without falsely acknowledging the oldest line; the terminal-command
+  stall fixture still proves that a genuinely silent controller times out.
 - Typed override tests cover every GRBL byte family, Mock `Ov:` mutation, and
   feed/rapid/spindle requests while an acknowledgement is delayed. An explicit
   status refresh during that delay cannot consume the sender's response or
@@ -603,6 +606,24 @@ cargo run -p millo-desktop --example hardware_overrides -- \
 Run it only while the controller is `Idle`. Cleanup is attempted even when an
 intermediate assertion fails; a cleanup failure is reported explicitly instead
 of silently leaving altered overrides.
+
+The physical Cutting harness performs Check and Cut in one controller session,
+requires every cutting confirmation flag, rejects an out-of-envelope XY path,
+uses the ordinary one-use authorization and production sender, and requests
+Hold plus challenge-confirmed Soft Reset on a terminal failure:
+
+```bash
+cargo run -p millo-desktop --example hardware_cut_run -- \
+  /dev/cu.usbmodem11101 job.nc \
+  --execute-cut --confirm-stock-secured --confirm-tool-secured \
+  --confirm-xyz-zero --confirm-safe-z --confirm-spindle-running \
+  --confirm-path-clear --confirm-power-control
+```
+
+Its argument/envelope tests run under normal Rust verification; CI never passes
+the required physical flags. On 2026-08-12 it completed the 1045/1045-command
+solar guilloche engraving in 226.5 s and verified final `Idle`, G54 WPos
+X30/Y30/Z3, and the sender shutdown tail.
 
 The guarded first-motion smoke example uses the same serial transport, command
 actor, readiness policy, and authorization path as Tauri. It requires an exact

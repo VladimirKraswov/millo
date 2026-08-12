@@ -251,6 +251,13 @@ match the exact source fingerprint, Optional Stop/Block Delete options, reset
 count, and reconnect count. Air run remains available without it as the
 spindle-off physical validation path.
 
+The first dense physical Cutting fixture, `millo-solar-guilloche.nc`, completed
+1045/1045 sender commands in 226.5 seconds after a same-session 1045/1045 Check.
+Its earlier line-44 false timeout led to a silence-based response watchdog:
+realtime status proves controller liveness without pretending to acknowledge a
+G-code line, while actual loss of responses still fails closed. The verified
+final state was `Idle` at G54 WPos X30/Y30/Z3.
+
 The execution-core differences from the Candle reference, the problem each one
 solves, and the remaining deliberate capability gates are maintained in
 [Millo sender compared with Candle](docs/CANDLE_SENDER_COMPARISON.md). The

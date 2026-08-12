@@ -92,6 +92,11 @@ On `/dev/cu.usbmodem11101`, GRBL `1.1f.20230316`:
   M5/M9 shutdown tail were accepted, and the controller returned to Idle.
 - `air-square-20mm.nc`: 10/10 physical Air run, planner drained, WPos returned
   to XYZ zero.
+- `millo-solar-guilloche.nc`: 1045/1045 physical Cutting run on 2026-08-12,
+  after a same-session 1045/1045 `$C` certificate. The 1034-motion, 1018.317 mm
+  dense engraving completed in 226.5 s through a 253-byte RX window and parked
+  in `Idle` at G54 WPos X30 Y30 Z3. This run verifies the status-refreshed
+  silence watchdog that replaced the earlier false absolute timeout at line 44.
 - Realtime override smoke: observed `Ov:110,50,99`, then verified restore to
   `Ov:100,100,100`.
 

@@ -168,7 +168,7 @@ pub struct Controller<T> {
 
 struct PendingProgramResponse {
     command: String,
-    started_at: Instant,
+    last_activity_at: Instant,
     lines: Vec<String>,
 }
 
@@ -463,7 +463,7 @@ impl<T: Transport> Controller<T> {
         } else {
             self.pending_program_response = Some(PendingProgramResponse {
                 command: command.to_owned(),
-                started_at: Instant::now(),
+                last_activity_at: Instant::now(),
                 lines: Vec::new(),
             });
         }
@@ -474,7 +474,7 @@ impl<T: Transport> Controller<T> {
             .ok_or(ControllerError::ProgramResponseState(
                 "pending response disappeared before polling",
             ))?
-            .started_at
+            .last_activity_at
             .elapsed();
         let Some(remaining) = self.config.command_timeout.checked_sub(elapsed) else {
             return Err(self.fail_program_response_timeout());
@@ -493,7 +493,7 @@ impl<T: Transport> Controller<T> {
                     .pending_program_response
                     .as_ref()
                     .is_some_and(|pending| {
-                        pending.started_at.elapsed() >= self.config.command_timeout
+                        pending.last_activity_at.elapsed() >= self.config.command_timeout
                     })
                 {
                     return Err(self.fail_program_response_timeout());
@@ -504,11 +504,13 @@ impl<T: Transport> Controller<T> {
 
         match parse_incoming_line(&wire_line)? {
             IncomingLine::Status(state) => {
+                self.record_pending_program_activity()?;
                 self.apply_status(*state);
                 self.record_poll_success();
                 Ok(ProgramResponsePoll::StatusObserved)
             }
             IncomingLine::Message(message) => {
+                self.record_pending_program_activity()?;
                 if !message.is_empty() {
                     self.pending_program_response
                         .as_mut()
@@ -635,6 +637,16 @@ impl<T: Transport> Controller<T> {
         };
         self.record_poll_failure(&error);
         error
+    }
+
+    fn record_pending_program_activity(&mut self) -> Result<(), ControllerError> {
+        self.pending_program_response
+            .as_mut()
+            .ok_or(ControllerError::ProgramResponseState(
+                "controller activity arrived without a pending command",
+            ))?
+            .last_activity_at = Instant::now();
+        Ok(())
     }
 
     async fn recover(&mut self) -> Result<ControllerSnapshot, ControllerError> {

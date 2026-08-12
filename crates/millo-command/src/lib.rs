@@ -4280,7 +4280,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn physical_sender_parses_interleaved_status_while_waiting_for_ok() {
+    async fn physical_sender_uses_interleaved_status_as_a_liveness_heartbeat() {
         let transport = MockTransport::default();
         let control = transport.control();
         // Keep the acknowledgement pending long enough to observe a poll frame
@@ -4291,7 +4291,7 @@ mod tests {
             ControllerConfig {
                 poll_interval: Duration::from_millis(5),
                 status_timeout: Duration::from_millis(20),
-                command_timeout: Duration::from_millis(250),
+                command_timeout: Duration::from_millis(50),
                 failures_before_recovery: 2,
             },
             HardwareProfile::first_machine(),
@@ -4321,6 +4321,8 @@ mod tests {
         .await
         .expect("interleaved status should update live telemetry");
 
+        tokio::time::sleep(Duration::from_millis(90)).await;
+        assert_ne!(arbiter.sender_snapshot().state, SenderState::Failed);
         assert!(arbiter.sender_snapshot().in_flight_lines > 0);
         assert!(control.writes().contains(&b"?".to_vec()));
         let challenge = arbiter.request_soft_reset().await.unwrap();
