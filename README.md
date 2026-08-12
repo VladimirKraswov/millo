@@ -283,6 +283,7 @@ successful GRBL status exchange.
 | `millo-domain` | Stable machine and controller types |
 | `millo-gcode` | Immutable G-code program, warnings, parser, and preview geometry |
 | `millo-journal` | Bounded crash-diagnostic history with throttled atomic JSON checkpoints |
+| `millo-recovery` | Crash-safe interrupted-job evidence and conservative restart program builder |
 | `millo-grbl` | GRBL wire-format parsing and encoding |
 | `millo-transport` | Controller-independent I/O contract |
 | `millo-mock` | Deterministic virtual machine for tests |
@@ -290,14 +291,14 @@ successful GRBL status exchange.
 | `millo-settings` | GRBL settings catalog, validated writes, session baselines, and per-machine revisions |
 | `millo-serial` | Native asynchronous serial discovery and byte/line I/O |
 | `millo-storage` | Synced temp/backup replacement and crash recovery shared by local JSON stores |
-
-The current cross-layer review, closed findings, dependency evidence, and
-remaining release boundaries are recorded in [`docs/CODE_AUDIT.md`](docs/CODE_AUDIT.md).
 | `millo-controller` | Connection lifecycle and state orchestration |
 | `millo-dry-run` | Fail-closed program policy and opaque approved plans |
 | `millo-command` | Single-owner command actor, polling, and response arbitration |
 | `millo-readiness` | Hardware-profile policy and guarded test-jog readiness |
 | `millo-run` | Intent-aware preflight, operator checklist, and one-use program-run lease |
+
+The current cross-layer review, closed findings, dependency evidence, and
+remaining release boundaries are recorded in [`docs/CODE_AUDIT.md`](docs/CODE_AUDIT.md).
 | `millo-safety` | Reset challenges and short-lived test-jog authorization |
 | `millo-sender` | Bounded GRBL RX/FIFO sender with Mock, air-run, and cutting modes |
 | `millo-desktop` | Thin Tauri command/event adapter |

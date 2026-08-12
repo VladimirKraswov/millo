@@ -420,6 +420,16 @@ additional two steps are the typed M5/M9 shutdown epilogue before M30.
 - Tauri owns only the platform config path and observes the existing sender
   event stream; it cannot alter journal recovery disposition.
 
+## Interrupted-job recovery coverage
+
+- `millo-recovery` tests bind exact source and program fingerprint to a machine
+  fingerprint and sender sequence, throttle execution checkpoints, recover a
+  corrupt primary from backup, and hide completed jobs.
+- Planner fixtures rewind an interruption to a prior clearance rapid, restore
+  WCS/modal/tool/spindle state, omit already-finished geometry, reject safe Z
+  below the program envelope, and block recovery when GRBL did not provide
+  `Ln:` execution telemetry.
+
 ### Hardware Air-run fixture
 
 Read-only preflight:

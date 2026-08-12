@@ -1959,6 +1959,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "millo-recovery"
+version = "0.1.0"
+dependencies = [
+ "millo-domain",
+ "millo-dry-run",
+ "millo-gcode",
+ "millo-run",
+ "millo-sender",
+ "millo-storage",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "millo-run"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,17 @@
+[package]
+name = "millo-recovery"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Crash-safe guided program recovery for Millo"
+
+[dependencies]
+millo-domain = { path = "../millo-domain" }
+millo-dry-run = { path = "../millo-dry-run" }
+millo-gcode = { path = "../millo-gcode" }
+millo-run = { path = "../millo-run" }
+millo-sender = { path = "../millo-sender" }
+millo-storage = { path = "../millo-storage" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

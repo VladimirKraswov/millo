@@ -125,6 +125,16 @@ the physical-run operator pause state while GRBL is in Check.
   A malformed primary is read from the preceding valid backup and immediately
   repaired while the backup remains available. If both JSON copies are corrupt,
   startup returns an explicit error instead of silently resetting operator data.
+- `millo-recovery` persists one exact active source, its fingerprint, machine
+  fingerprint, execution options, start positions, sender sequence and latest
+  physical `Ln:` checkpoint. It uses the same synced temp/backup replacement.
+  Completed jobs are never offered; a missing `Ln:` produces a visible blocker.
+- Recovery planning is pure and motion-free. It reparses the stored source,
+  verifies its fingerprint, rewinds to the latest preceding rapid segment at
+  program clearance (or the first known motion), and emits a new G-code program
+  with M5/M9, absolute metric clearance moves, recorded WCS, tool/spindle state
+  when applicable, and the parser's modal checkpoint. The generated program
+  must still pass preview, GRBL Check, preflight and one-time authorization.
 - Domain-specific stores still own schema validation and bounded history;
   `millo-storage` knows nothing about profiles, GRBL, sender state, or JSON.
 
