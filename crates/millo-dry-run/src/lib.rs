@@ -87,6 +87,20 @@ impl DryRunLine {
     pub fn estimated_duration_ms(&self) -> Option<u64> {
         self.estimated_duration_ms
     }
+
+    pub fn wire_command(&self) -> String {
+        match self.source_line {
+            Some(source_line) => numbered_command(source_line, &self.command),
+            None => self.command.clone(),
+        }
+    }
+
+    pub fn wire_command_len(&self) -> usize {
+        match self.source_line {
+            Some(source_line) => numbered_command_len(source_line, &self.command),
+            None => self.command.len(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -194,7 +208,7 @@ pub fn build_program_run_plan_with_options(
             &mut blockers,
             &mut seen,
         );
-        if line.normalized.len() > MAX_DRY_RUN_COMMAND_BYTES {
+        if numbered_command_len(line.source_line, &line.normalized) > MAX_DRY_RUN_COMMAND_BYTES {
             add_blocker(
                 &mut blockers,
                 &mut seen,
@@ -330,6 +344,19 @@ pub fn build_program_run_plan_with_options(
         time_estimate_complete,
         execution_options,
     })
+}
+
+fn numbered_command(source_line: usize, normalized: &str) -> String {
+    let body = normalized
+        .split_whitespace()
+        .filter(|word| !matches!(split_word(word), Some(('N', _))))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("N{source_line} {body}")
+}
+
+fn numbered_command_len(source_line: usize, normalized: &str) -> usize {
+    numbered_command(source_line, normalized).len()
 }
 
 fn line_timings(program: &GcodeProgram) -> BTreeMap<usize, Option<u64>> {
@@ -621,6 +648,21 @@ mod tests {
     }
 
     #[test]
+    fn wire_commands_replace_file_numbers_with_source_line_numbers() {
+        let plan = build_dry_run_plan(&parse("N900 G21 G90\nN950 G0 X1")).unwrap();
+        let commands = plan
+            .lines()
+            .iter()
+            .map(DryRunLine::wire_command)
+            .collect::<Vec<_>>();
+
+        assert_eq!(commands[0], "M5");
+        assert_eq!(commands[2], "N1 G21 G90");
+        assert_eq!(commands[3], "N2 G0 X1");
+        assert!(commands.iter().all(|command| !command.contains("N900")));
+    }
+
+    #[test]
     fn carries_deterministic_per_line_timing_and_marks_rapid_as_a_lower_bound() {
         let timed = build_dry_run_plan(&parse(
             "G21 G90 G94\nG1 X60 F60\nG4 P0.250\nG1 X90 F30\nM30",
@@ -870,7 +912,7 @@ mod tests {
                 .any(|blocker| blocker.kind == DryRunBlockerKind::IncompletePreview)
         );
 
-        let oversized_source = format!("G1 X1 {}", "N1 ".repeat(100));
+        let oversized_source = format!("G1 X1 F1.{}", "0".repeat(260));
         let oversized = build_dry_run_plan(&parse(&oversized_source)).unwrap_err();
         assert!(
             oversized

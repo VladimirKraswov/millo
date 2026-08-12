@@ -63,6 +63,10 @@ than attempting to reproduce issue-specific workarounds.
   an active desktop process through `expect`.
 - Journal checkpoints are diagnostic evidence, never executable continuation
   leases. A failed or cancelled run explicitly records `RestartBlocked`.
+- Millo replaces file line numbers with source-line `N` tags on the wire and
+  retains GRBL's optional `Ln:` execution report independently from `ok`.
+  Recovery therefore never mistakes buffered acceptance for physical progress;
+  firmware without `Ln:` cannot produce an automatic execution checkpoint.
 
 ## Deliberate boundaries
 

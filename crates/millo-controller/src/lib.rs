@@ -424,7 +424,7 @@ impl<T: Transport> Controller<T> {
         match tokio::time::timeout(
             timeout,
             self.transport
-                .write(format!("{}\n", line.command()).as_bytes()),
+                .write(format!("{}\n", line.wire_command()).as_bytes()),
         )
         .await
         {

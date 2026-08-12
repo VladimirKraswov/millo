@@ -126,6 +126,87 @@ pub struct ProgramLine {
     pub warning_count: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProgramMotionMode {
+    None,
+    Rapid,
+    Linear,
+    ArcClockwise,
+    ArcCounterclockwise,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProgramUnitMode {
+    Millimeters,
+    Inches,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProgramDistanceMode {
+    Absolute,
+    Incremental,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProgramFeedMode {
+    InverseTime,
+    UnitsPerMinute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProgramPlane {
+    Xy,
+    Xz,
+    Yz,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProgramSpindleMode {
+    Off,
+    Clockwise,
+    Counterclockwise,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ProgramWorkCoordinateSystem {
+    G54,
+    G55,
+    G56,
+    G57,
+    G58,
+    G59,
+}
+
+/// Parser state immediately before one executable source block.
+///
+/// This is intentionally not serialized to the webview. It exists for the
+/// native recovery planner, which must reconstruct modal state without
+/// replaying earlier motion or side effects.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramExecutionCheckpoint {
+    pub source_line: usize,
+    pub position: ProgramPoint,
+    pub motion: ProgramMotionMode,
+    pub units: ProgramUnitMode,
+    pub distance: ProgramDistanceMode,
+    pub arc_distance: ProgramDistanceMode,
+    pub feed_mode: ProgramFeedMode,
+    pub feed_rate: Option<f64>,
+    pub plane: ProgramPlane,
+    pub work_coordinate_system: ProgramWorkCoordinateSystem,
+    pub selected_tool: Option<u8>,
+    pub spindle_mode: ProgramSpindleMode,
+    pub spindle_speed: Option<f64>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgramFeatures {
@@ -165,6 +246,8 @@ pub struct GcodeProgram {
     pub features: ProgramFeatures,
     pub summary: ProgramSummary,
     pub toolpath: Vec<ToolpathSegment>,
+    #[serde(default, skip_serializing)]
+    pub execution_checkpoints: Vec<ProgramExecutionCheckpoint>,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -250,6 +333,11 @@ struct Parser {
     estimated_motion_time_seconds: f64,
     dwell_time_seconds: f64,
     time_estimate_complete: bool,
+    execution_checkpoints: Vec<ProgramExecutionCheckpoint>,
+    work_coordinate_system: ProgramWorkCoordinateSystem,
+    selected_tool: Option<u8>,
+    spindle_mode: ProgramSpindleMode,
+    spindle_speed: Option<f64>,
 }
 
 impl Default for Parser {
@@ -276,6 +364,11 @@ impl Default for Parser {
             estimated_motion_time_seconds: 0.0,
             dwell_time_seconds: 0.0,
             time_estimate_complete: true,
+            execution_checkpoints: Vec::new(),
+            work_coordinate_system: ProgramWorkCoordinateSystem::G54,
+            selected_tool: None,
+            spindle_mode: ProgramSpindleMode::Off,
+            spindle_speed: None,
         }
     }
 }
@@ -387,6 +480,7 @@ pub fn parse_program_with_options(
         features: parser.features,
         summary,
         toolpath: parser.toolpath,
+        execution_checkpoints: parser.execution_checkpoints,
     })
 }
 
@@ -431,6 +525,8 @@ impl Parser {
 
         let block_deleted = executable && optional_block && self.block_delete;
         if executable && !block_deleted {
+            self.execution_checkpoints
+                .push(self.execution_checkpoint(source_line));
             self.apply_block(source_line, &words, optional_block);
         }
 
@@ -444,6 +540,46 @@ impl Parser {
             checksum,
             warning_count: self.warnings.len() - warning_start,
         });
+    }
+
+    fn execution_checkpoint(&self, source_line: usize) -> ProgramExecutionCheckpoint {
+        ProgramExecutionCheckpoint {
+            source_line,
+            position: self.position,
+            motion: match self.motion {
+                MotionMode::None => ProgramMotionMode::None,
+                MotionMode::Rapid => ProgramMotionMode::Rapid,
+                MotionMode::Linear => ProgramMotionMode::Linear,
+                MotionMode::ArcClockwise => ProgramMotionMode::ArcClockwise,
+                MotionMode::ArcCounterclockwise => ProgramMotionMode::ArcCounterclockwise,
+            },
+            units: match self.units {
+                UnitMode::Millimeters => ProgramUnitMode::Millimeters,
+                UnitMode::Inches => ProgramUnitMode::Inches,
+            },
+            distance: match self.distance {
+                DistanceMode::Absolute => ProgramDistanceMode::Absolute,
+                DistanceMode::Incremental => ProgramDistanceMode::Incremental,
+            },
+            arc_distance: match self.arc_distance {
+                ArcDistanceMode::Absolute => ProgramDistanceMode::Absolute,
+                ArcDistanceMode::Incremental => ProgramDistanceMode::Incremental,
+            },
+            feed_mode: match self.feed_mode {
+                FeedMode::InverseTime => ProgramFeedMode::InverseTime,
+                FeedMode::UnitsPerMinute => ProgramFeedMode::UnitsPerMinute,
+            },
+            feed_rate: self.feed_rate,
+            plane: match self.plane {
+                Plane::Xy => ProgramPlane::Xy,
+                Plane::Xz => ProgramPlane::Xz,
+                Plane::Yz => ProgramPlane::Yz,
+            },
+            work_coordinate_system: self.work_coordinate_system,
+            selected_tool: self.selected_tool,
+            spindle_mode: self.spindle_mode,
+            spindle_speed: self.spindle_speed,
+        }
     }
 
     fn apply_block(&mut self, source_line: usize, words: &[Word], optional_block: bool) {
@@ -509,14 +645,17 @@ impl Parser {
                     }
                     self.apply_m_code(source_line, word.value)
                 }
-                'S' if word.value.abs() > f64::EPSILON => {
-                    self.features.has_spindle_speed = true;
-                    self.warn(
-                        source_line,
-                        ProgramWarningSeverity::Safety,
-                        ProgramWarningCode::SpindleSpeed,
-                        "spindle speed is recorded but will be blocked by dry run",
-                    );
+                'S' => {
+                    self.spindle_speed = Some(word.value);
+                    if word.value.abs() > f64::EPSILON {
+                        self.features.has_spindle_speed = true;
+                        self.warn(
+                            source_line,
+                            ProgramWarningSeverity::Safety,
+                            ProgramWarningCode::SpindleSpeed,
+                            "spindle speed is recorded but will be blocked by dry run",
+                        );
+                    }
                 }
                 'T' if word.value < 0.0
                     || word.value.fract().abs() > f64::EPSILON
@@ -531,8 +670,9 @@ impl Parser {
                         "T tool number must be an integer from 0 to 255",
                     );
                 }
-                'N' | 'O' | 'X' | 'Y' | 'Z' | 'I' | 'J' | 'K' | 'R' | 'F' | 'S' | 'T' | 'P'
-                | 'L' | 'H' | 'D' | 'Q' => {}
+                'T' => self.selected_tool = Some(word.value as u8),
+                'N' | 'O' | 'X' | 'Y' | 'Z' | 'I' | 'J' | 'K' | 'R' | 'F' | 'P' | 'L' | 'H'
+                | 'D' | 'Q' => {}
                 letter => {
                     skip_motion = true;
                     self.preview_complete = false;
@@ -885,6 +1025,14 @@ impl Parser {
                 "G64 is not supported by GRBL 1.1",
             );
         } else if (54.0..=59.0).contains(&value) && value.fract().abs() < f64::EPSILON {
+            self.work_coordinate_system = match value as u8 {
+                54 => ProgramWorkCoordinateSystem::G54,
+                55 => ProgramWorkCoordinateSystem::G55,
+                56 => ProgramWorkCoordinateSystem::G56,
+                57 => ProgramWorkCoordinateSystem::G57,
+                58 => ProgramWorkCoordinateSystem::G58,
+                _ => ProgramWorkCoordinateSystem::G59,
+            };
             self.warn(
                 source_line,
                 ProgramWarningSeverity::Warning,
@@ -928,6 +1076,11 @@ impl Parser {
 
     fn apply_m_code(&mut self, source_line: usize, value: f64) {
         if code_is(value, 3.0) || code_is(value, 4.0) {
+            self.spindle_mode = if code_is(value, 3.0) {
+                ProgramSpindleMode::Clockwise
+            } else {
+                ProgramSpindleMode::Counterclockwise
+            };
             self.features.has_spindle_activation = true;
             self.warn(
                 source_line,
@@ -957,6 +1110,9 @@ impl Parser {
             || code_is(value, 2.0)
             || code_is(value, 30.0)
         {
+            if code_is(value, 5.0) {
+                self.spindle_mode = ProgramSpindleMode::Off;
+            }
             // Safe for geometry parsing; sender semantics are intentionally absent.
         } else {
             self.warn(

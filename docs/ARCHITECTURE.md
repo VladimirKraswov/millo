@@ -570,6 +570,15 @@ does not schedule or execute controller I/O.
   last accepted source line/command, age since the last `ok`, and whether the
   full shutdown tail was accepted. All values are O(1); no snapshot walks the
   plan or response history.
+- Program blocks are tagged on the wire with a Millo-owned `N<source-line>`.
+  Existing file line numbers are replaced after checksum validation, while the
+  operator-facing command remains unchanged. RX accounting includes the wire
+  prefix. When GRBL exposes `Ln:`, the actor records it separately from `ok` as
+  evidence of the block physically executing; out-of-range values are ignored.
+- The parser retains native-only modal checkpoints immediately before every
+  executable block: XYZ entry position, units, distance/arc/feed modes, plane,
+  WCS, feed, tool, spindle mode and speed. These checkpoints are not serialized
+  to the webview and will be consumed only by the guarded recovery planner.
 - The sender owns only the immutable plan plus a `VecDeque` bounded by reported
   RX capacity. It never creates one UI object or response future per source
   line. A 100,000-line regression checks byte bounds and peak in-flight depth.

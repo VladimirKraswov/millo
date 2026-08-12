@@ -37,6 +37,8 @@ pub struct RunJournalEntry {
     pub acknowledged_lines: usize,
     pub last_acknowledged_source_line: Option<usize>,
     pub last_acknowledged_command: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executing_source_line: Option<usize>,
     pub current_source_line: Option<usize>,
     pub current_command: Option<String>,
     pub shutdown_commands_acknowledged: bool,
@@ -65,6 +67,7 @@ impl RunJournalEntry {
             acknowledged_lines: snapshot.acknowledged_lines,
             last_acknowledged_source_line: snapshot.last_acknowledged_source_line,
             last_acknowledged_command: snapshot.last_acknowledged_command.clone(),
+            executing_source_line: snapshot.executing_source_line,
             current_source_line: snapshot.current_source_line,
             current_command: snapshot.current_command.clone(),
             shutdown_commands_acknowledged: snapshot.shutdown_commands_acknowledged,
@@ -83,6 +86,7 @@ impl RunJournalEntry {
         self.acknowledged_lines = snapshot.acknowledged_lines;
         self.last_acknowledged_source_line = snapshot.last_acknowledged_source_line;
         self.last_acknowledged_command = snapshot.last_acknowledged_command.clone();
+        self.executing_source_line = snapshot.executing_source_line;
         self.current_source_line = snapshot.current_source_line;
         self.current_command = snapshot.current_command.clone();
         self.shutdown_commands_acknowledged = snapshot.shutdown_commands_acknowledged;
@@ -431,6 +435,20 @@ mod tests {
         assert_eq!(entry.current_source_line, Some(43));
         assert_eq!(entry.recovery, RecoveryDisposition::RestartBlocked);
         assert!(entry.recovery_detail.contains("Automatic restart"));
+    }
+
+    #[test]
+    fn checkpoints_retain_the_last_physically_executing_source_line() {
+        let wall = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let now = Instant::now();
+        let mut journal = RunJournal::new(None, 100, wall);
+        let mut running = snapshot(11, SenderState::Running, 400);
+        running.executing_source_line = Some(376);
+
+        journal.observe(&running, wall, now).unwrap();
+
+        assert_eq!(journal.entries()[0].executing_source_line, Some(376));
+        assert_ne!(journal.entries()[0].executing_source_line, Some(400));
     }
 
     #[test]

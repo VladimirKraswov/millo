@@ -134,6 +134,8 @@ pub struct SenderSnapshot {
     pub progress_sequence: u64,
     pub last_acknowledged_source_line: Option<usize>,
     pub last_acknowledged_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub executing_source_line: Option<usize>,
     pub seconds_since_acknowledgement: f64,
     pub shutdown_commands_acknowledged: bool,
     pub last_error: Option<String>,
@@ -166,6 +168,7 @@ impl Default for SenderSnapshot {
             progress_sequence: 0,
             last_acknowledged_source_line: None,
             last_acknowledged_command: None,
+            executing_source_line: None,
             seconds_since_acknowledgement: 0.0,
             shutdown_commands_acknowledged: false,
             last_error: None,
@@ -230,6 +233,7 @@ pub struct Sender {
     paused_at: Option<Instant>,
     paused_duration: Duration,
     finished_elapsed: Option<Duration>,
+    executing_source_line: Option<usize>,
 }
 
 impl Default for Sender {
@@ -265,6 +269,7 @@ impl Sender {
             paused_at: None,
             paused_duration: Duration::ZERO,
             finished_elapsed: None,
+            executing_source_line: None,
         }
     }
 
@@ -350,6 +355,7 @@ impl Sender {
         self.paused_at = None;
         self.paused_duration = Duration::ZERO;
         self.finished_elapsed = None;
+        self.executing_source_line = None;
         Ok(self.snapshot())
     }
 
@@ -487,6 +493,18 @@ impl Sender {
 
     pub fn has_in_flight(&self) -> bool {
         !self.in_flight.is_empty()
+    }
+
+    /// Records GRBL's `Ln` status, which identifies the block currently being
+    /// executed rather than merely accepted into the RX/planner buffers.
+    pub fn observe_executing_line_number(&mut self, line_number: Option<u64>) {
+        let Some(line_number) = line_number.and_then(|value| usize::try_from(value).ok()) else {
+            return;
+        };
+        let source_line_count = self.plan.as_ref().map_or(0, DryRunPlan::source_line_count);
+        if (1..=source_line_count).contains(&line_number) {
+            self.executing_source_line = Some(line_number);
+        }
     }
 
     pub fn needs_io(&self) -> bool {
@@ -693,6 +711,7 @@ impl Sender {
                 .last_acknowledged_line
                 .as_ref()
                 .map(|line| line.command().to_owned()),
+            executing_source_line: self.executing_source_line,
             seconds_since_acknowledgement: self
                 .acknowledgement_age_at(Instant::now())
                 .as_secs_f64(),
@@ -782,7 +801,7 @@ impl Sender {
         }
         let mut total_bytes = 0usize;
         for line in plan.lines() {
-            let bytes = line.command().len();
+            let bytes = line.wire_command_len();
             if bytes > self.limits.max_command_bytes {
                 return Err(SenderError::CommandTooLong {
                     actual: bytes,
@@ -821,7 +840,7 @@ impl Sender {
 }
 
 fn command_rx_bytes(line: &DryRunLine) -> usize {
-    line.command().len().saturating_add(1)
+    line.wire_command_len().saturating_add(1)
 }
 
 #[cfg(test)]
@@ -909,6 +928,22 @@ mod tests {
             sender.configure_rx_buffer_capacity(127),
             Err(SenderError::Busy(SenderState::Ready))
         );
+    }
+
+    #[test]
+    fn accepts_only_in_range_grbl_execution_line_numbers() {
+        let mut sender = Sender::default();
+        sender
+            .load_cut_run(cutting_plan("G21\nG0 X1\nG1 X2 F10"))
+            .unwrap();
+
+        sender.observe_executing_line_number(Some(2));
+        assert_eq!(sender.snapshot().executing_source_line, Some(2));
+        sender.observe_executing_line_number(Some(99));
+        sender.observe_executing_line_number(Some(0));
+        sender.observe_executing_line_number(None);
+
+        assert_eq!(sender.snapshot().executing_source_line, Some(2));
     }
 
     #[test]
@@ -1413,7 +1448,7 @@ mod tests {
         assert_eq!(
             sender.load(plan("G0 X1234")).unwrap_err(),
             SenderError::CommandExceedsRxBuffer {
-                actual: 9,
+                actual: 12,
                 limit: 8,
             }
         );

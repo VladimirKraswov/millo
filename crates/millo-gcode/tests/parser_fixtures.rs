@@ -424,6 +424,33 @@ fn tool_selection_is_bounded_and_m6_is_explicitly_host_managed() {
     }
 }
 
+#[test]
+fn records_native_only_modal_checkpoints_before_each_executable_block() {
+    let program = parse_fixture(
+        "recovery-modal.nc",
+        "G21 G90 G94 G17 G55\nS12000 M3\nG0 X5 Y6 Z3\nG1 Z-1 F120",
+    );
+
+    let motion = program
+        .execution_checkpoints
+        .iter()
+        .find(|checkpoint| checkpoint.source_line == 4)
+        .unwrap();
+    assert_eq!(motion.position.x, 5.0);
+    assert_eq!(motion.position.y, 6.0);
+    assert_eq!(motion.position.z, 3.0);
+    assert_eq!(motion.feed_rate, None);
+    assert_eq!(
+        motion.work_coordinate_system,
+        millo_gcode::ProgramWorkCoordinateSystem::G55
+    );
+    assert_eq!(
+        motion.spindle_mode,
+        millo_gcode::ProgramSpindleMode::Clockwise
+    );
+    assert_eq!(motion.spindle_speed, Some(12_000.0));
+}
+
 fn assert_point(point: millo_gcode::ProgramPoint, expected: [f64; 3]) {
     assert!((point.x - expected[0]).abs() < 0.001, "x={}", point.x);
     assert!((point.y - expected[1]).abs() < 0.001, "y={}", point.y);

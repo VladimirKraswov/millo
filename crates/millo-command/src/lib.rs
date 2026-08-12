@@ -1486,6 +1486,7 @@ async fn reconcile_physical_sender(
     sender_snapshots: &watch::Sender<SenderSnapshot>,
 ) {
     let snapshot = controller.snapshot();
+    sender.observe_executing_line_number(snapshot.machine.line_number);
     let sender_state = sender.snapshot().state;
     if !matches!(
         sender_state,
@@ -3426,9 +3427,8 @@ mod tests {
         let barrier = wait_for_sender(&arbiter, SenderState::ToolChange).await;
         assert_eq!(barrier.current_source_line, Some(3));
         assert_eq!(barrier.requested_tool, Some(2));
-        assert!(control.writes().contains(&b"T2\n".to_vec()));
-        assert!(!control.writes().contains(&b"T2 M6\n".to_vec()));
-        assert!(!control.writes().contains(&b"M6\n".to_vec()));
+        assert!(control.writes().contains(&b"N3 T2\n".to_vec()));
+        assert!(!control.writes().contains(&b"N3 T2 M6\n".to_vec()));
 
         let writes_before_resume = control.writes();
         assert!(matches!(
@@ -3464,7 +3464,7 @@ mod tests {
         arbiter.refresh_status().await.unwrap();
         let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
         assert_eq!(completed.acknowledged_lines, completed.total_lines);
-        assert!(control.writes().contains(&b"G1 X2 F20\n".to_vec()));
+        assert!(control.writes().contains(&b"N4 G1 X2 F20\n".to_vec()));
         assert!(!control.writes().iter().any(|write| {
             String::from_utf8_lossy(write)
                 .split_whitespace()
@@ -3487,8 +3487,8 @@ mod tests {
         let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
 
         assert_eq!(completed.acknowledged_lines, completed.total_lines);
-        assert!(control.writes().contains(&b"T5\n".to_vec()));
-        assert!(!control.writes().contains(&b"M30\n".to_vec()));
+        assert!(control.writes().contains(&b"N2 T5\n".to_vec()));
+        assert!(!control.writes().contains(&b"N4 M30\n".to_vec()));
         assert!(!control.writes().iter().any(|write| {
             String::from_utf8_lossy(write)
                 .split_whitespace()
@@ -3506,7 +3506,7 @@ mod tests {
             .lines()
             .iter()
             .filter(|line| line.kind() != DryRunLineKind::ProgramEnd)
-            .map(|line| format!("{}\n", line.command()).into_bytes())
+            .map(|line| format!("{}\n", line.wire_command()).into_bytes())
             .collect::<Vec<_>>();
         let (arbiter, control, worker) = serial_preflight_arbiter();
         control.set_firmware_options("V,35,254");
@@ -3552,7 +3552,7 @@ mod tests {
             .lines()
             .iter()
             .filter(|line| line.kind() != DryRunLineKind::ProgramEnd)
-            .map(|line| format!("{}\n", line.command()).into_bytes())
+            .map(|line| format!("{}\n", line.wire_command()).into_bytes())
             .collect::<Vec<_>>();
         let (arbiter, control, worker) = serial_preflight_arbiter();
         let task = tokio::spawn(worker);
@@ -3614,8 +3614,9 @@ mod tests {
             })
             .map(|write| String::from_utf8(write).unwrap())
             .collect::<Vec<_>>();
-        assert!(commands.contains(&"N50 M1\n".to_owned()));
-        assert!(!commands.iter().any(|line| line.contains("N30")));
+        assert!(commands.contains(&"N5 M1\n".to_owned()));
+        assert!(!commands.iter().any(|line| line.starts_with("N3 ")));
+        assert!(!commands.iter().any(|line| line.starts_with("N50 ")));
         assert!(commands.iter().all(|line| !line.contains('*')));
         assert_eq!(arbiter.snapshot().machine.mode, MachineMode::Idle);
         task.abort();
@@ -3682,18 +3683,18 @@ mod tests {
 
         let draining = wait_for_sender(&arbiter, SenderState::Draining).await;
         assert_eq!(draining.current_command.as_deref(), Some("M30"));
-        assert!(!control.writes().contains(&b"M30\n".to_vec()));
+        assert!(!control.writes().contains(&b"N3 M30\n".to_vec()));
 
         control.set_status("<Run|MPos:1.000,0.000,0.000|WPos:1.000,0.000,0.000|FS:20,0>");
         arbiter.refresh_status().await.unwrap();
         assert_eq!(arbiter.sender_snapshot().state, SenderState::Draining);
-        assert!(!control.writes().contains(&b"M30\n".to_vec()));
+        assert!(!control.writes().contains(&b"N3 M30\n".to_vec()));
 
         arbiter.feed_hold().await.unwrap();
         assert_eq!(arbiter.sender_snapshot().state, SenderState::Paused);
         arbiter.resume_program_run().await.unwrap();
         assert_eq!(arbiter.sender_snapshot().state, SenderState::Draining);
-        assert!(!control.writes().contains(&b"M30\n".to_vec()));
+        assert!(!control.writes().contains(&b"N3 M30\n".to_vec()));
 
         control.set_status("<Idle|MPos:2.000,0.000,0.000|WPos:2.000,0.000,0.000|FS:0,0>");
         arbiter.refresh_status().await.unwrap();
@@ -3704,7 +3705,7 @@ mod tests {
             control
                 .writes()
                 .iter()
-                .filter(|write| write.as_slice() == b"M30\n")
+                .filter(|write| write.as_slice() == b"N3 M30\n")
                 .count(),
             1
         );
@@ -3724,7 +3725,7 @@ mod tests {
         arbiter.confirm_soft_reset(challenge.id).await.unwrap();
 
         assert_eq!(arbiter.sender_snapshot().state, SenderState::Cancelled);
-        assert!(!control.writes().contains(&b"M30\n".to_vec()));
+        assert!(!control.writes().contains(&b"N3 M30\n".to_vec()));
         assert_eq!(control.writes().last(), Some(&b"\x18".to_vec()));
         task.abort();
     }
@@ -4042,9 +4043,9 @@ mod tests {
                 b"?".to_vec(),
                 b"M5\n".to_vec(),
                 b"M9\n".to_vec(),
-                b"G21 G90\n".to_vec(),
-                b"G0 X1\n".to_vec(),
-                b"G1 X2 F10\n".to_vec(),
+                b"N1 G21 G90\n".to_vec(),
+                b"N2 G0 X1\n".to_vec(),
+                b"N3 G1 X2 F10\n".to_vec(),
                 b"M5\n".to_vec(),
                 b"M9\n".to_vec(),
             ]
@@ -4121,8 +4122,8 @@ mod tests {
                 b"?".to_vec(),
                 b"M5\n".to_vec(),
                 b"M9\n".to_vec(),
-                b"G21\n".to_vec(),
-                b"G0 X1\n".to_vec(),
+                b"N1 G21\n".to_vec(),
+                b"N2 G0 X1\n".to_vec(),
                 b"M5\n".to_vec(),
                 b"M9\n".to_vec(),
             ]

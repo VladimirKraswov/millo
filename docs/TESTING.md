@@ -198,6 +198,10 @@ port names remain untouched.
   work. The test exposed and fixed an initial quadratic shutdown-counter scan.
 - Sender snapshots carry a monotonic `runSequence` for journal correlation in
   addition to the acknowledgement sequence used by the live heartbeat.
+- Wire-protocol tests prove source lines replace arbitrary file `N` words,
+  wire prefixes participate in command/RX limits, parser modal checkpoints are
+  native-only, and only in-range GRBL `Ln:` values become executing-line
+  evidence. Journal tests keep that value distinct from accepted-line counts.
 - Journal tests cover checkpoint throttling, mandatory terminal persistence,
   bounded history, backup recovery, and explicit failure when both primary and
   backup are corrupt. A Tauri adapter test proves the dedicated worker consumes
