@@ -19,6 +19,10 @@ import type {
   HardwareInspection,
   ResetChallenge,
 } from "../shared/machine";
+import {
+  isControllerConnected,
+  isControllerStableIdle,
+} from "../shared/controllerReadiness";
 
 interface SafetyControlsProps {
   snapshot: ControllerSnapshot;
@@ -60,12 +64,8 @@ export function SafetyControls({
   const [challengeDeadline, setChallengeDeadline] = useState<number>();
   const [now, setNow] = useState(() => Date.now());
 
-  const connected = snapshot.connection === "connected";
-  const stableIdle =
-    connected &&
-    snapshot.machine.mode === "idle" &&
-    snapshot.alarm === undefined &&
-    snapshot.resetNotice === undefined;
+  const connected = isControllerConnected(snapshot);
+  const stableIdle = isControllerStableIdle(snapshot);
   const canHold =
     connected && ["run", "jog", "home"].includes(snapshot.machine.mode);
   const challengeSeconds = secondsRemaining(challengeDeadline, now);

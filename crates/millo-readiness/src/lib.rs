@@ -1,6 +1,6 @@
 use millo_domain::{
-    CommandCompletion, ConnectionState, ControllerSnapshot, DeviceInspection, HardwareProfile,
-    MachineMode, ReadinessCheck, ReadinessLevel, ReadinessReport, SpindleControl,
+    CommandCompletion, ControllerSnapshot, DeviceInspection, HardwareProfile, ReadinessCheck,
+    ReadinessLevel, ReadinessReport, SpindleControl,
 };
 
 const EXPECTED_QUERIES: [&str; 4] = ["$I", "$$", "$G", "$#"];
@@ -65,10 +65,7 @@ pub fn assess(
 }
 
 fn controller_state(snapshot: &ControllerSnapshot) -> ReadinessCheck {
-    let ready = snapshot.connection == ConnectionState::Connected
-        && snapshot.machine.mode == MachineMode::Idle
-        && snapshot.alarm.is_none()
-        && snapshot.reset_notice.is_none();
+    let ready = snapshot.is_stable_idle();
 
     check(
         "controller-state",

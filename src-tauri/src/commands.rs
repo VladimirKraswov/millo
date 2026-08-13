@@ -16,11 +16,11 @@ use millo_cam::{
 use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
-    ControllerSnapshot, DeviceInspection, HardwareInspection, HardwareProfile, JogAxis,
-    JogPadStepOutcome, JogPadStepRequest, OperatorConfirmation, OverrideAdjustment,
-    RapidOverrideTarget, ResetChallenge, ReturnToWorkOriginOutcome, ReturnToWorkOriginRequest,
-    ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest, StepJogReceipt, StepJogRequest,
-    TestJogPreparation, WorkAxis, WorkZeroOutcome, WorkZeroRequest, ZProbeOutcome, ZProbeRequest,
+    ControllerSnapshot, DeviceInspection, HardwareInspection, HardwareProfile, JogPadStepOutcome,
+    JogPadStepRequest, OperatorConfirmation, OverrideAdjustment, RapidOverrideTarget,
+    ResetChallenge, ReturnToWorkOriginOutcome, ReturnToWorkOriginRequest, ReturnToWorkZeroOutcome,
+    ReturnToWorkZeroRequest, StepJogReceipt, StepJogRequest, TestJogPreparation, WorkZeroOutcome,
+    WorkZeroRequest, ZProbeOutcome, ZProbeRequest,
 };
 use millo_dry_run::{
     DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy, build_dry_run_plan,
@@ -52,9 +52,8 @@ use millo_run::{
     ToolChangeConfirmation, program_fingerprint,
 };
 use millo_script::{
-    InstalledScriptPlugin, ScriptAction, ScriptAxis, ScriptCapability, ScriptGeneratedJob,
-    ScriptNoticeTone, ScriptPluginStore, ScriptRuntime, action_capability, generated_job,
-    parse_package, read_package,
+    InstalledScriptPlugin, ScriptAction, ScriptCapability, ScriptPluginStore, ScriptRuntime,
+    action_capability, generated_job, parse_package, read_package,
 };
 use millo_sender::{SenderMode, SenderSnapshot};
 use millo_serial::{
@@ -75,6 +74,14 @@ use tokio::{
     sync::{Mutex, mpsc},
     task::JoinHandle,
 };
+
+mod script_command_model;
+
+pub use script_command_model::{
+    ScriptPluginDeleteRequest, ScriptPluginEnableRequest, ScriptPluginExecutionOutcome,
+    ScriptPluginExecutionRequest, ScriptPluginExportRequest, ScriptPluginSourceRequest,
+};
+use script_command_model::{ensure_script_motion_confirmed, jog_axis, work_axis};
 
 const MOCK_TRANSPORT_ID: &str = "mock";
 const SERIAL_TRANSPORT_PREFIX: &str = "serial:";
@@ -100,67 +107,6 @@ pub struct GeneratedGcodeSaveRequest {
 pub struct GeneratedGcodeSaveOutcome {
     pub path: String,
     pub bytes_written: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScriptPluginSourceRequest {
-    pub package_json: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScriptPluginEnableRequest {
-    pub plugin_id: String,
-    pub digest: String,
-    pub enabled: bool,
-    pub granted_capabilities: Vec<ScriptCapability>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScriptPluginDeleteRequest {
-    pub plugin_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScriptPluginExportRequest {
-    pub plugin_id: String,
-    pub digest: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScriptPluginExecutionRequest {
-    pub plugin_id: String,
-    pub digest: String,
-    pub command_id: String,
-    pub input: Value,
-    #[serde(default)]
-    pub operator_confirmed: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ScriptPluginExecutionOutcome {
-    Job {
-        job: ScriptGeneratedJob,
-    },
-    Machine {
-        action: String,
-        message: String,
-        snapshot: ControllerSnapshot,
-    },
-    Notice {
-        title: String,
-        message: String,
-        tone: ScriptNoticeTone,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -2803,30 +2749,6 @@ pub async fn execute_script_plugin(
                 snapshot: outcome.snapshot,
             })
         }
-    }
-}
-
-fn ensure_script_motion_confirmed(confirmed: bool) -> Result<(), String> {
-    if confirmed {
-        Ok(())
-    } else {
-        Err("operator confirmation is required for a plugin machine action".to_owned())
-    }
-}
-
-fn jog_axis(axis: ScriptAxis) -> JogAxis {
-    match axis {
-        ScriptAxis::X => JogAxis::X,
-        ScriptAxis::Y => JogAxis::Y,
-        ScriptAxis::Z => JogAxis::Z,
-    }
-}
-
-fn work_axis(axis: ScriptAxis) -> WorkAxis {
-    match axis {
-        ScriptAxis::X => WorkAxis::X,
-        ScriptAxis::Y => WorkAxis::Y,
-        ScriptAxis::Z => WorkAxis::Z,
     }
 }
 

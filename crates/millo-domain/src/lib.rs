@@ -163,6 +163,15 @@ pub struct ControllerSnapshot {
     pub last_error: Option<String>,
 }
 
+impl ControllerSnapshot {
+    pub fn is_stable_idle(&self) -> bool {
+        self.connection == ConnectionState::Connected
+            && self.machine.mode == MachineMode::Idle
+            && self.alarm.is_none()
+            && self.reset_notice.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CommandCompletion {
@@ -542,6 +551,52 @@ pub struct ZProbeOutcome {
     pub contact_machine_position: Position,
     pub final_work_z: f64,
     pub snapshot: ControllerSnapshot,
+}
+
+#[cfg(test)]
+mod controller_snapshot_tests {
+    use super::*;
+
+    fn stable_idle() -> ControllerSnapshot {
+        ControllerSnapshot {
+            connection: ConnectionState::Connected,
+            machine: MachineState {
+                mode: MachineMode::Idle,
+                reported_mode: "Idle".to_owned(),
+                ..MachineState::default()
+            },
+            ..ControllerSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn stable_idle_requires_a_clean_connected_controller() {
+        let ready = stable_idle();
+        assert!(ready.is_stable_idle());
+
+        let mut recovering = ready.clone();
+        recovering.connection = ConnectionState::Recovering;
+        assert!(!recovering.is_stable_idle());
+
+        let mut running = ready.clone();
+        running.machine.mode = MachineMode::Run;
+        assert!(!running.is_stable_idle());
+
+        let mut alarm = ready.clone();
+        alarm.alarm = Some(AlarmState {
+            code: Some(1),
+            message: "Hard limit".to_owned(),
+        });
+        assert!(!alarm.is_stable_idle());
+
+        let mut reset = ready;
+        reset.reset_notice = Some(ResetNotice {
+            banner: "Grbl 1.1h".to_owned(),
+            version: Some("1.1h".to_owned()),
+            sequence: 1,
+        });
+        assert!(!reset.is_stable_idle());
+    }
 }
 
 #[cfg(test)]

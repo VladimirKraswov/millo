@@ -20,6 +20,18 @@ quietly slowing every startup.
 It runs TypeScript type checking, all Rust workspace tests, the production Vite
 build, Rust formatting checks, and Clippy with warnings denied.
 
+The maintainability contract is tested at the same boundaries as behavior:
+
+- controller readiness is a table-tested shared predicate in both TS and Rust;
+- sender-state classification enumerates every state instead of repeating
+  Boolean expressions in individual components;
+- extracted connection, Inspector, readout, preview, diagnostics, and run-card
+  components have focused render tests;
+- presentation tests pass gateway availability explicitly and assert that
+  host-owned controls disappear when the capability is absent;
+- test builders may remove repeated setup, but separate lifecycle, race, error,
+  and hardware-policy cases must not be merged merely to reduce line count.
+
 `npm run test:ui` runs Vitest policy tests for TypeScript feature modules. The
 jog-pad suite verifies one signed bounded gateway call per press, rejects values
 outside the technical envelope before IPC, scales presets to the machine, and

@@ -1,4 +1,5 @@
 import type { SenderSnapshot } from "../../shared/dryRun";
+import { isSenderActive } from "./senderStateModel";
 
 export interface DryRunControlContext {
   readonly mockAvailable: boolean;
@@ -90,9 +91,7 @@ export const dryRunControls = (
   sender: SenderSnapshot,
   context: DryRunControlContext,
 ): DryRunControls => {
-  const active = ["running", "paused", "toolChange", "draining"].includes(
-    sender.state,
-  );
+  const active = isSenderActive(sender.state);
   return {
     canStart:
       !active &&

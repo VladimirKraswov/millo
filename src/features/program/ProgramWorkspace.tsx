@@ -3,10 +3,7 @@ import {
   ChevronDown,
   FileCode2,
   History,
-  LocateFixed,
-  Pause,
   PencilLine,
-  Play,
   RotateCcw,
   Route,
   ScanSearch,
@@ -14,13 +11,9 @@ import {
   SlidersHorizontal,
   Square,
   Trash2,
-  TriangleAlert,
-  Wrench,
   X,
 } from "lucide-react";
 import {
-  lazy,
-  Suspense,
   useEffect,
   useMemo,
   useRef,
@@ -39,9 +32,8 @@ import {
   idleSenderSnapshot,
   type DryRunGateway,
   type SenderSnapshot,
-  type SenderState,
 } from "../../shared/dryRun";
-import type { GcodeProgram, ProgramWarning } from "../../shared/program";
+import type { GcodeProgram } from "../../shared/program";
 import type { PublishedJob } from "../../shared/jobs";
 import type { SurfaceSession } from "../../shared/heightmap";
 import type {
@@ -64,18 +56,18 @@ import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
 import { JobReadinessPanel } from "./JobReadinessPanel";
 import { ProgramFilePicker } from "./ProgramFilePicker";
 import { ProgramEditor } from "./ProgramEditor";
+import { ProgramInspection, type ProgramDiagnosticView } from "./ProgramInspection";
+import { ProgramMockRunCard } from "./ProgramMockRunCard";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
-import { ProgramLineTable } from "./ProgramLineTable";
+import { ProgramPreviewStage } from "./ProgramPreviewStage";
 import { ProgramRecoveryDialog } from "./ProgramRecoveryDialog";
-import { ProgramPreflightReport } from "./ProgramPreflightReport";
+import { ProgramRunCard } from "./ProgramRunCard";
 import { SafeStartDialog } from "./SafeStartDialog";
 import { ToolChangeDialog } from "./ToolChangeDialog";
 import { canStartCheckRun } from "./checkRunReadModel";
 import {
   dryRunControls,
   senderFailureSummary,
-  senderHeartbeat,
-  senderTiming,
 } from "./dryRunReadModel";
 import { realRunPreflightControls } from "./realRunPreflightReadModel";
 import {
@@ -95,11 +87,9 @@ import {
   depthAdjustmentUmForTarget,
   depthCorrectionView,
 } from "./depthCorrectionModel";
-
-const ToolpathPreview = lazy(async () => {
-  const module = await import("./ToolpathPreview");
-  return { default: module.ToolpathPreview };
-});
+import { sameExecutionOptions } from "./executionOptionsModel";
+import { isSenderActive } from "./senderStateModel";
+import { senderStateLabel } from "./senderPresentationModel";
 
 export interface ProgramMachineContext {
   readonly activeCoordinateSystem: string;
@@ -142,80 +132,6 @@ interface SafeStartContext {
   readonly package: SafeStartPackage;
 }
 
-const formatDistance = (value: number): string =>
-  value >= 1_000 ? `${(value / 1_000).toFixed(2)} m` : `${value.toFixed(1)} mm`;
-
-const formatSegmentCount = (count: number): string => {
-  const lastTwo = count % 100;
-  const last = count % 10;
-  const noun = lastTwo >= 11 && lastTwo <= 14
-    ? "сегментов"
-    : last === 1
-      ? "сегмент"
-      : last >= 2 && last <= 4
-        ? "сегмента"
-        : "сегментов";
-  return `${count} ${noun} траектории`;
-};
-
-const formatDuration = (seconds: number, complete: boolean): string => {
-  const rounded = Math.max(0, Math.round(seconds));
-  const hours = Math.floor(rounded / 3_600);
-  const minutes = Math.floor((rounded % 3_600) / 60);
-  const remainder = rounded % 60;
-  const value = hours > 0
-      ? `${hours} ч ${minutes} мин`
-    : minutes > 0
-      ? `${minutes} мин ${remainder} с`
-      : `${remainder} с`;
-  return `${complete ? "~" : ">="}${value}`;
-};
-
-function SenderTiming({ sender }: { readonly sender: SenderSnapshot }) {
-  const timing = senderTiming(sender);
-  const heartbeat = senderHeartbeat(sender);
-  return (
-    <>
-      <div className="sender-timing" aria-label="Время выполнения">
-        <span>
-          Прошло <code>{timing.elapsed}</code>
-        </span>
-        <span>
-          {timing.estimateLabel === "ETA" ? "Осталось" : "Осталось ≥"}{" "}
-          <code>{timing.remaining}</code>
-        </span>
-      </div>
-      <div
-        className="sender-heartbeat"
-        aria-label="Подтверждения контроллера"
-      >
-        <span>ACK #{heartbeat.sequence}</span>
-        <code>
-          {heartbeat.lastLine} · {heartbeat.age}
-        </code>
-        <strong className={heartbeat.shutdownAcknowledged ? undefined : "is-placeholder"}>
-          M5 · M9 OK
-        </strong>
-      </div>
-    </>
-  );
-}
-
-const warningTitle = (warning: ProgramWarning): string =>
-  warning.code.replaceAll("-", " ");
-
-const senderLabels: Record<SenderState, string> = {
-  idle: "Не запускалась",
-  ready: "Готово",
-  running: "Выполняется",
-  paused: "Пауза",
-  toolChange: "Смена инструмента",
-  draining: "Завершение движения",
-  completed: "Завершено",
-  failed: "Остановлено из-за ошибки",
-  cancelled: "Остановлено",
-};
-
 export function ProgramWorkspace({
   desktopRuntime,
   dryRunAvailable = false,
@@ -247,9 +163,7 @@ export function ProgramWorkspace({
   const [view, setView] = useState<PreviewView>("iso");
   const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [diagnosticView, setDiagnosticView] = useState<
-    "lines" | "warnings" | "preflight"
-  >("lines");
+  const [diagnosticView, setDiagnosticView] = useState<ProgramDiagnosticView>("lines");
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(
     (initialProgram?.warnings.length ?? 0) > 0,
   );
@@ -276,9 +190,7 @@ export function ProgramWorkspace({
   const [error, setError] = useState<string>();
   const handledIncomingJob = useRef(0);
   const program = loaded?.program;
-  const senderActive = ["running", "paused", "toolChange", "draining"].includes(
-    sender.state,
-  );
+  const senderActive = isSenderActive(sender.state);
 
   useEffect(() => {
     if (!heightmapGateway) return;
@@ -621,9 +533,6 @@ export function ProgramWorkspace({
   };
 
   const bounds = program?.summary.bounds;
-  const pathDistance = program
-    ? program.summary.rapidDistanceMm + program.summary.cuttingDistanceMm
-    : 0;
   const motionSourceLines = useMemo(
     () => new Set(program?.toolpath.map((segment) => segment.sourceLine) ?? []),
     [program],
@@ -746,14 +655,7 @@ export function ProgramWorkspace({
     realRunReport &&
     realRunReport.sourceName === program?.sourceName &&
     realRunReport.intent === programRunIntent &&
-    realRunReport.executionOptions.optionalStop ===
-      programExecutionOptions.optionalStop &&
-    realRunReport.executionOptions.blockDelete ===
-      programExecutionOptions.blockDelete &&
-    realRunReport.executionOptions.surfaceMapId ===
-      programExecutionOptions.surfaceMapId &&
-    realRunReport.executionOptions.cuttingDepthAdjustmentUm ===
-      programExecutionOptions.cuttingDepthAdjustmentUm
+    sameExecutionOptions(realRunReport.executionOptions, programExecutionOptions)
       ? realRunReport
       : undefined;
   const setDepthCorrectionEnabled = (enabled: boolean) => {
@@ -1206,291 +1108,80 @@ export function ProgramWorkspace({
 
       {program ? (
         <div className="program-body">
-          <div className="program-preview-stage">
-            <Suspense
-              fallback={<div className="toolpath-preview is-loading">Загрузка траектории...</div>}
-            >
-              <ToolpathPreview
-                cuttingDepthAdjustmentMm={depthCorrection.enabled
-                  ? depthCorrection.adjustmentMm
-                  : 0}
-                onSelectSourceLine={setSelectedSourceLine}
-                program={program}
-                selectedSourceLine={selectedSourceLine}
-                toolCoordinateSystem={machineContext?.activeCoordinateSystem}
-                toolPosition={machineContext?.workPosition}
-                view={view}
-              />
-            </Suspense>
-            <div className="preview-legend" aria-label="Обозначения траектории">
-              <span className="is-cut">Рабочий ход</span>
-              <span className="is-rapid">Быстрый ход</span>
-            </div>
-            {selectedProgramLine && (
-              <div className="preview-selection" role="status">
-                <span>L{selectedProgramLine.sourceLine}</span>
-                <code title={selectedProgramLine.source}>
-                  {selectedProgramLine.source || "Пустая строка"}
-                </code>
-                <small>
-                  {selectedMotionCount > 0
-                    ? formatSegmentCount(selectedMotionCount)
-                    : "В этой строке нет движения"}
-                </small>
-                {realRunTarget &&
-                  realRunGateway &&
-                  realRunAvailable &&
-                  selectedMotionCount > 0 &&
-                  !recoveryCandidate &&
-                  !senderActive && (
-                    <button
-                      className="preview-safe-start"
-                      onClick={() => setSafeStartOpen(true)}
-                      title="Сформировать безопасный запуск с этого участка"
-                      type="button"
-                    >
-                      <Play aria-hidden="true" size={12} />
-                      С этого участка
-                    </button>
-                  )}
-                <button
-                  aria-label="Очистить выбор строки"
-                  onClick={() => setSelectedSourceLine(undefined)}
-                  title="Очистить выбор строки"
-                  type="button"
-                >
-                  <X aria-hidden="true" size={12} />
-                </button>
-              </div>
+          <ProgramPreviewStage
+            cuttingDepthAdjustmentMm={depthCorrection.enabled
+              ? depthCorrection.adjustmentMm
+              : 0}
+            onClearSelection={() => setSelectedSourceLine(undefined)}
+            onSafeStart={() => setSafeStartOpen(true)}
+            onSelectSourceLine={setSelectedSourceLine}
+            program={program}
+            safeStartAvailable={Boolean(
+              selectedProgramLine &&
+              realRunTarget &&
+              realRunGateway &&
+              realRunAvailable &&
+              selectedMotionCount > 0 &&
+              !recoveryCandidate &&
+              !senderActive,
             )}
-            <dl className="program-metrics">
-              <div>
-                <dt>Строки</dt>
-                <dd>{program.summary.lineCount}</dd>
-              </div>
-              <div>
-                <dt>Время</dt>
-                <dd>
-                  {formatDuration(
-                    program.summary.estimatedTotalTimeSeconds,
-                    program.summary.timeEstimateComplete,
-                  )}
-                </dd>
-              </div>
-              <div>
-                <dt>Траектория</dt>
-                <dd>{formatDistance(pathDistance)}</dd>
-              </div>
-              <div>
-                <dt>Размер XYZ</dt>
-                <dd>
-                  {bounds
-                    ? `${bounds.size.x.toFixed(1)} × ${bounds.size.y.toFixed(1)} × ${bounds.size.z.toFixed(1)}`
-                    : "--"}
-                </dd>
-              </div>
-            </dl>
-          </div>
+            selectedMotionCount={selectedMotionCount}
+            selectedProgramLine={selectedProgramLine}
+            selectedSourceLine={selectedSourceLine}
+            toolCoordinateSystem={machineContext?.activeCoordinateSystem}
+            toolPosition={machineContext?.workPosition}
+            view={view}
+          />
 
           <aside className="program-diagnostics" aria-label="Выполнение и диагностика программы">
             {realRunTarget && (programRunVisible || checkRunVisible) ? (
-              <div className={`dry-run-card program-run-card is-${displayedSender.state}`}>
-                <div className="dry-run-heading">
-                  <div>
-                    <span>
-                      {checkRunVisible
-                        ? "Проверка GRBL"
-                        : sender.mode === "airRun"
-                          ? "Проверка движения"
-                          : "Обработка"}
-                    </span>
-                    <strong>
-                      {displayedSender.state === "draining"
-                        ? "Ждём полной остановки станка"
-                        : senderLabels[displayedSender.state]}
-                    </strong>
-                  </div>
-                  <code>{progressPercent}%</code>
-                </div>
-                <div
-                  aria-label="Прогресс выполнения программы"
-                  aria-valuemax={100}
-                  aria-valuemin={0}
-                  aria-valuenow={progressPercent}
-                  className="dry-run-progress"
-                  role="progressbar"
-                >
-                  <i style={{ width: `${progressPercent}%` }} />
-                </div>
-                <div className="dry-run-line">
-                  <span>
-                    {displayedSender.currentSourceLine !== undefined
-                      ? `L${displayedSender.currentSourceLine}`
-                      : "Подготовка"}
-                  </span>
-                  <code>{displayedSender.currentCommand ?? "M5 · M9 перед запуском"}</code>
-                </div>
-                <SenderTiming sender={displayedSender} />
-                <div className="dry-run-actions">
-                  {programRunVisible &&
-                    physicalActions.primary === "pause" &&
-                    realRunGateway && (
-                    <button
-                      disabled={senderCommandBusy}
-                      onClick={() =>
-                        void runSenderAction(realRunGateway.pauseProgram)
-                      }
-                      type="button"
-                    >
-                      <Pause aria-hidden="true" size={13} />
-                      Пауза
-                    </button>
-                  )}
-                  {programRunVisible &&
-                    physicalActions.primary === "resume" &&
-                    realRunGateway && (
-                    <button
-                      disabled={senderCommandBusy}
-                      onClick={() =>
-                        void runSenderAction(realRunGateway.resumeProgram)
-                      }
-                      type="button"
-                    >
-                      <Play aria-hidden="true" size={13} />
-                      Продолжить
-                    </button>
-                  )}
-                  {programRunVisible &&
-                    physicalActions.primary === "toolChange" &&
-                    realRunGateway && (
-                    <button
-                      disabled={senderCommandBusy}
-                      onClick={() => setToolChangeOpen(true)}
-                      type="button"
-                    >
-                      <Wrench aria-hidden="true" size={13} />
-                      Подтвердить замену
-                    </button>
-                  )}
-                  {programRunVisible && physicalActions.stopVisible && realRunGateway && (
-                    <button
-                      aria-label="Остановить текущее задание"
-                      className="is-cancel"
-                      disabled={senderCommandBusy}
-                      onClick={() => void stopProgramRun()}
-                      title="Feed Hold, затем Soft Reset; незавершённую работу можно восстановить или закрыть"
-                      type="button"
-                    >
-                      <Square aria-hidden="true" size={13} />
-                      Остановить
-                    </button>
-                  )}
-                  {checkRunVisible && checkAction === "cancel" && dryRunGateway && (
-                    <button
-                      className="is-cancel"
-                      disabled={senderCommandBusy}
-                      onClick={() => void runSenderAction(dryRunGateway.cancel)}
-                      type="button"
-                    >
-                      <X aria-hidden="true" size={13} />
-                      Отменить проверку
-                    </button>
-                  )}
-                  {checkRunVisible && checkAction === "returnToPreparation" && (
-                    <button
-                      className="is-terminal-action"
-                      disabled={senderCommandBusy}
-                      onClick={returnFromCheck}
-                      type="button"
-                    >
-                      <RotateCcw aria-hidden="true" size={13} />
-                      Вернуться к подготовке
-                    </button>
-                  )}
-                  {programRunVisible &&
-                    ["completed", "failed", "cancelled"].includes(displayedSender.state) &&
-                    machineContext && (
-                      <div className="sender-zero-return" aria-label="Возврат к рабочему нулю">
-                        <span>После остановки</span>
-                        <button
-                          disabled={senderCommandBusy}
-                          onClick={() => void returnToWorkOrigin()}
-                          title="Millo поднимет Z, вернёт XY и только затем опустит Z к рабочему нулю"
-                          type="button"
-                        >
-                          <LocateFixed aria-hidden="true" size={13} />
-                          Вернуться в рабочий ноль
-                        </button>
-                      </div>
-                    )}
-                  {programRunVisible &&
-                    physicalActions.primary === "prepareRerun" && (
-                    <>
-                      <button
-                        className="is-terminal-action"
-                        disabled={senderCommandBusy}
-                        onClick={() => {
-                          setSender((current) => ({
-                            ...idleSenderSnapshot,
-                            runSequence: current.runSequence,
-                          }));
-                          setClearedSenderRunSequence(sender.runSequence);
-                          setRealRunReport(undefined);
-                        }}
-                        type="button"
-                      >
-                        <RotateCcw aria-hidden="true" size={13} />
-                        Подготовить повторный запуск
-                      </button>
-                    </>
-                  )}
-                  {programRunVisible &&
-                    physicalActions.primary === "resolveInterruption" && (
-                    <button
-                      className="is-terminal-action"
-                      disabled={!recoveryChecked}
-                      onClick={() => {
-                        if (recoveryCandidate) {
-                          setRecoveryOpen(true);
-                        } else {
-                          setClearedSenderRunSequence(sender.runSequence);
-                          setSender((current) => ({
-                            ...idleSenderSnapshot,
-                            runSequence: current.runSequence,
-                          }));
-                        }
-                      }}
-                      type="button"
-                    >
-                      <History aria-hidden="true" size={13} />
-                      {!recoveryChecked
-                        ? "Сохраняем остановку..."
-                        : recoveryCandidate
-                          ? "Продолжить или начать заново"
-                          : "Подготовить новый запуск"}
-                    </button>
-                  )}
-                </div>
-                <small>
-                  {displayedSender.state === "completed"
-                    ? checkRunVisible
-                      ? "Все строки приняты в $C; контроллер вернулся в Idle"
-                      : "Возврат: сначала безопасно поднимите Z, затем X0/Y0; Z0 выполняйте последним"
-                    : displayedSender.state === "failed"
-                      ? displayedSenderFailure
-                      : displayedSender.state === "toolChange"
-                        ? `M6 удерживается приложением${displayedSender.requestedTool === undefined ? "" : ` · требуется T${displayedSender.requestedTool}`}`
-                      : displayedSender.state === "paused"
-                        ? "Задание на паузе: продолжите его или завершите, чтобы освободить Jog"
-                      : displayedSender.state === "cancelled"
-                        ? checkRunVisible
-                          ? "Проверка остановлена; вернитесь к подготовке и запустите её снова"
-                          : "Задание завершено оператором; выберите восстановление или новый запуск"
-                      : checkRunVisible
-                        ? "По одной строке · без движения и включения выходов"
-                        : "Пауза сохраняет продолжение; завершение останавливает поток через Hold и Reset"}
-                </small>
-              </div>
+              <ProgramRunCard
+                busy={senderCommandBusy}
+                checkAction={checkAction}
+                checkControlsAvailable={dryRunGateway !== undefined}
+                checkRun={checkRunVisible}
+                failureSummary={displayedSenderFailure}
+                machineContextAvailable={machineContext !== undefined}
+                onCancelCheck={() => {
+                  if (dryRunGateway) void runSenderAction(dryRunGateway.cancel);
+                }}
+                onPause={() => {
+                  if (realRunGateway) void runSenderAction(realRunGateway.pauseProgram);
+                }}
+                onPrepareRerun={() => {
+                  setSender((current) => ({
+                    ...idleSenderSnapshot,
+                    runSequence: current.runSequence,
+                  }));
+                  setClearedSenderRunSequence(sender.runSequence);
+                  setRealRunReport(undefined);
+                }}
+                onResolveInterruption={() => {
+                  if (recoveryCandidate) {
+                    setRecoveryOpen(true);
+                  } else {
+                    setClearedSenderRunSequence(sender.runSequence);
+                    setSender((current) => ({
+                      ...idleSenderSnapshot,
+                      runSequence: current.runSequence,
+                    }));
+                  }
+                }}
+                onResume={() => {
+                  if (realRunGateway) void runSenderAction(realRunGateway.resumeProgram);
+                }}
+                onReturnFromCheck={returnFromCheck}
+                onReturnToWorkOrigin={() => void returnToWorkOrigin()}
+                onStop={() => void stopProgramRun()}
+                onToolChange={() => setToolChangeOpen(true)}
+                physicalActions={physicalActions}
+                programControlsAvailable={realRunGateway !== undefined}
+                programRun={programRunVisible}
+                progressPercent={progressPercent}
+                recoveryAvailable={recoveryCandidate !== undefined}
+                recoveryChecked={recoveryChecked}
+                sender={displayedSender}
+              />
             ) : realRunTarget ? (
               <div className="job-readiness-shell">
                 <JobReadinessPanel
@@ -1576,216 +1267,41 @@ export function ProgramWorkspace({
                 </details>
               </div>
             ) : (
-              <div className={`dry-run-card is-${displayedSender.state}`}>
-                <div className="dry-run-heading">
-                  <div>
-                    <span>Проверка движения</span>
-                    <strong>{senderLabels[displayedSender.state]}</strong>
-                  </div>
-                  <code>{progressPercent}%</code>
-                </div>
-                <div
-                  aria-label="Прогресс проверки движения"
-                  aria-valuemax={100}
-                  aria-valuemin={0}
-                  aria-valuenow={progressPercent}
-                  className="dry-run-progress"
-                  role="progressbar"
-                >
-                  <i style={{ width: `${progressPercent}%` }} />
-                </div>
-                <div className="dry-run-line">
-                  <span>
-                    {displayedSender.currentSourceLine !== undefined
-                      ? `L${displayedSender.currentSourceLine}`
-                      : "Подготовка"}
-                  </span>
-                  <code>
-                    {displayedSender.currentCommand ?? "M5 · M9 перед запуском"}
-                  </code>
-                </div>
-                <SenderTiming sender={displayedSender} />
-                <div className="dry-run-actions">
-                  <button
-                    aria-hidden={mockActions.primary === "none"}
-                    className={mockActions.primary === "none" ? "is-placeholder" : undefined}
-                    disabled={
-                      !dryRunGateway ||
-                      mockActions.primary === "none" ||
-                      (mockActions.primary === "start" && !controls.canStart) ||
-                      (mockActions.primary === "resume" && !controls.canResume)
-                    }
-                    onClick={runMockPrimaryAction}
-                    tabIndex={mockActions.primary === "none" ? -1 : 0}
-                    title={
-                      mockActions.primary === "start" && !dryRunAvailable
-                        ? "Подключите Mock GRBL в состоянии Idle"
-                        : undefined
-                    }
-                    type="button"
-                  >
-                    {mockActions.primary === "pause" ? (
-                      <Pause aria-hidden="true" size={13} />
-                    ) : (
-                      <Play aria-hidden="true" size={13} />
-                    )}
-                    {mockActions.primary === "pause"
-                      ? "Пауза"
-                      : mockActions.primary === "resume"
-                        ? "Продолжить"
-                        : "Запустить тест"}
-                  </button>
-                  <button
-                    aria-hidden={!mockActions.cancelVisible}
-                    className={`is-cancel${mockActions.cancelVisible ? "" : " is-placeholder"}`}
-                    disabled={!dryRunGateway || !mockActions.cancelVisible}
-                    onClick={() => {
-                      if (dryRunGateway && mockActions.cancelVisible) {
-                        void runSenderAction(dryRunGateway.cancel);
-                      }
-                    }}
-                    tabIndex={mockActions.cancelVisible ? 0 : -1}
-                    type="button"
-                  >
-                    <X aria-hidden="true" size={13} />
-                    Отменить
-                  </button>
-                </div>
-                <small className={displayedSenderFailure ? "is-error" : undefined}>
-                  {mockStatus}
-                </small>
-              </div>
-            )}
-            <details
-              className="program-inspection"
-              onToggle={(event) => setDiagnosticsOpen(event.currentTarget.open)}
-              open={diagnosticsOpen}
-            >
-              <summary>
-                <span>Программа и диагностика</span>
-                <code>
-                  {program.lines.length} строк
-                  {program.warnings.length > 0
-                    ? ` · ${program.warnings.length} предупреждений`
-                    : ""}
-                </code>
-                <ChevronDown aria-hidden="true" size={13} />
-              </summary>
-              <div
-                aria-label="Раздел диагностики программы"
-                className={`program-diagnostic-tabs${realRunTarget ? " has-preflight" : ""}`}
-                role="tablist"
-              >
-              <button
-                aria-controls="program-lines-panel"
-                aria-selected={diagnosticView === "lines"}
-                id="program-lines-tab"
-                onClick={() => setDiagnosticView("lines")}
-                role="tab"
-                type="button"
-              >
-                Строки <strong>{program.lines.length}</strong>
-              </button>
-              <button
-                aria-controls="program-warnings-panel"
-                aria-selected={diagnosticView === "warnings"}
-                id="program-warnings-tab"
-                onClick={() => setDiagnosticView("warnings")}
-                role="tab"
-                type="button"
-              >
-                Замечания <strong>{program.warnings.length}</strong>
-              </button>
-              {realRunTarget && (
-                <button
-                  aria-controls="program-preflight-panel"
-                  aria-selected={diagnosticView === "preflight"}
-                  disabled={!reportForProgram}
-                  id="program-preflight-tab"
-                  onClick={() => setDiagnosticView("preflight")}
-                  role="tab"
-                  type="button"
-                >
-                  Проверка <strong>{reportForProgram?.blockerCount ?? "--"}</strong>
-                </button>
-              )}
-              </div>
-              <div
-              aria-labelledby="program-lines-tab"
-              className="program-lines-panel"
-              hidden={diagnosticView !== "lines"}
-              id="program-lines-panel"
-              role="tabpanel"
-            >
-              <ProgramLineTable
-                lines={program.lines}
-                motionSourceLines={motionSourceLines}
-                onSelect={(sourceLine) =>
-                  setSelectedSourceLine((current) =>
-                    current === sourceLine ? undefined : sourceLine,
-                  )
-                }
-                selectedSourceLine={selectedSourceLine}
+              <ProgramMockRunCard
+                actions={mockActions}
+                controls={controls}
+                dryRunAvailable={dryRunAvailable}
+                failure={displayedSenderFailure !== undefined}
+                gatewayAvailable={dryRunGateway !== undefined}
+                onCancel={() => {
+                  if (dryRunGateway && mockActions.cancelVisible) {
+                    void runSenderAction(dryRunGateway.cancel);
+                  }
+                }}
+                onPrimary={runMockPrimaryAction}
+                sender={displayedSender}
+                status={mockStatus}
               />
-              </div>
-              <div
-              aria-labelledby="program-warnings-tab"
-              className="program-warnings"
-              hidden={diagnosticView !== "warnings"}
-              id="program-warnings-panel"
-              role="tabpanel"
-            >
-              {program.warnings.length === 0 ? (
-                <div className="warnings-empty">Парсер не нашёл замечаний</div>
-              ) : (
-                program.warnings.map((warning, index) => (
-                  <button
-                    aria-pressed={selectedSourceLine === warning.sourceLine}
-                    className={`program-warning is-${warning.severity}`}
-                    key={`${warning.sourceLine}-${warning.code}-${index}`}
-                    onClick={() => setSelectedSourceLine(warning.sourceLine)}
-                    type="button"
-                  >
-                    <span className="warning-line">L{warning.sourceLine}</span>
-                    {warning.severity === "safety" ? (
-                      <ShieldAlert aria-hidden="true" size={13} />
-                    ) : (
-                      <TriangleAlert aria-hidden="true" size={13} />
-                    )}
-                    <div>
-                      <strong>{warningTitle(warning)}</strong>
-                      <span>{warning.message}</span>
-                    </div>
-                  </button>
-                ))
-              )}
-              </div>
-              {realRunTarget && (
-                <div
-                aria-labelledby="program-preflight-tab"
-                hidden={diagnosticView !== "preflight"}
-                id="program-preflight-panel"
-                role="tabpanel"
-              >
-                {reportForProgram && (
-                  <ProgramPreflightReport
-                    onSelectSourceLine={(sourceLine) => {
-                      setSelectedSourceLine(sourceLine);
-                      setDiagnosticView("lines");
-                    }}
-                    report={reportForProgram}
-                  />
-                )}
-                </div>
-              )}
-            </details>
+            )}
+            <ProgramInspection
+              diagnosticView={diagnosticView}
+              motionSourceLines={motionSourceLines}
+              onOpenChange={setDiagnosticsOpen}
+              onSelectSourceLine={setSelectedSourceLine}
+              onView={setDiagnosticView}
+              open={diagnosticsOpen}
+              program={program}
+              realRunTarget={realRunTarget}
+              report={reportForProgram}
+              selectedSourceLine={selectedSourceLine}
+            />
           </aside>
         </div>
       ) : senderActive && dryRunGateway ? (
         <div className="program-dropzone sender-recovery" role="status">
           <ShieldAlert aria-hidden="true" size={28} />
           <strong>{sender.sourceName ?? "Проверка движения"}</strong>
-          <span>{senderLabels[sender.state]}</span>
+          <span>{senderStateLabel(sender.state)}</span>
           <button
             onClick={() => void runSenderAction(dryRunGateway.cancel)}
             type="button"

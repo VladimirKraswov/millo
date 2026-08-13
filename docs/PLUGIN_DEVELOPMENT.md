@@ -84,6 +84,24 @@ helper-функцией и не должны задаваться вручную
 Пример регистрации уже есть в `src/App.tsx`; эталонные реализации находятся в
 `src/plugins/image-to-gcode` и `src/plugins/spoilboard-surfacing`.
 
+### Границы модуля
+
+- Composition root создаёт gateway/service и выдаёт capability; плагин их не
+  конструирует и не импортирует Tauri.
+- UI-компонент плагина получает узкие capability props и хранит только локальное
+  состояние формы. Парсинг, CAM, профиль станка и safety policy остаются в core.
+- Повторно используемый алгоритм сначала добавляется в Rust/host service с
+  fixture-тестами, затем вызывается плагином. Нельзя прятать доменную реализацию
+  внутри React-модалки.
+- Проверка capability выполняется host proxy и Rust use case. Видимость кнопки
+  является UX, но не авторизацией.
+- Каждый `register`/`subscribe` обязан принадлежать lifecycle scope. Loader
+  закрывает scope до `deactivate`, поэтому отложенный callback не должен
+  рассчитывать на ещё живой proxy.
+
+Такое разделение позволяет заменить UI плагина, повторно использовать ядро из
+другого плагина и тестировать machine behavior без React и Tauri.
+
 ### Trusted capabilities v1
 
 - `ui.contribute`: регистрация React contribution в именованном slot.

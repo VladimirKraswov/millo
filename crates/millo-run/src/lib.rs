@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use millo_domain::{
-    ConnectionState, ControllerSnapshot, HardwareInspection, MachineMode, Position, ReadinessLevel,
+    ConnectionState, ControllerSnapshot, HardwareInspection, Position, ReadinessLevel,
     SpindleControl,
 };
 use millo_dry_run::{
@@ -93,7 +93,7 @@ impl ProgramCheckGate {
         snapshot: &ControllerSnapshot,
         now: Instant,
     ) -> Result<ProgramCheckCertificate, ProgramCheckCertificateError> {
-        if !stable_idle(snapshot) {
+        if !snapshot.is_stable_idle() {
             self.invalidate();
             return Err(ProgramCheckCertificateError::UnsafeControllerState);
         }
@@ -128,7 +128,7 @@ impl ProgramCheckGate {
             || lease.certificate.reconnect_count != snapshot.reconnect_count
         {
             Some(ProgramCheckCertificateError::ControllerSessionChanged)
-        } else if !stable_idle(snapshot) {
+        } else if !snapshot.is_stable_idle() {
             Some(ProgramCheckCertificateError::UnsafeControllerState)
         } else if lease.certificate.program_fingerprint != binding.program_fingerprint {
             Some(ProgramCheckCertificateError::ProgramChanged)
@@ -439,7 +439,7 @@ impl FirstCutGate {
             return;
         };
         let valid = now <= lease.expires_at
-            && stable_idle(snapshot)
+            && snapshot.is_stable_idle()
             && lease.reset_count == snapshot.reset_count
             && lease.reconnect_count == snapshot.reconnect_count
             && positions_equal(lease.machine_position, snapshot.machine.machine_position)
@@ -528,10 +528,7 @@ pub fn assess_real_run_preflight_with_options(
     execution_options: ProgramExecutionOptions,
 ) -> RunPreflightReport {
     let mut checks = Vec::new();
-    let stable_idle = snapshot.connection == ConnectionState::Connected
-        && snapshot.machine.mode == MachineMode::Idle
-        && snapshot.alarm.is_none()
-        && snapshot.reset_notice.is_none();
+    let stable_idle = snapshot.is_stable_idle();
     checks.push(check(
         "controller-state",
         if stable_idle {
@@ -774,18 +771,11 @@ fn update_digest_field(digest: &mut Sha256, value: &[u8]) {
 }
 
 fn ensure_stable_idle(snapshot: &ControllerSnapshot) -> Result<(), FirstCutAuthorizationError> {
-    if stable_idle(snapshot) {
+    if snapshot.is_stable_idle() {
         Ok(())
     } else {
         Err(FirstCutAuthorizationError::UnsafeControllerState)
     }
-}
-
-fn stable_idle(snapshot: &ControllerSnapshot) -> bool {
-    snapshot.connection == ConnectionState::Connected
-        && snapshot.machine.mode == MachineMode::Idle
-        && snapshot.alarm.is_none()
-        && snapshot.reset_notice.is_none()
 }
 
 fn positions_equal(left: Option<Position>, right: Option<Position>) -> bool {
@@ -939,7 +929,7 @@ fn check(
 #[cfg(test)]
 mod tests {
     use millo_domain::{
-        ControllerCapabilities, ControllerSnapshot, DeviceInspection, HardwareProfile,
+        ControllerCapabilities, ControllerSnapshot, DeviceInspection, HardwareProfile, MachineMode,
         MachineState, ReadinessCheck, ReadinessReport,
     };
     use millo_gcode::{

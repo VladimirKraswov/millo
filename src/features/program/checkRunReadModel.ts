@@ -1,4 +1,5 @@
 import type { SenderSnapshot } from "../../shared/dryRun";
+import { isSenderActive } from "./senderStateModel";
 
 export interface CheckRunContext {
   readonly gatewayAvailable: boolean;
@@ -15,4 +16,4 @@ export const canStartCheckRun = (
   context.serialAvailable &&
   context.programLoaded &&
   !context.loading &&
-  !["running", "paused", "toolChange", "draining"].includes(sender.state);
+  !isSenderActive(sender.state);

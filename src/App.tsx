@@ -1,16 +1,20 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import {
-  ChevronDown,
-  KeyRound,
-  PlugZap,
-  Puzzle,
-  RefreshCw,
-  ScrollText,
-  Unplug,
-} from "lucide-react";
+import { KeyRound, Puzzle } from "lucide-react";
 
 import { bootstrapPluginHost } from "./app/bootstrapPluginHost";
 import { DeferredDisposal } from "./app/DeferredDisposal";
+import {
+  developmentAuditFixture,
+  developmentFirstCutFixture,
+  developmentFixture,
+  developmentJogSnapshot,
+  developmentMachineFixture,
+  developmentPreflightFixture,
+  developmentPreviewFixture,
+  developmentProbeFixture,
+  developmentProfileFixture,
+  developmentSettingsFixture,
+} from "./app/developmentFixtures";
 import { CapabilityGrantStore } from "./platform/plugins/CapabilityGrantStore";
 import { createImageToGcodePlugin, IMAGE_TO_GCODE_PLUGIN_ID } from "./plugins/image-to-gcode/createImageToGcodePlugin";
 import {
@@ -47,10 +51,13 @@ import {
   selectMachineProfile,
   updateMachineLocalSettings,
 } from "./api/profiles";
-import { ReadinessPanel } from "./components/ReadinessPanel";
+import { formatCoordinate, PositionReadout } from "./components/PositionReadout";
 import { SafetyControls } from "./components/SafetyControls";
-import { previewFixtureProgram } from "./features/program/previewFixtureProgram";
-import { previewFixtureAirSquareProgram } from "./features/program/previewFixtureAirSquare";
+import { ControllerInspector } from "./features/controller/ControllerInspector";
+import {
+  ConnectionPanel,
+  connectionLabels,
+} from "./features/connection/ConnectionPanel";
 import { previewFixturePreflightGateway } from "./features/program/previewFixturePreflight";
 import {
   previewFixtureCheckCompleteSender,
@@ -58,7 +65,6 @@ import {
   previewFixtureCheckControlGateway,
   previewFixtureCheckRunningSender,
   previewFixtureFirstCutGateway,
-  previewFixtureFirstCutProgram,
   previewFixtureProgramGateway,
   previewFixtureRecoveryGateway,
   previewFixtureToolChangeSender,
@@ -95,11 +101,15 @@ import {
   emptySnapshot,
   type ControllerSnapshot,
   type HardwareInspection,
-  type Position,
   type TransportDescriptor,
   type WorkCoordinateSystem,
   type ZProbeOutcome,
 } from "./shared/machine";
+import {
+  hasControllerSession,
+  isControllerConnected,
+  isControllerStableIdle,
+} from "./shared/controllerReadiness";
 import type { GcodeProgram } from "./shared/program";
 import type {
   MachineProfile,
@@ -111,16 +121,7 @@ import type {
   ControllerSettingEditRequest,
   ControllerSettingsState,
 } from "./shared/settings";
-import type { AuditLogSnapshot } from "./shared/audit";
 import type { InstalledScriptPlugin } from "./shared/scriptPlugins";
-
-const connectionLabels = {
-  disconnected: "Отключено",
-  connecting: "Подключение",
-  connected: "Подключено",
-  recovering: "Восстановление",
-  faulted: "Ошибка",
-} as const;
 
 const mockTransport: TransportDescriptor = {
   id: "mock",
@@ -137,229 +138,6 @@ interface ProbeEstablishedZDatum {
   readonly reconnectCount: number;
   readonly source: "probe" | "heightmap";
   readonly workCoordinateOffsetZ?: number;
-}
-
-const baudRates = [9_600, 19_200, 38_400, 57_600, 115_200, 230_400];
-const developmentFixture = import.meta.env.DEV
-  ? new URLSearchParams(window.location.search).get("fixture")
-  : undefined;
-const developmentPreviewFixture =
-  developmentFixture === "air-square"
-    ? previewFixtureAirSquareProgram
-    : developmentFixture === "first-cut" ||
-        developmentFixture === "check-complete" ||
-        developmentFixture === "check-running" ||
-        developmentFixture === "run-complete" ||
-        developmentFixture === "tool-change" ||
-        developmentFixture === "recovery"
-      ? previewFixtureFirstCutProgram
-      : developmentFixture === "program" || developmentFixture === "preflight" || developmentFixture === "heightmap"
-        ? previewFixtureProgram
-        : undefined;
-const developmentPreflightFixture =
-  developmentFixture === "preflight" ||
-  developmentFixture === "heightmap" ||
-  developmentFixture === "first-cut" ||
-  developmentFixture === "check-complete" ||
-  developmentFixture === "check-running" ||
-  developmentFixture === "run-complete" ||
-  developmentFixture === "tool-change" ||
-  developmentFixture === "recovery" ||
-  developmentFixture === "air-square";
-const developmentFirstCutFixture =
-  developmentFixture === "first-cut" ||
-  developmentFixture === "check-complete" ||
-  developmentFixture === "check-running" ||
-  developmentFixture === "run-complete" ||
-  developmentFixture === "tool-change" ||
-  developmentFixture === "recovery" ||
-  developmentFixture === "air-square";
-const developmentJogFixture = ["jog", "jog-active", "alarm", "reset", "logs"].includes(
-  developmentFixture ?? "",
-);
-const developmentProbeFixture = developmentFixture === "probe" || developmentFixture === "heightmap";
-const developmentMachineFixture =
-  developmentJogFixture || developmentProbeFixture || developmentPreflightFixture;
-const developmentMachineMode =
-  developmentFixture === "jog-active"
-    ? "jog"
-    : developmentFixture === "alarm"
-      ? "alarm"
-      : "idle";
-const developmentJogSnapshot: ControllerSnapshot = {
-  ...emptySnapshot,
-  connection: "connected",
-  machine: {
-    ...emptySnapshot.machine,
-    mode: developmentMachineMode,
-    reportedMode:
-      developmentMachineMode === "jog"
-        ? "Jog"
-        : developmentMachineMode === "alarm"
-          ? "Alarm"
-          : "Idle",
-    machinePosition: { x: 152.4, y: 91.2, z: -4.75 },
-    workPosition: { x: 12.4, y: 8.2, z: 5.25 },
-    workCoordinateOffset: { x: 140, y: 83, z: -10 },
-    feedRate: 0,
-    spindleSpeed: 0,
-    pins: developmentProbeFixture
-      ? {
-          raw: "P",
-          xLimit: false,
-          yLimit: false,
-          zLimit: false,
-          aLimit: false,
-          bLimit: false,
-          cLimit: false,
-          probe: developmentFixture === "probe",
-          door: false,
-          hold: false,
-          softReset: false,
-          cycleStart: false,
-        }
-      : undefined,
-  },
-  pollSequence: 42,
-  pollIntervalMs: 250,
-  statusTimeoutMs: 500,
-  failureThreshold: 2,
-  alarm:
-    developmentFixture === "alarm"
-      ? { code: 3, message: "Reset while in motion" }
-      : undefined,
-  resetNotice:
-    developmentFixture === "reset"
-      ? { banner: "Grbl 1.1f ['$' for help]", version: "1.1f", sequence: 4 }
-      : undefined,
-};
-const developmentProfileFixture: MachineProfileState = {
-  profiles: [
-    {
-      id: "machine-0001",
-      name: "LUNYEE CNC",
-      travelMm: { x: 500, y: 500, z: 200 },
-      maxJogDistanceMm: 50,
-      spindleControl: "manual",
-      homingInstalled: false,
-      limitSwitchesInstalled: false,
-      probeInstalled: developmentProbeFixture,
-      probeSettings: {
-        mode: developmentFixture === "heightmap" ? "heightmap" : "workZero",
-        plateThicknessMm: 19.1,
-        maxTravelMm: 10,
-        probeFeedMmPerMin: 25,
-        retractMm: 3,
-        retractFeedMmPerMin: 100,
-      },
-      emergencyStopInstalled: false,
-      connection: { transportId: "mock", baudRate: 115_200 },
-      detectedController: { firmwareVersion: "1.1f.20230316" },
-    },
-  ],
-  selectedProfileId: "machine-0001",
-};
-const developmentSettingsFixture: ControllerSettingsState = {
-  snapshot: {
-    revision: 4,
-    firmwareVersion: "1.1f.20230316",
-    firmwareBuildInfo: "LUNYEE_4axis_Control",
-    values: [
-      { key: "$21", value: "0", title: "Hard limits", group: "safety", kind: "boolean", known: true },
-      { key: "$22", value: "0", title: "Homing cycle", group: "homing", kind: "boolean", known: true },
-      { key: "$100", value: "1600.000", title: "X steps per millimeter", group: "calibration", kind: "decimal", unit: "step/mm", known: true },
-      { key: "$110", value: "1000.000", title: "X maximum rate", group: "motion", kind: "decimal", unit: "mm/min", known: true },
-      { key: "$120", value: "600.000", title: "X acceleration", group: "motion", kind: "decimal", unit: "mm/s^2", known: true },
-      { key: "$130", value: "500.000", title: "X maximum travel", group: "travel", kind: "decimal", unit: "mm", known: true },
-      { key: "$131", value: "500.000", title: "Y maximum travel", group: "travel", kind: "decimal", unit: "mm", known: true },
-      { key: "$132", value: "200.000", title: "Z maximum travel", group: "travel", kind: "decimal", unit: "mm", known: true },
-      { key: "$200", value: "7.5", title: "Firmware setting 200", group: "advanced", kind: "decimal", known: false },
-    ],
-  },
-  sessionBaseline: {
-    "$21": "0",
-    "$22": "0",
-    "$100": "1600.000",
-    "$110": "1000.000",
-    "$120": "500.000",
-    "$130": "500.000",
-    "$131": "500.000",
-    "$132": "200.000",
-    "$200": "7.5",
-  },
-  previousBaseline: { "$120": "400.000" },
-  revisionCount: 2,
-  profileId: "machine-0001",
-  fingerprint: {
-    key: "port:0483:5740:lunyee_4axis_control:devcuusbmodem11101",
-    confidence: "portBound",
-    label: "LUNYEE_4axis_Control · 1.1f.20230316 · /dev/cu.usbmodem11101",
-  },
-};
-const developmentAuditFixture: AuditLogSnapshot = {
-  sessionId: "preview-2048",
-  activePath: "/Users/operator/Library/Application Support/Millo/logs/millo-audit.jsonl",
-  droppedEntries: 0,
-  writeFailures: 0,
-  entries: [
-    {
-      schemaVersion: 1,
-      sequence: 201,
-      sessionId: "preview-2048",
-      timestampMs: Date.now() - 8_500,
-      level: "info",
-      category: "transport",
-      event: "transport.connect.completed",
-      message: "Controller connected and synchronized",
-      data: { port: "/dev/cu.usbmodem11101", firmware: "Grbl 1.1f" },
-    },
-    {
-      schemaVersion: 1,
-      sequence: 202,
-      sessionId: "preview-2048",
-      timestampMs: Date.now() - 5_200,
-      level: "warning",
-      category: "program",
-      event: "program.preflight.report",
-      message: "Program preflight is blocked",
-      data: { sourceName: "millo-solar-guilloche.nc", blocker: "Work zero not verified" },
-    },
-    {
-      schemaVersion: 1,
-      sequence: 203,
-      sessionId: "preview-2048",
-      timestampMs: Date.now() - 2_100,
-      level: "error",
-      category: "sender",
-      event: "sender.snapshot",
-      message: "ALARM:2 at source line 18",
-      data: { sourceLine: 18, command: "G1 Z-0.200 F80", state: "failed" },
-    },
-  ],
-};
-
-const formatCoordinate = (value: number | undefined): string =>
-  value === undefined ? "--" : value.toFixed(3);
-
-function AxisReadout({ axis, value }: { axis: string; value: number | undefined }) {
-  return (
-    <div className="axis-readout">
-      <span>{axis}</span>
-      <strong>{formatCoordinate(value)}</strong>
-      <small>mm</small>
-    </div>
-  );
-}
-
-function PositionReadout({ position }: { position?: Position }) {
-  return (
-    <div className="position-grid">
-      <AxisReadout axis="X" value={position?.x} />
-      <AxisReadout axis="Y" value={position?.y} />
-      <AxisReadout axis="Z" value={position?.z} />
-      {position?.a !== undefined && <AxisReadout axis="A" value={position.a} />}
-    </div>
-  );
 }
 
 export default function App() {
@@ -662,9 +440,8 @@ export default function App() {
     }
   };
 
-  const isConnected = snapshot.connection === "connected";
-  const hasConnection =
-    snapshot.connection === "connected" || snapshot.connection === "recovering";
+  const isConnected = isControllerConnected(snapshot);
+  const hasConnection = hasControllerSession(snapshot);
   const canDisconnect =
     snapshot.connection !== "disconnected" && snapshot.connection !== "connecting";
   const transportLocked = hasConnection || snapshot.connection === "connecting";
@@ -1129,10 +906,7 @@ export default function App() {
               dryRunAvailable={
                 desktopRuntime &&
                 activeTransport.kind === "mock" &&
-                snapshot.connection === "connected" &&
-                snapshot.machine.mode === "idle" &&
-                snapshot.alarm === undefined &&
-                snapshot.resetNotice === undefined
+                isControllerStableIdle(snapshot)
               }
               dryRunGateway={
                 developmentFixture === "check-running"
@@ -1197,10 +971,7 @@ export default function App() {
                 developmentPreflightFixture ||
                 (desktopRuntime &&
                   activeTransport.kind === "serial" &&
-                  snapshot.connection === "connected" &&
-                  snapshot.machine.mode === "idle" &&
-                  snapshot.alarm === undefined &&
-                  snapshot.resetNotice === undefined &&
+                  isControllerStableIdle(snapshot) &&
                   machineBound)
               }
               realRunGateway={
@@ -1228,125 +999,13 @@ export default function App() {
             id="controller-workbench"
             role="tabpanel"
           >
-            <section className="device-inspector" aria-labelledby="inspector-title">
-            <div className="inspector-heading">
-              <div>
-                <span>Только чтение</span>
-                <h2 id="inspector-title">Состояние контроллера</h2>
-              </div>
-              <button
-                disabled={!isConnected || controlsBusy}
-                onClick={() => void readDeviceInspection()}
-                type="button"
-              >
-                <span>{inspecting ? "Чтение" : "Считать"}</span>
-                <code>$I · $$ · $G · $#</code>
-              </button>
-            </div>
-
-            {inspection ? (
-              <>
-                <ReadinessPanel report={inspection.readiness} />
-                <details className="technical-inspection">
-                  <summary>Технические данные контроллера</summary>
-                  <div className="inspector-content">
-                    <div className="inspector-identity">
-                      <div className="firmware-readout">
-                        <span>Прошивка</span>
-                        <strong>
-                          {inspection.device.firmwareVersion ?? "Неизвестная версия GRBL"}
-                        </strong>
-                        <small>
-                          {inspection.device.firmwareBuildInfo ?? "Нет сведений о сборке"}
-                        </small>
-                      </div>
-                      <dl className="inspection-meta">
-                        <div>
-                          <dt>Возможности</dt>
-                          <dd title={inspection.device.firmwareOptions}>
-                            {inspection.device.controllerCapabilities
-                              ? `${inspection.device.controllerCapabilities.optionFlags} · P${inspection.device.controllerCapabilities.plannerBufferBlocks ?? "?"} · RX${inspection.device.controllerCapabilities.rxBufferBytes ?? "?"}`
-                              : (inspection.device.firmwareOptions ?? "--")}
-                          </dd>
-                        </div>
-                        <div>
-                          <dt>Настройки</dt>
-                          <dd>{Object.keys(inspection.device.settings).length}</dd>
-                        </div>
-                        <div>
-                          <dt>Параметры</dt>
-                          <dd>
-                            {Object.keys(inspection.device.parameters).length}
-                          </dd>
-                        </div>
-                      </dl>
-                      <div className="modal-state">
-                        <span>Модальное состояние</span>
-                        <div>
-                          {inspection.device.modalState.map((mode) => (
-                            <code key={mode}>{mode}</code>
-                          ))}
-                        </div>
-                      </div>
-                      <div
-                        className="query-results"
-                        aria-label="Результаты запросов к контроллеру"
-                      >
-                        {inspection.device.responses.map((response) => (
-                          <div
-                            className={`is-${response.completion}`}
-                            key={response.command}
-                          >
-                            <code>{response.command}</code>
-                            <strong>
-                              {response.completion}
-                              {response.code !== undefined
-                                ? `:${response.code}`
-                                : ""}
-                            </strong>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="inspector-registers">
-                      <div>
-                        <span>Настройки контроллера</span>
-                        <div className="register-list">
-                          {Object.entries(inspection.device.settings).map(
-                            ([key, value]) => (
-                              <div key={key}>
-                                <code>{key}</code>
-                                <strong>{value}</strong>
-                              </div>
-                            ),
-                          )}
-                        </div>
-                      </div>
-                      <div>
-                        <span>Системы координат</span>
-                        <div className="register-list">
-                          {Object.entries(inspection.device.parameters).map(
-                            ([key, value]) => (
-                              <div key={key}>
-                                <code>{key}</code>
-                                <strong>{value}</strong>
-                              </div>
-                            ),
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </details>
-              </>
-            ) : (
-              <div className="inspector-empty">
-                <strong>Профиль контроллера не считан</strong>
-                <span>Движение и управление шпинделем недоступны</span>
-              </div>
-            )}
-            </section>
+            <ControllerInspector
+              busy={controlsBusy}
+              connected={isConnected}
+              inspecting={inspecting}
+              inspection={inspection}
+              onRead={() => void readDeviceInspection()}
+            />
           </div>
 
           <div className="telemetry-row">
@@ -1363,57 +1022,25 @@ export default function App() {
           </div>
         </section>
 
-        <aside className="control-panel" aria-label="Управление подключением">
-          <div className="panel-title">
-            <span>Подключение</span>
-            <strong>{displayedTransport.label}</strong>
-            <small>
-              {selectedMachine
-                ? `Станок: ${selectedMachine.name}`
-                : "Сначала добавьте или выберите станок"}
-            </small>
-          </div>
-
-          <div className="connection-primary">
-            {hasConnection ? (
-              <>
-                <div className={`connection-inline is-${snapshot.connection}`}>
-                  <i aria-hidden="true" />
-                  <span>{connectionLabels[snapshot.connection]}</span>
-                </div>
-                <button
-                  aria-label="Отключить"
-                  className="disconnect-action"
-                  disabled={controlsBusy || !canDisconnect}
-                  onClick={() => void disconnectController()}
-                  title="Отключить"
-                  type="button"
-                >
-                  <Unplug aria-hidden="true" size={15} />
-                </button>
-              </>
-            ) : (
-              <button
-                className="primary-action"
-                disabled={controlsBusy || !desktopRuntime}
-                onClick={() => void connectSelectedTransport()}
-                type="button"
-              >
-                <PlugZap aria-hidden="true" size={15} />
-                Подключить
-              </button>
-            )}
-          </div>
-
-          <button className="log-open-action" onClick={() => setLogOpen(true)} type="button">
-            <ScrollText aria-hidden="true" size={14} />
-            <span>
-              <strong>Журнал событий</strong>
-              <small>Подключение · GRBL · Выполнение</small>
-            </span>
-          </button>
-
-          {hasConnection && (
+        <ConnectionPanel
+          actions={{
+            onBaudRate: setBaudRate,
+            onClearMockAlarm: () => void runMockAction(clearMockAlarm),
+            onConnect: () => void connectSelectedTransport(),
+            onDisconnect: () => void disconnectController(),
+            onDismissError: () => setUiError(undefined),
+            onLikelyGrblOnly: setLikelyGrblOnly,
+            onMockAlarm: () => void runMockAction(() => triggerMockAlarm(3)),
+            onMockDisconnect: () => void runMockAction(triggerMockDisconnect),
+            onMockReset: () => void runMockAction(triggerMockReset),
+            onMockRun: () => void runMockAction(triggerMockRun),
+            onMockTimeout: () => void runMockAction(triggerMockTimeout),
+            onOpenLog: () => setLogOpen(true),
+            onRefreshStatus: () => void runAction(refreshStatus),
+            onRefreshTransports: () => void discoverTransports(),
+            onTransport: setSelectedTransportId,
+          }}
+          controls={
             <SafetyControls
               desktopRuntime={desktopRuntime}
               extensionRegistry={pluginHost.uiRegistry}
@@ -1432,180 +1059,25 @@ export default function App() {
               maxJogFeedMmPerMin={maxJogFeedMmPerMin}
               useProbeForZ={probeEstablishedZDatum !== undefined}
             />
-          )}
-
-          <details className="control-disclosure" open={!hasConnection}>
-            <summary>
-              <span>Параметры подключения</span>
-              <ChevronDown aria-hidden="true" size={14} />
-            </summary>
-            <div className="transport-config">
-              <label className="transport-filter">
-                <input
-                  checked={likelyGrblOnly}
-                  disabled={controlsBusy || discovering}
-                  onChange={(event) => setLikelyGrblOnly(event.target.checked)}
-                  type="checkbox"
-                />
-                <span>Только вероятные GRBL</span>
-              </label>
-              <label htmlFor="transport-select">Устройство</label>
-              <div className="transport-select-row">
-                <select
-                  id="transport-select"
-                  disabled={
-                    transportLocked || controlsBusy || discovering || !desktopRuntime
-                  }
-                  onChange={(event) => setSelectedTransportId(event.target.value)}
-                  value={selectedTransport.id}
-                >
-                  {visibleTransports.map((transport) => (
-                    <option key={transport.id} value={transport.id}>
-                      {transport.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  aria-label="Обновить список портов"
-                  disabled={
-                    transportLocked || controlsBusy || discovering || !desktopRuntime
-                  }
-                  onClick={() => void discoverTransports()}
-                  title="Обновить список портов"
-                  type="button"
-                >
-                  <RefreshCw aria-hidden="true" size={15} />
-                </button>
-              </div>
-              <small>
-                {selectedTransport.detail}
-                {selectedTransport.kind === "serial" &&
-                  selectedTransport.matchReason &&
-                  ` · ${selectedTransport.matchReason}`}
-              </small>
-
-              {selectedTransport.kind === "serial" && (
-                <label className="baud-field" htmlFor="baud-rate">
-                  <span>Скорость порта</span>
-                  <select
-                    id="baud-rate"
-                    disabled={transportLocked || controlsBusy}
-                    onChange={(event) => setBaudRate(Number(event.target.value))}
-                    value={baudRate}
-                  >
-                    {baudRates.map((rate) => (
-                      <option key={rate} value={rate}>
-                        {rate.toLocaleString("en-US", { useGrouping: false })}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              )}
-            </div>
-          </details>
-
-          {hasConnection && (
-            <details className="control-disclosure diagnostics-disclosure">
-              <summary>
-                <span>Диагностика соединения</span>
-                <ChevronDown aria-hidden="true" size={14} />
-              </summary>
-              <div className="lifecycle-metrics">
-                <div>
-                  <span>Опрос</span>
-                  <strong>{snapshot.pollIntervalMs || "--"} ms</strong>
-                </div>
-                <div>
-                  <span>Тайм-аут</span>
-                  <strong>{snapshot.statusTimeoutMs || "--"} ms</strong>
-                </div>
-                <div>
-                  <span>Сбои</span>
-                  <strong>
-                    {snapshot.consecutiveFailures}/{snapshot.failureThreshold || "--"}
-                  </strong>
-                </div>
-                <div>
-                  <span>Переподключения</span>
-                  <strong>{snapshot.reconnectCount}</strong>
-                </div>
-              </div>
-              <button
-                className="status-request-action"
-                disabled={controlsBusy || !isConnected}
-                onClick={() => void runAction(refreshStatus)}
-                type="button"
-              >
-                <RefreshCw aria-hidden="true" size={14} />
-                Запросить статус
-                <kbd>?</kbd>
-              </button>
-
-              {displayedTransport.kind === "mock" && (
-                <div className="mock-scenarios">
-                  <span>Сценарии Mock GRBL</span>
-                  <div>
-                    <button
-                      disabled={controlsBusy || !isConnected}
-                      onClick={() => void runMockAction(triggerMockRun)}
-                      type="button"
-                    >
-                      Run state
-                    </button>
-                    <button
-                      disabled={controlsBusy || !isConnected}
-                      onClick={() => void runMockAction(triggerMockReset)}
-                      type="button"
-                    >
-                      Reset banner
-                    </button>
-                    <button
-                      disabled={controlsBusy || !isConnected}
-                      onClick={() => void runMockAction(() => triggerMockAlarm(3))}
-                      type="button"
-                    >
-                      ALARM:3
-                    </button>
-                    <button
-                      disabled={controlsBusy || !isConnected || !snapshot.alarm}
-                      onClick={() => void runMockAction(clearMockAlarm)}
-                      type="button"
-                    >
-                      Clear alarm
-                    </button>
-                    <button
-                      disabled={controlsBusy || !isConnected}
-                      onClick={() => void runMockAction(triggerMockTimeout)}
-                      type="button"
-                    >
-                      Timeout ×2
-                    </button>
-                    <button
-                      disabled={controlsBusy || !isConnected}
-                      onClick={() => void runMockAction(triggerMockDisconnect)}
-                      type="button"
-                    >
-                      Link drop
-                    </button>
-                  </div>
-                </div>
-              )}
-            </details>
-          )}
-
-          {!desktopRuntime && (
-            <p className="runtime-note">Управление доступно в окне Tauri.</p>
-          )}
-          {displayedError && (
-            <div className="error-note" role="alert">
-              <span>{displayedError}</span>
-              <div>
-                <button onClick={() => setLogOpen(true)} type="button">Журнал</button>
-                <button aria-label="Закрыть ошибку" onClick={() => setUiError(undefined)} type="button">×</button>
-              </div>
-            </div>
-          )}
-        </aside>
+          }
+          view={{
+            baudRate,
+            canDisconnect,
+            controlsBusy,
+            desktopRuntime,
+            discovering,
+            displayedError,
+            displayedTransport,
+            hasConnection,
+            isConnected,
+            likelyGrblOnly,
+            selectedMachineName: selectedMachine?.name,
+            selectedTransport,
+            snapshot,
+            transportLocked,
+            visibleTransports,
+          }}
+        />
       </main>
 
       <MachineSettingsDialog

@@ -19,6 +19,10 @@ import type {
   StepJogReceipt,
 } from "../../shared/machine";
 import {
+  isControllerConnected,
+  isControllerStableIdle,
+} from "../../shared/controllerReadiness";
+import {
   MAX_JOG_DISTANCE_MM,
   MAX_JOG_FEED_MM_PER_MIN,
   MIN_JOG_DISTANCE_MM,
@@ -68,12 +72,8 @@ export function JogPad({
     [maxDistanceMm, maxFeedMmPerMin],
   );
 
-  const connected = snapshot.connection === "connected";
-  const stableIdle =
-    connected &&
-    snapshot.machine.mode === "idle" &&
-    snapshot.alarm === undefined &&
-    snapshot.resetNotice === undefined;
+  const connected = isControllerConnected(snapshot);
+  const stableIdle = isControllerStableIdle(snapshot);
   const distanceMm = Number(distanceDraft);
   const motionValuesValid =
     Number.isFinite(distanceMm) &&

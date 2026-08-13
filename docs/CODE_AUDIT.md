@@ -1,6 +1,6 @@
 # Code audit
 
-Audit date: 2026-08-13.
+Audit date: 2026-08-14.
 
 ## Scope
 
@@ -9,6 +9,29 @@ transport, local persistence, React state/effects, plugin host, Three.js preview
 tests, configuration, and direct/transitive dependency reports.
 
 ## Closed findings
+
+- The React composition root no longer embeds development fixture construction,
+  controller Inspector rendering, coordinate readouts, or the complete transport
+  panel. Those responsibilities now have narrow modules and focused render
+  tests; `App.tsx` keeps state and gateway orchestration.
+- The program workspace delegates Three.js presentation, line diagnostics,
+  sender timing, and physical-run controls to independent components. Gateway
+  availability remains an explicit fail-closed input, so extraction cannot make
+  a Pause/Resume/Cancel control available without its host capability.
+- Sender active/terminal classification and execution-option identity no longer
+  have local copies across read models and React. Exhaustive table tests cover
+  every sender state and every execution option.
+- Connected + stable Idle is now one shared domain predicate per language.
+  Rust readiness, safety leases, run certificates, preflight, probe startup and
+  the command actor use `ControllerSnapshot::is_stable_idle()`; React Jog,
+  work-zero, Safety Controls and run availability use the equivalent typed read
+  model. Each layer retains its own error type without duplicating policy.
+- Script-plugin request DTOs and pure axis/confirmation mappings were separated
+  from the Tauri command adapter. Public command signatures are re-exported, so
+  the IPC surface and generated handler names remain unchanged.
+- Repeated component setup in readiness/authorization tests was replaced with
+  typed builders and table cases. Distinct plugin lifecycle race tests were kept
+  instead of merging unlike behavior merely to shorten a suite.
 
 - Controller/program invariants return typed errors instead of panicking.
 - Reset challenge validation happens before sender mutation; stale confirmation
@@ -87,6 +110,20 @@ tests, configuration, and direct/transitive dependency reports.
   pass.
 
 ## Residual boundaries
+
+- `styles.css` is still a large ordered cascade shared by mature operator
+  screens. Splitting it mechanically during a behavior refactor could change
+  precedence without a useful product change. Extract it feature by feature
+  only with matching desktop/mobile screenshots and computed-style checks.
+- `millo-command` is large because it owns the single serialized controller
+  actor plus an extensive colocated hardware-protocol regression module. Its
+  runtime state machine should be decomposed by complete use case (sender,
+  probe, heightmap), never by moving arbitrary line ranges or exposing actor
+  internals. `src-tauri/commands.rs` likewise needs small `AppState` services
+  before more async command groups can move without widening field visibility.
+- `ProgramWorkspace` and `App` are still substantial orchestration roots. New
+  visual behavior must land in feature modules; further extraction should target
+  complete stateful use cases and preserve the current gateway boundaries.
 
 - External native libraries, JavaScript, QtScript compatibility modules, and
   arbitrary HTML/React injection remain unsupported. Version 1 deliberately

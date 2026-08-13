@@ -1,8 +1,8 @@
 use std::time::{Duration, Instant};
 
 use millo_domain::{
-    ConnectionState, ControllerSnapshot, HardwareInspection, MachineMode, OperatorConfirmation,
-    ResetChallenge, TestJogAuthorization,
+    ControllerSnapshot, HardwareInspection, OperatorConfirmation, ResetChallenge,
+    TestJogAuthorization,
 };
 use thiserror::Error;
 
@@ -96,7 +96,7 @@ impl SafetyManager {
                 blockers: inspection.readiness.blocker_count,
             });
         }
-        if !stable_idle(snapshot) {
+        if !snapshot.is_stable_idle() {
             return Err(SafetyError::UnsafeControllerState);
         }
 
@@ -165,7 +165,7 @@ impl SafetyManager {
         {
             return Err(SafetyError::ControllerSessionChanged);
         }
-        if !stable_idle(snapshot) {
+        if !snapshot.is_stable_idle() {
             return Err(SafetyError::UnsafeControllerState);
         }
         Ok(())
@@ -177,13 +177,6 @@ impl SafetyManager {
     }
 }
 
-fn stable_idle(snapshot: &ControllerSnapshot) -> bool {
-    snapshot.connection == ConnectionState::Connected
-        && snapshot.machine.mode == MachineMode::Idle
-        && snapshot.alarm.is_none()
-        && snapshot.reset_notice.is_none()
-}
-
 fn duration_ms(duration: Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
@@ -191,8 +184,8 @@ fn duration_ms(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use millo_domain::{
-        DeviceInspection, HardwareProfile, MachineState, ProbeWorkflowMode, ReadinessReport,
-        SpindleControl,
+        ConnectionState, DeviceInspection, HardwareProfile, MachineMode, MachineState,
+        ProbeWorkflowMode, ReadinessReport, SpindleControl,
     };
 
     use super::*;

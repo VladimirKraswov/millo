@@ -40,6 +40,26 @@ GRBL. The command actor owns the controller and active transport; the controller
 owns protocol state and the current snapshot. Tauri only converts application
 calls into commands and events.
 
+### Frontend composition
+
+`App.tsx` is the composition root: it owns application state, selects concrete
+gateways, bootstraps the plugin host, and connects feature callbacks. It does not
+own the presentation of those features. Connection diagnostics, controller
+inspection, coordinate readout, program preview, run status, and program
+diagnostics are separate components with typed `view`/`actions` or narrow props.
+
+`ProgramWorkspace` remains the orchestration boundary for one loaded program.
+Its Three.js stage, sender status, line/diagnostic browser, and timing readout
+are independent presentation modules. They receive immutable values and typed
+callbacks; they do not import Tauri or select a transport. Development fixtures
+live in `src/app/developmentFixtures.ts` and cannot become production state.
+
+Cross-feature controller policy is expressed once. TypeScript uses
+`shared/controllerReadiness.ts`; Rust uses
+`ControllerSnapshot::is_stable_idle()`. Jog, work-zero, probing, preflight,
+authorization, and actor guards may map that fact to different user messages or
+typed errors, but must not redefine what clean Connected + Idle means.
+
 Program loading is a parallel read-only path:
 
 ```text
@@ -149,6 +169,8 @@ identity, so changing it cannot reuse stale validation evidence.
 7. Safety-critical actions will be modeled as state transitions, not raw UI
    strings.
 8. Parsed source and preview geometry never imply permission to send a program.
+9. Composition roots coordinate; feature components render; domain predicates
+   do not depend on either layer.
 
 ### Webview security boundary
 

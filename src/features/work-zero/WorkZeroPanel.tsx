@@ -9,6 +9,10 @@ import type {
   WorkAxis,
   WorkZeroOutcome,
 } from "../../shared/machine";
+import {
+  isControllerConnected,
+  isControllerStableIdle,
+} from "../../shared/controllerReadiness";
 import { WorkZeroInteractor } from "./WorkZeroInteractor";
 
 const axes: readonly WorkAxis[] = ["x", "y", "z"];
@@ -43,12 +47,8 @@ export function WorkZeroPanel({
   const [outcome, setOutcome] = useState<WorkZeroOutcome>();
   const [, setReturnOutcome] = useState<ReturnToWorkZeroOutcome>();
   const [originOutcome, setOriginOutcome] = useState<ReturnToWorkOriginOutcome>();
-  const connected = snapshot.connection === "connected";
-  const stableIdle =
-    connected &&
-    snapshot.machine.mode === "idle" &&
-    snapshot.alarm === undefined &&
-    snapshot.resetNotice === undefined;
+  const connected = isControllerConnected(snapshot);
+  const stableIdle = isControllerStableIdle(snapshot);
   const canSet =
     desktopRuntime && stableIdle && positionConfirmed && !disabled && !busyAxis;
   const canReturn = desktopRuntime && stableIdle && !disabled && !busyAxis && gateway.returnToOrigin !== undefined;

@@ -26,6 +26,11 @@ const complete: FirstCutConfirmation = {
 };
 
 const clearReport = { ready: true } as RunPreflightReport;
+const availableContext = {
+  report: clearReport,
+  gatewayAvailable: true,
+  busy: false,
+} as const;
 
 describe("firstCutAuthorizationControls", () => {
   it("expands one operator readiness decision into intent-specific typed facts", () => {
@@ -33,11 +38,7 @@ describe("firstCutAuthorizationControls", () => {
     expect(airRun.toolRemoved).toBe(true);
     expect(airRun.manualSpindleOff).toBe(true);
     expect(airRun.stockSecured).toBe(false);
-    expect(firstCutAuthorizationControls(airRun, {
-      report: clearReport,
-      gatewayAvailable: true,
-      busy: false,
-    }).complete).toBe(true);
+    expect(firstCutAuthorizationControls(airRun, availableContext).complete).toBe(true);
 
     const cutting = setFirstCutReadiness({ ...emptyFirstCutConfirmation, intent: "cutting" }, true);
     expect(cutting.stockSecured).toBe(true);
@@ -48,52 +49,28 @@ describe("firstCutAuthorizationControls", () => {
 
   it("requires the physical confirmations for the selected intent", () => {
     expect(
-      firstCutAuthorizationControls(emptyFirstCutConfirmation, {
-        report: clearReport,
-        gatewayAvailable: true,
-        busy: false,
-      }),
+      firstCutAuthorizationControls(emptyFirstCutConfirmation, availableContext),
     ).toEqual({ completedCount: 0, totalCount: 6, complete: false, canAuthorize: false });
 
     expect(
       firstCutAuthorizationControls(
         { ...complete, powerControlReachable: false },
-        { report: clearReport, gatewayAvailable: true, busy: false },
+        availableContext,
       ),
     ).toEqual({ completedCount: 6, totalCount: 7, complete: false, canAuthorize: false });
   });
 
-  it("fails closed for stale, blocked, missing-gateway and busy states", () => {
-    expect(
-      firstCutAuthorizationControls(complete, {
-        report: { ...clearReport, ready: false },
-        gatewayAvailable: true,
-        busy: false,
-      }).canAuthorize,
-    ).toBe(false);
-    expect(
-      firstCutAuthorizationControls(complete, {
-        report: clearReport,
-        gatewayAvailable: false,
-        busy: false,
-      }).canAuthorize,
-    ).toBe(false);
-    expect(
-      firstCutAuthorizationControls(complete, {
-        report: clearReport,
-        gatewayAvailable: true,
-        busy: true,
-      }).canAuthorize,
-    ).toBe(false);
+  it.each([
+    ["blocked report", { ...availableContext, report: { ...clearReport, ready: false } }],
+    ["missing gateway", { ...availableContext, gatewayAvailable: false }],
+    ["busy host", { ...availableContext, busy: true }],
+  ])("fails closed for %s", (_label, context) => {
+    expect(firstCutAuthorizationControls(complete, context).canAuthorize).toBe(false);
   });
 
   it("enables only the authorization action after every gate is complete", () => {
     expect(
-      firstCutAuthorizationControls(complete, {
-        report: clearReport,
-        gatewayAvailable: true,
-        busy: false,
-      }),
+      firstCutAuthorizationControls(complete, availableContext),
     ).toEqual({ completedCount: 7, totalCount: 7, complete: true, canAuthorize: true });
   });
 
@@ -111,11 +88,7 @@ describe("firstCutAuthorizationControls", () => {
     };
 
     expect(
-      firstCutAuthorizationControls(airRun, {
-        report: clearReport,
-        gatewayAvailable: true,
-        busy: false,
-      }),
+      firstCutAuthorizationControls(airRun, availableContext),
     ).toEqual({ completedCount: 6, totalCount: 6, complete: true, canAuthorize: true });
   });
 
@@ -130,17 +103,13 @@ describe("firstCutAuthorizationControls", () => {
     };
 
     expect(
-      firstCutAuthorizationControls(withHeightmap, {
-        report: clearReport,
-        gatewayAvailable: true,
-        busy: false,
-      }),
+      firstCutAuthorizationControls(withHeightmap, availableContext),
     ).toEqual({ completedCount: 7, totalCount: 8, complete: false, canAuthorize: false });
 
     expect(
       firstCutAuthorizationControls(
         { ...withHeightmap, probeRemoved: true },
-        { report: clearReport, gatewayAvailable: true, busy: false },
+        availableContext,
       ),
     ).toEqual({ completedCount: 8, totalCount: 8, complete: true, canAuthorize: true });
   });

@@ -4370,11 +4370,7 @@ fn probe_start_blocked(snapshot: &ControllerSnapshot) -> ArbiterError {
 }
 
 fn ensure_probe_start_idle(snapshot: &ControllerSnapshot) -> Result<(), ArbiterError> {
-    if snapshot.connection == ConnectionState::Connected
-        && snapshot.machine.mode == MachineMode::Idle
-        && snapshot.alarm.is_none()
-        && snapshot.reset_notice.is_none()
-    {
+    if snapshot.is_stable_idle() {
         Ok(())
     } else {
         Err(probe_start_blocked(snapshot))
@@ -4721,11 +4717,7 @@ async fn execute_controller_setting_update(
 }
 
 fn ensure_stable_idle(snapshot: &ControllerSnapshot) -> Result<(), ArbiterError> {
-    if snapshot.connection == ConnectionState::Connected
-        && snapshot.machine.mode == MachineMode::Idle
-        && snapshot.alarm.is_none()
-        && snapshot.reset_notice.is_none()
-    {
+    if snapshot.is_stable_idle() {
         Ok(())
     } else {
         Err(SafetyError::UnsafeControllerState.into())

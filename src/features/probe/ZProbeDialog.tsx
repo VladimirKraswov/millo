@@ -10,6 +10,7 @@ import type {
   ZProbeOutcome,
   ZProbeSettings,
 } from "../../shared/machine";
+import { isControllerConnected } from "../../shared/controllerReadiness";
 import type { GcodeProgram } from "../../shared/program";
 import { defaultZProbeSettings } from "../../shared/profile";
 import { HeightmapPanel } from "../heightmap/HeightmapPanel";
@@ -96,7 +97,7 @@ export function ZProbeDialog({
   const activeRunValidationError = draft.mode === "workZero"
     ? runValidationError
     : undefined;
-  const connected = snapshot.connection === "connected";
+  const connected = isControllerConnected(snapshot);
   const idle = snapshot.machine.mode === "idle";
   const inputActive = snapshot.machine.pins?.probe ?? false;
   const busy = disabled || status === "saving" || status === "probing" || heightmapActive;
