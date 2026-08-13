@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use millo_gcode::{
-    GcodeProgram, ProgramDistanceMode, ProgramFeedMode, ProgramPlane, ProgramPoint,
+    GcodeProgram, ProgramBounds, ProgramDistanceMode, ProgramFeedMode, ProgramPlane, ProgramPoint,
     ProgramUnitMode, ProgramWarningCode, ProgramWarningSeverity, ToolpathKind, ToolpathSegment,
 };
 use millo_heightmap::Heightmap;
@@ -10,6 +10,7 @@ use thiserror::Error;
 
 pub const MAX_DRY_RUN_COMMAND_BYTES: usize = 255;
 pub const MAX_COMPENSATED_PROGRAM_LINES: usize = 200_000;
+pub const MAX_CUTTING_DEPTH_ADJUSTMENT_UM: i32 = 10_000;
 const SAFETY_PREAMBLE: [&str; 2] = ["M5", "M9"];
 const SAFETY_EPILOGUE: [&str; 2] = ["M5", "M9"];
 
@@ -27,6 +28,8 @@ pub struct ProgramExecutionOptions {
     pub block_delete: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surface_map_id: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cutting_depth_adjustment_um: Option<i32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -43,6 +46,7 @@ pub enum DryRunBlockerKind {
     IncompletePreview,
     CommandTooLong,
     HeightmapCompensation,
+    CuttingDepthAdjustment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -177,6 +181,20 @@ pub fn build_program_run_plan(
 }
 
 pub fn build_program_run_plan_with_options(
+    program: &GcodeProgram,
+    policy: ProgramRunPolicy,
+    execution_options: ProgramExecutionOptions,
+) -> Result<DryRunPlan, DryRunPolicyError> {
+    let plan = build_untransformed_program_run_plan(program, policy, execution_options)?;
+    let depth_adjustment_mm = validate_cutting_depth_adjustment(program, execution_options)?;
+    if depth_adjustment_mm.is_none_or(|adjustment| adjustment.abs() < f64::EPSILON) {
+        Ok(plan)
+    } else {
+        transform_plan(program, plan, None, depth_adjustment_mm)
+    }
+}
+
+fn build_untransformed_program_run_plan(
     program: &GcodeProgram,
     policy: ProgramRunPolicy,
     execution_options: ProgramExecutionOptions,
@@ -360,27 +378,39 @@ pub fn build_program_run_plan_with_heightmap(
     execution_options: ProgramExecutionOptions,
     heightmap: Option<&Heightmap>,
 ) -> Result<DryRunPlan, DryRunPolicyError> {
-    let plan = build_program_run_plan_with_options(program, policy, execution_options)?;
-    match (execution_options.surface_map_id, heightmap) {
-        (None, None) => Ok(plan),
-        (Some(_), Some(heightmap)) => compensate_plan(program, plan, heightmap),
+    let plan = build_untransformed_program_run_plan(program, policy, execution_options)?;
+    let depth_adjustment_mm = validate_cutting_depth_adjustment(program, execution_options)?;
+    let heightmap = match (execution_options.surface_map_id, heightmap) {
+        (None, None) => None,
+        (Some(_), Some(heightmap)) => Some(heightmap),
         (Some(_), None) => Err(heightmap_rejection(
             None,
             "selected heightmap is unavailable",
-        )),
+        ))?,
         (None, Some(_)) => Err(heightmap_rejection(
             None,
             "heightmap data was supplied without an explicit map selection",
-        )),
+        ))?,
+    };
+    if heightmap.is_none()
+        && depth_adjustment_mm.is_none_or(|adjustment| adjustment.abs() < f64::EPSILON)
+    {
+        Ok(plan)
+    } else {
+        transform_plan(program, plan, heightmap, depth_adjustment_mm)
     }
 }
 
-fn compensate_plan(
+fn transform_plan(
     program: &GcodeProgram,
     plan: DryRunPlan,
-    heightmap: &Heightmap,
+    heightmap: Option<&Heightmap>,
+    depth_adjustment_mm: Option<f64>,
 ) -> Result<DryRunPlan, DryRunPolicyError> {
-    validate_compensation_contract(program, heightmap)?;
+    validate_transformation_contract(program, heightmap.is_some(), depth_adjustment_mm.is_some())?;
+    if let Some(heightmap) = heightmap {
+        validate_heightmap_contract(heightmap)?;
+    }
     let mut segments = BTreeMap::<usize, Vec<&ToolpathSegment>>::new();
     for segment in &program.toolpath {
         segments
@@ -389,9 +419,17 @@ fn compensate_plan(
             .push(segment);
     }
 
-    let clearance_z = heightmap.plan.request.clearance_z_mm.max(0.001);
-    let max_step_mm =
-        (heightmap.plan.spacing.x_mm.min(heightmap.plan.spacing.y_mm) / 2.0).clamp(0.25, 1.0);
+    let clearance_z = heightmap
+        .map(|map| map.plan.request.clearance_z_mm.max(0.001))
+        .unwrap_or(1.0);
+    let max_step_mm = heightmap
+        .map(|map| (map.plan.spacing.x_mm.min(map.plan.spacing.y_mm) / 2.0).clamp(0.25, 1.0));
+    let transform = TrajectoryTransform {
+        heightmap,
+        depth_adjustment_mm,
+        clearance_z,
+        max_step_mm,
+    };
     let mut transformed = Vec::with_capacity(plan.lines.len());
     let mut known_x = false;
     let mut known_y = false;
@@ -418,7 +456,8 @@ fn compensate_plan(
             continue;
         }
 
-        let safe_z_only_before_xy = !known_x
+        let safe_z_only_before_xy = heightmap.is_some()
+            && !known_x
             && !known_y
             && !axes.0
             && !axes.1
@@ -434,12 +473,13 @@ fn compensate_plan(
             continue;
         }
 
-        let needs_surface = line_segments.iter().any(|segment| {
-            segment
-                .points
-                .iter()
-                .any(|point| compensation_weight(point.z, clearance_z) > 0.0)
-        });
+        let needs_surface = heightmap.is_some()
+            && line_segments.iter().any(|segment| {
+                segment
+                    .points
+                    .iter()
+                    .any(|point| compensation_weight(point.z, clearance_z) > 0.0)
+            });
         if needs_surface && (!known_x || !known_y) {
             return Err(heightmap_rejection(
                 Some(source_line),
@@ -462,9 +502,7 @@ fn compensate_plan(
             append_compensated_segment(
                 &mut transformed,
                 segment,
-                heightmap,
-                clearance_z,
-                max_step_mm,
+                transform,
                 establishes_x,
                 establishes_y,
             )?;
@@ -490,10 +528,39 @@ fn compensate_plan(
     })
 }
 
-fn validate_compensation_contract(
+fn validate_transformation_contract(
     program: &GcodeProgram,
-    heightmap: &Heightmap,
+    heightmap_enabled: bool,
+    depth_adjustment_enabled: bool,
 ) -> Result<(), DryRunPolicyError> {
+    for checkpoint in &program.execution_checkpoints {
+        let supported = checkpoint.units == ProgramUnitMode::Millimeters
+            && checkpoint.distance == ProgramDistanceMode::Absolute
+            && checkpoint.feed_mode == ProgramFeedMode::UnitsPerMinute
+            && (!heightmap_enabled || checkpoint.plane == ProgramPlane::Xy);
+        if !supported {
+            let kind = if heightmap_enabled {
+                DryRunBlockerKind::HeightmapCompensation
+            } else {
+                DryRunBlockerKind::CuttingDepthAdjustment
+            };
+            let requirement = if heightmap_enabled {
+                "G21, G90, G94 and G17"
+            } else {
+                "G21, G90 and G94"
+            };
+            return Err(transformation_rejection(
+                Some(checkpoint.source_line),
+                kind,
+                &format!("trajectory transformation requires {requirement} for every motion block"),
+            ));
+        }
+    }
+    debug_assert!(heightmap_enabled || depth_adjustment_enabled);
+    Ok(())
+}
+
+fn validate_heightmap_contract(heightmap: &Heightmap) -> Result<(), DryRunPolicyError> {
     if heightmap.coordinate_binding.is_none() {
         return Err(heightmap_rejection(
             None,
@@ -507,40 +574,119 @@ fn validate_compensation_contract(
             "heightmap is incomplete or contains a probe miss",
         ));
     }
-    for checkpoint in &program.execution_checkpoints {
-        let supported = checkpoint.units == ProgramUnitMode::Millimeters
-            && checkpoint.distance == ProgramDistanceMode::Absolute
-            && checkpoint.feed_mode == ProgramFeedMode::UnitsPerMinute
-            && checkpoint.plane == ProgramPlane::Xy;
-        if !supported {
-            return Err(heightmap_rejection(
-                Some(checkpoint.source_line),
-                "heightmap execution requires G21, G90, G94 and G17 for every motion block",
-            ));
-        }
-    }
     Ok(())
+}
+
+fn validate_cutting_depth_adjustment(
+    program: &GcodeProgram,
+    execution_options: ProgramExecutionOptions,
+) -> Result<Option<f64>, DryRunPolicyError> {
+    let Some(adjustment_um) = execution_options.cutting_depth_adjustment_um else {
+        return Ok(None);
+    };
+    if adjustment_um.unsigned_abs() > MAX_CUTTING_DEPTH_ADJUSTMENT_UM as u32 {
+        return Err(depth_adjustment_rejection(
+            None,
+            "cutting depth adjustment exceeds the 10 mm safety limit",
+        ));
+    }
+    let Some(file_depth_mm) = deepest_cutting_z(program) else {
+        return Err(depth_adjustment_rejection(
+            None,
+            "cutting depth adjustment requires a cutting move below work Z0",
+        ));
+    };
+    let adjustment_mm = f64::from(adjustment_um) / 1_000.0;
+    if file_depth_mm + adjustment_mm > 1e-9 {
+        return Err(depth_adjustment_rejection(
+            None,
+            "adjusted deepest point cannot be above work Z0",
+        ));
+    }
+    Ok(Some(adjustment_mm))
+}
+
+pub fn deepest_cutting_z(program: &GcodeProgram) -> Option<f64> {
+    program
+        .toolpath
+        .iter()
+        .filter(|segment| segment.kind != ToolpathKind::Rapid)
+        .flat_map(|segment| segment.points.iter().map(|point| point.z))
+        .filter(|z| *z < -1e-9)
+        .reduce(f64::min)
+}
+
+pub fn program_bounds_with_execution_options(
+    program: &GcodeProgram,
+    execution_options: ProgramExecutionOptions,
+) -> Option<ProgramBounds> {
+    let original = program.summary.bounds?;
+    let adjustment_mm = execution_options
+        .cutting_depth_adjustment_um
+        .map(|value| f64::from(value) / 1_000.0)
+        .unwrap_or(0.0);
+    if adjustment_mm.abs() < f64::EPSILON {
+        return Some(original);
+    }
+    let min_z = program
+        .toolpath
+        .iter()
+        .flat_map(|segment| {
+            segment.points.iter().map(move |point| ProgramPoint {
+                z: adjusted_cutting_z(point.z, segment.kind, adjustment_mm),
+                ..*point
+            })
+        })
+        .map(|point| point.z)
+        .reduce(f64::min)?;
+    let min = ProgramPoint {
+        z: min_z,
+        ..original.min
+    };
+    let max = original.max;
+    Some(ProgramBounds {
+        min,
+        max,
+        size: ProgramPoint {
+            x: max.x - min.x,
+            y: max.y - min.y,
+            z: max.z - min.z,
+        },
+    })
+}
+
+#[derive(Clone, Copy)]
+struct TrajectoryTransform<'a> {
+    heightmap: Option<&'a Heightmap>,
+    depth_adjustment_mm: Option<f64>,
+    clearance_z: f64,
+    max_step_mm: Option<f64>,
 }
 
 fn append_compensated_segment(
     output: &mut Vec<DryRunLine>,
     segment: &ToolpathSegment,
-    heightmap: &Heightmap,
-    clearance_z: f64,
-    max_step_mm: f64,
+    transform: TrajectoryTransform<'_>,
     known_x: bool,
     known_y: bool,
 ) -> Result<(), DryRunPolicyError> {
+    let TrajectoryTransform {
+        heightmap,
+        depth_adjustment_mm,
+        clearance_z,
+        max_step_mm,
+    } = transform;
     let rapid = segment.kind == ToolpathKind::Rapid;
     for pair in segment.points.windows(2) {
         let start = pair[0];
         let end = pair[1];
-        let compensation_needed = compensation_weight(start.z, clearance_z) > 0.0
-            || compensation_weight(end.z, clearance_z) > 0.0;
+        let compensation_needed = heightmap.is_some()
+            && (compensation_weight(start.z, clearance_z) > 0.0
+                || compensation_weight(end.z, clearance_z) > 0.0);
         let xy_distance = (end.x - start.x).hypot(end.y - start.y);
         let z_distance = (end.z - start.z).abs();
         let parts = if compensation_needed {
-            ((xy_distance.max(z_distance) / max_step_mm).ceil() as usize).max(1)
+            ((xy_distance.max(z_distance) / max_step_mm.unwrap_or(1.0)).ceil() as usize).max(1)
         } else {
             1
         };
@@ -553,8 +699,12 @@ fn append_compensated_segment(
             }
             let mix = part as f64 / parts as f64;
             let point = lerp_point(start, end, mix);
-            let weight = compensation_weight(point.z, clearance_z);
-            let surface_z = if weight > 0.0 {
+            let nominal_z =
+                adjusted_cutting_z(point.z, segment.kind, depth_adjustment_mm.unwrap_or(0.0));
+            let weight = heightmap
+                .map(|_| compensation_weight(nominal_z, clearance_z))
+                .unwrap_or(0.0);
+            let surface_z = if let Some(heightmap) = heightmap.filter(|_| weight > 0.0) {
                 heightmap
                     .interpolate_delta_z(point.x, point.y)
                     .map_err(|_| {
@@ -566,7 +716,7 @@ fn append_compensated_segment(
             } else {
                 0.0
             };
-            let corrected_z = point.z + surface_z * weight;
+            let corrected_z = nominal_z + surface_z * weight;
             let mut command = format!("G90 G21 G94 {}", if rapid { "G0" } else { "G1" });
             if known_x {
                 command.push_str(&format!(" X{:.4}", point.x));
@@ -584,15 +734,23 @@ fn append_compensated_segment(
                 segment.feed_rate_mm_per_min.map(|feed| {
                     let previous_mix = (part - 1) as f64 / parts as f64;
                     let previous = lerp_point(start, end, previous_mix);
-                    let previous_weight = compensation_weight(previous.z, clearance_z);
-                    let previous_surface = if previous_weight > 0.0 {
-                        heightmap
-                            .interpolate_delta_z(previous.x, previous.y)
-                            .unwrap_or(0.0)
-                    } else {
-                        0.0
-                    };
-                    let previous_z = previous.z + previous_surface * previous_weight;
+                    let previous_nominal_z = adjusted_cutting_z(
+                        previous.z,
+                        segment.kind,
+                        depth_adjustment_mm.unwrap_or(0.0),
+                    );
+                    let previous_weight = heightmap
+                        .map(|_| compensation_weight(previous_nominal_z, clearance_z))
+                        .unwrap_or(0.0);
+                    let previous_surface =
+                        if let Some(heightmap) = heightmap.filter(|_| previous_weight > 0.0) {
+                            heightmap
+                                .interpolate_delta_z(previous.x, previous.y)
+                                .unwrap_or(0.0)
+                        } else {
+                            0.0
+                        };
+                    let previous_z = previous_nominal_z + previous_surface * previous_weight;
                     let distance = (point.x - previous.x)
                         .hypot(point.y - previous.y)
                         .hypot(corrected_z - previous_z);
@@ -609,6 +767,14 @@ fn append_compensated_segment(
         }
     }
     Ok(())
+}
+
+fn adjusted_cutting_z(z: f64, kind: ToolpathKind, adjustment_mm: f64) -> f64 {
+    if kind != ToolpathKind::Rapid && z < -1e-9 {
+        (z + adjustment_mm).min(0.0)
+    } else {
+        z
+    }
 }
 
 fn push_compensated_line(
@@ -635,11 +801,31 @@ fn push_compensated_line(
 }
 
 fn heightmap_rejection(source_line: Option<usize>, message: &str) -> DryRunPolicyError {
+    transformation_rejection(
+        source_line,
+        DryRunBlockerKind::HeightmapCompensation,
+        message,
+    )
+}
+
+fn depth_adjustment_rejection(source_line: Option<usize>, message: &str) -> DryRunPolicyError {
+    transformation_rejection(
+        source_line,
+        DryRunBlockerKind::CuttingDepthAdjustment,
+        message,
+    )
+}
+
+fn transformation_rejection(
+    source_line: Option<usize>,
+    kind: DryRunBlockerKind,
+    message: &str,
+) -> DryRunPolicyError {
     DryRunPolicyError::Rejected(
         1,
         vec![DryRunBlocker {
             source_line,
-            kind: DryRunBlockerKind::HeightmapCompensation,
+            kind,
             message: message.to_owned(),
         }],
     )
@@ -1304,6 +1490,93 @@ mod tests {
     }
 
     #[test]
+    fn cutting_depth_adjustment_moves_only_negative_cutting_z() {
+        let program =
+            parse("G21 G90 G94 G17\nG0 Z3\nG1 Z-0.2 F100\nG1 X10 Z-0.1\nG1 Z0\nG0 Z3\nM30");
+        let options = ProgramExecutionOptions {
+            cutting_depth_adjustment_um: Some(-100),
+            ..ProgramExecutionOptions::default()
+        };
+        let plan =
+            build_program_run_plan_with_options(&program, ProgramRunPolicy::Cutting, options)
+                .unwrap();
+        let commands = plan
+            .lines()
+            .iter()
+            .map(DryRunLine::command)
+            .collect::<Vec<_>>();
+
+        assert!(commands.iter().any(|command| command.contains("Z-0.3000")));
+        assert!(commands.iter().any(|command| command.contains("Z-0.2000")));
+        assert!(commands.iter().any(|command| command.contains("Z0.0000")));
+        assert!(
+            commands
+                .iter()
+                .filter(|command| command.contains("Z3.0000"))
+                .count()
+                >= 2
+        );
+        assert_eq!(plan.execution_options(), options);
+
+        let bounds = program_bounds_with_execution_options(&program, options).unwrap();
+        assert!((bounds.min.z + 0.3).abs() < 1e-9);
+        assert!((bounds.max.z - 3.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn shallower_adjustment_clamps_intermediate_passes_at_work_z_zero() {
+        let options = ProgramExecutionOptions {
+            cutting_depth_adjustment_um: Some(100),
+            ..ProgramExecutionOptions::default()
+        };
+        let plan = build_program_run_plan_with_options(
+            &parse("G21 G90 G94 G17\nG0 Z2\nG1 Z-0.2 F100\nG1 Z-0.05\nG0 Z2"),
+            ProgramRunPolicy::Cutting,
+            options,
+        )
+        .unwrap();
+        let commands = plan
+            .lines()
+            .iter()
+            .map(DryRunLine::command)
+            .collect::<Vec<_>>();
+
+        assert!(commands.iter().any(|command| command.contains("Z-0.1000")));
+        assert!(commands.iter().any(|command| command.contains("Z0.0000")));
+        assert!(!commands.iter().any(|command| command.contains("Z0.0500")));
+    }
+
+    #[test]
+    fn cutting_depth_adjustment_is_bounded_and_requires_negative_cutting_geometry() {
+        let excessive = ProgramExecutionOptions {
+            cutting_depth_adjustment_um: Some(-10_001),
+            ..ProgramExecutionOptions::default()
+        };
+        let error = build_program_run_plan_with_options(
+            &parse("G21 G90 G94\nG1 Z-0.2 F100"),
+            ProgramRunPolicy::Cutting,
+            excessive,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.blockers()[0].kind,
+            DryRunBlockerKind::CuttingDepthAdjustment
+        );
+
+        let no_depth = ProgramExecutionOptions {
+            cutting_depth_adjustment_um: Some(0),
+            ..ProgramExecutionOptions::default()
+        };
+        let error = build_program_run_plan_with_options(
+            &parse("G21 G90 G94\nG1 X1 Z0 F100"),
+            ProgramRunPolicy::Cutting,
+            no_depth,
+        )
+        .unwrap_err();
+        assert!(error.blockers()[0].message.contains("below work Z0"));
+    }
+
+    #[test]
     fn heightmap_compensation_interpolates_surface_z_and_preserves_safe_z() {
         let options = ProgramExecutionOptions {
             surface_map_id: Some(7),
@@ -1329,6 +1602,26 @@ mod tests {
         );
         assert!(commands.contains(&"G0 Z2"));
         assert_eq!(plan.execution_options().surface_map_id, Some(7));
+    }
+
+    #[test]
+    fn heightmap_compensation_is_applied_after_cutting_depth_adjustment() {
+        let options = ProgramExecutionOptions {
+            surface_map_id: Some(7),
+            cutting_depth_adjustment_um: Some(-100),
+            ..ProgramExecutionOptions::default()
+        };
+        let plan = build_program_run_plan_with_heightmap(
+            &parse("G21 G90 G94 G17\nG0 Z2\nG0 X0 Y0\nG1 Z-0.2 F30\nG1 X10 Y0 F100"),
+            ProgramRunPolicy::Cutting,
+            options,
+            Some(&completed_heightmap()),
+        )
+        .unwrap();
+
+        assert!(plan.lines().iter().any(|line| {
+            line.command().contains("X10.0000") && line.command().contains("Z-1.3000")
+        }));
     }
 
     #[test]

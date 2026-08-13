@@ -24,6 +24,10 @@ interface FirstCutAuthorizationDialogProps {
   readonly open: boolean;
   readonly intent: ProgramRunIntent;
   readonly executionOptions: ProgramExecutionOptions;
+  readonly depthCorrection?: {
+    readonly fileDepthMm: number;
+    readonly targetDepthMm: number;
+  };
   readonly report?: RunPreflightReport;
   readonly onAuthorize: (
     confirmation: FirstCutConfirmation,
@@ -38,6 +42,7 @@ export function FirstCutAuthorizationDialog({
   open,
   intent,
   executionOptions,
+  depthCorrection,
   report,
   onAuthorize,
   onAuthorized,
@@ -130,12 +135,21 @@ export function FirstCutAuthorizationDialog({
             <strong>Проверьте станок перед стартом</strong>
             <span>Контроллер и G-code уже проверены. Остались только физические действия.</span>
           </div>
-          <code>{intent === "airRun" ? "AIR" : "CUT"}</code>
+          <code>{intent === "airRun" ? "CHECK" : "RUN"}</code>
         </div>
         <div className="program-run-mode-summary">
           <span>Режим</span>
-          <strong>{intent === "airRun" ? "Без резания" : "Гравировка с инструментом"}</strong>
+          <strong>{intent === "airRun" ? "Проверка движения" : "Обработка"}</strong>
         </div>
+        {intent === "cutting" && depthCorrection && (
+          <div className="program-run-mode-summary">
+            <span>Коррекция глубины</span>
+            <strong>
+              {formatDepth(depthCorrection.fileDepthMm)} →{" "}
+              {formatDepth(depthCorrection.targetDepthMm)} мм
+            </strong>
+          </div>
+        )}
         <div className="first-cut-checklist">
           <label>
             <input
@@ -191,7 +205,7 @@ export function FirstCutAuthorizationDialog({
             <span>
               <strong>{intent === "airRun" ? "Шпиндель выключен" : "Шпиндель запущен"}</strong>
               <small>{intent === "airRun"
-                ? "Прогон выполняется без резания"
+                ? "Станок движется по траектории без обработки материала"
                 : "Ручной шпиндель вращается в нужном направлении"}</small>
             </span>
           </label>
@@ -214,11 +228,15 @@ export function FirstCutAuthorizationDialog({
             {busy
               ? "Проверка и запуск..."
               : intent === "airRun"
-                ? "Начать прогон"
-                : "Начать гравировку"}
+                ? "Начать проверку движения"
+                : "Начать обработку"}
           </button>
         </footer>
       </section>
     </div>
   );
+}
+
+function formatDepth(value: number): string {
+  return `${value < 0 ? "−" : ""}${Math.abs(value).toFixed(3)}`;
 }

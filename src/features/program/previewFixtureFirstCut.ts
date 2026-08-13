@@ -13,7 +13,11 @@ import { previewFixtureProgram } from "./previewFixtureProgram";
 export const previewFixtureFirstCutProgram: GcodeProgram = {
   ...previewFixtureProgram,
   sourceName: "first-cut-fixture.nc",
-  lines: previewFixtureProgram.lines.filter((line) => line.sourceLine !== 8),
+  lines: previewFixtureProgram.lines
+    .filter((line) => line.sourceLine !== 8)
+    .map((line) => line.sourceLine === 4
+      ? { ...line, source: "G1 X20 Z-0.2 F120", normalized: "G1 X20 Z-0.2 F120" }
+      : line),
   warnings: [],
   features: {
     ...previewFixtureProgram.features,
@@ -24,7 +28,18 @@ export const previewFixtureFirstCutProgram: GcodeProgram = {
     lineCount: previewFixtureProgram.summary.lineCount - 1,
     executableLineCount: previewFixtureProgram.summary.executableLineCount - 1,
     dryRunEligible: true,
+    bounds: {
+      min: { x: 0, y: 0, z: -0.2 },
+      max: { x: 20, y: 15, z: 0 },
+      size: { x: 20, y: 15, z: 0.2 },
+    },
   },
+  toolpath: previewFixtureProgram.toolpath.map((segment) => segment.kind === "rapid"
+    ? segment
+    : {
+        ...segment,
+        points: segment.points.map((point) => ({ ...point, z: -0.2 })),
+      }),
 };
 
 export const previewFixtureProgramGateway: ProgramGateway = {

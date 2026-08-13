@@ -91,6 +91,10 @@ import {
 import type { PreviewView } from "./ToolpathPreview";
 import { suggestedSafeZ } from "./safeStartModel";
 import { surfaceMapExecutionView } from "./surfaceMapExecutionModel";
+import {
+  depthAdjustmentUmForTarget,
+  depthCorrectionView,
+} from "./depthCorrectionModel";
 
 const ToolpathPreview = lazy(async () => {
   const module = await import("./ToolpathPreview");
@@ -706,6 +710,10 @@ export function ProgramWorkspace({
     loading,
   });
   const progressPercent = controls.progressPercent;
+  const depthCorrection = useMemo(
+    () => depthCorrectionView(program, programExecutionOptions.cuttingDepthAdjustmentUm),
+    [program, programExecutionOptions.cuttingDepthAdjustmentUm],
+  );
   const updateExecutionOption = async (
     key: keyof ProgramExecutionOptions,
     value: boolean,
@@ -743,9 +751,36 @@ export function ProgramWorkspace({
     realRunReport.executionOptions.blockDelete ===
       programExecutionOptions.blockDelete &&
     realRunReport.executionOptions.surfaceMapId ===
-      programExecutionOptions.surfaceMapId
+      programExecutionOptions.surfaceMapId &&
+    realRunReport.executionOptions.cuttingDepthAdjustmentUm ===
+      programExecutionOptions.cuttingDepthAdjustmentUm
       ? realRunReport
       : undefined;
+  const setDepthCorrectionEnabled = (enabled: boolean) => {
+    if (!depthCorrection.available) return;
+    setRealRunReport(undefined);
+    setProgramExecutionOptions((current) => ({
+      ...current,
+      cuttingDepthAdjustmentUm: enabled ? 0 : undefined,
+    }));
+  };
+  const setDepthTarget = (targetDepthMm: number) => {
+    if (depthCorrection.fileDepthMm === undefined || !Number.isFinite(targetDepthMm)) return;
+    try {
+      const cuttingDepthAdjustmentUm = depthAdjustmentUmForTarget(
+        depthCorrection.fileDepthMm,
+        targetDepthMm,
+      );
+      setError(undefined);
+      setRealRunReport(undefined);
+      setProgramExecutionOptions((current) => ({
+        ...current,
+        cuttingDepthAdjustmentUm,
+      }));
+    } catch (reason) {
+      setError(String(reason));
+    }
+  };
   const surfaceMap = useMemo(
     () => surfaceMapExecutionView(
       surfaceSession,
@@ -1176,6 +1211,9 @@ export function ProgramWorkspace({
               fallback={<div className="toolpath-preview is-loading">Загрузка траектории...</div>}
             >
               <ToolpathPreview
+                cuttingDepthAdjustmentMm={depthCorrection.enabled
+                  ? depthCorrection.adjustmentMm
+                  : 0}
                 onSelectSourceLine={setSelectedSourceLine}
                 program={program}
                 selectedSourceLine={selectedSourceLine}
@@ -1263,8 +1301,8 @@ export function ProgramWorkspace({
                       {checkRunVisible
                         ? "Проверка GRBL"
                         : sender.mode === "airRun"
-                          ? "Без резания"
-                          : "Гравировка"}
+                          ? "Проверка движения"
+                          : "Обработка"}
                     </span>
                     <strong>
                       {displayedSender.state === "draining"
@@ -1472,9 +1510,18 @@ export function ProgramWorkspace({
                   intentLocked={safeStartContext !== undefined}
                   onIntent={(intent) => {
                     setProgramRunIntent(intent);
+                    if (intent === "airRun") {
+                      setProgramExecutionOptions((current) => ({
+                        ...current,
+                        cuttingDepthAdjustmentUm: undefined,
+                      }));
+                    }
                     setRealRunReport(undefined);
                   }}
                   onOpenOrigin={() => machineContext?.onOpenWorkZero()}
+                  depthCorrection={depthCorrection}
+                  onDepthCorrectionEnabled={setDepthCorrectionEnabled}
+                  onDepthTarget={setDepthTarget}
                   onPrimary={runReadinessAction}
                   onSurfaceMap={(enabled) => void setSurfaceMapApplication(enabled)}
                   surfaceMap={surfaceMap ? {
@@ -1532,13 +1579,13 @@ export function ProgramWorkspace({
               <div className={`dry-run-card is-${displayedSender.state}`}>
                 <div className="dry-run-heading">
                   <div>
-                    <span>Тестовый прогон</span>
+                    <span>Проверка движения</span>
                     <strong>{senderLabels[displayedSender.state]}</strong>
                   </div>
                   <code>{progressPercent}%</code>
                 </div>
                 <div
-                  aria-label="Прогресс тестового прогона"
+                  aria-label="Прогресс проверки движения"
                   aria-valuemax={100}
                   aria-valuemin={0}
                   aria-valuenow={progressPercent}
@@ -1737,7 +1784,7 @@ export function ProgramWorkspace({
       ) : senderActive && dryRunGateway ? (
         <div className="program-dropzone sender-recovery" role="status">
           <ShieldAlert aria-hidden="true" size={28} />
-          <strong>{sender.sourceName ?? "Тестовый прогон"}</strong>
+          <strong>{sender.sourceName ?? "Проверка движения"}</strong>
           <span>{senderLabels[sender.state]}</span>
           <button
             onClick={() => void runSenderAction(dryRunGateway.cancel)}
@@ -1796,6 +1843,16 @@ export function ProgramWorkspace({
       )}
 
       <FirstCutAuthorizationDialog
+        depthCorrection={
+          depthCorrection.enabled &&
+          depthCorrection.fileDepthMm !== undefined &&
+          depthCorrection.targetDepthMm !== undefined
+            ? {
+                fileDepthMm: depthCorrection.fileDepthMm,
+                targetDepthMm: depthCorrection.targetDepthMm,
+              }
+            : undefined
+        }
         executionOptions={programExecutionOptions}
         intent={programRunIntent}
         onAuthorize={authorizeFirstCut}

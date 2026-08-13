@@ -12,6 +12,7 @@ export interface ProgramExecutionOptions {
   readonly optionalStop: boolean;
   readonly blockDelete: boolean;
   readonly surfaceMapId?: number;
+  readonly cuttingDepthAdjustmentUm?: number;
 }
 
 export type ProgramWorkCoordinateSystem =

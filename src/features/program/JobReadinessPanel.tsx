@@ -29,6 +29,16 @@ interface JobReadinessPanelProps {
   readonly onOpenOrigin: () => void;
   readonly onPrimary: (action: JobReadinessAction) => void;
   readonly onSurfaceMap?: (enabled: boolean) => void;
+  readonly depthCorrection?: {
+    readonly available: boolean;
+    readonly enabled: boolean;
+    readonly fileDepthMm?: number;
+    readonly targetDepthMm?: number;
+    readonly minimumTargetMm?: number;
+    readonly maximumTargetMm: number;
+  };
+  readonly onDepthCorrectionEnabled?: (enabled: boolean) => void;
+  readonly onDepthTarget?: (targetDepthMm: number) => void;
   readonly surfaceMap?: {
     readonly checked: boolean;
     readonly detail: string;
@@ -69,6 +79,9 @@ export function JobReadinessPanel({
   intent,
   intentLocked = false,
   onIntent,
+  depthCorrection,
+  onDepthCorrectionEnabled,
+  onDepthTarget,
   onOpenOrigin,
   onPrimary,
   onSurfaceMap,
@@ -78,8 +91,8 @@ export function JobReadinessPanel({
   const primaryLabel =
     view.primaryAction === "startProgram"
       ? intent === "cutting"
-        ? "Начать гравировку"
-        : "Запустить без резания"
+        ? "Начать обработку"
+        : "Запустить проверку движения"
       : view.primaryLabel;
 
   return (
@@ -96,7 +109,7 @@ export function JobReadinessPanel({
             onClick={() => onIntent("airRun")}
             type="button"
           >
-            Без резания
+            Проверка движения
           </button>
           <button
             aria-pressed={intent === "cutting"}
@@ -104,7 +117,7 @@ export function JobReadinessPanel({
             onClick={() => onIntent("cutting")}
             type="button"
           >
-            Гравировка
+            Обработка
           </button>
         </div>
       </header>
@@ -125,6 +138,44 @@ export function JobReadinessPanel({
             type="checkbox"
           />
         </label>
+      )}
+
+      {intent === "cutting" && depthCorrection?.available && (
+        <div className={`job-depth-correction${depthCorrection.enabled ? " is-enabled" : ""}`}>
+          <label>
+            <span>
+              <strong>Коррекция глубины</strong>
+              <small>
+                Файл {depthCorrection.fileDepthMm?.toFixed(3)} мм
+                {depthCorrection.enabled && depthCorrection.targetDepthMm !== undefined
+                  ? ` · итог ${depthCorrection.targetDepthMm.toFixed(3)} мм`
+                  : ""}
+              </small>
+            </span>
+            <input
+              aria-label="Включить коррекцию глубины"
+              checked={depthCorrection.enabled}
+              disabled={busy}
+              onChange={(event) => onDepthCorrectionEnabled?.(event.target.checked)}
+              role="switch"
+              type="checkbox"
+            />
+          </label>
+          <div className="job-depth-value" aria-hidden={!depthCorrection.enabled}>
+            <span>Глубина</span>
+            <input
+              aria-label="Итоговая глубина обработки"
+              disabled={busy || !depthCorrection.enabled}
+              max={depthCorrection.maximumTargetMm}
+              min={depthCorrection.minimumTargetMm}
+              onChange={(event) => onDepthTarget?.(event.target.valueAsNumber)}
+              step="0.01"
+              type="number"
+              value={depthCorrection.targetDepthMm?.toFixed(3) ?? ""}
+            />
+            <code>мм</code>
+          </div>
+        </div>
       )}
 
       <button

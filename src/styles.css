@@ -5265,8 +5265,8 @@ textarea:focus-visible {
 }
 
 .job-readiness .program-run-intent {
-  width: 132px;
-  flex: 0 0 132px;
+  width: 176px;
+  flex: 0 0 176px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   padding: 0;
   border: 1px solid #334149;
@@ -5399,6 +5399,100 @@ textarea:focus-visible {
 .job-surface-map:has(input:disabled) {
   cursor: default;
   opacity: 0.62;
+}
+
+.job-depth-correction {
+  display: grid;
+  min-height: 48px;
+  grid-template-columns: minmax(0, 1fr) 104px;
+  align-items: stretch;
+  border-bottom: 1px solid #27323a;
+  background: #11181c;
+}
+
+.job-depth-correction > label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px 6px 11px;
+  cursor: pointer;
+}
+
+.job-depth-correction > label > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.job-depth-correction strong {
+  color: #cbd5da;
+  font-size: 10px;
+}
+
+.job-depth-correction small {
+  color: #76858d;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
+.job-depth-correction input[type="checkbox"] {
+  width: 30px;
+  height: 17px;
+  flex: 0 0 30px;
+  margin: 0;
+  accent-color: #68cba7;
+}
+
+.job-depth-correction.is-enabled {
+  background: #101a18;
+}
+
+.job-depth-value {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: center;
+  gap: 2px 4px;
+  padding: 5px 8px;
+  border-left: 1px solid #27323a;
+}
+
+.job-depth-value > span {
+  grid-column: 1 / -1;
+  color: #75838b;
+  font-size: 7px;
+  text-transform: uppercase;
+}
+
+.job-depth-value input {
+  width: 100%;
+  min-width: 0;
+  height: 23px;
+  padding: 0 4px;
+  border: 1px solid #3b4b53;
+  border-radius: 3px;
+  outline: 0;
+  color: #e4ecef;
+  background: #0b1114;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+}
+
+.job-depth-value input:focus {
+  border-color: #69cdaa;
+}
+
+.job-depth-value input:disabled {
+  color: #637078;
+  opacity: 0.58;
+}
+
+.job-depth-value code {
+  align-self: center;
+  color: #75838b;
+  font-size: 8px;
 }
 
 .job-primary-action {

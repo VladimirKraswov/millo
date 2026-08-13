@@ -49,6 +49,12 @@ The command-actor regression `heightmap_reuses_probe_established_z_zero_after_xy
 executes the real operator sequence and asserts that the entire probe plus map
 flow writes exactly one `G10 ... Z` command.
 
+Depth-correction tests derive the file depth from non-rapid geometry, preserve
+rapid and safe-Z moves, clamp shallower passes at work Z0, enforce the +/-10 mm
+bound, update preview geometry, bind the exact micrometre delta into Check and
+run evidence, and prove that heightmap compensation is applied after the
+nominal depth adjustment.
+
 Program-loader tests reject unsupported, empty, and oversized files before IPC
 and assert both the exact typed parse request and retained original source.
 Program-editor tests cover bounded undo/redo history, whole-row insert/delete

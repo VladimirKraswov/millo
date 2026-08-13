@@ -96,7 +96,7 @@ describe("JobReadinessPanel", () => {
       />,
     );
 
-    expect(markup).toContain("Начать гравировку");
+    expect(markup).toContain("Начать обработку");
     expect(markup).not.toContain(">Запустить программу<");
   });
 
@@ -133,5 +133,69 @@ describe("JobReadinessPanel", () => {
     expect(markup).toContain("Компенсировать по карте");
     expect(markup).toContain("role=\"switch\"");
     expect(markup).toContain("Карта #3");
+  });
+
+  it("shows file and target depth only for processing mode", () => {
+    const markup = renderToStaticMarkup(
+      <JobReadinessPanel
+        busy={false}
+        depthCorrection={{
+          available: true,
+          enabled: true,
+          fileDepthMm: -0.2,
+          targetDepthMm: -0.3,
+          minimumTargetMm: -10.2,
+          maximumTargetMm: 0,
+        }}
+        details={{ machine: "Idle", file: "ok", origin: "G54", validation: "ok" }}
+        intent="cutting"
+        onIntent={() => undefined}
+        onOpenOrigin={() => undefined}
+        onPrimary={() => undefined}
+        view={{
+          primaryAction: "startProgram",
+          primaryDisabled: false,
+          primaryLabel: "Запустить программу",
+          steps: [
+            { id: "machine", state: "ready" },
+            { id: "file", state: "ready" },
+            { id: "origin", state: "ready" },
+            { id: "validation", state: "ready" },
+          ],
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Коррекция глубины");
+    expect(markup).toContain("Файл -0.200 мм · итог -0.300 мм");
+    expect(markup).toContain("Итоговая глубина обработки");
+    expect(markup).toContain("Обработка");
+  });
+
+  it("uses distinct names for physical motion check and real processing", () => {
+    const renderMode = (intent: "airRun" | "cutting") => renderToStaticMarkup(
+      <JobReadinessPanel
+        busy={false}
+        details={{ machine: "Idle", file: "ok", origin: "G54", validation: "ok" }}
+        intent={intent}
+        onIntent={() => undefined}
+        onOpenOrigin={() => undefined}
+        onPrimary={() => undefined}
+        view={{
+          primaryAction: "startProgram",
+          primaryDisabled: false,
+          primaryLabel: "Запустить программу",
+          steps: [
+            { id: "machine", state: "ready" },
+            { id: "file", state: "ready" },
+            { id: "origin", state: "ready" },
+            { id: "validation", state: "ready" },
+          ],
+        }}
+      />,
+    );
+
+    expect(renderMode("airRun")).toContain("Запустить проверку движения");
+    expect(renderMode("cutting")).toContain("Начать обработку");
   });
 });

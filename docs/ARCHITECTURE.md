@@ -131,6 +131,13 @@ The UI cannot pass a prepared plan or toggle `$C`. M0 is a syntax-validation
 line in this mode; M1 is sent only when Optional Stop is enabled. Neither enters
 the physical-run operator pause state while GRBL is in Check.
 
+Processing-depth correction is also an execution option, never a UI-side G-code
+rewrite. React submits a bounded integer micrometre delta. Rust derives the
+lowest non-rapid Z, rebuilds only the transformed trajectory, leaves rapid and
+non-negative Z unchanged, then applies heightmap compensation. The option is
+part of preflight, Check certificate, authorization, recovery, and sender-plan
+identity, so changing it cannot reuse stale validation evidence.
+
 ## Rules
 
 1. CNC behavior belongs in Rust and must be testable without Tauri.

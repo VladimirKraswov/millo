@@ -122,11 +122,11 @@ export function presentPreflightCheck(
         : "Проверка критичных настроек движения не пройдена. Откройте инспектор станка.";
       break;
     case "program-policy":
-      title = report.intent === "cutting" ? "Допустимость гравировки" : "Безопасность прогона";
+      title = report.intent === "cutting" ? "Допустимость обработки" : "Безопасность проверки движения";
       detail = check.level === "pass"
         ? report.intent === "cutting"
           ? "Команды резания допустимы; опасные служебные команды остаются под контролем Millo."
-          : "В файле нет команд, запрещённых для прогона без резания."
+          : "В файле нет команд, запрещённых для проверки движения."
         : programBlockerDetail(report.programBlockers);
       break;
     case "program-modal-contract":

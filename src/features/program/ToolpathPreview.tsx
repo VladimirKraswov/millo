@@ -15,6 +15,7 @@ import {
 export type PreviewView = "top" | "iso";
 
 interface ToolpathPreviewProps {
+  readonly cuttingDepthAdjustmentMm?: number;
   readonly onSelectSourceLine?: (sourceLine: number) => void;
   readonly program: GcodeProgram;
   readonly selectedSourceLine?: number;
@@ -79,6 +80,7 @@ const createToolMarkerTexture = (): THREE.CanvasTexture => {
 };
 
 export function ToolpathPreview({
+  cuttingDepthAdjustmentMm = 0,
   onSelectSourceLine,
   program,
   selectedSourceLine,
@@ -104,7 +106,7 @@ export function ToolpathPreview({
     const host = hostRef.current;
     if (!host) return;
 
-    const model = buildToolpathReadModel(program);
+    const model = buildToolpathReadModel(program, cuttingDepthAdjustmentMm);
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0b1013);
 
@@ -379,7 +381,7 @@ export function ToolpathPreview({
       renderer.domElement.remove();
       if (runtimeRef.current === runtime) runtimeRef.current = undefined;
     };
-  }, [onSelectSourceLine, program, view]);
+  }, [cuttingDepthAdjustmentMm, onSelectSourceLine, program, view]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -388,6 +390,7 @@ export function ToolpathPreview({
       program,
       selectedSourceLine,
       runtime.model.center,
+      cuttingDepthAdjustmentMm,
     );
     const hasSelection = selection.positions.length > 0;
     const replaceGeometry = (object: THREE.LineSegments | THREE.Points) => {
@@ -414,7 +417,7 @@ export function ToolpathPreview({
         ? "Предпросмотр траектории G-code"
         : `Предпросмотр траектории G-code, выбрана строка ${selectedSourceLine}`,
     );
-  }, [program, selectedSourceLine, view]);
+  }, [cuttingDepthAdjustmentMm, program, selectedSourceLine, view]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;

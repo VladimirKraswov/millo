@@ -50,7 +50,7 @@ Program owns a compact, non-modal job-readiness surface beside the toolpath.
   leaving the operator in a disabled sender card.
 - A completed GRBL Check run sequence is consumed exactly once. Repeated backend
   snapshots with that sequence remain hidden while automatic preflight exposes
-  an intent-specific `Начать гравировку` or `Запустить без резания` action.
+  an intent-specific `Начать обработку` or `Начать проверку движения` action.
 - An active GRBL Check always has an explicit Cancel action. Cancellation and
   failure return to readiness through a dedicated Check action model and never
   invoke physical-run recovery lookup.

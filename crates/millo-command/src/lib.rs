@@ -7467,7 +7467,7 @@ mod tests {
             .unwrap();
         assert!(!changed_options.ready);
         assert!(changed_options.checks.iter().any(|check| {
-            check.id == "grbl-check-certificate" && check.detail.contains("semantics changed")
+            check.id == "grbl-check-certificate" && check.detail.contains("options changed")
         }));
         assert_eq!(
             control

@@ -28,8 +28,36 @@ export interface ToolPositionReadModel {
   readonly overProgram: boolean;
 }
 
-export function buildToolpathReadModel(program: GcodeProgram): ToolpathReadModel {
-  const bounds = program.summary.bounds;
+export function buildToolpathReadModel(
+  program: GcodeProgram,
+  cuttingDepthAdjustmentMm = 0,
+): ToolpathReadModel {
+  const adjustedPoint = (
+    point: ProgramPoint,
+    kind: GcodeProgram["toolpath"][number]["kind"],
+  ): ProgramPoint => ({
+    ...point,
+    z: kind !== "rapid" && point.z < -1e-9
+      ? Math.min(0, point.z + cuttingDepthAdjustmentMm)
+      : point.z,
+  });
+  const adjustedPoints = program.toolpath.flatMap((segment) =>
+    segment.points.map((point) => adjustedPoint(point, segment.kind)),
+  );
+  const bounds = Math.abs(cuttingDepthAdjustmentMm) < Number.EPSILON
+    ? program.summary.bounds
+    : adjustedPoints.length === 0 || !program.summary.bounds
+    ? program.summary.bounds
+    : (() => {
+        const minZ = adjustedPoints.reduce((minimum, point) => Math.min(minimum, point.z), Infinity);
+        const min = { ...program.summary.bounds.min, z: minZ };
+        const max = program.summary.bounds.max;
+        return {
+          min,
+          max,
+          size: { x: max.x - min.x, y: max.y - min.y, z: max.z - min.z },
+        };
+      })();
   const center: ProgramPoint = bounds
     ? {
         x: (bounds.min.x + bounds.max.x) / 2,
@@ -48,8 +76,8 @@ export function buildToolpathReadModel(program: GcodeProgram): ToolpathReadModel
     const sourceLines =
       segment.kind === "rapid" ? rapidSourceLines : cuttingSourceLines;
     for (let index = 1; index < segment.points.length; index += 1) {
-      const start = segment.points[index - 1];
-      const end = segment.points[index];
+      const start = adjustedPoint(segment.points[index - 1], segment.kind);
+      const end = adjustedPoint(segment.points[index], segment.kind);
       positions.push(
         start.x - center.x,
         start.y - center.y,
@@ -92,6 +120,7 @@ export function buildToolpathHighlightReadModel(
   program: GcodeProgram,
   sourceLine: number | undefined,
   center: ProgramPoint,
+  cuttingDepthAdjustmentMm = 0,
 ): ToolpathHighlightReadModel {
   if (sourceLine === undefined) {
     return {
@@ -108,8 +137,14 @@ export function buildToolpathHighlightReadModel(
     if (segment.sourceLine !== sourceLine) continue;
     segmentCount += 1;
     for (let index = 1; index < segment.points.length; index += 1) {
-      const start = segment.points[index - 1];
-      const end = segment.points[index];
+      const adjust = (point: ProgramPoint): ProgramPoint => ({
+        ...point,
+        z: segment.kind !== "rapid" && point.z < -1e-9
+          ? Math.min(0, point.z + cuttingDepthAdjustmentMm)
+          : point.z,
+      });
+      const start = adjust(segment.points[index - 1]);
+      const end = adjust(segment.points[index]);
       positions.push(
         start.x - center.x,
         start.y - center.y,

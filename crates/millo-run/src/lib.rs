@@ -6,7 +6,7 @@ use millo_domain::{
 };
 use millo_dry_run::{
     DryRunBlocker, DryRunBlockerKind, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy,
-    build_program_run_plan_with_options,
+    build_program_run_plan_with_options, deepest_cutting_z, program_bounds_with_execution_options,
 };
 use millo_gcode::{GcodeProgram, ProgramBounds, ToolpathKind};
 use serde::{Deserialize, Serialize};
@@ -66,7 +66,7 @@ pub enum ProgramCheckCertificateError {
     Expired,
     #[error("the loaded program changed after GRBL Check")]
     ProgramChanged,
-    #[error("optional-stop or block-delete semantics changed after GRBL Check")]
+    #[error("execution options changed after GRBL Check")]
     ExecutionOptionsChanged,
     #[error("the controller reset or reconnected after GRBL Check")]
     ControllerSessionChanged,
@@ -635,9 +635,10 @@ pub fn assess_real_run_preflight_with_options(
         modal_contract.source_line,
     ));
 
+    let execution_bounds = program_bounds_with_execution_options(program, execution_options);
     let geometry_ready = program.summary.preview_complete
         && program.summary.motion_count > 0
-        && program.summary.bounds.is_some();
+        && execution_bounds.is_some();
     checks.push(check(
         "program-geometry",
         if geometry_ready {
@@ -646,7 +647,7 @@ pub fn assess_real_run_preflight_with_options(
             RunPreflightLevel::Blocker
         },
         "Program geometry",
-        if let Some(bounds) = program.summary.bounds.filter(|_| geometry_ready) {
+        if let Some(bounds) = execution_bounds.filter(|_| geometry_ready) {
             format!(
                 "{} motion(s) · {:.3} × {:.3} × {:.3} mm",
                 program.summary.motion_count, bounds.size.x, bounds.size.y, bounds.size.z
@@ -656,6 +657,22 @@ pub fn assess_real_run_preflight_with_options(
         },
         None,
     ));
+    if let (Some(adjustment_um), Some(file_depth_mm)) = (
+        execution_options.cutting_depth_adjustment_um,
+        deepest_cutting_z(program),
+    ) {
+        let adjustment_mm = f64::from(adjustment_um) / 1_000.0;
+        checks.push(check(
+            "cutting-depth-adjustment",
+            RunPreflightLevel::Pass,
+            "Cutting depth adjustment",
+            format!(
+                "File depth {file_depth_mm:.3} mm · adjustment {adjustment_mm:+.3} mm · target {:.3} mm",
+                file_depth_mm + adjustment_mm
+            ),
+            None,
+        ));
+    }
 
     let active_wcs = hardware.device.modal_state.iter().find(|value| {
         matches!(
@@ -733,7 +750,7 @@ pub fn assess_real_run_preflight_with_options(
         blocker_count,
         caution_count,
         poll_sequence: snapshot.poll_sequence,
-        bounds: program.summary.bounds,
+        bounds: execution_bounds,
         hardware,
         checks,
         program_blockers,
@@ -817,6 +834,7 @@ fn blocker_kind_id(kind: DryRunBlockerKind) -> &'static str {
         DryRunBlockerKind::IncompletePreview => "incomplete-preview",
         DryRunBlockerKind::CommandTooLong => "command-too-long",
         DryRunBlockerKind::HeightmapCompensation => "heightmap-compensation",
+        DryRunBlockerKind::CuttingDepthAdjustment => "cutting-depth-adjustment",
     }
 }
 
@@ -1425,18 +1443,19 @@ mod tests {
     }
 
     #[test]
-    fn authorization_binds_optional_stop_and_block_delete_semantics() {
+    fn authorization_binds_every_execution_option() {
         let now = Instant::now();
         let snapshot = snapshot(MachineMode::Idle);
         let options = ProgramExecutionOptions {
             optional_stop: true,
             block_delete: true,
+            cutting_depth_adjustment_um: Some(-100),
             ..ProgramExecutionOptions::default()
         };
         let parsed = parse_program_with_options(
             ProgramParseRequest {
                 source_name: "optional.nc".to_owned(),
-                source: "G21 G90 G94\n/G91\nG1 X10 F10\nM1\nG1 X20".to_owned(),
+                source: "G21 G90 G94\n/G91\nG1 X10 Z-0.2 F10\nM1\nG1 X20".to_owned(),
             },
             ProgramParseOptions { block_delete: true },
         )

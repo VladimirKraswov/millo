@@ -90,6 +90,26 @@ plan -> confirm stock/tool, removed probe wires and running manual spindle -> ru
 The final modal always offers **Start** and **Cancel** and contains only facts
 that software cannot observe.
 
+## Processing Depth Correction
+
+**Processing** is the real G-code execution mode for engraving, milling,
+contouring, and drilling. **Motion check** physically follows the program with
+the cutting setup disabled; GRBL Check remains the separate firmware-only
+validation without motion.
+
+For a program with cutting motion below work Z0, the launch panel can enable a
+depth correction. Millo derives the file depth from the lowest non-rapid
+toolpath point and uses it as the initial target. Editing the target stores an
+exact micrometre delta in the execution options. The Rust plan applies that
+same delta to every negative non-rapid Z point, preserving relative multi-pass
+depths while clamping shallower points at Z0. Rapid moves, safe Z, and all
+points at or above Z0 are unchanged.
+
+The adjustment is bounded to +/-10 mm. Heightmap compensation is applied after
+the nominal cutting-depth correction. Changing the correction invalidates the
+previous preflight and GRBL Check certificate because the execution options and
+physical trajectory have changed.
+
 ## Errors
 
 Command errors persist until dismissed. Successful periodic polling must never
