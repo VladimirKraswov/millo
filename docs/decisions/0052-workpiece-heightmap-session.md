@@ -43,9 +43,18 @@ same map is shown as a coordinate-labelled numeric matrix and as an exaggerated
 Three.js mesh with low-to-high color contrast, probe points, perimeter, program
 outline, top/isometric views, and optional interpolation wireframe.
 
+The UI does not classify stock as `PCB` or `relief`. That distinction did not
+select a different probing algorithm and therefore looked like a processing
+mode without changing the operation. Instead, the primary surface setup exposes
+the two physical bounds that do change movement: the first Z0 contact distance
+and the maximum downward variation searched at each grid point. Contact offset,
+feeds, clearance, and display layers remain on-demand settings.
+
 The ordinary 19.1 mm touch plate setting is never inherited by a heightmap.
 Heightmap contact is either direct conductive stock with zero offset or an
-explicit fixed plate covering every point.
+explicit fixed plate covering every point. In fixed-plate mode the same plate
+thickness establishes the first Z0 contact and offsets every grid contact; the
+UI cannot combine it with a second removable calibration-plate offset.
 
 Direct probing begins with an explicit surface calibration at the highest point
 of the intended perimeter. That contact establishes Z0; the operator does not
@@ -54,7 +63,17 @@ bounded surface-variation value controls how far below the highest point each
 grid contact may search, which supports relief while preserving a finite miss
 condition. Per-machine UI drafts survive dialog closure, but successful physical
 calibration never does: any close, reset, disconnect, or relevant setting change
-requires a new touch.
+requires a new touch. In particular, changing the perimeter or contact setup
+invalidates the highest-point calibration; changing only density or rendering
+does not.
+
+The settings column owns its own scroll area and a stable action dock, so Start,
+Pause, Stop, progress, and failures remain visible without moving the surrounding
+layout. Below 900 px, settings precede the preview because completing the setup
+is the next operator action. Saved map geometry always renders from its own
+stored perimeter; editing the next plan cannot stretch old measurements into a
+false surface. A restored map is explicitly view-only until a future typed
+sender compensation boundary exists.
 
 ## Consequences
 

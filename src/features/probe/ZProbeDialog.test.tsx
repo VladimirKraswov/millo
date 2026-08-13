@@ -103,6 +103,6 @@ describe("ZProbeDialog", () => {
 
     expect(markup).toContain("Ручное обнуление Z доступно");
     expect(markup).not.toContain("Перед касанием введите измеренную толщину");
-    expect(markup).toContain("Сохранить параметры");
+    expect(markup).not.toContain("Сохранить параметры");
   });
 });

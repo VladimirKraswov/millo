@@ -25,4 +25,14 @@ describe("heightmapDraftStore", () => {
     storage.setItem("millo.heightmap-draft.v2.machine-1", "{broken");
     expect(loadHeightmapDraft("machine-1", storage)).toBeUndefined();
   });
+
+  it("loads older v2 drafts without preserving the removed shape preset", () => {
+    const storage = memoryStorage();
+    const legacy = { ...initialHeightmapDraft(), surfaceShape: "relief" };
+    storage.setItem("millo.heightmap-draft.v2.machine-1", JSON.stringify(legacy));
+
+    const loaded = loadHeightmapDraft("machine-1", storage);
+    expect(loaded).toBeDefined();
+    expect(loaded).not.toHaveProperty("surfaceShape");
+  });
 });

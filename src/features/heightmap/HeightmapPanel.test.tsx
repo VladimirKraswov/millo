@@ -6,7 +6,7 @@ import { previewHeightmapGateway } from "./previewHeightmapGateway";
 import { HeightmapPanel } from "./HeightmapPanel";
 
 describe("HeightmapPanel", () => {
-  it("leads with direct surface finding and keeps optional plate details advanced", () => {
+  it("leads with physical search limits and keeps optional contact details advanced", () => {
     const markup = renderToStaticMarkup(
       <HeightmapPanel
         desktopRuntime
@@ -27,8 +27,14 @@ describe("HeightmapPanel", () => {
     );
 
     expect(markup).toContain("Найти поверхность и установить Z0");
-    expect(markup).toContain("Плоская / PCB");
-    expect(markup).toContain("Сильный рельеф");
+    expect(markup).toContain("Первый контакт");
+    expect(markup).toContain("Макс. перепад поверхности");
+    expect(markup).toContain("Слои");
+    expect(markup).toContain("3D-карта");
+    expect(markup).toContain("Таблица");
+    expect(markup).not.toContain("Плоская / PCB");
+    expect(markup).not.toContain("Сильный рельеф");
+    expect(markup).not.toContain("Подтвердить ту же установку");
     expect(markup).toContain("Это толщина съёмной шайбы, а не заготовки");
     expect(markup).not.toContain("Пластина для Z0");
   });

@@ -72,12 +72,19 @@ export const estimateHeightmapSeconds = (request: HeightmapPlanRequest): number 
   const probes = plan.points.length;
   return xyDistance / request.travelFeedMmPerMin * 60 + probes * (
     request.maxProbeDepthMm / request.probeFeedMmPerMin * 60 +
-    request.maxProbeDepthMm / request.retractFeedMmPerMin * 60
+    (request.clearanceZMm + request.maxProbeDepthMm) / request.retractFeedMmPerMin * 60
   );
 };
 
 export const heightmapSafeWorkZ = (request: HeightmapPlanRequest): number =>
   request.contactOffsetMm + request.clearanceZMm;
+
+export const heightmapCalibrationPlateThickness = (
+  request: HeightmapPlanRequest,
+  separatePlateThicknessMm: number,
+): number => request.contactMode === "fixedPlate"
+  ? request.contactOffsetMm
+  : separatePlateThicknessMm;
 
 export const heightmapSurfaceVariation = (request: HeightmapPlanRequest): number =>
   Math.max(0.1, request.maxProbeDepthMm - request.clearanceZMm);
@@ -111,10 +118,17 @@ export const validateHeightmapRequest = (
   if (request.columns < 2 || request.rows < 2) return "Нужно не менее двух точек по каждой оси";
   if (!Number.isInteger(request.columns) || !Number.isInteger(request.rows)) return "Количество точек должно быть целым";
   if (request.columns > 101 || request.rows > 101 || request.columns * request.rows > 10_000) return "Сетка слишком плотная: максимум 10 000 точек";
+  const endX = request.originXMm + request.widthMm;
+  const endY = request.originYMm + request.heightMm;
+  if (Math.abs(request.originXMm) > 100_000 || Math.abs(endX) > 100_000) return "Координаты периметра X выходят за допустимый диапазон";
+  if (Math.abs(request.originYMm) > 100_000 || Math.abs(endY) > 100_000) return "Координаты периметра Y выходят за допустимый диапазон";
   if (travel && (request.widthMm > travel.x || request.heightMm > travel.y)) return "Периметр больше рабочего поля выбранного станка";
   if (travel && heightmapSafeWorkZ(request) > travel.z) return "Безопасная Z с учётом пластины больше хода станка";
   if (request.clearanceZMm <= 0 || request.maxProbeDepthMm <= 0) return "Безопасная Z и глубина поиска должны быть положительными";
   if (request.maxProbeDepthMm <= request.clearanceZMm) return "Допуск неровности должен быть больше 0";
+  if (request.probeFeedMmPerMin <= 0 || request.probeFeedMmPerMin > 1_000) return "Подача щупа должна быть от 0.1 до 1000 mm/min";
+  if (request.travelFeedMmPerMin < 10 || request.travelFeedMmPerMin > 100_000) return "Подача перехода должна быть от 10 до 100000 mm/min";
+  if (request.retractFeedMmPerMin < 10 || request.retractFeedMmPerMin > 100_000) return "Подача подъёма должна быть от 10 до 100000 mm/min";
   if (request.contactMode === "directSurface" && request.contactOffsetMm !== 0) return "Для прямого контакта смещение равно 0";
   if (request.contactMode === "fixedPlate" && (request.contactOffsetMm < 0.01 || request.contactOffsetMm > 100)) return "Толщина сплошной пластины должна быть от 0.01 до 100 mm";
   return undefined;

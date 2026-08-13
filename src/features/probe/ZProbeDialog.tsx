@@ -65,6 +65,7 @@ export function ZProbeDialog({
   );
   const [confirmed, setConfirmed] = useState(false);
   const [status, setStatus] = useState<ProbeStatus>("idle");
+  const [heightmapActive, setHeightmapActive] = useState(false);
   const [localError, setLocalError] = useState<string>();
   const abortRequested = useRef(false);
 
@@ -73,6 +74,7 @@ export function ZProbeDialog({
     setDraft(settings ?? defaultZProbeSettings());
     setConfirmed(false);
     setStatus("idle");
+    setHeightmapActive(false);
     setLocalError(undefined);
     abortRequested.current = false;
   }, [open, profileId]);
@@ -87,7 +89,7 @@ export function ZProbeDialog({
   const connected = snapshot.connection === "connected";
   const idle = snapshot.machine.mode === "idle";
   const inputActive = snapshot.machine.pins?.probe ?? false;
-  const busy = disabled || status === "saving" || status === "probing";
+  const busy = disabled || status === "saving" || status === "probing" || heightmapActive;
   const canSave = desktopRuntime && !busy && !validationError;
   const canProbe =
     canSave &&
@@ -195,7 +197,7 @@ export function ZProbeDialog({
             <span>Щуп · рабочая поверхность</span>
             <h2 id="z-probe-title">{draft.mode === "heightmap" ? "Карта высот" : "Настроить щуп"}</h2>
           </div>
-          <button aria-label="Закрыть" disabled={status === "probing"} onClick={onClose} title="Закрыть" type="button">
+          <button aria-label="Закрыть" disabled={status === "probing" || heightmapActive} onClick={onClose} title="Закрыть" type="button">
             <X aria-hidden="true" size={16} />
           </button>
         </header>
@@ -229,12 +231,14 @@ export function ZProbeDialog({
             <HeightmapPanel
               key={profileId ?? "unbound"}
               desktopRuntime={desktopRuntime}
+              disabled={disabled}
               gateway={heightmapGateway}
               zProbeGateway={gateway}
               machineProfileId={profileId}
               machineTravel={machineTravel}
               onAbort={onAbort}
               onError={onError}
+              onActivityChange={setHeightmapActive}
               onSnapshot={onSnapshot}
               onSaveMode={() => onSaveSettings(draft)}
               onUnlock={onUnlock}
@@ -313,16 +317,16 @@ export function ZProbeDialog({
           </>}
         </div>
 
-        {draft.mode !== "heightmap" && <footer className={`z-probe-actions${draft.mode === "off" ? " is-off" : ""}`}>
+        {draft.mode === "workZero" && <footer className="z-probe-actions">
           {status === "probing" ? (
             <button className="is-danger" onClick={() => void abort()} type="button">Остановить касание</button>
           ) : (
             <button disabled={!canSave} onClick={() => void save()} type="button">Сохранить параметры</button>
           )}
-          {draft.mode === "workZero" && <button className="is-primary" disabled={!canProbe} onClick={() => void run()} type="button">
+          <button className="is-primary" disabled={!canProbe} onClick={() => void run()} type="button">
             <CircleDot aria-hidden="true" size={16} />
             {status === "probing" ? "Ищу поверхность…" : "Найти поверхность и установить Z"}
-          </button>}
+          </button>
         </footer>}
       </section>
     </div>

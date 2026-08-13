@@ -59,9 +59,20 @@ export function HeightmapScene({
     renderer.domElement.setAttribute("aria-label", "Карта высот и периметр измерения");
     element.replaceChildren(renderer.domElement);
 
-    const centerX = request.originXMm + request.widthMm / 2;
-    const centerY = request.originYMm + request.heightMm / 2;
-    const span = Math.max(request.widthMm, request.heightMm, 10);
+    const mapRequest = map?.plan.request;
+    const minimumX = Math.min(request.originXMm, mapRequest?.originXMm ?? request.originXMm);
+    const minimumY = Math.min(request.originYMm, mapRequest?.originYMm ?? request.originYMm);
+    const maximumX = Math.max(
+      request.originXMm + request.widthMm,
+      mapRequest ? mapRequest.originXMm + mapRequest.widthMm : request.originXMm + request.widthMm,
+    );
+    const maximumY = Math.max(
+      request.originYMm + request.heightMm,
+      mapRequest ? mapRequest.originYMm + mapRequest.heightMm : request.originYMm + request.heightMm,
+    );
+    const centerX = (minimumX + maximumX) / 2;
+    const centerY = (minimumY + maximumY) / 2;
+    const span = Math.max(maximumX - minimumX, maximumY - minimumY, 10);
     const camera = new THREE.OrthographicCamera(-span, span, span, -span, 0.01, span * 20);
     camera.up.set(0, 0, 1);
     camera.position.set(
@@ -129,6 +140,7 @@ export function HeightmapScene({
     const exaggeration = Math.min(50, Math.max(1, span * 0.08 / zRange));
 
     if (showInterpolation && map && map.samples.every(Boolean)) {
+      const sourceRequest = map.plan.request;
       const columns = Math.max(2, Math.min(150, interpolationColumns));
       const rows = Math.max(2, Math.min(150, interpolationRows));
       const positions: number[] = [];
@@ -155,8 +167,8 @@ export function HeightmapScene({
           const corners = [[row, column], [row, column + 1], [row + 1, column + 1], [row, column], [row + 1, column + 1], [row + 1, column]];
           for (const [cornerRow, cornerColumn] of corners) {
             const z = sampleZ(cornerRow, cornerColumn);
-            const x = request.originXMm + cornerColumn / (columns - 1) * request.widthMm;
-            const y = request.originYMm + cornerRow / (rows - 1) * request.heightMm;
+            const x = sourceRequest.originXMm + cornerColumn / (columns - 1) * sourceRequest.widthMm;
+            const y = sourceRequest.originYMm + cornerRow / (rows - 1) * sourceRequest.heightMm;
             positions.push(x, y, (z - minimum) * exaggeration);
             const color = colorFor((z - minimum) / zRange);
             colors.push(color.r, color.g, color.b);
@@ -183,22 +195,43 @@ export function HeightmapScene({
     }
 
     if (showProbeGrid) {
-      const positions: number[] = [];
-      const colors: number[] = [];
+      const samePlan = Boolean(map && [
+        "originXMm",
+        "originYMm",
+        "widthMm",
+        "heightMm",
+        "columns",
+        "rows",
+      ].every((key) => map.plan.request[key as keyof HeightmapPlanRequest] === request[key as keyof HeightmapPlanRequest]));
+      const addPoints = (positions: number[], colors: number[], size: number) => {
+        if (positions.length === 0) return;
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+        geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+        scene.add(new THREE.Points(geometry, new THREE.PointsMaterial({
+          size,
+          sizeAttenuation: false,
+          vertexColors: true,
+        })));
+      };
+      const plannedPositions: number[] = [];
+      const plannedColors: number[] = [];
       for (const point of draftPlan.points) {
-        const sample = map?.samples[point.sequence];
-        positions.push(point.xMm, point.yMm, sample ? (sample.zMm - minimum) * exaggeration + 0.08 : 0.08);
-        const color = sample ? colorFor((sample.zMm - minimum) / zRange) : new THREE.Color(0x7f9099);
-        colors.push(color.r, color.g, color.b);
+        const existingSample = samePlan ? map?.samples[point.sequence] : undefined;
+        if (!existingSample) {
+          plannedPositions.push(point.xMm, point.yMm, 0.08);
+          plannedColors.push(0.5, 0.56, 0.6);
+        }
       }
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-      geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-      scene.add(new THREE.Points(geometry, new THREE.PointsMaterial({
-        size: 6,
-        sizeAttenuation: false,
-        vertexColors: true,
-      })));
+      addPoints(plannedPositions, plannedColors, 5);
+      const measuredPositions: number[] = [];
+      const measuredColors: number[] = [];
+      for (const sample of samples) {
+        measuredPositions.push(sample.point.xMm, sample.point.yMm, (sample.zMm - minimum) * exaggeration + 0.08);
+        const color = colorFor((sample.zMm - minimum) / zRange);
+        measuredColors.push(color.r, color.g, color.b);
+      }
+      addPoints(measuredPositions, measuredColors, 7);
     }
 
     const controls = new OrbitControls(camera, renderer.domElement);

@@ -6,7 +6,9 @@ import { defaultHeightmapRequest } from "./heightmapDefaults";
 import {
   applyDensity,
   buildHeightmapPlan,
+  estimateHeightmapSeconds,
   heightColor,
+  heightmapCalibrationPlateThickness,
   heightmapSafeWorkZ,
   heightmapSurfaceVariation,
   heightmapMatrix,
@@ -40,6 +42,23 @@ describe("heightmapModel", () => {
     expect(buildHeightmapPlan(next).points).toHaveLength(77);
   });
 
+  it("estimates the same bounded probe and full retract path as Rust", () => {
+    const request = {
+      ...defaultHeightmapRequest(),
+      widthMm: 10,
+      heightMm: 10,
+      columns: 2,
+      rows: 2,
+      clearanceZMm: 2,
+      maxProbeDepthMm: 3,
+      probeFeedMmPerMin: 30,
+      travelFeedMmPerMin: 60,
+      retractFeedMmPerMin: 60,
+    };
+    // XY is 30 s; each of four points probes for 6 s and retracts for 5 s.
+    expect(estimateHeightmapSeconds(request)).toBe(74);
+  });
+
   it("maps serpentine samples back into a readable numeric matrix", () => {
     const plan = buildHeightmapPlan({ ...defaultHeightmapRequest(), columns: 2, rows: 2 });
     const map: Heightmap = {
@@ -62,6 +81,21 @@ describe("heightmapModel", () => {
     expect(heightColor(0.2, -0.2, 0.2)).toContain("35");
   });
 
+  it("mirrors Rust coordinate and feed limits before dispatch", () => {
+    expect(validateHeightmapRequest({
+      ...defaultHeightmapRequest(),
+      originXMm: 100_001,
+    })).toContain("периметра X");
+    expect(validateHeightmapRequest({
+      ...defaultHeightmapRequest(),
+      probeFeedMmPerMin: 1_001,
+    })).toContain("Подача щупа");
+    expect(validateHeightmapRequest({
+      ...defaultHeightmapRequest(),
+      travelFeedMmPerMin: 5,
+    })).toContain("Подача перехода");
+  });
+
   it("derives a safe Z above a fixed plate and keeps variation operator-facing", () => {
     const request = {
       ...defaultHeightmapRequest(),
@@ -70,6 +104,8 @@ describe("heightmapModel", () => {
       clearanceZMm: 2,
     };
     expect(heightmapSafeWorkZ(request)).toBe(21.1);
+    expect(heightmapCalibrationPlateThickness(request, 3)).toBe(19.1);
+    expect(heightmapCalibrationPlateThickness(defaultHeightmapRequest(), 3)).toBe(3);
     const next = withHeightmapSurfaceVariation(request, 1.5);
     expect(next.maxProbeDepthMm).toBe(3.5);
     expect(heightmapSurfaceVariation(next)).toBe(1.5);

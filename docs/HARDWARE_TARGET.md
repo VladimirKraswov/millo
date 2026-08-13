@@ -152,10 +152,19 @@ rendering, never the number of physical contacts.
 
 The operator first touches the highest intended point and establishes surface
 Z0; no stock thickness measurement is required for direct conductive probing.
-The safe travel plane is `surface Z0 + clearance`. For strong relief, maximum
-surface variation is the bounded distance below that highest point that each
-probe may search. It must cover the expected relief plus margin, but it remains
-finite so a missing surface cannot send Z downward indefinitely.
+The safe travel plane is `surface Z0 + clearance`. `First contact` is the
+bounded search used once to establish Z0. `Maximum surface variation` is the
+separate bounded distance below that highest point that every grid contact may
+search. It must cover the expected relief plus margin, but it remains finite so
+a missing surface cannot send Z downward indefinitely. There is no PCB/relief
+mode switch: both shapes use the same contact algorithm and differ only in this
+physical search limit.
+
+Direct contact may optionally use a removable measured plate for the first Z0
+touch only; remove it before the grid. Fixed-plate contact instead assumes one
+continuous measured plate covering the complete perimeter. Its single thickness
+is used for both Z0 and every grid sample, so two plate offsets cannot be added
+accidentally.
 
 For each serpentine point the command actor requires connected stable Idle and
 an open probe input, raises to the absolute safe plane, moves absolute work XY,

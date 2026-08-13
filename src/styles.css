@@ -3333,19 +3333,6 @@ textarea:focus-visible {
   margin-top: 14px;
 }
 
-.z-probe-mode {
-  display: flex;
-  min-height: 50px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  margin-top: 10px;
-  padding: 0 12px;
-  border: 1px solid #2c3840;
-  border-radius: 5px;
-  background: #0e1519;
-}
-
 .probe-workflow-selector {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3404,54 +3391,6 @@ textarea:focus-visible {
 
 .probe-mode-empty small {
   font-size: 9px;
-}
-
-.z-probe-mode > span {
-  display: grid;
-  gap: 3px;
-}
-
-.z-probe-mode strong {
-  color: #d5dee3;
-  font-size: 10px;
-}
-
-.z-probe-mode small {
-  color: #7e8b93;
-  font-size: 9px;
-}
-
-.z-probe-mode input {
-  position: relative;
-  width: 32px;
-  height: 17px;
-  flex: 0 0 auto;
-  appearance: none;
-  border: 1px solid #45525a;
-  border-radius: 9px;
-  background: #202a30;
-  cursor: pointer;
-}
-
-.z-probe-mode input::after {
-  position: absolute;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  background: #8d989e;
-  content: "";
-  inset: 2px auto auto 2px;
-  transition: transform 120ms ease, background 120ms ease;
-}
-
-.z-probe-mode input:checked {
-  border-color: #53987f;
-  background: #1c4c3c;
-}
-
-.z-probe-mode input:checked::after {
-  background: #7ad7b4;
-  transform: translateX(15px);
 }
 
 .z-probe-fields > label,
@@ -3578,10 +3517,6 @@ textarea:focus-visible {
   border-top: 1px solid #2b363e;
 }
 
-.z-probe-actions.is-off {
-  grid-template-columns: 1fr;
-}
-
 .heightmap-workspace {
   display: grid;
   min-height: 0;
@@ -3599,7 +3534,7 @@ textarea:focus-visible {
 
 .heightmap-visual {
   display: grid;
-  grid-template-rows: 38px minmax(360px, 1fr) 35px;
+  grid-template-rows: 38px minmax(360px, 1fr);
   border: 1px solid #2b373e;
   border-radius: 5px;
   overflow: hidden;
@@ -3607,6 +3542,8 @@ textarea:focus-visible {
 }
 
 .heightmap-visual-toolbar {
+  position: relative;
+  z-index: 4;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3645,6 +3582,63 @@ textarea:focus-visible {
 .heightmap-view-tabs.compact button {
   min-height: 24px;
   padding: 0 7px;
+}
+
+.heightmap-view-controls {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.heightmap-layer-menu {
+  position: relative;
+}
+
+.heightmap-layer-menu summary {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 7px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: #829097;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 650;
+  list-style: none;
+}
+
+.heightmap-layer-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.heightmap-layer-menu[open] summary {
+  border-color: #3f554e;
+  color: #d3e9e0;
+  background: #18241f;
+}
+
+.heightmap-layer-menu > div {
+  position: absolute;
+  z-index: 6;
+  display: grid;
+  width: 220px;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #3c4951;
+  border-radius: 4px;
+  inset: 30px 0 auto auto;
+  background: #11191e;
+  box-shadow: 0 12px 30px #0009;
+}
+
+.heightmap-layer-menu > div > label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #a5b1b6;
+  font-size: 8px;
 }
 
 .heightmap-visual-stage {
@@ -3701,26 +3695,8 @@ textarea:focus-visible {
   background: linear-gradient(90deg, #3ba8d8, #72d6b1, #ffb55c);
 }
 
-.heightmap-layers {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 0 10px;
-  border-top: 1px solid #273239;
-  color: #839198;
-  background: #10171b;
-  font-size: 8px;
-}
-
-.heightmap-layers label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.heightmap-layers input,
+.heightmap-layer-menu input,
 .heightmap-contact-mode input,
-.heightmap-confirm input,
 .heightmap-interpolation-settings input[type="checkbox"] {
   width: 13px;
   height: 13px;
@@ -3729,8 +3705,15 @@ textarea:focus-visible {
 }
 
 .heightmap-settings {
-  overflow: auto;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+
+.heightmap-settings-scroll {
+  min-height: 0;
   padding-right: 3px;
+  overflow: auto;
 }
 
 .heightmap-settings section {
@@ -3801,44 +3784,9 @@ textarea:focus-visible {
 
 .heightmap-surface-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
   margin: 7px 0;
-}
-
-.heightmap-shape-selector {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 5px;
-  margin: 7px 0;
-}
-
-.heightmap-shape-selector button {
-  display: grid;
-  min-height: 40px;
-  align-content: center;
-  gap: 2px;
-  padding: 0 8px;
-  border: 1px solid #344149;
-  border-radius: 3px;
-  color: #9aa8ae;
-  background: #11191e;
-  text-align: left;
-}
-
-.heightmap-shape-selector button[aria-pressed="true"] {
-  border-color: #53987f;
-  color: #dff6ed;
-  background: #173128;
-}
-
-.heightmap-shape-selector strong {
-  font-size: 8px;
-}
-
-.heightmap-shape-selector small {
-  color: #76858c;
-  font-size: 7px;
 }
 
 .heightmap-surface-controls > label {
@@ -3866,6 +3814,13 @@ textarea:focus-visible {
   background: #0d1418;
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 9px;
+}
+
+.heightmap-surface-hint {
+  margin: 0 0 8px;
+  color: #718087;
+  font-size: 7px;
+  line-height: 1.4;
 }
 
 .heightmap-surface-actions {
@@ -4114,12 +4069,24 @@ textarea:focus-visible {
   font-size: 8px;
 }
 
+.heightmap-fixed-plate-note {
+  margin: 8px 0 0;
+  padding: 7px 8px;
+  border-left: 2px solid #4f987e;
+  color: #8fa79e;
+  background: #101d18;
+  font-size: 8px;
+  line-height: 1.4;
+}
+
 .heightmap-interpolation-settings {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 50px auto 50px;
+  grid-template-columns: minmax(0, 1fr) 46px auto 46px;
   align-items: center;
   gap: 5px;
-  margin-top: 10px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid #2e3a41;
   color: #7d8b92;
   font-size: 8px;
 }
@@ -4131,6 +4098,10 @@ textarea:focus-visible {
   gap: 5px;
 }
 
+.heightmap-interpolation-settings input[type="number"] {
+  height: 26px;
+}
+
 .heightmap-safe-z-note {
   margin: 7px 0 0;
   color: #718087;
@@ -4140,9 +4111,15 @@ textarea:focus-visible {
 
 .heightmap-progress {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 42px;
+  grid-template-columns: minmax(0, 1fr) auto 28px;
   gap: 7px 10px;
-  padding: 12px 0 8px;
+  align-items: center;
+  padding: 0 0 7px;
+}
+
+.heightmap-progress.is-empty {
+  visibility: hidden;
 }
 
 .heightmap-progress > span {
@@ -4167,6 +4144,19 @@ textarea:focus-visible {
   background: #28333a;
 }
 
+.heightmap-progress .icon-only {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #49383b;
+  border-radius: 3px;
+  color: #d9898c;
+  background: #211719;
+  cursor: pointer;
+}
+
 .heightmap-progress > i b {
   display: block;
   height: 100%;
@@ -4174,19 +4164,7 @@ textarea:focus-visible {
   transition: width 160ms ease;
 }
 
-.heightmap-confirm {
-  display: grid;
-  min-height: 42px;
-  grid-template-columns: 16px minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-  color: #aeb9be;
-  font-size: 8px;
-  line-height: 1.4;
-}
-
-.heightmap-primary-actions,
-.heightmap-session-actions {
+.heightmap-primary-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
@@ -4196,8 +4174,7 @@ textarea:focus-visible {
   grid-template-columns: 1fr;
 }
 
-.heightmap-primary-actions button,
-.heightmap-session-actions button {
+.heightmap-primary-actions button {
   display: inline-flex;
   min-height: 36px;
   align-items: center;
@@ -4224,14 +4201,10 @@ textarea:focus-visible {
   background: #4b2528;
 }
 
-.heightmap-session-actions {
-  grid-template-columns: minmax(0, 1fr) 36px;
-  margin-top: 6px;
-}
-
-.heightmap-session-actions .icon-only {
-  padding: 0;
-  color: #d9898c;
+.heightmap-action-dock {
+  padding: 8px 3px 0 0;
+  border-top: 1px solid #2c373e;
+  background: #11181c;
 }
 
 .heightmap-status-message {
@@ -4240,6 +4213,10 @@ textarea:focus-visible {
   color: #74828a;
   font-size: 8px;
   line-height: 1.45;
+}
+
+.heightmap-status-message.is-empty {
+  visibility: hidden;
 }
 
 .heightmap-status-message.is-error {
@@ -4398,11 +4375,36 @@ textarea:focus-visible {
   }
 
   .heightmap-visual {
-    min-height: 430px;
+    min-height: 390px;
   }
 
   .heightmap-settings {
-    overflow: visible;
+    order: -1;
+    height: min(520px, max(400px, calc(100vh - 310px)));
+    overflow: hidden;
+  }
+
+  .heightmap-settings-scroll {
+    overflow: auto;
+  }
+
+  .heightmap-action-dock {
+    padding: 8px 0;
+  }
+}
+
+@media (max-width: 620px) {
+  .probe-workflow-selector strong {
+    font-size: 9px;
+  }
+
+  .probe-workflow-selector small {
+    display: none;
+  }
+
+  .heightmap-surface-controls,
+  .heightmap-field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 

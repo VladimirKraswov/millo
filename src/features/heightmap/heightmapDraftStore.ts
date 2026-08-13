@@ -9,7 +9,6 @@ export interface HeightmapDraft {
   readonly marginMm: number;
   readonly surfaceSearchMm: number;
   readonly zeroPlateThicknessMm: number;
-  readonly surfaceShape: "flat" | "relief";
 }
 
 const storageKey = (profileId?: string): string =>
@@ -56,10 +55,16 @@ export const loadHeightmapDraft = (
       !["sparse", "normal", "precise", "custom"].includes(draft.density ?? "") ||
       !finite(draft.marginMm) ||
       !finite(draft.surfaceSearchMm) ||
-      !finite(draft.zeroPlateThicknessMm) ||
-      !["flat", "relief"].includes(draft.surfaceShape ?? "")
+      !finite(draft.zeroPlateThicknessMm)
     ) return undefined;
-    return draft as HeightmapDraft;
+    return {
+      schemaVersion: 2,
+      request: draft.request,
+      density: draft.density,
+      marginMm: draft.marginMm,
+      surfaceSearchMm: draft.surfaceSearchMm,
+      zeroPlateThicknessMm: draft.zeroPlateThicknessMm,
+    } as HeightmapDraft;
   } catch {
     return undefined;
   }
@@ -89,5 +94,4 @@ export const initialHeightmapDraft = (
     marginMm: 1,
     surfaceSearchMm: 10,
     zeroPlateThicknessMm: 0,
-    surfaceShape: "flat",
   };

@@ -111,8 +111,9 @@ map is checkpointed in a separate atomic `surface-session.json`; a partial
 replacement never overwrites the preceding completed map, and restart always
 requires fixture/work-zero reconfirmation.
 The map workspace first finds the highest surface point as Z0, then provides
-automatic program bounds with margin, flat/strong-relief search presets,
-physical grid density, perimeter validation, coordinate-labelled values, and a Three.js
+automatic program bounds with margin, separate bounded limits for the first Z0
+contact and per-point surface variation, physical grid density, perimeter
+validation, coordinate-labelled values, and a Three.js
 low-to-high surface view. See [ADR 0052](docs/decisions/0052-workpiece-heightmap-session.md).
 
 Returning to an existing work zero is a different typed motion command. The

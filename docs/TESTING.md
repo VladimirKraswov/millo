@@ -811,4 +811,8 @@ real coordinate headers, explicit empty cells, and a stable low-to-high color
 scale. Visual verification uses `/?fixture=heightmap` at wide and 820 px
 viewports. It must show one perimeter, program motion outside it in red, probe
 points, a nonblank colored mesh, and a numeric view with absolute Z plus delta;
-`NaN` is never accepted.
+`NaN` is never accepted. The wide layout keeps the action dock visible while
+only settings scroll. The 820 px layout places setup before preview without
+overlap or horizontal scrolling. `PCB/relief` presets and a permanent layer
+checkbox row are regressions: actual first-contact and surface-variation limits
+remain visible, while rendering layers live in the on-demand `Слои` menu.
