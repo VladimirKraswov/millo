@@ -801,6 +801,12 @@ Idle. It then discards the exact operation sequence and proves that no motion wa
 published. Production Tauri persists the pending surface session between this
 prepare phase and the matching commit, so fast mock runs cannot outrun their
 first durable checkpoint.
+The start-readiness fixture reproduces the hardware-observed race where the UI
+action arrives while the last controller status is still `Run`. The actor polls
+without dispatching motion, accepts a fresh `Idle` within three seconds, and
+still proves that neither `$J` nor `G38.x` is written before durable commit.
+Companion fixtures prove that realtime Hold remains serviceable during this
+wait and that an active sender is rejected as Busy without emitting `G38.x`.
 The IPC contract is pinned on both sides: Vitest serializes the complete
 webview request with `originXMm`, `originYMm` and `clearanceZMm`, while a Rust
 fixture deserializes that same camelCase shape into `HeightmapStartRequest`.

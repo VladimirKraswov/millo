@@ -178,12 +178,16 @@ the physical-run operator pause state while GRBL is in Check.
   the prepared sender without writing a G-code block.
 - Heightmap Start uses the same durable-start shape. `prepare_heightmap` performs
   bounded-plan, fresh-Idle, probe-input, WCS and modal checks but does not publish
-  an active operation or send `$J`/`G38.3`. Tauri atomically creates the pending
-  workpiece session, then commits the exact operation sequence. A failed write
-  discards the preparation; Reset may preempt either phase. While prepared, the
-  actor rejects every ordinary machine command with typed Busy, so no motion can
-  invalidate the evidence between validation and commit or execute later by
-  surprise.
+  an active operation or send `$J`/`G38.3`. Pure configuration and operation
+  checks run first. If fresh status then reports a trailing `Run`/`Jog`, the
+  public arbiter handle performs bounded readiness stabilization as separate
+  status requests. This leaves the actor free to process Hold and Reset while
+  motion settles, without touching a controller for an invalid configuration.
+  Tauri then atomically creates the pending workpiece session and commits the
+  exact operation sequence. A failed write discards the
+  preparation; Reset may preempt either phase. The actor repeats the Busy and
+  fresh-Idle checks at commit-sensitive boundaries, so a concurrent sender or
+  motion cannot invalidate earlier evidence or execute later by surprise.
 - Recovery planning is pure and motion-free. It reparses the stored source,
   verifies its fingerprint, and creates one of two explicit programs. Proven
   continuity plus `Ln:` rewinds to the latest preceding rapid at clearance;

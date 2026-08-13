@@ -5,6 +5,7 @@ import type {
   ProbePoint,
 } from "../../shared/heightmap";
 import type { ProgramBounds } from "../../shared/program";
+import { describeProbeReadinessFailure } from "../probe/probeReadinessModel";
 
 export type HeightmapDensity = "sparse" | "normal" | "precise" | "custom";
 
@@ -102,6 +103,8 @@ export const describeHeightmapFailure = (
   searchMm: number,
 ): string | undefined => {
   if (!error) return undefined;
+  const readiness = describeProbeReadinessFailure(error, "измерению");
+  if (readiness) return readiness;
   if (error.includes("probe did not contact") || error.includes("ALARM:5")) {
     return `Щуп не коснулся поверхности в пределах ${searchMm.toFixed(1)} mm. Увеличьте диапазон или подведите фрезу ближе.`;
   }

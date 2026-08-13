@@ -11,6 +11,7 @@ import type {
 import type { GcodeProgram } from "../../shared/program";
 import { defaultZProbeSettings } from "../../shared/profile";
 import { HeightmapPanel } from "../heightmap/HeightmapPanel";
+import { describeProbeReadinessFailure } from "./probeReadinessModel";
 import {
   validateZProbeRunSettings,
   validateZProbeSettings,
@@ -116,7 +117,7 @@ export function ZProbeDialog({
     void onSaveSettings(next)
       .then(() => setStatus("idle"))
       .catch((error) => {
-        const message = String(error);
+        const message = describeProbeReadinessFailure(error, "касанию") ?? String(error);
         setStatus("error");
         setLocalError(message);
         onError(message);
@@ -136,7 +137,7 @@ export function ZProbeDialog({
       setStatus("idle");
       return true;
     } catch (error) {
-      const message = String(error);
+      const message = describeProbeReadinessFailure(error, "касанию") ?? String(error);
       setStatus("error");
       setLocalError(message);
       onError(message);
@@ -154,7 +155,7 @@ export function ZProbeDialog({
       setStatus("complete");
       setConfirmed(false);
     } catch (error) {
-      const message = String(error);
+      const message = describeProbeReadinessFailure(error, "касанию") ?? String(error);
       if (abortRequested.current && message.includes("interrupted by controller reset")) {
         setStatus("stopped");
         setConfirmed(false);
@@ -178,7 +179,7 @@ export function ZProbeDialog({
       onError(undefined);
     } catch (error) {
       abortRequested.current = false;
-      const message = String(error);
+      const message = describeProbeReadinessFailure(error, "касанию") ?? String(error);
       setLocalError(message);
       onError(message);
     }

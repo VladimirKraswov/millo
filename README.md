@@ -115,6 +115,9 @@ automatic program bounds with margin, separate bounded limits for the first Z0
 contact and per-point surface variation, physical grid density, perimeter
 validation, coordinate-labelled values, and a Three.js
 low-to-high surface view. See [ADR 0052](docs/decisions/0052-workpiece-heightmap-session.md).
+The implementation choices and follow-up ideas taken from GRBL, Candle, CNCjs,
+bCNC, and UGS are recorded in
+[Probing and heightmap comparison](docs/PROBING_COMPARISON.md).
 
 Returning to an existing work zero is a different typed motion command. The
 actor emits one absolute `$J=G90 G21 <axis>0` only after fresh `Idle`, `$G`,

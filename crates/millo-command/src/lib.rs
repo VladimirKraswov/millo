@@ -58,6 +58,7 @@ use tokio::{
 const REQUEST_CAPACITY: usize = 32;
 const WORK_ZERO_TOLERANCE_MM: f64 = 0.002;
 const SENDER_RESPONSE_SLICE: Duration = Duration::from_millis(10);
+const PROBE_START_SETTLE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Error)]
 pub enum ArbiterError {
@@ -122,6 +123,22 @@ pub enum ArbiterError {
     ZProbeRetractTimeout(u64),
     #[error("Z probe was interrupted by controller reset")]
     ZProbeReset,
+    #[error(
+        "probe start is blocked: connection {connection:?}, mode {mode:?}, alarm {alarm_active}, reset acknowledgement pending {reset_pending}"
+    )]
+    ProbeStartBlocked {
+        connection: ConnectionState,
+        mode: MachineMode,
+        alarm_active: bool,
+        reset_pending: bool,
+    },
+    #[error(
+        "probe start timed out after {timeout_ms} ms waiting for Idle (last mode {last_mode:?})"
+    )]
+    ProbeStartSettleTimeout {
+        timeout_ms: u64,
+        last_mode: MachineMode,
+    },
     #[error(transparent)]
     Heightmap(#[from] HeightmapError),
     #[error("heightmap requires confirmation that the entire perimeter is clear and reachable")]
@@ -634,8 +651,17 @@ impl CommandArbiter {
     }
 
     pub async fn probe_z(&self, request: ZProbeRequest) -> Result<ZProbeOutcome, ArbiterError> {
-        self.call(|response| Request::ProbeZ { request, response })
+        match self
+            .call(|response| Request::ProbeZ { request, response })
             .await
+        {
+            Err(error) if probe_start_can_settle(&error) => {
+                self.wait_for_probe_start_idle().await?;
+                self.call(|response| Request::ProbeZ { request, response })
+                    .await
+            }
+            result => result,
+        }
     }
 
     #[cfg(test)]
@@ -662,8 +688,69 @@ impl CommandArbiter {
         &self,
         request: HeightmapStartRequest,
     ) -> Result<HeightmapOperationSnapshot, ArbiterError> {
-        self.call(|response| Request::PrepareHeightmap { request, response })
+        match self
+            .call(|response| Request::PrepareHeightmap {
+                request: request.clone(),
+                response,
+            })
             .await
+        {
+            Err(error) if probe_start_can_settle(&error) => {
+                self.wait_for_probe_start_idle().await?;
+                self.call(|response| Request::PrepareHeightmap { request, response })
+                    .await
+            }
+            result => result,
+        }
+    }
+
+    async fn wait_for_probe_start_idle(&self) -> Result<ControllerSnapshot, ArbiterError> {
+        let started = Instant::now();
+        loop {
+            if sender_is_active(&self.sender_snapshot())
+                || matches!(
+                    self.heightmap_snapshot().state,
+                    HeightmapOperationState::Running | HeightmapOperationState::Paused
+                )
+            {
+                return Err(ArbiterError::MachineOperationBusy);
+            }
+
+            let current = self.snapshot();
+            if current.connection != ConnectionState::Connected
+                || current.alarm.is_some()
+                || current.reset_notice.is_some()
+            {
+                return Err(probe_start_blocked(&current));
+            }
+
+            let snapshot = self.refresh_status().await?;
+            if snapshot.connection != ConnectionState::Connected
+                || snapshot.alarm.is_some()
+                || snapshot.reset_notice.is_some()
+            {
+                return Err(probe_start_blocked(&snapshot));
+            }
+
+            match snapshot.machine.mode {
+                MachineMode::Idle => return Ok(snapshot),
+                MachineMode::Run | MachineMode::Jog
+                    if started.elapsed() < PROBE_START_SETTLE_TIMEOUT =>
+                {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+                MachineMode::Run | MachineMode::Jog => {
+                    return Err(ArbiterError::ProbeStartSettleTimeout {
+                        timeout_ms: PROBE_START_SETTLE_TIMEOUT
+                            .as_millis()
+                            .try_into()
+                            .unwrap_or(u64::MAX),
+                        last_mode: snapshot.machine.mode,
+                    });
+                }
+                _ => return Err(probe_start_blocked(&snapshot)),
+            }
+        }
     }
 
     pub async fn commit_prepared_heightmap(
@@ -1566,13 +1653,13 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         }
         Request::ProbeZ { request, response } => {
             invalidate_authorizations(safety, first_cut);
+            let sender_busy = sender_is_active(&sender.snapshot());
             let result = if active_z_probe.is_some()
                 || prepared_heightmap.is_some()
                 || active_heightmap.is_some()
+                || sender_busy
             {
-                Err(ArbiterError::Controller(
-                    ControllerError::ProgramResponseState("a probe operation is already active"),
-                ))
+                Err(ArbiterError::MachineOperationBusy)
             } else {
                 begin_z_probe(controller, hardware_profile, request).await
             };
@@ -1596,13 +1683,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         }
         Request::PrepareHeightmap { request, response } => {
             invalidate_authorizations(safety, first_cut);
-            let sender_busy = !matches!(
-                sender.snapshot().state,
-                SenderState::Idle
-                    | SenderState::Completed
-                    | SenderState::Failed
-                    | SenderState::Cancelled
-            );
+            let sender_busy = sender_is_active(&sender.snapshot());
             let result = if active_z_probe.is_some()
                 || prepared_heightmap.is_some()
                 || active_heightmap.is_some()
@@ -2603,7 +2684,7 @@ async fn begin_z_probe(
     validate_z_probe_settings(request.settings)?;
 
     let before = controller.refresh_status().await?;
-    ensure_stable_idle(&before)?;
+    ensure_probe_start_idle(&before)?;
     if before.machine.pins.as_ref().is_some_and(|pins| pins.probe) {
         return Err(ArbiterError::ZProbeInputAlreadyActive);
     }
@@ -2616,7 +2697,7 @@ async fn begin_z_probe(
         .ok_or(ArbiterError::ActiveWorkCoordinateSystemUnavailable)?;
     let restore_modal = restore_probe_modal_command(&modal.modal_state);
 
-    ensure_stable_idle(&controller.snapshot())?;
+    ensure_probe_start_idle(&controller.snapshot())?;
     let (command, _) = controller
         .begin_z_probe(
             request.settings.max_travel_mm,
@@ -2669,7 +2750,7 @@ async fn begin_heightmap(
     }
     let map = Heightmap::new(plan_heightmap(request.plan, travel)?);
     let before = controller.refresh_status().await?;
-    ensure_stable_idle(&before)?;
+    ensure_probe_start_idle(&before)?;
     if before.machine.pins.as_ref().is_some_and(|pins| pins.probe) {
         return Err(ArbiterError::ZProbeInputAlreadyActive);
     }
@@ -3366,6 +3447,50 @@ fn restore_probe_modal_command(modal: &[String]) -> String {
         "G94"
     };
     format!("G0 {units} {distance} {feed}")
+}
+
+fn probe_start_blocked(snapshot: &ControllerSnapshot) -> ArbiterError {
+    ArbiterError::ProbeStartBlocked {
+        connection: snapshot.connection,
+        mode: snapshot.machine.mode,
+        alarm_active: snapshot.alarm.is_some(),
+        reset_pending: snapshot.reset_notice.is_some(),
+    }
+}
+
+fn ensure_probe_start_idle(snapshot: &ControllerSnapshot) -> Result<(), ArbiterError> {
+    if snapshot.connection == ConnectionState::Connected
+        && snapshot.machine.mode == MachineMode::Idle
+        && snapshot.alarm.is_none()
+        && snapshot.reset_notice.is_none()
+    {
+        Ok(())
+    } else {
+        Err(probe_start_blocked(snapshot))
+    }
+}
+
+fn probe_start_can_settle(error: &ArbiterError) -> bool {
+    matches!(
+        error,
+        ArbiterError::ProbeStartBlocked {
+            connection: ConnectionState::Connected,
+            mode: MachineMode::Run | MachineMode::Jog,
+            alarm_active: false,
+            reset_pending: false,
+        }
+    )
+}
+
+fn sender_is_active(snapshot: &SenderSnapshot) -> bool {
+    matches!(
+        snapshot.state,
+        SenderState::Ready
+            | SenderState::Running
+            | SenderState::Paused
+            | SenderState::ToolChange
+            | SenderState::Draining
+    )
 }
 
 async fn wait_for_idle_after_probe(
@@ -4970,6 +5095,121 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn z_probe_start_waits_for_a_previous_motion_to_reach_idle() {
+        let transport = MockTransport::with_status(
+            "<Run|MPos:10.000,20.000,10.000|WPos:10.000,20.000,10.000|FS:100,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::WorkZero;
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(100),
+                failures_before_recovery: 2,
+            },
+            profile,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let settle_control = control.clone();
+        let settle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            settle_control
+                .set_status("<Idle|MPos:10.000,20.000,10.000|WPos:10.000,20.000,10.000|FS:0,0>");
+        });
+        let outcome = arbiter.probe_z(z_probe_request()).await.unwrap();
+        settle.await.unwrap();
+
+        assert_eq!(outcome.contact_machine_position.z, 9.0);
+        let writes = control.writes();
+        let modal_index = writes
+            .iter()
+            .position(|write| write.as_slice() == b"$G\n")
+            .unwrap();
+        assert!(
+            writes[..modal_index]
+                .iter()
+                .filter(|write| write.as_slice() == b"?")
+                .count()
+                >= 2
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn probe_start_wait_keeps_realtime_hold_available() {
+        let transport = MockTransport::with_status(
+            "<Run|MPos:10.000,20.000,10.000|WPos:10.000,20.000,10.000|FS:100,0>",
+        );
+        let control = transport.control();
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::WorkZero;
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(100),
+                failures_before_recovery: 2,
+            },
+            profile,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let probe_arbiter = arbiter.clone();
+        let probe = tokio::spawn(async move { probe_arbiter.probe_z(z_probe_request()).await });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        arbiter
+            .send_realtime(RealtimeCommand::FeedHold)
+            .await
+            .unwrap();
+
+        assert!(matches!(
+            probe.await.unwrap(),
+            Err(ArbiterError::ProbeStartBlocked {
+                mode: MachineMode::Hold,
+                ..
+            })
+        ));
+        let writes = control.writes();
+        assert!(writes.iter().any(|write| write.as_slice() == b"!"));
+        assert!(!writes.iter().any(|write| write.starts_with(b"G38.")));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn probe_start_is_rejected_while_sender_is_active() {
+        let (arbiter, control, worker) = mock_dry_run_arbiter();
+        control.queue_program_stall();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.refresh_status().await.unwrap();
+        arbiter
+            .start_dry_run(dry_run_plan("G21 G90\nG1 X10 F100"))
+            .await
+            .unwrap();
+
+        let error = arbiter.probe_z(z_probe_request()).await.unwrap_err();
+
+        assert!(matches!(error, ArbiterError::MachineOperationBusy));
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"G38."))
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn heightmap_mode_can_calibrate_direct_surface_z_zero() {
         let transport = MockTransport::with_status(
             "<Idle|MPos:10.000,20.000,5.000|WPos:10.000,20.000,5.000|FS:0,0>",
@@ -5106,6 +5346,63 @@ mod tests {
                 .iter()
                 .any(|write| { write.starts_with(b"$J=") || write.starts_with(b"G38.") })
         );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn heightmap_start_waits_for_a_previous_motion_to_reach_idle() {
+        let transport = MockTransport::with_status(
+            "<Run|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:100,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(100),
+                failures_before_recovery: 2,
+            },
+            profile,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let settle_control = control.clone();
+        let settle = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            settle_control
+                .set_status("<Idle|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:0,0>");
+        });
+        let prepared = arbiter
+            .prepare_heightmap(heightmap_request())
+            .await
+            .unwrap();
+        settle.await.unwrap();
+
+        assert_eq!(prepared.state, HeightmapOperationState::Running);
+        assert!(
+            control
+                .writes()
+                .iter()
+                .filter(|write| write.as_slice() == b"?")
+                .count()
+                >= 2
+        );
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"$J=") || write.starts_with(b"G38."))
+        );
+        arbiter
+            .discard_prepared_heightmap(prepared.operation_sequence)
+            .await
+            .unwrap();
         task.abort();
     }
 

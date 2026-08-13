@@ -176,6 +176,13 @@ modal restoration. The panel draft is persisted per machine so closing the
 dialog or unlocking an alarm does not erase the perimeter and density; physical
 surface calibration is intentionally never persisted as valid evidence.
 
+After pure setup validation, the arbiter tolerates the short `Run`/`Jog` tail
+reported by GRBL after a previous acknowledged move. It sends status queries
+only and waits up to three seconds for fresh `Idle`; it never starts probing
+from `Run`. Alarm, reset acknowledgement, another controller mode, timeout, or
+loss of connection remain hard blockers and are reported separately in the
+operator UI.
+
 `surface-session.json` atomically checkpoints the pending operation beside the
 last completed active map. Only all successful contacts replace active data.
 On restart the numeric matrix and 3D mesh can be inspected, but compensation is
