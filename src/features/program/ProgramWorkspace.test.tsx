@@ -10,7 +10,7 @@ import {
 } from "./previewFixtureFirstCut";
 
 describe("ProgramWorkspace completed-run workflow", () => {
-  it("puts Z0 return beside the repeat-run action", () => {
+  it("puts one safe work-origin return beside the repeat-run action", () => {
     const markup = renderToStaticMarkup(
       <ProgramWorkspace
         desktopRuntime={false}
@@ -23,10 +23,12 @@ describe("ProgramWorkspace completed-run workflow", () => {
           busy: false,
           machineBound: true,
           machineName: "Fixture CNC",
+          machineSyncing: false,
           onAcknowledgeReset: () => undefined,
           onConnect: () => undefined,
           onOpenWorkZero: () => undefined,
-          onReturnToWorkZero: async () => undefined,
+          onReturnToWorkOrigin: async () => undefined,
+          onSyncMachine: () => undefined,
           onUnlock: () => undefined,
           snapshot: {
             ...emptySnapshot,
@@ -46,9 +48,8 @@ describe("ProgramWorkspace completed-run workflow", () => {
       />,
     );
 
-    expect(markup).toContain("Вернуть фрезу к Z0");
+    expect(markup).toContain("Вернуться в рабочий ноль");
     expect(markup).toContain("Подготовить повторный запуск");
-    expect(markup).toContain("Z0 → Jog Z− → Только Z");
     expect(markup).toContain("aria-label=\"Редактировать G-code\"");
   });
 });

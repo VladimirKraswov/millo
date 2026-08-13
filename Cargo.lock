@@ -2063,6 +2063,7 @@ dependencies = [
  "millo-domain",
  "millo-dry-run",
  "millo-gcode",
+ "millo-grbl",
  "millo-heightmap",
  "millo-journal",
  "millo-mock",
@@ -2096,7 +2097,9 @@ dependencies = [
 name = "millo-dry-run"
 version = "0.1.0"
 dependencies = [
+ "millo-domain",
  "millo-gcode",
+ "millo-heightmap",
  "serde",
  "thiserror 2.0.20",
 ]
@@ -2124,6 +2127,7 @@ dependencies = [
 name = "millo-heightmap"
 version = "0.1.0"
 dependencies = [
+ "millo-domain",
  "millo-storage",
  "serde",
  "serde_json",

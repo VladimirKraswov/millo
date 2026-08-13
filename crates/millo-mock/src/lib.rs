@@ -424,8 +424,18 @@ impl Transport for MockTransport {
             }
         } else if let Some(jog) = parse_xy_jog(data) {
             let mut position = status_position(&state.status_line).unwrap_or([0.0; 3]);
-            let x_mm = jog.x_mm * state.jog_distance_scale;
-            let y_mm = jog.y_mm * state.jog_distance_scale;
+            let intended_x = if jog.absolute {
+                state.work_offsets[state.active_wcs][0] + jog.x_mm - position[0]
+            } else {
+                jog.x_mm
+            };
+            let intended_y = if jog.absolute {
+                state.work_offsets[state.active_wcs][1] + jog.y_mm - position[1]
+            } else {
+                jog.y_mm
+            };
+            let x_mm = intended_x * state.jog_distance_scale;
+            let y_mm = intended_y * state.jog_distance_scale;
             let distance_mm = x_mm.hypot(y_mm);
             position[0] += x_mm;
             position[1] += y_mm;
@@ -436,7 +446,7 @@ impl Transport for MockTransport {
                 axis: 0,
                 distance_mm,
                 feed_mm_per_min: jog.feed_mm_per_min,
-                absolute: false,
+                absolute: jog.absolute,
             });
             state
                 .active_reads
@@ -568,16 +578,24 @@ struct MockXyJog {
     x_mm: f64,
     y_mm: f64,
     feed_mm_per_min: f64,
+    absolute: bool,
 }
 
 fn parse_xy_jog(data: &[u8]) -> Option<MockXyJog> {
     let command = std::str::from_utf8(data)
         .ok()?
         .trim_end_matches(['\r', '\n']);
-    let words = command
-        .strip_prefix("$J=G91 G21 ")?
-        .split_whitespace()
-        .collect::<Vec<_>>();
+    let (words, absolute) = if let Some(words) = command.strip_prefix("$J=G91 G21 ") {
+        (words.split_whitespace().collect::<Vec<_>>(), false)
+    } else {
+        (
+            command
+                .strip_prefix("$J=G90 G21 ")?
+                .split_whitespace()
+                .collect::<Vec<_>>(),
+            true,
+        )
+    };
     if words.len() != 3 {
         return None;
     }
@@ -585,6 +603,7 @@ fn parse_xy_jog(data: &[u8]) -> Option<MockXyJog> {
         x_mm: words[0].strip_prefix('X')?.parse().ok()?,
         y_mm: words[1].strip_prefix('Y')?.parse().ok()?,
         feed_mm_per_min: words[2].strip_prefix('F')?.parse().ok()?,
+        absolute,
     })
 }
 

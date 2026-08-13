@@ -9,6 +9,8 @@ import type {
   OperatorConfirmation,
   OverrideAdjustment,
   RapidOverrideTarget,
+  ReturnToWorkOriginOutcome,
+  ReturnToWorkOriginRequest,
   ReturnToWorkZeroOutcome,
   ReturnToWorkZeroRequest,
   ResetChallenge,
@@ -28,6 +30,7 @@ import type {
 } from "../shared/settings";
 import type {
   HeightmapOperationSnapshot,
+  HeightmapResumeRequest,
   HeightmapStartRequest,
   SurfaceSession,
 } from "../shared/heightmap";
@@ -130,6 +133,11 @@ export const returnToWorkZero = (
 ): Promise<ReturnToWorkZeroOutcome> =>
   invoke<ReturnToWorkZeroOutcome>("return_to_work_zero", { request });
 
+export const returnToWorkOrigin = (
+  request: ReturnToWorkOriginRequest,
+): Promise<ReturnToWorkOriginOutcome> =>
+  invoke<ReturnToWorkOriginOutcome>("return_to_work_origin", { request });
+
 export const runZProbe = (request: ZProbeRequest): Promise<ZProbeOutcome> =>
   invoke<ZProbeOutcome>("probe_z", { request });
 
@@ -144,6 +152,12 @@ export const startHeightmap = (
   machineProfileId: string,
 ): Promise<HeightmapOperationSnapshot> =>
   invoke<HeightmapOperationSnapshot>("start_heightmap", { request, machineProfileId });
+
+export const resumeHeightmapDraft = (
+  request: HeightmapResumeRequest,
+  machineProfileId: string,
+): Promise<HeightmapOperationSnapshot> =>
+  invoke<HeightmapOperationSnapshot>("resume_heightmap_draft", { request, machineProfileId });
 
 export const pauseHeightmap = (): Promise<HeightmapOperationSnapshot> =>
   invoke<HeightmapOperationSnapshot>("pause_heightmap");
@@ -162,6 +176,9 @@ export const setHeightmapApplication = (
 
 export const clearSurfaceSession = (): Promise<SurfaceSession> =>
   invoke<SurfaceSession>("clear_surface_session");
+
+export const discardHeightmapDraft = (): Promise<SurfaceSession> =>
+  invoke<SurfaceSession>("discard_heightmap_draft");
 
 export const onHeightmapState = (
   handler: (snapshot: HeightmapOperationSnapshot) => void,

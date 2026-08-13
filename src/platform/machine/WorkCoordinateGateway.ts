@@ -1,4 +1,6 @@
 import type {
+  ReturnToWorkOriginOutcome,
+  ReturnToWorkOriginRequest,
   ReturnToWorkZeroOutcome,
   ReturnToWorkZeroRequest,
   WorkZeroOutcome,
@@ -8,4 +10,5 @@ import type {
 export interface WorkCoordinateGateway {
   setZero(request: WorkZeroRequest): Promise<WorkZeroOutcome>;
   returnToZero(request: ReturnToWorkZeroRequest): Promise<ReturnToWorkZeroOutcome>;
+  returnToOrigin?(request: ReturnToWorkOriginRequest): Promise<ReturnToWorkOriginOutcome>;
 }

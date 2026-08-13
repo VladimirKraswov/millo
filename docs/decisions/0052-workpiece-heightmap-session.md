@@ -2,6 +2,13 @@
 
 Status: accepted
 
+## Coordinate and Z-datum Amendment
+
+Each new map stores active G54-G59 and effective WCO. The first successful map
+contact establishes and verifies surface Z0. Compensation uses relative height
+(`sample - first sample`), never raw work-coordinate Z. A G10 mutation, WCS/WCO
+mismatch, or legacy map without a binding makes the map display-only.
+
 ## Problem
 
 A heightmap describes one mounted workpiece and its current work zero, not the
@@ -22,6 +29,10 @@ acknowledgement, reads `PRB` through `$#`, records surface Z without writing
 preemptive. Each internal jog must finish at its expected work target within
 0.05 mm. Failure sends Feed Hold and Soft Reset, publishes a quarantined failed
 snapshot, and issues no automatic recovery motion from an untrusted coordinate.
+An ordinary `G38.3` no-contact result is the narrow exception: when fresh status
+still proves the same connected Idle controller and work coordinates, the actor
+raises to its measured-safe transit plane and restores modal state without a
+Soft Reset. Any failure during that recovery falls back to quarantine.
 
 Map data lives in `surface-session.json`, separate from machine profiles. A
 pending map is checkpointed atomically while the preceding active map remains
@@ -68,13 +79,49 @@ requires a new touch. In particular, changing the perimeter or contact setup
 invalidates the highest-point calibration; changing only density or rendering
 does not.
 
+`maximum probe depth` is defined as reserve below calibrated work Z0. It is not
+the total move from safe clearance: the actual bounded `G38.3` travel is
+`clearance + reserve`. On a miss or operator cancellation, the pending map keeps
+its contiguous measured prefix beside the previous complete map. Explicit
+resume creates a new operation sequence, revalidates the selected profile,
+fresh Idle/A5/WCS/modal state, and continues at the first empty sample. The grid,
+contact mode and measured values are immutable; only the lower search reserve
+may increase. A persisted Running draft after process or power loss is never
+continued automatically and requires the same explicit resume action.
+
 The settings column owns its own scroll area and a stable action dock, so Start,
 Pause, Stop, progress, and failures remain visible without moving the surrounding
 layout. Below 900 px, settings precede the preview because completing the setup
 is the next operator action. Saved map geometry always renders from its own
 stored perimeter; editing the next plan cannot stretch old measurements into a
-false surface. A restored map is explicitly view-only until a future typed
-sender compensation boundary exists.
+false surface.
+
+Applying a map is deliberately separate from selecting an A5 probe workflow.
+Off, Work Zero, and Heightmap control which new measurement the operator can
+start. A saved map is enabled for one mounted workpiece from the Program
+readiness card with `Компенсировать по карте`. The switch is visible only for
+the selected machine profile and includes the map identity, physical grid,
+perimeter, and measured Z range. It is disabled when the loaded XY toolpath is
+outside the measured perimeter. Restart disarms it. A successful one-point Z
+zero also disarms it because that operation changed the coordinate datum in
+which the map was measured; the map remains available for inspection.
+
+Map application is a typed Rust sender transformation, not a UI offset. The
+map ID is part of `ProgramExecutionOptions`, the GRBL Check certificate, the
+one-use run authorization, and the recovery seed. Tauri resolves that ID to the
+active immutable map for preflight, `$C`, and physical dispatch. A replacement,
+profile mismatch, disabled session, missing sample, unsupported modal state, or
+motion outside the map fails closed before sender start.
+
+The transformer requires metric absolute G94 motion in the XY plane. It
+linearizes previewed arcs and subdivides long moves to at most half the physical
+probe spacing, bounded to 0.25..1 mm, then bilinearly interpolates measured
+surface Z. Nominal cutting Z at or below zero receives the full correction.
+Between Z0 and the configured clearance the correction fades linearly to avoid
+an abrupt Z step; at and above clearance it is zero. Safe rapid motion may be
+outside the map, but every point that receives non-zero compensation must be
+inside it. The transformed stream is bounded to 200,000 lines and retains the
+original source-line identity for diagnostics and recovery.
 
 ## Consequences
 
@@ -86,6 +133,7 @@ sender compensation boundary exists.
   data survives, but applying it requires manual work-zero restoration.
 - Numeric values never use `NaN`; unmeasured cells are visibly empty.
 - Display interpolation can become smoother without increasing probe motion.
-- Actual G-code compensation is a separate typed transformation boundary. Until
-  that transform is connected to sender planning, storage application state is
-  recovery intent, not permission to alter outgoing coordinates.
+- GRBL Check and physical execution consume the same compensated sender plan.
+- Changing the map selection invalidates preflight and the prior `$C`
+  certificate, preventing a checked path from differing from the dispatched
+  path.

@@ -128,6 +128,9 @@ export function MachineProfiles({
             disabled={locked || busy || state.profiles.length === 0}
             onChange={(event) => void onSelect(event.target.value)}
             value={selected?.id ?? ""}
+            title={locked
+              ? "Профиль определяется подключённым контроллером. Для ручной смены сначала отключите станок."
+              : "Выбрать профиль станка"}
           >
             {!selected && <option value="">Не выбран</option>}
             {state.profiles.map((profile) => (
@@ -137,7 +140,14 @@ export function MachineProfiles({
             ))}
           </select>
         </label>
-        <small>{selected ? formatMachineTravel(selected) : "Нужен профиль"}</small>
+        <small title={locked
+          ? "Профиль привязан к текущему подключению"
+          : undefined}
+        >
+          {selected
+            ? `${locked ? "Привязан · " : ""}${formatMachineTravel(selected)}`
+            : "Нужен профиль"}
+        </small>
         <button
           aria-label="Настройки станка"
           disabled={busy || !selected || Boolean(onboardingDraft)}

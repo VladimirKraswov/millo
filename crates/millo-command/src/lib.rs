@@ -11,13 +11,14 @@ use millo_domain::{
     CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot, DeviceInspection,
     HardwareInspection, HardwareProfile, JogPadStepOutcome, JogPadStepRequest, MachineMode,
     OperatorConfirmation, OverrideAdjustment, Position, ProbeWorkflowMode, RapidOverrideTarget,
-    ResetChallenge, ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest, StepJogReceipt,
-    StepJogRequest, TestJogPreparation, WorkAxis, WorkCoordinateSystem, WorkZeroOutcome,
-    WorkZeroRequest, ZProbeOutcome, ZProbeRequest, ZProbeSettings,
+    ResetChallenge, ReturnToWorkOriginOutcome, ReturnToWorkOriginRequest, ReturnToWorkZeroOutcome,
+    ReturnToWorkZeroRequest, StepJogReceipt, StepJogRequest, TestJogPreparation, WorkAxis,
+    WorkCoordinateSystem, WorkZeroOutcome, WorkZeroRequest, ZProbeOutcome, ZProbeRequest,
+    ZProbeSettings,
 };
 use millo_dry_run::{
     DryRunLineKind, DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy,
-    build_program_run_plan_with_options,
+    build_program_run_plan_with_heightmap,
 };
 use millo_gcode::GcodeProgram;
 use millo_grbl::{
@@ -28,8 +29,9 @@ use millo_grbl::{
 #[cfg(test)]
 use millo_heightmap::HeightmapContactMode;
 use millo_heightmap::{
-    Heightmap, HeightmapError, HeightmapOperationSnapshot, HeightmapOperationState,
-    HeightmapStartRequest, HeightmapTravelLimits, plan_heightmap,
+    Heightmap, HeightmapCoordinateBinding, HeightmapError, HeightmapOperationSnapshot,
+    HeightmapOperationState, HeightmapResumeRequest, HeightmapStartRequest, HeightmapTravelLimits,
+    plan_heightmap,
 };
 use millo_readiness::assess;
 use millo_run::program_fingerprint;
@@ -292,6 +294,7 @@ impl CommandArbiter {
             first_cut: FirstCutGate::default(),
             program_check: ProgramCheckGate::default(),
             pending_program_check: None,
+            verified_z_datum: None,
             active_z_probe: None,
             prepared_heightmap: None,
             active_heightmap: None,
@@ -431,10 +434,22 @@ impl CommandArbiter {
         intent: ProgramRunIntent,
         execution_options: ProgramExecutionOptions,
     ) -> Result<RunPreflightReport, ArbiterError> {
+        self.preflight_real_run_with_heightmap(program, intent, execution_options, None)
+            .await
+    }
+
+    pub async fn preflight_real_run_with_heightmap(
+        &self,
+        program: GcodeProgram,
+        intent: ProgramRunIntent,
+        execution_options: ProgramExecutionOptions,
+        heightmap: Option<Heightmap>,
+    ) -> Result<RunPreflightReport, ArbiterError> {
         self.call(|response| Request::PreflightRealRun {
             program,
             intent,
             execution_options,
+            heightmap,
             response,
         })
         .await
@@ -445,9 +460,20 @@ impl CommandArbiter {
         program: GcodeProgram,
         confirmation: FirstCutConfirmation,
     ) -> Result<FirstCutPreparation, ArbiterError> {
+        self.authorize_first_cut_with_heightmap(program, confirmation, None)
+            .await
+    }
+
+    pub async fn authorize_first_cut_with_heightmap(
+        &self,
+        program: GcodeProgram,
+        confirmation: FirstCutConfirmation,
+        heightmap: Option<Heightmap>,
+    ) -> Result<FirstCutPreparation, ArbiterError> {
         self.call(|response| Request::AuthorizeFirstCut {
             program,
             confirmation,
+            heightmap,
             require_check_certificate: true,
             response,
         })
@@ -463,6 +489,7 @@ impl CommandArbiter {
         self.call(|response| Request::AuthorizeFirstCut {
             program,
             confirmation,
+            heightmap: None,
             require_check_certificate: false,
             response,
         })
@@ -474,10 +501,22 @@ impl CommandArbiter {
         program: GcodeProgram,
         authorization_id: u64,
     ) -> Result<SenderSnapshot, ArbiterError> {
+        self.start_program_run_with_heightmap(program, authorization_id, None, true)
+            .await
+    }
+
+    pub async fn start_program_run_with_heightmap(
+        &self,
+        program: GcodeProgram,
+        authorization_id: u64,
+        heightmap: Option<Heightmap>,
+        dispatch_immediately: bool,
+    ) -> Result<SenderSnapshot, ArbiterError> {
         self.call(|response| Request::StartProgramRun {
             program,
             authorization_id,
-            dispatch_immediately: true,
+            heightmap,
+            dispatch_immediately,
             response,
         })
         .await
@@ -488,13 +527,18 @@ impl CommandArbiter {
         program: GcodeProgram,
         authorization_id: u64,
     ) -> Result<SenderSnapshot, ArbiterError> {
-        self.call(|response| Request::StartProgramRun {
-            program,
-            authorization_id,
-            dispatch_immediately: false,
-            response,
-        })
-        .await
+        self.start_program_run_with_heightmap(program, authorization_id, None, false)
+            .await
+    }
+
+    pub async fn prepare_program_run_with_heightmap(
+        &self,
+        program: GcodeProgram,
+        authorization_id: u64,
+        heightmap: Option<Heightmap>,
+    ) -> Result<SenderSnapshot, ArbiterError> {
+        self.start_program_run_with_heightmap(program, authorization_id, heightmap, false)
+            .await
     }
 
     pub async fn commit_prepared_program_run(
@@ -532,9 +576,20 @@ impl CommandArbiter {
         program: GcodeProgram,
         execution_options: ProgramExecutionOptions,
     ) -> Result<SenderSnapshot, ArbiterError> {
+        self.start_check_run_with_heightmap(program, execution_options, None)
+            .await
+    }
+
+    pub async fn start_check_run_with_heightmap(
+        &self,
+        program: GcodeProgram,
+        execution_options: ProgramExecutionOptions,
+        heightmap: Option<Heightmap>,
+    ) -> Result<SenderSnapshot, ArbiterError> {
         self.call(|response| Request::StartCheckRun {
             program,
             execution_options,
+            heightmap,
             response,
         })
         .await
@@ -659,6 +714,14 @@ impl CommandArbiter {
             .await
     }
 
+    pub async fn return_to_work_origin(
+        &self,
+        request: ReturnToWorkOriginRequest,
+    ) -> Result<ReturnToWorkOriginOutcome, ArbiterError> {
+        self.call(|response| Request::ReturnToWorkOrigin { request, response })
+            .await
+    }
+
     pub async fn probe_z(&self, request: ZProbeRequest) -> Result<ZProbeOutcome, ArbiterError> {
         match self
             .call(|response| Request::ProbeZ { request, response })
@@ -708,6 +771,32 @@ impl CommandArbiter {
                 self.wait_for_probe_start_idle().await?;
                 self.call(|response| Request::PrepareHeightmap { request, response })
                     .await
+            }
+            result => result,
+        }
+    }
+
+    pub async fn prepare_resume_heightmap(
+        &self,
+        map: Heightmap,
+        request: HeightmapResumeRequest,
+    ) -> Result<HeightmapOperationSnapshot, ArbiterError> {
+        match self
+            .call(|response| Request::PrepareResumeHeightmap {
+                map: map.clone(),
+                request,
+                response,
+            })
+            .await
+        {
+            Err(error) if probe_start_can_settle(&error) => {
+                self.wait_for_probe_start_idle().await?;
+                self.call(|response| Request::PrepareResumeHeightmap {
+                    map,
+                    request,
+                    response,
+                })
+                .await
             }
             result => result,
         }
@@ -829,6 +918,7 @@ impl CommandArbiter {
         self.call(|response| Request::StartProgramRun {
             program,
             authorization_id,
+            heightmap: None,
             dispatch_immediately,
             response,
         })
@@ -905,23 +995,27 @@ enum Request {
         program: GcodeProgram,
         intent: ProgramRunIntent,
         execution_options: ProgramExecutionOptions,
+        heightmap: Option<Heightmap>,
         response: oneshot::Sender<Result<RunPreflightReport, ArbiterError>>,
     },
     AuthorizeFirstCut {
         program: GcodeProgram,
         confirmation: FirstCutConfirmation,
+        heightmap: Option<Heightmap>,
         require_check_certificate: bool,
         response: oneshot::Sender<Result<FirstCutPreparation, ArbiterError>>,
     },
     StartProgramRun {
         program: GcodeProgram,
         authorization_id: u64,
+        heightmap: Option<Heightmap>,
         dispatch_immediately: bool,
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
     StartCheckRun {
         program: GcodeProgram,
         execution_options: ProgramExecutionOptions,
+        heightmap: Option<Heightmap>,
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
     ResumeProgramRun {
@@ -974,12 +1068,21 @@ enum Request {
         request: ReturnToWorkZeroRequest,
         response: oneshot::Sender<Result<ReturnToWorkZeroOutcome, ArbiterError>>,
     },
+    ReturnToWorkOrigin {
+        request: ReturnToWorkOriginRequest,
+        response: oneshot::Sender<Result<ReturnToWorkOriginOutcome, ArbiterError>>,
+    },
     ProbeZ {
         request: ZProbeRequest,
         response: oneshot::Sender<Result<ZProbeOutcome, ArbiterError>>,
     },
     PrepareHeightmap {
         request: HeightmapStartRequest,
+        response: oneshot::Sender<Result<HeightmapOperationSnapshot, ArbiterError>>,
+    },
+    PrepareResumeHeightmap {
+        map: Heightmap,
+        request: HeightmapResumeRequest,
         response: oneshot::Sender<Result<HeightmapOperationSnapshot, ArbiterError>>,
     },
     CommitPreparedHeightmap {
@@ -1033,6 +1136,7 @@ struct ActorState {
     first_cut: FirstCutGate,
     program_check: ProgramCheckGate,
     pending_program_check: Option<ProgramCheckBinding>,
+    verified_z_datum: Option<VerifiedZDatum>,
     active_z_probe: Option<ActiveZProbe>,
     prepared_heightmap: Option<ActiveHeightmap>,
     active_heightmap: Option<ActiveHeightmap>,
@@ -1040,6 +1144,13 @@ struct ActorState {
     snapshots: watch::Sender<ControllerSnapshot>,
     sender_snapshots: watch::Sender<SenderSnapshot>,
     heightmap_snapshots: watch::Sender<HeightmapOperationSnapshot>,
+}
+
+#[derive(Clone, Copy)]
+struct VerifiedZDatum {
+    binding: HeightmapCoordinateBinding,
+    reset_count: u64,
+    reconnect_count: u32,
 }
 
 struct ActiveZProbe {
@@ -1069,6 +1180,7 @@ struct ActiveHeightmap {
     last_work_xy: Option<(f64, f64)>,
     last_work_z: Option<f64>,
     highest_measured_surface_z: f64,
+    establish_z_zero_on_first_contact: bool,
 }
 
 enum HeightmapPhase {
@@ -1210,6 +1322,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         first_cut,
         program_check,
         pending_program_check,
+        verified_z_datum,
         active_z_probe,
         prepared_heightmap,
         active_heightmap,
@@ -1242,6 +1355,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             invalidate_authorizations(safety, first_cut);
             program_check.invalidate();
             *pending_program_check = None;
+            *verified_z_datum = None;
             cancel_active_sender(sender, sender_snapshots);
             *sender_dispatch_enabled = true;
             *controller = Controller::with_config(transport, *config);
@@ -1255,6 +1369,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 invalidate_authorizations(safety, first_cut);
                 program_check.invalidate();
                 *pending_program_check = None;
+                *verified_z_datum = None;
                 cancel_active_sender(sender, sender_snapshots);
                 *sender_dispatch_enabled = true;
                 controller.connect().await.map_err(ArbiterError::from)
@@ -1268,6 +1383,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let connection = controller.snapshot().connection;
             let result = if connection == ConnectionState::Disconnected {
                 invalidate_authorizations(safety, first_cut);
+                *verified_z_datum = None;
                 *hardware_profile = profile;
                 Ok(hardware_profile.clone())
             } else {
@@ -1278,6 +1394,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         Request::BindHardwareProfile { profile, response } => {
             let result = ensure_profile_binding_available(&controller.snapshot()).map(|()| {
                 invalidate_authorizations(safety, first_cut);
+                *verified_z_datum = None;
                 *hardware_profile = profile;
                 hardware_profile.clone()
             });
@@ -1302,6 +1419,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             .await;
             program_check.invalidate();
             *pending_program_check = None;
+            *verified_z_datum = None;
             cancel_active_sender(sender, sender_snapshots);
             *sender_dispatch_enabled = true;
             let result = controller.disconnect().await.map_err(ArbiterError::from);
@@ -1377,6 +1495,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             program,
             intent,
             execution_options,
+            heightmap,
             response,
         } => {
             first_cut.invalidate();
@@ -1388,9 +1507,12 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                     hardware_profile,
                     program_check,
                     program,
-                    intent,
-                    execution_options,
-                    true,
+                    RealRunPreflightContext {
+                        intent,
+                        execution_options,
+                        heightmap: heightmap.as_ref(),
+                        require_check_certificate: true,
+                    },
                 )
                 .await
             };
@@ -1400,6 +1522,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         Request::AuthorizeFirstCut {
             program,
             confirmation,
+            heightmap,
             require_check_certificate,
             response,
         } => {
@@ -1417,9 +1540,12 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                     hardware_profile,
                     first_cut,
                     program_check,
-                    program,
-                    confirmation,
-                    require_check_certificate,
+                    FirstCutAuthorizationContext {
+                        program,
+                        confirmation,
+                        heightmap: heightmap.as_ref(),
+                        require_check_certificate,
+                    },
                 )
                 .await
             };
@@ -1429,6 +1555,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         Request::StartProgramRun {
             program,
             authorization_id,
+            heightmap,
             dispatch_immediately,
             response,
         } => {
@@ -1441,6 +1568,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                     sender,
                     program,
                     authorization_id,
+                    heightmap.as_ref(),
                 )
                 .await
             };
@@ -1452,6 +1580,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         Request::StartCheckRun {
             program,
             execution_options,
+            heightmap,
             response,
         } => {
             *sender_dispatch_enabled = true;
@@ -1459,7 +1588,14 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let result = if *execution_target != ExecutionTarget::Serial {
                 Err(ArbiterError::CheckRunTransportUnavailable)
             } else {
-                execute_check_run_start(controller, sender, &program, execution_options).await
+                execute_check_run_start(
+                    controller,
+                    sender,
+                    &program,
+                    execution_options,
+                    heightmap.as_ref(),
+                )
+                .await
             };
             if result.is_ok() {
                 program_check.invalidate();
@@ -1526,6 +1662,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             if command == RealtimeCommand::SoftReset {
                 program_check.invalidate();
                 *pending_program_check = None;
+                *verified_z_datum = None;
             }
             let controller_result = if command == RealtimeCommand::Status
                 && (sender.has_in_flight()
@@ -1597,6 +1734,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                     first_cut.invalidate();
                     program_check.invalidate();
                     *pending_program_check = None;
+                    *verified_z_datum = None;
                     let controller_result =
                         controller.send_realtime(RealtimeCommand::SoftReset).await;
                     match &controller_result {
@@ -1684,13 +1822,43 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         }
         Request::SetWorkZero { request, response } => {
             invalidate_authorizations(safety, first_cut);
+            let previous_z_datum = *verified_z_datum;
+            let axis = request.axis;
             let result = execute_set_work_zero(controller, request).await;
+            if let Ok(outcome) = &result {
+                let current =
+                    verified_z_datum_from_snapshot(outcome.coordinate_system, &outcome.snapshot);
+                let preserve_z_datum = axis == WorkAxis::Z
+                    || previous_z_datum.is_some_and(|previous| {
+                        current.is_some_and(|current| {
+                            previous.reset_count == current.reset_count
+                                && previous.reconnect_count == current.reconnect_count
+                                && previous.binding.coordinate_system
+                                    == current.binding.coordinate_system
+                                && (previous.binding.work_coordinate_offset.z
+                                    - current.binding.work_coordinate_offset.z)
+                                    .abs()
+                                    <= 0.01
+                        })
+                    });
+                *verified_z_datum = if preserve_z_datum { current } else { None };
+            }
             publish(snapshots, controller);
             let _ = response.send(result);
         }
         Request::ReturnToWorkZero { request, response } => {
             invalidate_authorizations(safety, first_cut);
             let result = execute_return_to_work_zero(controller, hardware_profile, request).await;
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::ReturnToWorkOrigin { request, response } => {
+            invalidate_authorizations(safety, first_cut);
+            let result = if sender_is_active(&sender.snapshot()) {
+                Err(ArbiterError::MachineOperationBusy)
+            } else {
+                execute_return_to_work_origin(controller, hardware_profile, request).await
+            };
             publish(snapshots, controller);
             let _ = response.send(result);
         }
@@ -1735,7 +1903,50 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 Err(ArbiterError::MachineOperationBusy)
             } else {
                 *heightmap_sequence = heightmap_sequence.saturating_add(1);
-                begin_heightmap(controller, hardware_profile, request, *heightmap_sequence).await
+                begin_heightmap(
+                    controller,
+                    hardware_profile,
+                    request,
+                    *heightmap_sequence,
+                    *verified_z_datum,
+                )
+                .await
+            };
+            match result {
+                Ok(active) => {
+                    let snapshot = heightmap_operation_snapshot(&active);
+                    *prepared_heightmap = Some(active);
+                    let _ = response.send(Ok(snapshot));
+                }
+                Err(error) => {
+                    let _ = response.send(Err(error));
+                }
+            }
+            publish(snapshots, controller);
+        }
+        Request::PrepareResumeHeightmap {
+            map,
+            request,
+            response,
+        } => {
+            invalidate_authorizations(safety, first_cut);
+            let sender_busy = sender_is_active(&sender.snapshot());
+            let result = if active_z_probe.is_some()
+                || prepared_heightmap.is_some()
+                || active_heightmap.is_some()
+                || sender_busy
+            {
+                Err(ArbiterError::MachineOperationBusy)
+            } else {
+                *heightmap_sequence = heightmap_sequence.saturating_add(1);
+                begin_resumed_heightmap(
+                    controller,
+                    hardware_profile,
+                    map,
+                    request,
+                    *heightmap_sequence,
+                )
+                .await
             };
             match result {
                 Ok(active) => {
@@ -1947,15 +2158,26 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
     }
 }
 
+struct RealRunPreflightContext<'a> {
+    intent: ProgramRunIntent,
+    execution_options: ProgramExecutionOptions,
+    heightmap: Option<&'a Heightmap>,
+    require_check_certificate: bool,
+}
+
 async fn execute_real_run_preflight(
     controller: &mut Controller<BoxedTransport>,
     hardware_profile: &HardwareProfile,
     program_check: &mut ProgramCheckGate,
     program: GcodeProgram,
-    intent: ProgramRunIntent,
-    execution_options: ProgramExecutionOptions,
-    require_check_certificate: bool,
+    context: RealRunPreflightContext<'_>,
 ) -> Result<RunPreflightReport, ArbiterError> {
+    let RealRunPreflightContext {
+        intent,
+        execution_options,
+        heightmap,
+        require_check_certificate,
+    } = context;
     controller.refresh_status().await?;
     ensure_stable_idle(&controller.snapshot())?;
     let device = controller.inspect_device().await?;
@@ -1970,6 +2192,7 @@ async fn execute_real_run_preflight(
         intent,
         execution_options,
     );
+    apply_heightmap_preflight(&mut report, &program, intent, execution_options, heightmap);
     if require_check_certificate
         && (intent == ProgramRunIntent::Cutting || requires_safe_start_check(&program))
     {
@@ -2018,23 +2241,80 @@ fn apply_program_check_requirement(
     }
 }
 
+fn apply_heightmap_preflight(
+    report: &mut RunPreflightReport,
+    program: &GcodeProgram,
+    intent: ProgramRunIntent,
+    execution_options: ProgramExecutionOptions,
+    heightmap: Option<&Heightmap>,
+) {
+    if execution_options.surface_map_id.is_none() {
+        return;
+    }
+    let policy = match intent {
+        ProgramRunIntent::AirRun => ProgramRunPolicy::AirRun,
+        ProgramRunIntent::Cutting => ProgramRunPolicy::Cutting,
+    };
+    match build_program_run_plan_with_heightmap(program, policy, execution_options, heightmap) {
+        Ok(plan) => report.checks.push(RunPreflightCheck {
+            id: "heightmap-compensation".to_owned(),
+            level: RunPreflightLevel::Pass,
+            title: "Heightmap compensation".to_owned(),
+            detail: format!(
+                "Map #{} covers the program; {} compensated sender block(s) prepared",
+                execution_options.surface_map_id.unwrap_or_default(),
+                plan.lines().len()
+            ),
+            source_line: None,
+        }),
+        Err(error) => {
+            report.ready = false;
+            report.blocker_count = report.blocker_count.saturating_add(1);
+            report.checks.push(RunPreflightCheck {
+                id: "heightmap-compensation".to_owned(),
+                level: RunPreflightLevel::Blocker,
+                title: "Heightmap compensation".to_owned(),
+                detail: error.to_string(),
+                source_line: error
+                    .blockers()
+                    .first()
+                    .and_then(|blocker| blocker.source_line),
+            });
+        }
+    }
+}
+
+struct FirstCutAuthorizationContext<'a> {
+    program: GcodeProgram,
+    confirmation: FirstCutConfirmation,
+    heightmap: Option<&'a Heightmap>,
+    require_check_certificate: bool,
+}
+
 async fn execute_first_cut_authorization(
     controller: &mut Controller<BoxedTransport>,
     hardware_profile: &HardwareProfile,
     first_cut: &mut FirstCutGate,
     program_check: &mut ProgramCheckGate,
-    program: GcodeProgram,
-    confirmation: FirstCutConfirmation,
-    require_check_certificate: bool,
+    context: FirstCutAuthorizationContext<'_>,
 ) -> Result<FirstCutPreparation, ArbiterError> {
+    let FirstCutAuthorizationContext {
+        program,
+        confirmation,
+        heightmap,
+        require_check_certificate,
+    } = context;
     let report = execute_real_run_preflight(
         controller,
         hardware_profile,
         program_check,
         program,
-        confirmation.intent,
-        confirmation.execution_options,
-        require_check_certificate,
+        RealRunPreflightContext {
+            intent: confirmation.intent,
+            execution_options: confirmation.execution_options,
+            heightmap,
+            require_check_certificate,
+        },
     )
     .await?;
     let authorization = first_cut.authorize(
@@ -2055,6 +2335,7 @@ async fn execute_authorized_program_run_start(
     sender: &mut Sender,
     program: GcodeProgram,
     authorization_id: u64,
+    heightmap: Option<&Heightmap>,
 ) -> Result<SenderSnapshot, ArbiterError> {
     let sender_state = sender.snapshot().state;
     if matches!(
@@ -2075,8 +2356,12 @@ async fn execute_authorized_program_run_start(
         ProgramRunIntent::AirRun => ProgramRunPolicy::AirRun,
         ProgramRunIntent::Cutting => ProgramRunPolicy::Cutting,
     };
-    let plan =
-        build_program_run_plan_with_options(&program, policy, authorization.execution_options)?;
+    let plan = build_program_run_plan_with_heightmap(
+        &program,
+        policy,
+        authorization.execution_options,
+        heightmap,
+    )?;
     sender.configure_rx_buffer_capacity(usable_rx_buffer_capacity(
         authorization.reported_rx_buffer_bytes,
     ))?;
@@ -2092,6 +2377,7 @@ async fn execute_check_run_start(
     sender: &mut Sender,
     program: &GcodeProgram,
     execution_options: ProgramExecutionOptions,
+    heightmap: Option<&Heightmap>,
 ) -> Result<SenderSnapshot, ArbiterError> {
     let sender_state = sender.snapshot().state;
     if matches!(
@@ -2104,8 +2390,12 @@ async fn execute_check_run_start(
         return Err(SenderError::Busy(sender_state).into());
     }
 
-    let plan =
-        build_program_run_plan_with_options(program, ProgramRunPolicy::Cutting, execution_options)?;
+    let plan = build_program_run_plan_with_heightmap(
+        program,
+        ProgramRunPolicy::Cutting,
+        execution_options,
+        heightmap,
+    )?;
     let initial = controller.refresh_status().await?;
     ensure_stable_idle(&initial)?;
     let inspection = controller.inspect_device().await?;
@@ -2735,6 +3025,163 @@ async fn execute_return_to_work_zero(
     })
 }
 
+async fn execute_return_to_work_origin(
+    controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
+    request: ReturnToWorkOriginRequest,
+) -> Result<ReturnToWorkOriginOutcome, ArbiterError> {
+    validate_jog_pad_motion(0.01, request.xy_feed_mm_per_min)?;
+    validate_jog_pad_motion(0.01, request.z_feed_mm_per_min)?;
+    if !request.clearance_z_mm.is_finite() || request.clearance_z_mm < 0.1 {
+        return Err(ArbiterError::JogPadDistanceOutOfRange);
+    }
+
+    let initial = controller.refresh_status().await?;
+    ensure_stable_idle(&initial)?;
+    let mut position = verified_heightmap_work_position(&initial)?;
+    let inspection = controller.inspect_device().await?;
+    let coordinate_system = active_work_coordinate_system(&inspection.modal_state)
+        .ok_or(ArbiterError::ActiveWorkCoordinateSystemUnavailable)?;
+    ensure_stable_idle(&controller.snapshot())?;
+
+    for (axis, distance) in [
+        (millo_domain::JogAxis::X, position.x.abs()),
+        (millo_domain::JogAxis::Y, position.y.abs()),
+        (
+            millo_domain::JogAxis::Z,
+            (request.clearance_z_mm - position.z)
+                .max(0.0)
+                .max(position.z.abs()),
+        ),
+    ] {
+        let maximum = axis_travel_limit(hardware_profile, axis);
+        if distance > maximum {
+            return Err(ArbiterError::JogPadDistanceExceedsProfile {
+                axis,
+                requested: distance,
+                maximum,
+            });
+        }
+    }
+    for (axis, feed) in [
+        (millo_domain::JogAxis::X, request.xy_feed_mm_per_min),
+        (millo_domain::JogAxis::Y, request.xy_feed_mm_per_min),
+        (millo_domain::JogAxis::Z, request.z_feed_mm_per_min),
+    ] {
+        if let Some(maximum) = axis_max_rate(&inspection, axis)
+            && feed > maximum
+        {
+            return Err(ArbiterError::JogPadFeedExceedsAxisRate {
+                axis,
+                requested: feed,
+                maximum,
+            });
+        }
+    }
+
+    let mut commands = Vec::with_capacity(3);
+    let transit_z = position.z.max(request.clearance_z_mm);
+    if (position.z - transit_z).abs() > WORK_ZERO_TOLERANCE_MM {
+        let response = controller
+            .move_to_work_position(None, None, Some(transit_z), request.z_feed_mm_per_min)
+            .await?;
+        commands.push(response.command);
+        position = wait_for_work_position(
+            controller,
+            position.x,
+            position.y,
+            transit_z,
+            transit_z - position.z,
+            request.z_feed_mm_per_min,
+        )
+        .await?;
+    }
+
+    if position.x.abs() > WORK_ZERO_TOLERANCE_MM || position.y.abs() > WORK_ZERO_TOLERANCE_MM {
+        let distance = position.x.hypot(position.y);
+        let response = controller
+            .move_to_work_position(Some(0.0), Some(0.0), None, request.xy_feed_mm_per_min)
+            .await?;
+        commands.push(response.command);
+        position = wait_for_work_position(
+            controller,
+            0.0,
+            0.0,
+            transit_z,
+            distance,
+            request.xy_feed_mm_per_min,
+        )
+        .await?;
+    }
+
+    if position.z.abs() > WORK_ZERO_TOLERANCE_MM {
+        let distance = position.z.abs();
+        let response = controller
+            .move_to_work_position(None, None, Some(0.0), request.z_feed_mm_per_min)
+            .await?;
+        commands.push(response.command);
+        let _ = wait_for_work_position(
+            controller,
+            0.0,
+            0.0,
+            0.0,
+            distance,
+            request.z_feed_mm_per_min,
+        )
+        .await?;
+    }
+
+    let snapshot = controller.snapshot();
+    let verified = verified_heightmap_work_position(&snapshot)?;
+    if verified.x.abs() > HEIGHTMAP_POSITION_TOLERANCE_MM
+        || verified.y.abs() > HEIGHTMAP_POSITION_TOLERANCE_MM
+        || verified.z.abs() > HEIGHTMAP_POSITION_TOLERANCE_MM
+    {
+        return Err(ArbiterError::WorkZeroVerification(format!(
+            "safe return ended at X{:.3} Y{:.3} Z{:.3}, expected work origin",
+            verified.x, verified.y, verified.z
+        )));
+    }
+    Ok(ReturnToWorkOriginOutcome {
+        coordinate_system,
+        commands,
+        snapshot,
+    })
+}
+
+async fn wait_for_work_position(
+    controller: &mut Controller<BoxedTransport>,
+    expected_x: f64,
+    expected_y: f64,
+    expected_z: f64,
+    distance_mm: f64,
+    feed_mm_per_min: f64,
+) -> Result<Position, ArbiterError> {
+    let timeout = bounded_motion_timeout(distance_mm, feed_mm_per_min);
+    let started = Instant::now();
+    loop {
+        let snapshot = controller.refresh_status().await?;
+        match snapshot.machine.mode {
+            MachineMode::Idle => {
+                let actual = verified_heightmap_work_position(&snapshot)?;
+                verify_heightmap_axis("X", expected_x, actual.x)?;
+                verify_heightmap_axis("Y", expected_y, actual.y)?;
+                verify_heightmap_axis("Z", expected_z, actual.z)?;
+                return Ok(actual);
+            }
+            MachineMode::Jog | MachineMode::Run if started.elapsed() < timeout => {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            MachineMode::Jog | MachineMode::Run => {
+                return Err(ArbiterError::ZProbeRetractTimeout(
+                    timeout.as_millis().try_into().unwrap_or(u64::MAX),
+                ));
+            }
+            _ => ensure_stable_idle(&snapshot)?,
+        }
+    }
+}
+
 async fn begin_z_probe(
     controller: &mut Controller<BoxedTransport>,
     hardware_profile: &HardwareProfile,
@@ -2787,6 +3234,7 @@ async fn begin_heightmap(
     hardware_profile: &HardwareProfile,
     request: HeightmapStartRequest,
     operation_sequence: u64,
+    verified_z_datum: Option<VerifiedZDatum>,
 ) -> Result<ActiveHeightmap, ArbiterError> {
     if !request.setup_confirmed {
         return Err(ArbiterError::HeightmapConfirmationRequired);
@@ -2818,7 +3266,7 @@ async fn begin_heightmap(
         }
         .into());
     }
-    let map = Heightmap::new(plan_heightmap(request.plan, travel)?);
+    let mut map = Heightmap::new(plan_heightmap(request.plan, travel)?);
     let before = controller.refresh_status().await?;
     ensure_probe_start_idle(&before)?;
     if before.machine.pins.as_ref().is_some_and(|pins| pins.probe) {
@@ -2831,6 +3279,15 @@ async fn begin_heightmap(
     let coordinate_system = active_work_coordinate_system(&modal.modal_state)
         .ok_or(ArbiterError::ActiveWorkCoordinateSystemUnavailable)?;
     let parameters = query_parameters(controller).await?;
+    let current_offset =
+        effective_work_coordinate_offset_with_parameters(&before, &parameters, coordinate_system)?;
+    map.bind_coordinates(coordinate_system, current_offset);
+    let reuse_verified_z_zero = verified_z_datum.is_some_and(|datum| {
+        datum.reset_count == before.reset_count
+            && datum.reconnect_count == before.reconnect_count
+            && datum.binding.coordinate_system == coordinate_system
+            && positions_within(datum.binding.work_coordinate_offset, current_offset, 0.01)
+    });
     let current_work_x = verified_work_axis(&before, &parameters, coordinate_system, WorkAxis::X)?;
     let current_work_y = verified_work_axis(&before, &parameters, coordinate_system, WorkAxis::Y)?;
     let current_work_z = verified_work_axis(&before, &parameters, coordinate_system, WorkAxis::Z)?;
@@ -2847,6 +3304,128 @@ async fn begin_heightmap(
         last_work_xy,
         last_work_z: Some(current_work_z),
         highest_measured_surface_z: 0.0,
+        establish_z_zero_on_first_contact: !reuse_verified_z_zero,
+    })
+}
+
+async fn begin_resumed_heightmap(
+    controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
+    mut map: Heightmap,
+    request: HeightmapResumeRequest,
+    operation_sequence: u64,
+) -> Result<ActiveHeightmap, ArbiterError> {
+    if !request.setup_confirmed {
+        return Err(ArbiterError::HeightmapConfirmationRequired);
+    }
+    if !hardware_profile.probe_installed {
+        return Err(ArbiterError::ZProbeNotInstalled);
+    }
+    if hardware_profile.probe_mode != ProbeWorkflowMode::Heightmap {
+        return Err(ArbiterError::HeightmapModeDisabled);
+    }
+    if !request.contact_available_at_every_point {
+        return Err(ArbiterError::HeightmapContactUnavailable);
+    }
+    if !request.max_probe_depth_mm.is_finite()
+        || !(0.1..=100.0).contains(&request.max_probe_depth_mm)
+    {
+        return Err(HeightmapError::InvalidSetting("maximum probe depth").into());
+    }
+    let next_sequence = map
+        .samples
+        .iter()
+        .position(Option::is_none)
+        .ok_or(HeightmapError::Incomplete)?;
+    if map.samples[next_sequence + 1..].iter().any(Option::is_some) {
+        return Err(ArbiterError::HeightmapProbe(
+            "saved heightmap samples are not a contiguous prefix".to_owned(),
+        ));
+    }
+    if map.samples[..next_sequence]
+        .iter()
+        .any(|sample| sample.as_ref().is_none_or(|sample| !sample.triggered))
+    {
+        return Err(ArbiterError::HeightmapProbe(
+            "saved heightmap contains an unverified contact".to_owned(),
+        ));
+    }
+    map.plan.request.max_probe_depth_mm = request.max_probe_depth_mm;
+    let travel = hardware_profile
+        .travel_mm
+        .map(|travel| HeightmapTravelLimits {
+            x_mm: travel.x,
+            y_mm: travel.y,
+        });
+    let validated_plan = plan_heightmap(map.plan.request, travel)?;
+    if validated_plan.points != map.plan.points || validated_plan.spacing != map.plan.spacing {
+        return Err(ArbiterError::HeightmapProbe(
+            "saved heightmap grid no longer matches its plan".to_owned(),
+        ));
+    }
+    map.plan = validated_plan;
+    let safe_work_z = heightmap_safe_work_z(map.plan.request);
+    if hardware_profile
+        .travel_mm
+        .is_some_and(|travel| safe_work_z > travel.z)
+    {
+        return Err(HeightmapError::ExceedsTravel {
+            axis: "Z",
+            requested: safe_work_z,
+            maximum: hardware_profile.travel_mm.map_or(0.0, |travel| travel.z),
+        }
+        .into());
+    }
+    let before = controller.refresh_status().await?;
+    ensure_probe_start_idle(&before)?;
+    if before.machine.pins.as_ref().is_some_and(|pins| pins.probe) {
+        return Err(ArbiterError::ZProbeInputAlreadyActive);
+    }
+    let modal_response = controller
+        .query_device(millo_controller::DeviceQuery::ModalState)
+        .await?;
+    let modal = build_device_inspection(vec![modal_response]);
+    let coordinate_system = active_work_coordinate_system(&modal.modal_state)
+        .ok_or(ArbiterError::ActiveWorkCoordinateSystemUnavailable)?;
+    let binding = map.coordinate_binding.ok_or_else(|| {
+        ArbiterError::HeightmapProbe(
+            "saved heightmap has no work-coordinate binding; start a new measurement".to_owned(),
+        )
+    })?;
+    let parameters = query_parameters(controller).await?;
+    let current_offset =
+        effective_work_coordinate_offset_with_parameters(&before, &parameters, coordinate_system)?;
+    if binding.coordinate_system != coordinate_system
+        || !positions_within(binding.work_coordinate_offset, current_offset, 0.01)
+    {
+        return Err(ArbiterError::HeightmapProbe(
+            "work zero changed after this heightmap draft was measured; start a new measurement"
+                .to_owned(),
+        ));
+    }
+    let current_work_x = verified_work_axis(&before, &parameters, coordinate_system, WorkAxis::X)?;
+    let current_work_y = verified_work_axis(&before, &parameters, coordinate_system, WorkAxis::Y)?;
+    let current_work_z = verified_work_axis(&before, &parameters, coordinate_system, WorkAxis::Z)?;
+    let highest_measured_surface_z = map
+        .samples
+        .iter()
+        .filter_map(Option::as_ref)
+        .map(|sample| sample.z_mm)
+        .fold(0.0_f64, f64::max);
+    let last_work_xy = Some((current_work_x, current_work_y));
+    Ok(ActiveHeightmap {
+        map,
+        coordinate_system,
+        restore_modal: restore_probe_modal_command(&modal.modal_state),
+        next_sequence,
+        phase: HeightmapPhase::Raise,
+        paused: false,
+        operation_sequence,
+        start_work_xy: last_work_xy,
+        last_work_xy,
+        last_work_z: Some(current_work_z),
+        highest_measured_surface_z,
+        establish_z_zero_on_first_contact: false,
     })
 }
 
@@ -2886,21 +3465,82 @@ async fn poll_active_heightmap(actor: &mut ActorState) {
         return;
     }
     if let Err(error) = execute_heightmap_phase(actor).await {
-        if let Some(active) = actor.active_heightmap.take() {
-            let stop_error = quarantine_failed_heightmap(&mut actor.controller).await;
+        if let Some(mut active) = actor.active_heightmap.take() {
+            let expected_miss = matches!(&error, ArbiterError::ZProbeContactNotFound);
+            let stop_error = if expected_miss {
+                match recover_heightmap_probe_miss(&mut actor.controller, &mut active).await {
+                    Ok(()) => None,
+                    Err(recovery) => {
+                        let quarantine = quarantine_failed_heightmap(&mut actor.controller).await;
+                        Some(match quarantine {
+                            Some(stop) => {
+                                format!("{recovery}; emergency stop delivery also failed: {stop}")
+                            }
+                            None => recovery.to_string(),
+                        })
+                    }
+                }
+            } else {
+                quarantine_failed_heightmap(&mut actor.controller).await
+            };
             let mut snapshot = heightmap_operation_snapshot(&active);
             snapshot.state = HeightmapOperationState::Failed;
-            snapshot.current_sequence = None;
-            snapshot.error = Some(match stop_error {
-                Some(stop) => format!(
+            snapshot.current_sequence = Some(active.next_sequence);
+            snapshot.error = Some(match (expected_miss, stop_error) {
+                (true, Some(stop)) => format!(
+                    "{error}; automatic recovery to safe Z failed and motion was disabled: {stop}"
+                ),
+                (false, Some(stop)) => format!(
                     "{error}; automatic motion was disabled, but emergency stop delivery failed: {stop}"
                 ),
-                None => error.to_string(),
+                (_, None) => error.to_string(),
             });
             let _ = actor.heightmap_snapshots.send(snapshot);
         }
         publish(&actor.snapshots, &actor.controller);
     }
+}
+
+async fn recover_heightmap_probe_miss(
+    controller: &mut Controller<BoxedTransport>,
+    active: &mut ActiveHeightmap,
+) -> Result<(), ArbiterError> {
+    let snapshot = controller.refresh_status().await?;
+    ensure_stable_idle(&snapshot)?;
+    let current_z = verified_heightmap_work_position(&snapshot)?.z;
+    let request = active.map.plan.request;
+    let target_z = heightmap_transit_work_z(request, active.highest_measured_surface_z);
+    let distance = target_z - current_z;
+    if distance > WORK_ZERO_TOLERANCE_MM {
+        controller
+            .move_heightmap_z(distance, request.retract_feed_mm_per_min)
+            .await?;
+        let timeout = bounded_motion_timeout(distance, request.retract_feed_mm_per_min);
+        let started = Instant::now();
+        loop {
+            let snapshot = controller.refresh_status().await?;
+            match snapshot.machine.mode {
+                MachineMode::Idle => {
+                    let actual_z = verified_heightmap_work_position(&snapshot)?.z;
+                    verify_heightmap_axis("Z", target_z, actual_z)?;
+                    active.last_work_z = Some(actual_z);
+                    break;
+                }
+                MachineMode::Jog | MachineMode::Run if started.elapsed() < timeout => {}
+                MachineMode::Jog | MachineMode::Run => {
+                    return Err(ArbiterError::ZProbeRetractTimeout(
+                        timeout.as_millis().try_into().unwrap_or(u64::MAX),
+                    ));
+                }
+                _ => ensure_stable_idle(&snapshot)?,
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    }
+    controller
+        .restore_modal_state(&active.restore_modal)
+        .await?;
+    Ok(())
 }
 
 async fn quarantine_failed_heightmap(
@@ -3077,21 +3717,29 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
             let delta_x = point.x_mm - current_xy.0;
             let delta_y = point.y_mm - current_xy.1;
             let distance = delta_x.hypot(delta_y);
-            actor
-                .controller
-                .move_heightmap_xy(delta_x, delta_y, feed)
-                .await?;
-            let timeout = bounded_motion_timeout(distance, feed);
-            actor
-                .active_heightmap
-                .as_mut()
-                .ok_or(ArbiterError::HeightmapOperationUnavailable)?
-                .phase = HeightmapPhase::WaitForXy {
-                started: Instant::now(),
-                timeout,
-                target_x: point.x_mm,
-                target_y: point.y_mm,
-            };
+            if distance <= HEIGHTMAP_POSITION_TOLERANCE_MM {
+                let active = actor
+                    .active_heightmap
+                    .as_mut()
+                    .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+                active.last_work_xy = Some((point.x_mm, point.y_mm));
+                active.phase = HeightmapPhase::Probe;
+            } else {
+                actor
+                    .controller
+                    .move_heightmap_xy(delta_x, delta_y, feed)
+                    .await?;
+                let active = actor
+                    .active_heightmap
+                    .as_mut()
+                    .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+                active.phase = HeightmapPhase::WaitForXy {
+                    started: Instant::now(),
+                    timeout: bounded_motion_timeout(distance, feed),
+                    target_x: point.x_mm,
+                    target_y: point.y_mm,
+                };
+            }
         }
         HeightmapPhase::WaitForXy {
             started,
@@ -3142,9 +3790,10 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
             if status.machine.pins.as_ref().is_some_and(|pins| pins.probe) {
                 return Err(ArbiterError::ZProbeInputAlreadyActive);
             }
+            let search_travel_mm = request.clearance_z_mm + request.max_probe_depth_mm;
             let (command, _) = actor
                 .controller
-                .begin_z_probe(request.max_probe_depth_mm, request.probe_feed_mm_per_min)
+                .begin_z_probe(search_travel_mm, request.probe_feed_mm_per_min)
                 .await?;
             actor
                 .active_heightmap
@@ -3194,15 +3843,52 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
             }
         }
         HeightmapPhase::RecordProbe => {
-            let parameters = query_parameters(&mut actor.controller).await?;
+            let (coordinate_system, contact_offset_mm, establishes_z_zero) = {
+                let active = actor
+                    .active_heightmap
+                    .as_ref()
+                    .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+                (
+                    active.coordinate_system,
+                    active.map.plan.request.contact_offset_mm,
+                    active.establish_z_zero_on_first_contact
+                        && active.next_sequence == 0
+                        && active.map.samples.iter().all(Option::is_none),
+                )
+            };
+            let mut parameters = query_parameters(&mut actor.controller).await?;
             let contact = parse_probe_position(&parameters)?;
+            if establishes_z_zero {
+                actor
+                    .controller
+                    .set_work_value(WorkAxis::Z, coordinate_system, contact_offset_mm)
+                    .await?;
+                parameters = query_parameters(&mut actor.controller).await?;
+                let zero_snapshot = actor.controller.refresh_status().await?;
+                ensure_stable_idle(&zero_snapshot)?;
+                verify_probe_zero_snapshot(
+                    &zero_snapshot,
+                    &parameters,
+                    coordinate_system,
+                    contact_offset_mm,
+                )?;
+                let binding_offset = effective_work_coordinate_offset(&zero_snapshot)
+                    .ok_or(ArbiterError::WorkPositionUnavailable)?;
+                actor
+                    .active_heightmap
+                    .as_mut()
+                    .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                    .map
+                    .bind_coordinates(coordinate_system, binding_offset);
+                actor.verified_z_datum =
+                    verified_z_datum_from_snapshot(coordinate_system, &zero_snapshot);
+            }
+            let contact_work_z = derive_probe_work_z(&parameters, coordinate_system, contact)?;
+            let surface_z = contact_work_z - contact_offset_mm;
             let active = actor
                 .active_heightmap
                 .as_mut()
                 .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
-            let contact_work_z =
-                derive_probe_work_z(&parameters, active.coordinate_system, contact)?;
-            let surface_z = contact_work_z - active.map.plan.request.contact_offset_mm;
             active
                 .map
                 .record_sample(active.next_sequence, surface_z, true)?;
@@ -3475,8 +4161,10 @@ fn reject_request_during_machine_operation(request: Request) {
         Request::ConfigureUnhomedOperation { response } => send_machine_operation_busy(response),
         Request::SetWorkZero { response, .. } => send_machine_operation_busy(response),
         Request::ReturnToWorkZero { response, .. } => send_machine_operation_busy(response),
+        Request::ReturnToWorkOrigin { response, .. } => send_machine_operation_busy(response),
         Request::ProbeZ { response, .. } => send_machine_operation_busy(response),
         Request::PrepareHeightmap { response, .. }
+        | Request::PrepareResumeHeightmap { response, .. }
         | Request::CommitPreparedHeightmap { response, .. }
         | Request::PauseHeightmap { response }
         | Request::ResumeHeightmap { response }
@@ -3533,6 +4221,10 @@ async fn poll_active_z_probe(actor: &mut ActorState) {
                 probe_response,
             )
             .await;
+            if let Ok(outcome) = &result {
+                actor.verified_z_datum =
+                    verified_z_datum_from_snapshot(outcome.coordinate_system, &outcome.snapshot);
+            }
             let _ = active.response.send(result);
             publish(&actor.snapshots, &actor.controller);
         }
@@ -3832,6 +4524,77 @@ fn verified_heightmap_work_position(
                 })
         })
         .ok_or(ArbiterError::WorkPositionUnavailable)
+}
+
+fn effective_work_coordinate_offset(snapshot: &ControllerSnapshot) -> Option<Position> {
+    snapshot.machine.work_coordinate_offset.or_else(|| {
+        snapshot
+            .machine
+            .machine_position
+            .zip(snapshot.machine.work_position)
+            .map(|(machine, work)| Position {
+                x: machine.x - work.x,
+                y: machine.y - work.y,
+                z: machine.z - work.z,
+                a: None,
+            })
+    })
+}
+
+fn effective_work_coordinate_offset_with_parameters(
+    snapshot: &ControllerSnapshot,
+    parameters: &DeviceInspection,
+    coordinate_system: WorkCoordinateSystem,
+) -> Result<Position, ArbiterError> {
+    if let Some(offset) = effective_work_coordinate_offset(snapshot) {
+        return Ok(offset);
+    }
+    let parameter_name = work_coordinate_parameter(coordinate_system);
+    let wcs = parameters
+        .parameters
+        .get(parameter_name)
+        .and_then(|value| parse_xyz_parameter(value))
+        .ok_or_else(|| {
+            ArbiterError::WorkZeroVerification(format!(
+                "$# did not return a valid {parameter_name} offset"
+            ))
+        })?;
+    let g92 = parameters
+        .parameters
+        .get("G92")
+        .and_then(|value| parse_xyz_parameter(value))
+        .unwrap_or([0.0; 3]);
+    let tlo = parameters
+        .parameters
+        .get("TLO")
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    Ok(Position {
+        x: wcs[0] + g92[0],
+        y: wcs[1] + g92[1],
+        z: wcs[2] + g92[2] + tlo,
+        a: None,
+    })
+}
+
+fn positions_within(left: Position, right: Position, tolerance_mm: f64) -> bool {
+    (left.x - right.x).abs() <= tolerance_mm
+        && (left.y - right.y).abs() <= tolerance_mm
+        && (left.z - right.z).abs() <= tolerance_mm
+}
+
+fn verified_z_datum_from_snapshot(
+    coordinate_system: WorkCoordinateSystem,
+    snapshot: &ControllerSnapshot,
+) -> Option<VerifiedZDatum> {
+    effective_work_coordinate_offset(snapshot).map(|work_coordinate_offset| VerifiedZDatum {
+        binding: HeightmapCoordinateBinding {
+            coordinate_system,
+            work_coordinate_offset,
+        },
+        reset_count: snapshot.reset_count,
+        reconnect_count: snapshot.reconnect_count,
+    })
 }
 
 fn verify_heightmap_axis(
@@ -4154,6 +4917,7 @@ mod tests {
             safe_z_verified: true,
             manual_spindle_running: true,
             manual_spindle_off: false,
+            probe_removed: true,
             path_clear: true,
             power_control_reachable: true,
         }
@@ -4170,6 +4934,7 @@ mod tests {
             safe_z_verified: true,
             manual_spindle_running: false,
             manual_spindle_off: true,
+            probe_removed: true,
             path_clear: true,
             power_control_reachable: true,
         }
@@ -4345,6 +5110,29 @@ mod tests {
                 poll_interval,
                 status_timeout: Duration::from_millis(20),
                 command_timeout: Duration::from_millis(50),
+                failures_before_recovery: 2,
+            },
+            HardwareProfile::first_machine(),
+            ExecutionTarget::Serial,
+        );
+        (arbiter, control, worker)
+    }
+
+    fn serial_preflight_arbiter_for_realtime_preemption() -> (
+        CommandArbiter,
+        millo_mock::MockControl,
+        impl Future<Output = ()> + Send + 'static,
+    ) {
+        let transport = MockTransport::default();
+        let control = transport.control();
+        let (arbiter, worker) = CommandArbiter::new_with_execution_target(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                // The delayed response is intentional. Keep the command alive
+                // even when the parallel workspace test runner is under load.
+                command_timeout: Duration::from_secs(1),
                 failures_before_recovery: 2,
             },
             HardwareProfile::first_machine(),
@@ -5326,6 +6114,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn safe_return_raises_z_then_returns_xy_and_z_without_mutating_work_zero() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:12.000,8.000,-0.200|WPos:12.000,8.000,-0.200|FS:0,0>",
+        );
+        let control = transport.control();
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(50),
+                failures_before_recovery: 2,
+            },
+            HardwareProfile::first_machine(),
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let outcome = arbiter
+            .return_to_work_origin(ReturnToWorkOriginRequest {
+                clearance_z_mm: 2.0,
+                xy_feed_mm_per_min: 300.0,
+                z_feed_mm_per_min: 100.0,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.coordinate_system, WorkCoordinateSystem::G54);
+        assert_eq!(
+            outcome.commands,
+            vec![
+                "$J=G90 G21 Z2.000 F100.000",
+                "$J=G90 G21 X0.000 Y0.000 F300.000",
+                "$J=G90 G21 Z0.000 F100.000",
+            ]
+        );
+        assert_eq!(
+            outcome.snapshot.machine.work_position,
+            Some(Position {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                a: None
+            })
+        );
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"G10 L20"))
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
     async fn z_probe_sets_contact_height_retracts_and_verifies_final_work_z() {
         let transport = MockTransport::with_status(
             "<Idle|MPos:10.000,20.000,10.000|WPos:10.000,20.000,10.000|FS:0,0>",
@@ -5674,7 +6517,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn heightmap_probes_a_serpentine_grid_without_mutating_work_zero() {
+    async fn heightmap_probes_a_serpentine_grid_and_establishes_z_zero_once() {
         let transport = MockTransport::with_status(
             "<Idle|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:0,0>",
         );
@@ -5727,7 +6570,13 @@ mod tests {
                 .count(),
             4
         );
-        assert!(!writes.iter().any(|write| write.starts_with(b"G10 L20")));
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|write| write.starts_with(b"G10 L20 P1 Z"))
+                .count(),
+            1
+        );
         assert_eq!(
             arbiter
                 .snapshot()
@@ -5740,6 +6589,159 @@ mod tests {
             !writes
                 .iter()
                 .any(|write| write.starts_with(b"$J=G90 G21 Z"))
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn heightmap_reuses_probe_established_z_zero_after_xy_zeroing() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:10.000,20.000,5.000|WPos:10.000,20.000,5.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(100),
+                failures_before_recovery: 2,
+            },
+            profile,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        let mut calibration = z_probe_request();
+        calibration.settings.mode = ProbeWorkflowMode::Heightmap;
+        calibration.settings.plate_thickness_mm = 0.0;
+
+        arbiter.probe_z(calibration).await.unwrap();
+        arbiter
+            .set_work_zero(work_zero_request(WorkAxis::X, true))
+            .await
+            .unwrap();
+        control.set_probe_trigger_distance(Some(2.0));
+        arbiter.start_heightmap(heightmap_request()).await.unwrap();
+        let completed = wait_for_heightmap(&arbiter, HeightmapOperationState::Completed).await;
+
+        assert!(completed.progress.complete);
+        assert_eq!(
+            control
+                .writes()
+                .iter()
+                .filter(|write| write.starts_with(b"G10 L20 P1 Z"))
+                .count(),
+            1,
+            "the map must retain the probe-established Z0 instead of writing it again",
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn heightmap_probe_miss_keeps_the_draft_and_returns_to_safe_idle_without_reset() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:0.000,0.000,2.000|WPos:0.000,0.000,2.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(None);
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) =
+            CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        arbiter.start_heightmap(heightmap_request()).await.unwrap();
+        let failed = wait_for_heightmap(&arbiter, HeightmapOperationState::Failed).await;
+
+        assert_eq!(failed.progress.measured, 0);
+        assert_eq!(failed.current_sequence, Some(0));
+        assert!(failed.error.as_deref().unwrap().contains("did not contact"));
+        assert_eq!(arbiter.snapshot().machine.mode, MachineMode::Idle);
+        assert!(arbiter.snapshot().reset_notice.is_none());
+        let writes = control.writes();
+        assert!(!writes.iter().any(|write| write.as_slice() == [0x18]));
+        assert!(
+            writes
+                .iter()
+                .any(|write| { String::from_utf8_lossy(write).contains("G38.3 Z-4.000") })
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn resumed_heightmap_keeps_saved_samples_and_probes_only_the_missing_suffix() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:12.000,20.000,2.000|WPos:12.000,20.000,2.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) =
+            CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let request = heightmap_request();
+        let mut map = Heightmap::new(plan_heightmap(request.plan, None).unwrap());
+        map.bind_coordinates(
+            WorkCoordinateSystem::G54,
+            Position {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                a: None,
+            },
+        );
+        map.record_sample(0, 0.1, true).unwrap();
+        map.record_sample(1, 0.0, true).unwrap();
+        let prepared = arbiter
+            .prepare_resume_heightmap(
+                map,
+                HeightmapResumeRequest {
+                    max_probe_depth_mm: 4.0,
+                    setup_confirmed: true,
+                    contact_available_at_every_point: true,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(prepared.progress.measured, 2);
+        assert_eq!(prepared.current_sequence, Some(2));
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"G38.3"))
+        );
+        arbiter
+            .commit_prepared_heightmap(prepared.operation_sequence)
+            .await
+            .unwrap();
+        let completed = wait_for_heightmap(&arbiter, HeightmapOperationState::Completed).await;
+
+        assert_eq!(completed.progress.measured, 4);
+        assert_eq!(completed.map.unwrap().samples[0].unwrap().z_mm, 0.1);
+        let writes = control.writes();
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|write| write.starts_with(b"G91 G21 G94 G38.3"))
+                .count(),
+            2
+        );
+        assert!(
+            writes
+                .iter()
+                .any(|write| { String::from_utf8_lossy(write).contains("G38.3 Z-6.000") })
         );
         task.abort();
     }
@@ -6458,6 +7460,7 @@ mod tests {
                 ProgramExecutionOptions {
                     optional_stop: true,
                     block_delete: false,
+                    ..ProgramExecutionOptions::default()
                 },
             )
             .await
@@ -6779,6 +7782,7 @@ mod tests {
         let options = ProgramExecutionOptions {
             optional_stop: true,
             block_delete: true,
+            ..ProgramExecutionOptions::default()
         };
         let program = parsed_program_with_options(source, options);
         let (arbiter, control, worker) = serial_preflight_arbiter();
@@ -7114,7 +8118,7 @@ mod tests {
     #[tokio::test]
     async fn feed_hold_preempts_a_delayed_program_response() {
         let source = "G21 G90 G94\nG1 X2 F20";
-        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let (arbiter, control, worker) = serial_preflight_arbiter_for_realtime_preemption();
         control.queue_program_delay(20);
         let task = tokio::spawn(worker);
         arbiter.connect().await.unwrap();
@@ -7136,7 +8140,7 @@ mod tests {
     #[tokio::test]
     async fn realtime_overrides_preempt_sender_waiting_without_pausing_it() {
         let source = "G21 G90 G94\nG1 X2 F20";
-        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let (arbiter, control, worker) = serial_preflight_arbiter_for_realtime_preemption();
         control.queue_program_delay(20);
         let task = tokio::spawn(worker);
         arbiter.connect().await.unwrap();
@@ -7175,7 +8179,7 @@ mod tests {
     #[tokio::test]
     async fn realtime_write_failure_quarantines_a_physical_sender() {
         let source = "G21 G90 G94\nG1 X2 F20";
-        let (arbiter, control, worker) = serial_preflight_arbiter();
+        let (arbiter, control, worker) = serial_preflight_arbiter_for_realtime_preemption();
         control.queue_program_delay(20);
         let task = tokio::spawn(worker);
         arbiter.connect().await.unwrap();

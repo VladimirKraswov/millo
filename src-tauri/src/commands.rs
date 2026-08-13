@@ -18,9 +18,9 @@ use millo_controller::ControllerConfig;
 use millo_domain::{
     ControllerSnapshot, DeviceInspection, HardwareInspection, HardwareProfile, JogAxis,
     JogPadStepOutcome, JogPadStepRequest, OperatorConfirmation, OverrideAdjustment,
-    RapidOverrideTarget, ResetChallenge, ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest,
-    StepJogReceipt, StepJogRequest, TestJogPreparation, WorkAxis, WorkZeroOutcome, WorkZeroRequest,
-    ZProbeOutcome, ZProbeRequest,
+    RapidOverrideTarget, ResetChallenge, ReturnToWorkOriginOutcome, ReturnToWorkOriginRequest,
+    ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest, StepJogReceipt, StepJogRequest,
+    TestJogPreparation, WorkAxis, WorkZeroOutcome, WorkZeroRequest, ZProbeOutcome, ZProbeRequest,
 };
 use millo_dry_run::{
     DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy, build_dry_run_plan,
@@ -30,9 +30,10 @@ use millo_gcode::{
     GcodeProgram, ProgramParseOptions, ProgramParseRequest, parse_program,
     parse_program_with_options,
 };
+use millo_grbl::active_work_coordinate_system;
 use millo_heightmap::{
-    HeightmapOperationSnapshot, HeightmapOperationState, HeightmapStartRequest, SurfaceSession,
-    SurfaceSessionStore,
+    HeightmapOperationSnapshot, HeightmapOperationState, HeightmapResumeRequest,
+    HeightmapStartRequest, SurfaceSession, SurfaceSessionStore,
 };
 use millo_journal::{RunJournal, RunJournalEntry};
 use millo_mock::{MockControl, MockTransport};
@@ -2026,11 +2027,30 @@ pub async fn jog_pad_step(
 #[tauri::command]
 pub async fn set_work_zero(
     request: WorkZeroRequest,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<WorkZeroOutcome, String> {
     let context = serde_json::to_value(request).unwrap_or(Value::Null);
     let result = async {
         ensure_machine_bound(&state).await?;
+        if !request.position_confirmed {
+            return state
+                .arbiter
+                .set_work_zero(request)
+                .await
+                .map_err(|error| error.to_string());
+        }
+        // Every surface sample is expressed in the current work coordinate
+        // frame, so any G10 zero write invalidates automatic application.
+        let session = state
+            .surface_session
+            .lock()
+            .map_err(|error| format!("surface session lock poisoned: {error}"))?
+            .disarm_for_coordinate_change()
+            .map_err(|error| {
+                format!("could not disarm heightmap before changing work zero: {error}")
+            })?;
+        let _ = app.emit("surface-session", session);
         state
             .arbiter
             .set_work_zero(request)
@@ -2052,11 +2072,28 @@ pub async fn set_work_zero(
 #[tauri::command]
 pub async fn probe_z(
     request: ZProbeRequest,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<ZProbeOutcome, String> {
     let context = serde_json::to_value(request).unwrap_or(Value::Null);
     let result = async {
         ensure_machine_bound(&state).await?;
+        if !request.setup_confirmed {
+            return state
+                .arbiter
+                .probe_z(request)
+                .await
+                .map_err(|error| error.to_string());
+        }
+        // A Z-zero write changes the datum of every stored surface sample. The
+        // session must be durably disarmed before any probe motion can begin.
+        let session = state
+            .surface_session
+            .lock()
+            .map_err(|error| format!("surface session lock poisoned: {error}"))?
+            .disarm_for_coordinate_change()
+            .map_err(|error| format!("could not disarm heightmap before Z probing: {error}"))?;
+        let _ = app.emit("surface-session", session);
         state
             .arbiter
             .probe_z(request)
@@ -2170,6 +2207,123 @@ pub async fn start_heightmap(
 }
 
 #[tauri::command]
+pub async fn resume_heightmap_draft(
+    request: HeightmapResumeRequest,
+    machine_profile_id: String,
+    state: State<'_, AppState>,
+) -> Result<HeightmapOperationSnapshot, String> {
+    ensure_machine_bound(&state).await?;
+    if state.arbiter.snapshot().reset_notice.is_some() {
+        state
+            .arbiter
+            .acknowledge_reset()
+            .await
+            .map_err(|error| format!("controller resynchronization failed: {error}"))?;
+    }
+    let selected = state
+        .profiles
+        .lock()
+        .await
+        .state()
+        .selected_profile_id
+        .ok_or_else(|| "select a machine profile before resuming probing".to_owned())?;
+    if selected != machine_profile_id {
+        return Err("heightmap draft does not belong to the selected machine".to_owned());
+    }
+    let previous = state
+        .surface_session
+        .lock()
+        .map_err(|error| error.to_string())?
+        .session()
+        .pending
+        .ok_or_else(|| "there is no unfinished heightmap to resume".to_owned())?;
+    if previous.machine_profile_id != machine_profile_id {
+        return Err("heightmap draft does not belong to the selected machine".to_owned());
+    }
+    if !matches!(
+        previous.operation.state,
+        HeightmapOperationState::Running
+            | HeightmapOperationState::Failed
+            | HeightmapOperationState::Cancelled
+    ) {
+        return Err("only a stopped heightmap draft can be resumed".to_owned());
+    }
+    let map = previous
+        .operation
+        .map
+        .clone()
+        .ok_or_else(|| "unfinished heightmap has no saved samples".to_owned())?;
+    let prepared = state
+        .arbiter
+        .prepare_resume_heightmap(map, request)
+        .await
+        .map_err(|error| error.to_string())?;
+    let persisted = state
+        .surface_session
+        .lock()
+        .map_err(|error| error.to_string())
+        .and_then(|mut store| {
+            store
+                .resume_pending(&machine_profile_id, prepared.clone(), unix_time_ms())
+                .map_err(|error| error.to_string())
+        });
+    if let Err(error) = persisted {
+        let cleanup = state
+            .arbiter
+            .discard_prepared_heightmap(prepared.operation_sequence)
+            .await;
+        return Err(match cleanup {
+            Ok(()) => error,
+            Err(cleanup) => format!("{error}; prepared heightmap cleanup also failed: {cleanup}"),
+        });
+    }
+
+    match state
+        .arbiter
+        .commit_prepared_heightmap(prepared.operation_sequence)
+        .await
+    {
+        Ok(snapshot) => Ok(snapshot),
+        Err(error) => {
+            let cleanup = state
+                .arbiter
+                .discard_prepared_heightmap(prepared.operation_sequence)
+                .await;
+            let mut details = vec![error.to_string()];
+            match cleanup {
+                Ok(()) => {
+                    if let Err(restore) = state
+                        .surface_session
+                        .lock()
+                        .map_err(|lock_error| lock_error.to_string())?
+                        .restore_pending_after_failed_resume(prepared.operation_sequence, previous)
+                    {
+                        details.push(format!("draft restore failed: {restore}"));
+                    }
+                }
+                Err(cleanup) => details.push(format!("actor cleanup failed: {cleanup}")),
+            }
+            Err(details.join("; "))
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn discard_heightmap_draft(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<SurfaceSession, String> {
+    let session = state
+        .surface_session
+        .lock()
+        .map_err(|error| error.to_string())?
+        .discard_pending()
+        .map_err(|error| error.to_string())?;
+    let _ = app.emit("surface-session", session.clone());
+    Ok(session)
+}
+
+#[tauri::command]
 pub async fn pause_heightmap(
     state: State<'_, AppState>,
 ) -> Result<HeightmapOperationSnapshot, String> {
@@ -2206,24 +2360,32 @@ pub async fn cancel_heightmap(
 pub async fn set_heightmap_application(
     enabled: bool,
     setup_confirmed: bool,
+    app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<SurfaceSession, String> {
-    state
+    let session = state
         .surface_session
         .lock()
         .map_err(|error| error.to_string())?
         .set_application_enabled(enabled, setup_confirmed)
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    let _ = app.emit("surface-session", session.clone());
+    Ok(session)
 }
 
 #[tauri::command]
-pub async fn clear_surface_session(state: State<'_, AppState>) -> Result<SurfaceSession, String> {
+pub async fn clear_surface_session(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<SurfaceSession, String> {
     let mut store = state
         .surface_session
         .lock()
         .map_err(|error| error.to_string())?;
     store.discard_pending().map_err(|error| error.to_string())?;
-    store.forget_active().map_err(|error| error.to_string())
+    let session = store.forget_active().map_err(|error| error.to_string())?;
+    let _ = app.emit("surface-session", session.clone());
+    Ok(session)
 }
 
 #[tauri::command]
@@ -2246,6 +2408,32 @@ pub async fn return_to_work_zero(
         AuditCategory::Controller,
         "controller.return_to_work_zero",
         "Absolute work-zero jog accepted",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn return_to_work_origin(
+    request: ReturnToWorkOriginRequest,
+    state: State<'_, AppState>,
+) -> Result<ReturnToWorkOriginOutcome, String> {
+    let context = serde_json::to_value(request).unwrap_or(Value::Null);
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        state
+            .arbiter
+            .return_to_work_origin(request)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Controller,
+        "controller.return_to_work_origin",
+        "Safe return to work origin completed",
         context,
         &result,
     );
@@ -2884,6 +3072,9 @@ pub async fn preflight_real_run(
         if state.active_transport.lock().await.kind != TransportKind::Serial {
             return Err("real-run preflight requires an active serial transport".to_owned());
         }
+        let heightmap = selected_surface_map_for_active_profile(execution_options, &state)
+            .await?
+            .map(|stored| stored.map);
         let program = tokio::task::spawn_blocking(move || {
             parse_program_with_options(
                 request,
@@ -2897,7 +3088,7 @@ pub async fn preflight_real_run(
         .map_err(|error| error.to_string())?;
         state
             .arbiter
-            .preflight_real_run_with_options(program, intent, execution_options)
+            .preflight_real_run_with_heightmap(program, intent, execution_options, heightmap)
             .await
             .map_err(|error| error.to_string())
     }
@@ -2948,6 +3139,9 @@ pub async fn authorize_first_cut(
             return Err("first-cut authorization requires an active serial transport".to_owned());
         }
         let execution_options = confirmation.execution_options;
+        let heightmap = selected_surface_map_for_active_profile(execution_options, &state)
+            .await?
+            .map(|stored| stored.map);
         let program = tokio::task::spawn_blocking(move || {
             parse_program_with_options(
                 request,
@@ -2961,7 +3155,7 @@ pub async fn authorize_first_cut(
         .map_err(|error| error.to_string())?;
         state
             .arbiter
-            .authorize_first_cut(program, confirmation)
+            .authorize_first_cut_with_heightmap(program, confirmation, heightmap)
             .await
             .map_err(|error| error.to_string())
     }
@@ -3039,11 +3233,21 @@ async fn start_program_run_impl(
     .await
     .map_err(|error| format!("program-run parser task failed: {error}"))?
     .map_err(|error| error.to_string())?;
+    let heightmap = if execution_options.surface_map_id.is_some() {
+        let selected_profile_id = profile_id.as_deref().ok_or_else(|| {
+            "heightmap compensation requires the controller to be linked to a machine profile"
+                .to_owned()
+        })?;
+        selected_surface_map(execution_options, state, selected_profile_id)?
+            .map(|stored| stored.map)
+    } else {
+        None
+    };
     let stored_source_name = program.source_name.clone();
     let fingerprint = program_fingerprint(&program);
     let prepared = state
         .arbiter
-        .prepare_program_run(program, authorization_id)
+        .prepare_program_run_with_heightmap(program, authorization_id, heightmap)
         .await
         .map_err(|error| error.to_string())?;
     let intent = match prepared.mode {
@@ -3140,6 +3344,118 @@ async fn start_program_run_impl(
     }
 }
 
+fn selected_surface_map(
+    options: ProgramExecutionOptions,
+    state: &AppState,
+    profile_id: &str,
+) -> Result<Option<millo_heightmap::StoredSurfaceMap>, String> {
+    let Some(requested_map_id) = options.surface_map_id else {
+        return Ok(None);
+    };
+    let session = state
+        .surface_session
+        .lock()
+        .map_err(|error| format!("surface session lock poisoned: {error}"))?
+        .session();
+    if !session.application_enabled {
+        return Err("heightmap application is not enabled for this workpiece".to_owned());
+    }
+    if session.coordinate_binding_stale {
+        return Err(
+            "heightmap work-coordinate binding is stale; measure a new map after setting work zero"
+                .to_owned(),
+        );
+    }
+    let active = session
+        .active
+        .ok_or_else(|| "selected heightmap is no longer available".to_owned())?;
+    if active.map_id != requested_map_id {
+        return Err(format!(
+            "heightmap changed after preparation: expected #{requested_map_id}, active #{}",
+            active.map_id
+        ));
+    }
+    if active.machine_profile_id != profile_id {
+        return Err("heightmap belongs to a different machine profile".to_owned());
+    }
+    Ok(Some(active))
+}
+
+async fn selected_surface_map_for_active_profile(
+    options: ProgramExecutionOptions,
+    state: &AppState,
+) -> Result<Option<millo_heightmap::StoredSurfaceMap>, String> {
+    if options.surface_map_id.is_none() {
+        return Ok(None);
+    }
+    let profile_id = state
+        .settings_session
+        .lock()
+        .await
+        .as_ref()
+        .and_then(|session| session.profile_id.clone())
+        .ok_or_else(|| {
+            "heightmap compensation requires the controller to be linked to a machine profile"
+                .to_owned()
+        })?;
+    let selected = selected_surface_map(options, state, &profile_id)?;
+    let Some(selected) = selected else {
+        return Ok(None);
+    };
+    let binding = selected.map.coordinate_binding.ok_or_else(|| {
+        "heightmap has no work-coordinate binding; measure a new map after setting work zero"
+            .to_owned()
+    })?;
+    let snapshot = state
+        .arbiter
+        .refresh_status()
+        .await
+        .map_err(|error| error.to_string())?;
+    let inspection = state
+        .arbiter
+        .inspect_device()
+        .await
+        .map_err(|error| error.to_string())?;
+    let coordinate_system = active_work_coordinate_system(&inspection.device.modal_state)
+        .ok_or_else(|| {
+            "controller did not report an active G54-G59 work coordinate system".to_owned()
+        })?;
+    let offset = snapshot
+        .machine
+        .work_coordinate_offset
+        .or_else(|| {
+            snapshot
+                .machine
+                .machine_position
+                .zip(snapshot.machine.work_position)
+                .map(|(machine, work)| millo_domain::Position {
+                    x: machine.x - work.x,
+                    y: machine.y - work.y,
+                    z: machine.z - work.z,
+                    a: None,
+                })
+        })
+        .ok_or_else(|| {
+            "controller did not report enough position data to verify the heightmap".to_owned()
+        })?;
+    let bound = binding.work_coordinate_offset;
+    let same_offset = (bound.x - offset.x).abs() <= 0.01
+        && (bound.y - offset.y).abs() <= 0.01
+        && (bound.z - offset.z).abs() <= 0.01;
+    if binding.coordinate_system != coordinate_system || !same_offset {
+        let _ = state
+            .surface_session
+            .lock()
+            .map_err(|error| format!("surface session lock poisoned: {error}"))?
+            .disarm_for_coordinate_change();
+        return Err(
+            "work zero or G54-G59 changed after the heightmap was measured; measure a new map"
+                .to_owned(),
+        );
+    }
+    Ok(Some(selected))
+}
+
 #[tauri::command]
 pub async fn start_check_run(
     request: ProgramParseRequest,
@@ -3173,6 +3489,9 @@ async fn start_check_run_impl(
     if state.active_transport.lock().await.kind != TransportKind::Serial {
         return Err("GRBL Check requires an active serial transport".to_owned());
     }
+    let heightmap = selected_surface_map_for_active_profile(execution_options, state)
+        .await?
+        .map(|stored| stored.map);
     let program = tokio::task::spawn_blocking(move || {
         parse_program_with_options(
             request,
@@ -3186,7 +3505,7 @@ async fn start_check_run_impl(
     .map_err(|error| error.to_string())?;
     state
         .arbiter
-        .start_check_run_with_options(program, execution_options)
+        .start_check_run_with_heightmap(program, execution_options, heightmap)
         .await
         .map_err(|error| error.to_string())
 }

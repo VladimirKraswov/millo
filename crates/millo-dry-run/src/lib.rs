@@ -1,10 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use millo_gcode::{GcodeProgram, ProgramWarningCode, ProgramWarningSeverity};
+use millo_gcode::{
+    GcodeProgram, ProgramDistanceMode, ProgramFeedMode, ProgramPlane, ProgramPoint,
+    ProgramUnitMode, ProgramWarningCode, ProgramWarningSeverity, ToolpathKind, ToolpathSegment,
+};
+use millo_heightmap::Heightmap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const MAX_DRY_RUN_COMMAND_BYTES: usize = 255;
+pub const MAX_COMPENSATED_PROGRAM_LINES: usize = 200_000;
 const SAFETY_PREAMBLE: [&str; 2] = ["M5", "M9"];
 const SAFETY_EPILOGUE: [&str; 2] = ["M5", "M9"];
 
@@ -20,6 +25,8 @@ pub enum ProgramRunPolicy {
 pub struct ProgramExecutionOptions {
     pub optional_stop: bool,
     pub block_delete: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface_map_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -35,6 +42,7 @@ pub enum DryRunBlockerKind {
     UnsupportedProgram,
     IncompletePreview,
     CommandTooLong,
+    HeightmapCompensation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -346,6 +354,343 @@ pub fn build_program_run_plan_with_options(
     })
 }
 
+pub fn build_program_run_plan_with_heightmap(
+    program: &GcodeProgram,
+    policy: ProgramRunPolicy,
+    execution_options: ProgramExecutionOptions,
+    heightmap: Option<&Heightmap>,
+) -> Result<DryRunPlan, DryRunPolicyError> {
+    let plan = build_program_run_plan_with_options(program, policy, execution_options)?;
+    match (execution_options.surface_map_id, heightmap) {
+        (None, None) => Ok(plan),
+        (Some(_), Some(heightmap)) => compensate_plan(program, plan, heightmap),
+        (Some(_), None) => Err(heightmap_rejection(
+            None,
+            "selected heightmap is unavailable",
+        )),
+        (None, Some(_)) => Err(heightmap_rejection(
+            None,
+            "heightmap data was supplied without an explicit map selection",
+        )),
+    }
+}
+
+fn compensate_plan(
+    program: &GcodeProgram,
+    plan: DryRunPlan,
+    heightmap: &Heightmap,
+) -> Result<DryRunPlan, DryRunPolicyError> {
+    validate_compensation_contract(program, heightmap)?;
+    let mut segments = BTreeMap::<usize, Vec<&ToolpathSegment>>::new();
+    for segment in &program.toolpath {
+        segments
+            .entry(segment.source_line)
+            .or_default()
+            .push(segment);
+    }
+
+    let clearance_z = heightmap.plan.request.clearance_z_mm.max(0.001);
+    let max_step_mm =
+        (heightmap.plan.spacing.x_mm.min(heightmap.plan.spacing.y_mm) / 2.0).clamp(0.25, 1.0);
+    let mut transformed = Vec::with_capacity(plan.lines.len());
+    let mut known_x = false;
+    let mut known_y = false;
+
+    for line in plan.lines {
+        let Some(source_line) = line.source_line else {
+            transformed.push(line);
+            continue;
+        };
+        let Some(source) = program
+            .lines
+            .iter()
+            .find(|item| item.source_line == source_line)
+        else {
+            transformed.push(line);
+            continue;
+        };
+        let axes = explicit_axes(&source.normalized);
+        let line_segments = segments.get(&source_line).cloned().unwrap_or_default();
+        if line_segments.is_empty() {
+            transformed.push(line);
+            known_x |= axes.0;
+            known_y |= axes.1;
+            continue;
+        }
+
+        let safe_z_only_before_xy = !known_x
+            && !known_y
+            && !axes.0
+            && !axes.1
+            && line_segments.iter().all(|segment| {
+                segment.kind == ToolpathKind::Rapid
+                    && segment
+                        .points
+                        .last()
+                        .is_some_and(|point| point.z >= clearance_z)
+            });
+        if safe_z_only_before_xy {
+            transformed.push(line);
+            continue;
+        }
+
+        let needs_surface = line_segments.iter().any(|segment| {
+            segment
+                .points
+                .iter()
+                .any(|point| compensation_weight(point.z, clearance_z) > 0.0)
+        });
+        if needs_surface && (!known_x || !known_y) {
+            return Err(heightmap_rejection(
+                Some(source_line),
+                "heightmap compensation requires explicit safe-Z positioning of X and Y before the first surface-level move",
+            ));
+        }
+        let establishes_x = known_x || axes.0;
+        let establishes_y = known_y || axes.1;
+
+        if let Some(prefix) = non_motion_prefix(&source.normalized) {
+            push_compensated_line(
+                &mut transformed,
+                source_line,
+                prefix,
+                DryRunLineKind::Program,
+                Some(0),
+            )?;
+        }
+        for segment in line_segments {
+            append_compensated_segment(
+                &mut transformed,
+                segment,
+                heightmap,
+                clearance_z,
+                max_step_mm,
+                establishes_x,
+                establishes_y,
+            )?;
+        }
+        known_x = establishes_x;
+        known_y = establishes_y;
+    }
+
+    let estimated_total_ms = transformed
+        .iter()
+        .filter_map(DryRunLine::estimated_duration_ms)
+        .fold(0u64, u64::saturating_add);
+    let time_estimate_complete = transformed
+        .iter()
+        .all(|line| line.estimated_duration_ms().is_some());
+    Ok(DryRunPlan {
+        source_name: plan.source_name,
+        source_line_count: plan.source_line_count,
+        lines: transformed,
+        estimated_total_ms,
+        time_estimate_complete,
+        execution_options: plan.execution_options,
+    })
+}
+
+fn validate_compensation_contract(
+    program: &GcodeProgram,
+    heightmap: &Heightmap,
+) -> Result<(), DryRunPolicyError> {
+    if heightmap.coordinate_binding.is_none() {
+        return Err(heightmap_rejection(
+            None,
+            "heightmap has no work-coordinate binding",
+        ));
+    }
+    let progress = heightmap.progress();
+    if !progress.complete || progress.triggered != progress.total {
+        return Err(heightmap_rejection(
+            None,
+            "heightmap is incomplete or contains a probe miss",
+        ));
+    }
+    for checkpoint in &program.execution_checkpoints {
+        let supported = checkpoint.units == ProgramUnitMode::Millimeters
+            && checkpoint.distance == ProgramDistanceMode::Absolute
+            && checkpoint.feed_mode == ProgramFeedMode::UnitsPerMinute
+            && checkpoint.plane == ProgramPlane::Xy;
+        if !supported {
+            return Err(heightmap_rejection(
+                Some(checkpoint.source_line),
+                "heightmap execution requires G21, G90, G94 and G17 for every motion block",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn append_compensated_segment(
+    output: &mut Vec<DryRunLine>,
+    segment: &ToolpathSegment,
+    heightmap: &Heightmap,
+    clearance_z: f64,
+    max_step_mm: f64,
+    known_x: bool,
+    known_y: bool,
+) -> Result<(), DryRunPolicyError> {
+    let rapid = segment.kind == ToolpathKind::Rapid;
+    for pair in segment.points.windows(2) {
+        let start = pair[0];
+        let end = pair[1];
+        let compensation_needed = compensation_weight(start.z, clearance_z) > 0.0
+            || compensation_weight(end.z, clearance_z) > 0.0;
+        let xy_distance = (end.x - start.x).hypot(end.y - start.y);
+        let z_distance = (end.z - start.z).abs();
+        let parts = if compensation_needed {
+            ((xy_distance.max(z_distance) / max_step_mm).ceil() as usize).max(1)
+        } else {
+            1
+        };
+        for part in 1..=parts {
+            if output.len() >= MAX_COMPENSATED_PROGRAM_LINES {
+                return Err(heightmap_rejection(
+                    Some(segment.source_line),
+                    "heightmap segmentation exceeds the 200000-line sender limit",
+                ));
+            }
+            let mix = part as f64 / parts as f64;
+            let point = lerp_point(start, end, mix);
+            let weight = compensation_weight(point.z, clearance_z);
+            let surface_z = if weight > 0.0 {
+                heightmap
+                    .interpolate_delta_z(point.x, point.y)
+                    .map_err(|_| {
+                        heightmap_rejection(
+                            Some(segment.source_line),
+                            "program motion leaves the measured heightmap perimeter",
+                        )
+                    })?
+            } else {
+                0.0
+            };
+            let corrected_z = point.z + surface_z * weight;
+            let mut command = format!("G90 G21 G94 {}", if rapid { "G0" } else { "G1" });
+            if known_x {
+                command.push_str(&format!(" X{:.4}", point.x));
+            }
+            if known_y {
+                command.push_str(&format!(" Y{:.4}", point.y));
+            }
+            command.push_str(&format!(" Z{corrected_z:.4}"));
+            if !rapid && let Some(feed) = segment.feed_rate_mm_per_min {
+                command.push_str(&format!(" F{feed:.3}"));
+            }
+            let duration = if rapid {
+                None
+            } else {
+                segment.feed_rate_mm_per_min.map(|feed| {
+                    let previous_mix = (part - 1) as f64 / parts as f64;
+                    let previous = lerp_point(start, end, previous_mix);
+                    let previous_weight = compensation_weight(previous.z, clearance_z);
+                    let previous_surface = if previous_weight > 0.0 {
+                        heightmap
+                            .interpolate_delta_z(previous.x, previous.y)
+                            .unwrap_or(0.0)
+                    } else {
+                        0.0
+                    };
+                    let previous_z = previous.z + previous_surface * previous_weight;
+                    let distance = (point.x - previous.x)
+                        .hypot(point.y - previous.y)
+                        .hypot(corrected_z - previous_z);
+                    seconds_to_millis(distance / feed * 60.0)
+                })
+            };
+            push_compensated_line(
+                output,
+                segment.source_line,
+                command,
+                DryRunLineKind::Program,
+                duration,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn push_compensated_line(
+    output: &mut Vec<DryRunLine>,
+    source_line: usize,
+    command: String,
+    kind: DryRunLineKind,
+    estimated_duration_ms: Option<u64>,
+) -> Result<(), DryRunPolicyError> {
+    if numbered_command_len(source_line, &command) > MAX_DRY_RUN_COMMAND_BYTES {
+        return Err(heightmap_rejection(
+            Some(source_line),
+            "heightmap command exceeds the sender line-length limit",
+        ));
+    }
+    output.push(DryRunLine {
+        source_line: Some(source_line),
+        command,
+        kind,
+        tool_number: None,
+        estimated_duration_ms,
+    });
+    Ok(())
+}
+
+fn heightmap_rejection(source_line: Option<usize>, message: &str) -> DryRunPolicyError {
+    DryRunPolicyError::Rejected(
+        1,
+        vec![DryRunBlocker {
+            source_line,
+            kind: DryRunBlockerKind::HeightmapCompensation,
+            message: message.to_owned(),
+        }],
+    )
+}
+
+fn explicit_axes(normalized: &str) -> (bool, bool) {
+    let mut x = false;
+    let mut y = false;
+    for word in normalized.split_whitespace().filter_map(split_word) {
+        x |= word.0 == 'X';
+        y |= word.0 == 'Y';
+    }
+    (x, y)
+}
+
+fn non_motion_prefix(normalized: &str) -> Option<String> {
+    let words = normalized
+        .split_whitespace()
+        .filter(|word| {
+            let Some((letter, value)) = split_word(word) else {
+                return true;
+            };
+            !(matches!(letter, 'N' | 'X' | 'Y' | 'Z' | 'I' | 'J' | 'K' | 'R' | 'F')
+                || letter == 'G'
+                    && [0.0, 1.0, 2.0, 3.0]
+                        .iter()
+                        .any(|code| code_is(value, *code)))
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    (!words.is_empty()).then_some(words)
+}
+
+fn compensation_weight(nominal_z: f64, clearance_z: f64) -> f64 {
+    if nominal_z <= 0.0 {
+        1.0
+    } else if nominal_z >= clearance_z {
+        0.0
+    } else {
+        1.0 - nominal_z / clearance_z
+    }
+}
+
+fn lerp_point(start: ProgramPoint, end: ProgramPoint, mix: f64) -> ProgramPoint {
+    ProgramPoint {
+        x: start.x + (end.x - start.x) * mix,
+        y: start.y + (end.y - start.y) * mix,
+        z: start.z + (end.z - start.z) * mix,
+    }
+}
+
 fn numbered_command(source_line: usize, normalized: &str) -> String {
     let body = normalized
         .split_whitespace()
@@ -607,9 +952,11 @@ fn add_blocker(
 
 #[cfg(test)]
 mod tests {
+    use millo_domain::{Position, WorkCoordinateSystem};
     use millo_gcode::{
         ProgramParseOptions, ProgramParseRequest, parse_program, parse_program_with_options,
     };
+    use millo_heightmap::{HeightmapPlanRequest, plan_heightmap};
 
     use super::*;
 
@@ -630,6 +977,39 @@ mod tests {
             ProgramParseOptions { block_delete: true },
         )
         .unwrap()
+    }
+
+    fn completed_heightmap() -> Heightmap {
+        let plan = plan_heightmap(
+            HeightmapPlanRequest {
+                origin_x_mm: 0.0,
+                origin_y_mm: 0.0,
+                width_mm: 10.0,
+                height_mm: 10.0,
+                columns: 2,
+                rows: 2,
+                clearance_z_mm: 2.0,
+                ..HeightmapPlanRequest::default()
+            },
+            None,
+        )
+        .unwrap();
+        let mut map = Heightmap::new(plan);
+        map.bind_coordinates(
+            WorkCoordinateSystem::G54,
+            Position {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                a: None,
+            },
+        );
+        for point in map.plan.points.clone() {
+            // A simple plane: work surface falls 1 mm from X0 to X10.
+            map.record_sample(point.sequence, -point.x_mm / 10.0, true)
+                .unwrap();
+        }
+        map
     }
 
     #[test]
@@ -824,6 +1204,7 @@ mod tests {
         let options = ProgramExecutionOptions {
             optional_stop: true,
             block_delete: true,
+            ..ProgramExecutionOptions::default()
         };
         let configured = build_program_run_plan_with_options(
             &parse_with_block_delete(source),
@@ -920,5 +1301,119 @@ mod tests {
                 .iter()
                 .any(|blocker| blocker.kind == DryRunBlockerKind::CommandTooLong)
         );
+    }
+
+    #[test]
+    fn heightmap_compensation_interpolates_surface_z_and_preserves_safe_z() {
+        let options = ProgramExecutionOptions {
+            surface_map_id: Some(7),
+            ..ProgramExecutionOptions::default()
+        };
+        let plan = build_program_run_plan_with_heightmap(
+            &parse("G21 G90 G94 G17\nG0 Z2\nG0 X0 Y0\nG1 Z-0.2 F30\nG1 X10 Y0 F100\nG0 Z2\nM30"),
+            ProgramRunPolicy::Cutting,
+            options,
+            Some(&completed_heightmap()),
+        )
+        .unwrap();
+        let commands = plan
+            .lines()
+            .iter()
+            .map(DryRunLine::command)
+            .collect::<Vec<_>>();
+
+        assert!(
+            commands
+                .iter()
+                .any(|command| { command.contains("X10.0000") && command.contains("Z-1.2000") })
+        );
+        assert!(commands.contains(&"G0 Z2"));
+        assert_eq!(plan.execution_options().surface_map_id, Some(7));
+    }
+
+    #[test]
+    fn heightmap_compensation_fails_closed_outside_the_measured_area() {
+        let options = ProgramExecutionOptions {
+            surface_map_id: Some(7),
+            ..ProgramExecutionOptions::default()
+        };
+        let error = build_program_run_plan_with_heightmap(
+            &parse("G21 G90 G94 G17\nG0 Z2\nG0 X0 Y0\nG1 Z-0.2 F30\nG1 X11 F100"),
+            ProgramRunPolicy::Cutting,
+            options,
+            Some(&completed_heightmap()),
+        )
+        .unwrap_err();
+
+        assert!(error.blockers().iter().any(|blocker| {
+            blocker.kind == DryRunBlockerKind::HeightmapCompensation
+                && blocker.message.contains("perimeter")
+        }));
+    }
+
+    #[test]
+    fn selected_heightmap_requires_complete_data_and_explicit_selection() {
+        let plan = plan_heightmap(
+            HeightmapPlanRequest {
+                width_mm: 10.0,
+                height_mm: 10.0,
+                columns: 2,
+                rows: 2,
+                ..HeightmapPlanRequest::default()
+            },
+            None,
+        )
+        .unwrap();
+        let incomplete = Heightmap::new(plan);
+        let mut incomplete = incomplete;
+        incomplete.bind_coordinates(
+            WorkCoordinateSystem::G54,
+            Position {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                a: None,
+            },
+        );
+        let program = parse("G21 G90 G94 G17\nG0 X0 Y0 Z2\nG1 Z-0.2 F30");
+        let selected = ProgramExecutionOptions {
+            surface_map_id: Some(2),
+            ..ProgramExecutionOptions::default()
+        };
+
+        let missing = build_program_run_plan_with_heightmap(
+            &program,
+            ProgramRunPolicy::Cutting,
+            selected,
+            None,
+        )
+        .unwrap_err();
+        assert!(missing.blockers()[0].message.contains("unavailable"));
+
+        let incomplete = build_program_run_plan_with_heightmap(
+            &program,
+            ProgramRunPolicy::Cutting,
+            selected,
+            Some(&incomplete),
+        )
+        .unwrap_err();
+        assert!(incomplete.blockers()[0].message.contains("incomplete"));
+    }
+
+    #[test]
+    fn compensation_rejects_a_surface_move_from_the_parsers_implicit_origin() {
+        let options = ProgramExecutionOptions {
+            surface_map_id: Some(7),
+            ..ProgramExecutionOptions::default()
+        };
+        let error = build_program_run_plan_with_heightmap(
+            &parse("G21 G90 G94 G17\nG1 X5 Y5 Z-0.2 F30"),
+            ProgramRunPolicy::Cutting,
+            options,
+            Some(&completed_heightmap()),
+        )
+        .unwrap_err();
+
+        assert!(error.blockers()[0].message.contains("safe-Z positioning"));
     }
 }

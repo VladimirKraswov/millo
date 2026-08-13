@@ -1,8 +1,6 @@
 import {
   Box,
   ChevronDown,
-  CircleAlert,
-  CircleCheck,
   FileCode2,
   History,
   LocateFixed,
@@ -31,6 +29,7 @@ import {
 } from "react";
 
 import type { ProgramGateway } from "../../platform/program/ProgramGateway";
+import type { HeightmapGateway } from "../../platform/machine/HeightmapGateway";
 import type {
   ControllerSnapshot,
   HardwareInspection,
@@ -44,6 +43,7 @@ import {
 } from "../../shared/dryRun";
 import type { GcodeProgram, ProgramWarning } from "../../shared/program";
 import type { PublishedJob } from "../../shared/jobs";
+import type { SurfaceSession } from "../../shared/heightmap";
 import type {
   ProgramRecoveryCandidate,
   ProgramRecoveryPackage,
@@ -67,6 +67,7 @@ import { ProgramEditor } from "./ProgramEditor";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramLineTable } from "./ProgramLineTable";
 import { ProgramRecoveryDialog } from "./ProgramRecoveryDialog";
+import { ProgramPreflightReport } from "./ProgramPreflightReport";
 import { SafeStartDialog } from "./SafeStartDialog";
 import { ToolChangeDialog } from "./ToolChangeDialog";
 import { canStartCheckRun } from "./checkRunReadModel";
@@ -89,6 +90,7 @@ import {
 } from "./jobReadinessModel";
 import type { PreviewView } from "./ToolpathPreview";
 import { suggestedSafeZ } from "./safeStartModel";
+import { surfaceMapExecutionView } from "./surfaceMapExecutionModel";
 
 const ToolpathPreview = lazy(async () => {
   const module = await import("./ToolpathPreview");
@@ -100,10 +102,13 @@ export interface ProgramMachineContext {
   readonly busy: boolean;
   readonly machineBound: boolean;
   readonly machineName: string;
+  readonly machineProfileId?: string;
+  readonly machineSyncing: boolean;
   readonly onAcknowledgeReset: () => void | Promise<unknown>;
   readonly onConnect: () => void | Promise<unknown>;
   readonly onOpenWorkZero: () => void;
-  readonly onReturnToWorkZero: (axis: "x" | "y" | "z") => Promise<void>;
+  readonly onReturnToWorkOrigin: (clearanceZMm: number) => Promise<void>;
+  readonly onSyncMachine: () => void | Promise<unknown>;
   readonly onUnlock: () => void | Promise<unknown>;
   readonly snapshot: ControllerSnapshot;
   readonly workPosition?: Position;
@@ -114,6 +119,7 @@ interface ProgramWorkspaceProps {
   readonly dryRunAvailable?: boolean;
   readonly dryRunGateway?: DryRunGateway;
   readonly gateway: ProgramGateway;
+  readonly heightmapGateway?: HeightmapGateway;
   readonly initialProgram?: GcodeProgram;
   readonly initialRunIntent?: ProgramRunIntent;
   readonly initialSender?: SenderSnapshot;
@@ -211,6 +217,7 @@ export function ProgramWorkspace({
   dryRunAvailable = false,
   dryRunGateway,
   gateway,
+  heightmapGateway,
   initialProgram,
   initialRunIntent = "airRun",
   initialSender,
@@ -257,16 +264,50 @@ export function ProgramWorkspace({
   const [recoveryCandidate, setRecoveryCandidate] =
     useState<ProgramRecoveryCandidate>();
   const [recoveryChecked, setRecoveryChecked] = useState(realRunGateway === undefined);
-  const [stopConfirming, setStopConfirming] = useState(false);
   const [senderCommandBusy, setSenderCommandBusy] = useState(false);
   const [clearedSenderRunSequence, setClearedSenderRunSequence] = useState<number>();
   const [preflightLoading, setPreflightLoading] = useState(false);
+  const [surfaceSession, setSurfaceSession] = useState<SurfaceSession>();
+  const [surfaceMapBusy, setSurfaceMapBusy] = useState(false);
   const [error, setError] = useState<string>();
   const handledIncomingJob = useRef(0);
   const program = loaded?.program;
   const senderActive = ["running", "paused", "toolChange", "draining"].includes(
     sender.state,
   );
+
+  useEffect(() => {
+    if (!heightmapGateway) return;
+    let active = true;
+    let unsubscribe: (() => void) | undefined;
+    const accept = (session: SurfaceSession) => {
+      if (!active) return;
+      setSurfaceSession(session);
+      setProgramExecutionOptions((current) => {
+        const usable = session.applicationEnabled &&
+          session.coordinateBindingStale === false &&
+          session.active?.machineProfileId === machineContext?.machineProfileId;
+        const surfaceMapId = usable ? session.active?.mapId : undefined;
+        return current.surfaceMapId === surfaceMapId
+          ? current
+          : { ...current, surfaceMapId };
+      });
+      setRealRunReport(undefined);
+    };
+    void heightmapGateway.getSession().then(accept).catch((reason: unknown) => {
+      if (active) setError(String(reason));
+    });
+    void heightmapGateway.subscribeSession(accept).then((stop) => {
+      if (active) unsubscribe = stop;
+      else stop();
+    }).catch((reason: unknown) => {
+      if (active) setError(String(reason));
+    });
+    return () => {
+      active = false;
+      unsubscribe?.();
+    };
+  }, [heightmapGateway, machineContext?.machineProfileId]);
 
   useEffect(() => {
     if (!incomingJob || incomingJob.sequence === handledIncomingJob.current) return;
@@ -277,7 +318,16 @@ export function ProgramWorkspace({
     }
     setLoaded({ program: incomingJob.job.program, source: incomingJob.job.source });
     setProgramRunIntent("cutting");
-    setProgramExecutionOptions(defaultProgramExecutionOptions);
+    const activeSurfaceMap = surfaceSession?.active;
+    const activeSurfaceMapId = surfaceSession?.applicationEnabled &&
+      activeSurfaceMap &&
+      activeSurfaceMap?.machineProfileId === machineContext?.machineProfileId
+      ? activeSurfaceMap.mapId
+      : undefined;
+    setProgramExecutionOptions({
+      ...defaultProgramExecutionOptions,
+      surfaceMapId: activeSurfaceMapId,
+    });
     setClearedSenderRunSequence(sender.runSequence || undefined);
     setSender(idleSenderSnapshot);
     setSelectedSourceLine(undefined);
@@ -290,7 +340,15 @@ export function ProgramWorkspace({
     setSafeStartContext(undefined);
     setToolChangeOpen(false);
     setError(undefined);
-  }, [incomingJob, sender.runSequence, senderActive]);
+  }, [
+    incomingJob,
+    machineContext?.machineProfileId,
+    sender.runSequence,
+    senderActive,
+    surfaceSession?.active?.machineProfileId,
+    surfaceSession?.active?.mapId,
+    surfaceSession?.applicationEnabled,
+  ]);
 
   useEffect(() => {
     if (!desktopRuntime || !dryRunGateway) return;
@@ -394,18 +452,6 @@ export function ProgramWorkspace({
     }
   }, [sender.currentSourceLine, sender.requestedTool, sender.state]);
 
-  useEffect(() => {
-    if (!stopConfirming) return;
-    const timer = window.setTimeout(() => setStopConfirming(false), 5_000);
-    return () => window.clearTimeout(timer);
-  }, [stopConfirming]);
-
-  useEffect(() => {
-    if (!["running", "paused", "toolChange", "draining"].includes(sender.state)) {
-      setStopConfirming(false);
-    }
-  }, [sender.state]);
-
   const loadFile = async (file?: File) => {
     if (!file || loading || !desktopRuntime) return;
     setLoading(true);
@@ -451,7 +497,17 @@ export function ProgramWorkspace({
       });
       setLoaded({ program, source: prepared.request.source });
       setProgramRunIntent(prepared.intent);
-      setProgramExecutionOptions(prepared.executionOptions);
+      const activeSurfaceMap = surfaceSession?.active;
+      const restoredMapId = surfaceSession?.applicationEnabled &&
+        activeSurfaceMap &&
+        activeSurfaceMap?.mapId === prepared.executionOptions.surfaceMapId &&
+        activeSurfaceMap.machineProfileId === machineContext?.machineProfileId
+        ? prepared.executionOptions.surfaceMapId
+        : undefined;
+      setProgramExecutionOptions({
+        ...prepared.executionOptions,
+        surfaceMapId: restoredMapId,
+      });
       setClearedSenderRunSequence(sender.runSequence || undefined);
       setSender(idleSenderSnapshot);
       setSelectedSourceLine(prepared.restartSourceLine);
@@ -595,12 +651,12 @@ export function ProgramWorkspace({
     }
   };
 
-  const returnToWorkZero = async (axis: "x" | "y" | "z") => {
+  const returnToWorkOrigin = async () => {
     if (!machineContext || senderCommandBusy) return;
     setSenderCommandBusy(true);
     setError(undefined);
     try {
-      await machineContext.onReturnToWorkZero(axis);
+      await machineContext.onReturnToWorkOrigin(Math.max(2, program?.summary.bounds?.max.z ?? 0));
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -610,10 +666,6 @@ export function ProgramWorkspace({
 
   const stopProgramRun = async () => {
     if (!realRunGateway || senderCommandBusy) return;
-    if (!stopConfirming) {
-      setStopConfirming(true);
-      return;
-    }
     setSenderCommandBusy(true);
     setError(undefined);
     setRecoveryChecked(false);
@@ -628,7 +680,6 @@ export function ProgramWorkspace({
       setError(String(reason));
       setRecoveryChecked(true);
     } finally {
-      setStopConfirming(false);
       setSenderCommandBusy(false);
     }
   };
@@ -690,9 +741,45 @@ export function ProgramWorkspace({
     realRunReport.executionOptions.optionalStop ===
       programExecutionOptions.optionalStop &&
     realRunReport.executionOptions.blockDelete ===
-      programExecutionOptions.blockDelete
+      programExecutionOptions.blockDelete &&
+    realRunReport.executionOptions.surfaceMapId ===
+      programExecutionOptions.surfaceMapId
       ? realRunReport
       : undefined;
+  const surfaceMap = useMemo(
+    () => surfaceMapExecutionView(
+      surfaceSession,
+      machineContext?.machineProfileId,
+      program?.summary.bounds,
+    ),
+    [machineContext?.machineProfileId, program?.summary.bounds, surfaceSession],
+  );
+  const setSurfaceMapApplication = async (enabled: boolean) => {
+    if (!heightmapGateway || !surfaceMap || surfaceMapBusy || senderActive) return;
+    if (enabled && !surfaceMap.coversProgram) {
+      setError("Карта высот не покрывает траекторию задания. Снимите карту по периметру файла.");
+      return;
+    }
+    if (enabled && !surfaceMap.usable) {
+      setError("Рабочий ноль изменился после измерения карты. Сначала снимите новую карту высот.");
+      return;
+    }
+    setSurfaceMapBusy(true);
+    setError(undefined);
+    setRealRunReport(undefined);
+    try {
+      const session = await heightmapGateway.setApplication(enabled, enabled);
+      setSurfaceSession(session);
+      setProgramExecutionOptions((current) => ({
+        ...current,
+        surfaceMapId: enabled ? session.active?.mapId : undefined,
+      }));
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setSurfaceMapBusy(false);
+    }
+  };
   const preflightControls = realRunPreflightControls(reportForProgram, {
     serialAvailable: realRunAvailable,
     gatewayAvailable: realRunGateway !== undefined,
@@ -706,6 +793,7 @@ export function ProgramWorkspace({
     alarm: machineContext?.snapshot.alarm !== undefined,
     connection: machineContext?.snapshot.connection ?? "disconnected",
     machineBound: machineContext?.machineBound ?? false,
+    machineSyncing: machineContext?.machineSyncing ?? false,
     machineMode: machineContext?.snapshot.machine.mode ?? "unknown",
     parserEligible: program?.summary.dryRunEligible ?? false,
     preflightStatus: preflightControls.status,
@@ -725,6 +813,10 @@ export function ProgramWorkspace({
         ? `ALARM${machineContext.snapshot.alarm.code === undefined ? "" : `:${machineContext.snapshot.alarm.code}`}`
         : machineContext.snapshot.resetNotice
           ? "Контроллер перезапущен"
+          : machineContext.machineSyncing
+            ? "Читаем привязку профиля из контроллера"
+            : !machineContext.machineBound
+              ? "Профиль не синхронизирован с подключённым контроллером"
           : `${machineContext.machineName} · ${machineContext.snapshot.machine.reportedMode}`
     : "Не подключен";
   const fileDetail = program?.summary.dryRunEligible
@@ -834,6 +926,7 @@ export function ProgramWorkspace({
     if (action === "acknowledgeReset") void machineContext?.onAcknowledgeReset();
     if (action === "setWorkZero") machineContext?.onOpenWorkZero();
     if (action === "runPreflight") void runRealPreflight();
+    if (action === "syncMachine") void machineContext?.onSyncMachine();
     if (action === "runGrblCheck") {
       setRealRunReport(undefined);
       startCheckRun();
@@ -1243,19 +1336,15 @@ export function ProgramWorkspace({
                   )}
                   {programRunVisible && physicalActions.stopVisible && realRunGateway && (
                     <button
-                      aria-label={
-                        stopConfirming
-                          ? "Подтвердить завершение задания"
-                          : "Завершить текущее задание"
-                      }
-                      className={`is-cancel${stopConfirming ? " is-confirming" : ""}`}
+                      aria-label="Остановить текущее задание"
+                      className="is-cancel"
                       disabled={senderCommandBusy}
                       onClick={() => void stopProgramRun()}
                       title="Feed Hold, затем Soft Reset; незавершённую работу можно восстановить или закрыть"
                       type="button"
                     >
                       <Square aria-hidden="true" size={13} />
-                      {stopConfirming ? "Ещё раз: завершить" : "Завершить задание"}
+                      Остановить
                     </button>
                   )}
                   {checkRunVisible && checkAction === "cancel" && dryRunGateway && (
@@ -1281,18 +1370,24 @@ export function ProgramWorkspace({
                     </button>
                   )}
                   {programRunVisible &&
+                    ["completed", "failed", "cancelled"].includes(displayedSender.state) &&
+                    machineContext && (
+                      <div className="sender-zero-return" aria-label="Возврат к рабочему нулю">
+                        <span>После остановки</span>
+                        <button
+                          disabled={senderCommandBusy}
+                          onClick={() => void returnToWorkOrigin()}
+                          title="Millo поднимет Z, вернёт XY и только затем опустит Z к рабочему нулю"
+                          type="button"
+                        >
+                          <LocateFixed aria-hidden="true" size={13} />
+                          Вернуться в рабочий ноль
+                        </button>
+                      </div>
+                    )}
+                  {programRunVisible &&
                     physicalActions.primary === "prepareRerun" && (
                     <>
-                      <button
-                        className="is-return-zero"
-                        disabled={senderCommandBusy || !machineContext}
-                        onClick={() => void returnToWorkZero("z")}
-                        title="Вернуть ось Z к сохранённому рабочему нулю без изменения G54–G59"
-                        type="button"
-                      >
-                        <LocateFixed aria-hidden="true" size={13} />
-                        Вернуть фрезу к Z0
-                      </button>
                       <button
                         className="is-terminal-action"
                         disabled={senderCommandBusy}
@@ -1342,7 +1437,7 @@ export function ProgramWorkspace({
                   {displayedSender.state === "completed"
                     ? checkRunVisible
                       ? "Все строки приняты в $C; контроллер вернулся в Idle"
-                      : "Ещё проход: Z0 → Jog Z− → Только Z → подготовить повтор"
+                      : "Возврат: сначала безопасно поднимите Z, затем X0/Y0; Z0 выполняйте последним"
                     : displayedSender.state === "failed"
                       ? displayedSenderFailure
                       : displayedSender.state === "toolChange"
@@ -1381,6 +1476,14 @@ export function ProgramWorkspace({
                   }}
                   onOpenOrigin={() => machineContext?.onOpenWorkZero()}
                   onPrimary={runReadinessAction}
+                  onSurfaceMap={(enabled) => void setSurfaceMapApplication(enabled)}
+                  surfaceMap={surfaceMap ? {
+                    checked: surfaceMap.enabled &&
+                      programExecutionOptions.surfaceMapId === surfaceMap.map.mapId,
+                    detail: surfaceMap.detail,
+                    disabled: surfaceMapBusy || senderActive || !surfaceMap.coversProgram || !surfaceMap.usable,
+                    warning: !surfaceMap.coversProgram || !surfaceMap.usable,
+                  } : undefined}
                   view={readiness}
                 />
                 <details className="execution-settings">
@@ -1613,48 +1716,19 @@ export function ProgramWorkspace({
               {realRunTarget && (
                 <div
                 aria-labelledby="program-preflight-tab"
-                className="real-run-checks"
                 hidden={diagnosticView !== "preflight"}
                 id="program-preflight-panel"
                 role="tabpanel"
               >
-                {reportForProgram?.checks.map((item) => {
-                  const sourceLine = item.sourceLine;
-                  const content = (
-                    <>
-                      {item.level === "pass" ? (
-                        <CircleCheck aria-hidden="true" size={13} />
-                      ) : (
-                        <CircleAlert aria-hidden="true" size={13} />
-                      )}
-                      <span>
-                        <strong>{item.title}</strong>
-                        <small>{item.detail}</small>
-                      </span>
-                      {sourceLine !== undefined && <code>L{sourceLine}</code>}
-                    </>
-                  );
-                  return sourceLine !== undefined ? (
-                    <button
-                      className={`real-run-check is-${item.level}`}
-                      key={item.id}
-                      onClick={() => {
-                        setSelectedSourceLine(sourceLine);
-                        setDiagnosticView("lines");
-                      }}
-                      type="button"
-                    >
-                      {content}
-                    </button>
-                  ) : (
-                    <div
-                      className={`real-run-check is-${item.level}`}
-                      key={item.id}
-                    >
-                      {content}
-                    </div>
-                  );
-                })}
+                {reportForProgram && (
+                  <ProgramPreflightReport
+                    onSelectSourceLine={(sourceLine) => {
+                      setSelectedSourceLine(sourceLine);
+                      setDiagnosticView("lines");
+                    }}
+                    report={reportForProgram}
+                  />
+                )}
                 </div>
               )}
             </details>
@@ -1764,7 +1838,12 @@ export function ProgramWorkspace({
         />
       )}
 
-      {error && <p className="program-error">{error}</p>}
+      {error && (
+        <div className="program-error" role="alert">
+          <span>{error}</span>
+          <button aria-label="Закрыть сообщение" onClick={() => setError(undefined)} type="button">×</button>
+        </div>
+      )}
     </section>
   );
 }

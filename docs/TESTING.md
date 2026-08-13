@@ -40,6 +40,14 @@ empty workspace, the complete supported extension allowlist, and a stable
 The work-zero feature suite rejects an unconfirmed request before the gateway
 and delegates only a typed X/Y/Z request. Registry tests also verify that the
 core panel occupies the separate `control.coordinates` slot.
+Heightmap datum tests accept Z0 only when a map contains verified contact and
+its stored G54-G59/WCO binding matches the live controller. Stale bindings,
+changed WCS/WCO and maps without contact fail closed. The operator fixture must
+show `Z0 найден` for a current saved map and must not request redundant Z
+zeroing after the surface dialog is reopened.
+The command-actor regression `heightmap_reuses_probe_established_z_zero_after_xy_zeroing`
+executes the real operator sequence and asserts that the entire probe plus map
+flow writes exactly one `G10 ... Z` command.
 
 Program-loader tests reject unsupported, empty, and oversized files before IPC
 and assert both the exact typed parse request and retained original source.
@@ -787,7 +795,9 @@ short search distance, low feed, and the operator at the machine.
 `millo-heightmap` tests bounded serpentine planning, grid spacing, duration,
 bilinear interpolation across serpentine storage, probe misses, direct/fixed
 contact semantics, JSON round trips, atomic active-map replacement, and restart
-disarming. Domain fixtures preserve legacy `useForWorkZero` profiles while an
+disarming. Resume fixtures prove that only probe depth may change while grid and
+measured samples remain immutable. Domain fixtures preserve legacy
+`useForWorkZero` profiles while an
 explicit new mode wins.
 
 Command-actor tests execute a 2 x 2 map on Mock GRBL, assert exact XY order and
@@ -812,6 +822,12 @@ without dispatching motion, accepts a fresh `Idle` within three seconds, and
 still proves that neither `$J` nor `G38.x` is written before durable commit.
 Companion fixtures prove that realtime Hold remains serviceable during this
 wait and that an active sender is rejected as Busy without emitting `G38.x`.
+The recoverable-miss fixture verifies that clearance 2 mm plus reserve 2 mm
+emits `G38.3 Z-4.000`, leaves GRBL Idle without byte `0x18`, preserves the
+failing sequence, and raises back to safe Z. The resume fixture starts with two
+of four samples already durable, increases reserve to 4 mm, emits exactly two
+remaining probes with a 6 mm search travel, and preserves the original values.
+Critical link-loss and target-mismatch fixtures continue to require quarantine.
 The LUNYEE hardware regression fixture reports host-issued `$J` retract, safe-Z,
 and XY moves as `Run` rather than `Jog`; both one-point calibration and a full
 serpentine map must complete within computed motion deadlines. A sparse-status
@@ -823,6 +839,14 @@ emitted only after XY settles to fresh `Idle`.
 The IPC contract is pinned on both sides: Vitest serializes the complete
 webview request with `originXMm`, `originYMm` and `clearanceZMm`, while a Rust
 fixture deserializes that same camelCase shape into `HeightmapStartRequest`.
+
+`millo-dry-run` additionally fixtures the execution boundary. A completed
+sloped 2 x 2 map must lower a nominal Z-0.2 path to the interpolated local
+surface while preserving the unmodified safe Z command. Programs outside the
+measured perimeter, missing map data, incomplete samples, and implicit map
+selection are rejected with `heightmap-compensation` blockers. The same map ID
+is serialized in execution options so the preflight report and GRBL Check
+certificate become stale when application changes.
 
 Vitest covers auto-perimeter margins, density independent from display
 interpolation, readable serpentine matrix ordering, machine-travel validation,
@@ -841,3 +865,7 @@ the active point. Partial adjacent cells render incrementally during probing.
 The scene-model camera-scope fixture proves that another sample in the same
 perimeter preserves the current 3D camera, while changing the perimeter or
 Top/3D mode deliberately requests a fresh frame.
+Program UI tests keep the map switch in the primary readiness card, verify its
+map identity and coverage warning, and keep optional-stop/block-delete controls
+in the advanced drawer. One-point Z probing disarms map application without
+deleting the measured data.

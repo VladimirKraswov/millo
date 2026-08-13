@@ -4,10 +4,33 @@ import type {
   HeightmapPlanRequest,
   ProbePoint,
 } from "../../shared/heightmap";
+import type { Position, WorkCoordinateSystem } from "../../shared/machine";
 import type { ProgramBounds } from "../../shared/program";
 import { describeProbeReadinessFailure } from "../probe/probeReadinessModel";
 
 export type HeightmapDensity = "sparse" | "normal" | "precise" | "custom";
+
+const sameCoordinate = (left: number, right: number): boolean =>
+  Math.abs(left - right) <= 0.01;
+
+export const heightmapHasCurrentZDatum = (
+  map: Heightmap | undefined,
+  coordinateBindingStale: boolean,
+  activeCoordinateSystem: WorkCoordinateSystem,
+  currentWorkCoordinateOffset: Position | undefined,
+): boolean => {
+  const binding = map?.coordinateBinding;
+  return Boolean(
+    !coordinateBindingStale &&
+    binding &&
+    currentWorkCoordinateOffset &&
+    map?.samples.some((sample) => sample?.triggered) &&
+    binding.coordinateSystem === activeCoordinateSystem &&
+    sameCoordinate(binding.workCoordinateOffset.x, currentWorkCoordinateOffset.x) &&
+    sameCoordinate(binding.workCoordinateOffset.y, currentWorkCoordinateOffset.y) &&
+    sameCoordinate(binding.workCoordinateOffset.z, currentWorkCoordinateOffset.z),
+  );
+};
 
 const densitySpacing: Record<Exclude<HeightmapDensity, "custom">, number> = {
   sparse: 20,
@@ -72,7 +95,7 @@ export const estimateHeightmapSeconds = (request: HeightmapPlanRequest): number 
   }, 0);
   const probes = plan.points.length;
   return xyDistance / request.travelFeedMmPerMin * 60 + probes * (
-    request.maxProbeDepthMm / request.probeFeedMmPerMin * 60 +
+    (request.clearanceZMm + request.maxProbeDepthMm) / request.probeFeedMmPerMin * 60 +
     (request.clearanceZMm + request.maxProbeDepthMm) / request.retractFeedMmPerMin * 60
   );
 };
@@ -88,14 +111,14 @@ export const heightmapCalibrationPlateThickness = (
   : separatePlateThicknessMm;
 
 export const heightmapSurfaceVariation = (request: HeightmapPlanRequest): number =>
-  Math.max(0.1, request.maxProbeDepthMm - request.clearanceZMm);
+  request.maxProbeDepthMm;
 
 export const withHeightmapSurfaceVariation = (
   request: HeightmapPlanRequest,
   variationMm: number,
 ): HeightmapPlanRequest => ({
   ...request,
-  maxProbeDepthMm: request.clearanceZMm + variationMm,
+  maxProbeDepthMm: variationMm,
 });
 
 export const describeHeightmapFailure = (
@@ -106,7 +129,7 @@ export const describeHeightmapFailure = (
   const readiness = describeProbeReadinessFailure(error, "измерению");
   if (readiness) return readiness;
   if (error.includes("probe did not contact") || error.includes("ALARM:5")) {
-    return `Щуп не коснулся поверхности в пределах ${searchMm.toFixed(1)} mm. Увеличьте диапазон или подведите фрезу ближе.`;
+    return `Щуп не коснулся поверхности до Z −${searchMm.toFixed(1)} mm. Готовые точки сохранены: увеличьте запас и продолжите.`;
   }
   return error;
 };
@@ -128,7 +151,6 @@ export const validateHeightmapRequest = (
   if (travel && (request.widthMm > travel.x || request.heightMm > travel.y)) return "Периметр больше рабочего поля выбранного станка";
   if (travel && heightmapSafeWorkZ(request) > travel.z) return "Безопасная Z с учётом пластины больше хода станка";
   if (request.clearanceZMm <= 0 || request.maxProbeDepthMm <= 0) return "Безопасная Z и глубина поиска должны быть положительными";
-  if (request.maxProbeDepthMm <= request.clearanceZMm) return "Допуск неровности должен быть больше 0";
   if (request.probeFeedMmPerMin <= 0 || request.probeFeedMmPerMin > 1_000) return "Подача щупа должна быть от 0.1 до 1000 mm/min";
   if (request.travelFeedMmPerMin < 10 || request.travelFeedMmPerMin > 100_000) return "Подача перехода должна быть от 10 до 100000 mm/min";
   if (request.retractFeedMmPerMin < 10 || request.retractFeedMmPerMin > 100_000) return "Подача подъёма должна быть от 10 до 100000 mm/min";

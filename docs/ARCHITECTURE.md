@@ -1,5 +1,9 @@
 # Architecture
 
+The authoritative operator state machine is documented in
+[`OPERATOR_WORKFLOW.md`](OPERATOR_WORKFLOW.md). UI components and plugins must
+not invent readiness or motion states outside that contract.
+
 ## Direction of dependencies
 
 ```text
@@ -327,11 +331,26 @@ does not schedule or execute controller I/O.
   quarantine through Feed Hold plus Soft Reset and never dispatches automatic
   recovery G-code from an untrusted coordinate. A dedicated cancel request is
   admitted by the biased actor queue and atomically removes the active map.
+- Per-point depth means reserve below calibrated work Z0, not travel from the
+  clearance plane. The emitted `G38.3` distance is `clearance + reserve`. An
+  ordinary no-contact result is recoverable: the actor verifies fresh Idle,
+  raises to the measured-safe transit plane, restores modal state without Soft
+  Reset, and publishes a failed snapshot with the missing sequence. Tauri keeps
+  the measured prefix as a durable pending draft. Resume revalidates profile,
+  Idle, A5 input, WCS, unchanged grid and contiguous samples before creating a
+  new operation sequence at the first empty point. Transport, position and
+  controller-state failures still use Feed Hold plus Soft Reset quarantine.
 - Heightmap rendering has no machine capability. A pure model derives the
   auto-perimeter, physical spacing, matrix, and color scale; Three.js consumes
   immutable map/program DTOs for one perimeter, probe points, outside-path
   warnings, measured-point labels, incremental interpolated mesh, and bounded
   label density. Render-grid resolution cannot add physical contacts.
+- Heightmap execution crosses a separate typed boundary in `millo-dry-run`.
+  `ProgramExecutionOptions.surface_map_id` binds an immutable workpiece map to
+  preflight, GRBL Check, one-use authorization, recovery, and physical sender
+  preparation. The core linearizes arcs, bounds segmentation, interpolates Z,
+  and rejects incomplete, stale, cross-profile, out-of-perimeter, or unsupported
+  modal input. React can select a map ID but cannot generate corrected G-code.
 - `programLineTableModel` computes a fixed-height overscanned window, and the
   React table mounts only that slice. The full line count is represented by a
   spacer inside a bounded desktop/mobile viewport.

@@ -181,6 +181,8 @@ pub struct FirstCutConfirmation {
     pub safe_z_verified: bool,
     pub manual_spindle_running: bool,
     pub manual_spindle_off: bool,
+    #[serde(default)]
+    pub probe_removed: bool,
     pub path_clear: bool,
     pub power_control_reachable: bool,
 }
@@ -218,6 +220,9 @@ impl FirstCutConfirmation {
                 }
                 if !self.manual_spindle_running {
                     missing.push("manual spindle running");
+                }
+                if self.execution_options.surface_map_id.is_some() && !self.probe_removed {
+                    missing.push("probe and wires removed");
                 }
             }
         }
@@ -690,7 +695,7 @@ pub fn assess_real_run_preflight_with_options(
             "manual-spindle",
             RunPreflightLevel::Caution,
             "Manual spindle workflow",
-            "Automatic M3/M4/S commands remain forbidden; spindle state requires a separate operator step"
+            "The machine profile uses a manual spindle; controller spindle words do not replace the separate operator step"
                 .to_owned(),
             None,
         ));
@@ -811,6 +816,7 @@ fn blocker_kind_id(kind: DryRunBlockerKind) -> &'static str {
         DryRunBlockerKind::UnsupportedProgram => "unsupported-program",
         DryRunBlockerKind::IncompletePreview => "incomplete-preview",
         DryRunBlockerKind::CommandTooLong => "command-too-long",
+        DryRunBlockerKind::HeightmapCompensation => "heightmap-compensation",
     }
 }
 
@@ -999,6 +1005,7 @@ mod tests {
             safe_z_verified: true,
             manual_spindle_running: true,
             manual_spindle_off: false,
+            probe_removed: true,
             path_clear: true,
             power_control_reachable: true,
         }
@@ -1015,6 +1022,7 @@ mod tests {
             safe_z_verified: true,
             manual_spindle_running: false,
             manual_spindle_off: true,
+            probe_removed: true,
             path_clear: true,
             power_control_reachable: true,
         }
@@ -1042,6 +1050,7 @@ mod tests {
             ProgramExecutionOptions {
                 optional_stop: true,
                 block_delete: false,
+                ..ProgramExecutionOptions::default()
             },
         );
         let mut gate = ProgramCheckGate::default();
@@ -1065,6 +1074,7 @@ mod tests {
             execution_options: ProgramExecutionOptions {
                 optional_stop: false,
                 block_delete: false,
+                ..ProgramExecutionOptions::default()
             },
             ..binding.clone()
         };
@@ -1305,6 +1315,35 @@ mod tests {
     }
 
     #[test]
+    fn heightmap_cut_requires_probe_wires_to_be_removed() {
+        let now = Instant::now();
+        let snapshot = snapshot(MachineMode::Idle);
+        let program = program("G21 G90 G94 G17\nG0 X0 Y0 Z2\nG1 Z-0.1 F30");
+        let options = ProgramExecutionOptions {
+            surface_map_id: Some(4),
+            ..ProgramExecutionOptions::default()
+        };
+        let report = assess_real_run_preflight_with_options(
+            &program,
+            hardware(vec![readiness_check("axis-steps", ReadinessLevel::Pass)]),
+            &snapshot,
+            ProgramRunIntent::Cutting,
+            options,
+        );
+        let mut confirmation = first_cut_confirmation();
+        confirmation.execution_options = options;
+        confirmation.probe_removed = false;
+
+        assert_eq!(confirmation.missing(), vec!["probe and wires removed"]);
+        assert_eq!(
+            FirstCutGate::default().authorize(confirmation, &report, &snapshot, now),
+            Err(FirstCutAuthorizationError::IncompleteConfirmation {
+                missing: vec!["probe and wires removed"]
+            })
+        );
+    }
+
+    #[test]
     fn first_cut_authorization_is_short_lived_program_bound_and_single_use() {
         let now = Instant::now();
         let snapshot = snapshot(MachineMode::Idle);
@@ -1392,6 +1431,7 @@ mod tests {
         let options = ProgramExecutionOptions {
             optional_stop: true,
             block_delete: true,
+            ..ProgramExecutionOptions::default()
         };
         let parsed = parse_program_with_options(
             ProgramParseRequest {
@@ -1436,6 +1476,41 @@ mod tests {
     }
 
     #[test]
+    fn authorization_binds_the_selected_surface_map_identity() {
+        let now = Instant::now();
+        let snapshot = snapshot(MachineMode::Idle);
+        let (parsed, _) = ready_first_cut(&snapshot);
+        let options = ProgramExecutionOptions {
+            surface_map_id: Some(42),
+            ..ProgramExecutionOptions::default()
+        };
+        let report = assess_real_run_preflight_with_options(
+            &parsed,
+            hardware(Vec::new()),
+            &snapshot,
+            ProgramRunIntent::Cutting,
+            options,
+        );
+        assert!(report.ready);
+        let mut confirmation = first_cut_confirmation();
+        confirmation.execution_options = options;
+        let mut gate = FirstCutGate::default();
+        let authorization = gate
+            .authorize(confirmation, &report, &snapshot, now)
+            .unwrap();
+        let consumed = gate
+            .consume(
+                authorization.id,
+                &report.program_fingerprint,
+                &snapshot,
+                now,
+            )
+            .unwrap();
+
+        assert_eq!(consumed.execution_options.surface_map_id, Some(42));
+    }
+
+    #[test]
     fn block_delete_is_part_of_the_program_fingerprint_and_modal_contract() {
         let request = ProgramParseRequest {
             source_name: "optional-modal.nc".to_owned(),
@@ -1458,6 +1533,7 @@ mod tests {
             ProgramExecutionOptions {
                 optional_stop: false,
                 block_delete: true,
+                ..ProgramExecutionOptions::default()
             },
         );
         let modal = report

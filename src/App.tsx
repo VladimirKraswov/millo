@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   ChevronDown,
   KeyRound,
@@ -70,6 +70,7 @@ import { DiagnosticLogViewer } from "./features/diagnostics/DiagnosticLogViewer"
 import { ProbeIndicator } from "./features/probe/ProbeIndicator";
 import { ZProbeDialog } from "./features/probe/ZProbeDialog";
 import { previewHeightmapGateway } from "./features/heightmap/previewHeightmapGateway";
+import { heightmapHasCurrentZDatum } from "./features/heightmap/heightmapModel";
 import { WorkZeroDialog } from "./features/work-zero/WorkZeroDialog";
 import { ToolLibraryDialog } from "./features/tool-library/ToolLibraryDialog";
 import { WorkspaceToolsMenu } from "./components/WorkspaceToolsMenu";
@@ -96,7 +97,8 @@ import {
   type HardwareInspection,
   type Position,
   type TransportDescriptor,
-  type WorkAxis,
+  type WorkCoordinateSystem,
+  type ZProbeOutcome,
 } from "./shared/machine";
 import type { GcodeProgram } from "./shared/program";
 import type {
@@ -129,6 +131,14 @@ const mockTransport: TransportDescriptor = {
   matchReason: "Встроенный тестовый контроллер",
 };
 
+interface ProbeEstablishedZDatum {
+  readonly coordinateSystem: WorkCoordinateSystem;
+  readonly resetCount: number;
+  readonly reconnectCount: number;
+  readonly source: "probe" | "heightmap";
+  readonly workCoordinateOffsetZ?: number;
+}
+
 const baudRates = [9_600, 19_200, 38_400, 57_600, 115_200, 230_400];
 const developmentFixture = import.meta.env.DEV
   ? new URLSearchParams(window.location.search).get("fixture")
@@ -148,6 +158,7 @@ const developmentPreviewFixture =
         : undefined;
 const developmentPreflightFixture =
   developmentFixture === "preflight" ||
+  developmentFixture === "heightmap" ||
   developmentFixture === "first-cut" ||
   developmentFixture === "check-complete" ||
   developmentFixture === "check-running" ||
@@ -189,6 +200,7 @@ const developmentJogSnapshot: ControllerSnapshot = {
           : "Idle",
     machinePosition: { x: 152.4, y: 91.2, z: -4.75 },
     workPosition: { x: 12.4, y: 8.2, z: 5.25 },
+    workCoordinateOffset: { x: 140, y: 83, z: -10 },
     feedRate: 0,
     spindleSpeed: 0,
     pins: developmentProbeFixture
@@ -402,6 +414,8 @@ export default function App() {
       : { profiles: [] },
   );
   const [profileBusy, setProfileBusy] = useState(false);
+  const [machineSyncing, setMachineSyncing] = useState(false);
+  const [machineSyncAttempted, setMachineSyncAttempted] = useState(false);
   const [controllerSettings, setControllerSettings] =
     useState<ControllerSettingsState | undefined>(
       developmentFixture === "settings" || developmentMachineFixture
@@ -419,6 +433,9 @@ export default function App() {
   const [logOpen, setLogOpen] = useState(developmentFixture === "logs");
   const [workZeroOpen, setWorkZeroOpen] = useState(false);
   const [zProbeOpen, setZProbeOpen] = useState(developmentProbeFixture);
+  const [probeEstablishedZDatum, setProbeEstablishedZDatum] =
+    useState<ProbeEstablishedZDatum>();
+  const zDatumRestoreKey = useRef<string | undefined>(undefined);
   const [toolLibraryOpen, setToolLibraryOpen] = useState(
     developmentFixture === "tools",
   );
@@ -458,6 +475,65 @@ export default function App() {
       .catch((error: unknown) => setUiError(String(error)));
   }, [desktopRuntime]);
 
+  const synchronizeConnectedMachine = async (): Promise<boolean> => {
+    if (!desktopRuntime || snapshot.connection !== "connected") return false;
+    setMachineSyncAttempted(true);
+    setMachineSyncing(true);
+    setUiError(undefined);
+    try {
+      const [settings, profiles] = await Promise.all([
+        getControllerSettings(),
+        getMachineProfiles(),
+      ]);
+      setControllerSettings(settings);
+      setMachineProfiles(settings.profileId
+        ? { ...profiles, selectedProfileId: settings.profileId }
+        : profiles);
+      if (!settings.profileId) {
+        throw new Error(
+          "Подключённый контроллер не привязан к профилю. Отключите станок и подключите его снова для автоматического определения.",
+        );
+      }
+      return true;
+    } catch (error) {
+      setUiError(String(error));
+      return false;
+    } finally {
+      setMachineSyncing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (
+      !desktopRuntime ||
+      snapshot.connection !== "connected" ||
+      controllerSettings !== undefined ||
+      machineSyncAttempted ||
+      machineSyncing
+    ) return;
+    void synchronizeConnectedMachine();
+  }, [controllerSettings, desktopRuntime, machineSyncAttempted, machineSyncing, snapshot.connection]);
+
+  useEffect(() => {
+    if (snapshot.connection === "disconnected") {
+      setMachineSyncAttempted(false);
+      setMachineSyncing(false);
+    }
+  }, [snapshot.connection]);
+
+  const rememberProbeEstablishedZDatum = (
+    outcome: ZProbeOutcome,
+    source: ProbeEstablishedZDatum["source"],
+  ) => {
+    setProbeEstablishedZDatum({
+      coordinateSystem: outcome.coordinateSystem,
+      resetCount: outcome.snapshot.resetCount,
+      reconnectCount: outcome.snapshot.reconnectCount,
+      source,
+      workCoordinateOffsetZ: outcome.snapshot.machine.workCoordinateOffset?.z,
+    });
+  };
+
   useEffect(() => {
     if (generatedJob) setWorkbenchView("program");
   }, [generatedJob]);
@@ -480,9 +556,6 @@ export default function App() {
           value.resetNotice !== undefined
         ) {
           setInspection(undefined);
-        }
-        if (value.connection === "connected" && value.consecutiveFailures === 0) {
-          setUiError(undefined);
         }
       },
       onError: (error) => {
@@ -544,13 +617,14 @@ export default function App() {
     }
   };
 
-  const returnToWorkZero = async (axis: WorkAxis): Promise<void> => {
+  const returnToWorkOrigin = async (clearanceZMm: number): Promise<void> => {
     setBusy(true);
     setUiError(undefined);
     try {
-      const outcome = await tauriWorkCoordinateGateway.returnToZero({
-        axis,
-        feedMmPerMin: axis === "z" ? 100 : 300,
+      const outcome = await tauriWorkCoordinateGateway.returnToOrigin!({
+        clearanceZMm,
+        xyFeedMmPerMin: 300,
+        zFeedMmPerMin: 100,
       });
       pluginHost.machineState.publish(outcome.snapshot);
     } catch (error) {
@@ -606,7 +680,7 @@ export default function App() {
     activeTransport;
   const displayedTransport = transportLocked ? activeTransport : selectedTransport;
   const displayedError = uiError ?? snapshot.lastError;
-  const controlsBusy = busy || inspecting || profileBusy;
+  const controlsBusy = busy || inspecting || profileBusy || machineSyncing;
   const effectiveMachineProfiles =
     hasConnection && controllerSettings
       ? {
@@ -616,7 +690,10 @@ export default function App() {
       : machineProfiles;
   const selectedMachine = selectedMachineProfile(effectiveMachineProfiles);
   const machineBound =
-    activeTransport.kind === "mock" || controllerSettings?.profileId !== undefined;
+    activeTransport.kind === "mock" || (
+      controllerSettings?.profileId !== undefined &&
+      selectedMachine?.id === controllerSettings.profileId
+    );
   const jogAxisRates = ["$110", "$111", "$112"]
     .map((key) =>
       Number(
@@ -629,6 +706,91 @@ export default function App() {
     jogAxisRates.length > 0 ? Math.min(...jogAxisRates) : 1_000;
   const maxJogDistanceMm = selectedMachine?.maxJogDistanceMm ?? 50;
   const workPositionView = resolveWorkPosition(snapshot, inspection);
+
+  useEffect(() => {
+    if (!probeEstablishedZDatum) return;
+    if (
+      snapshot.connection !== "connected" ||
+      snapshot.resetCount !== probeEstablishedZDatum.resetCount ||
+      snapshot.reconnectCount !== probeEstablishedZDatum.reconnectCount ||
+      workPositionView.coordinateSystem.toLowerCase() !==
+        probeEstablishedZDatum.coordinateSystem.toLowerCase() ||
+      (
+        probeEstablishedZDatum.workCoordinateOffsetZ !== undefined &&
+        snapshot.machine.workCoordinateOffset !== undefined &&
+        Math.abs(
+          probeEstablishedZDatum.workCoordinateOffsetZ -
+          snapshot.machine.workCoordinateOffset.z,
+        ) > 0.01
+      )
+    ) {
+      setProbeEstablishedZDatum(undefined);
+    }
+  }, [
+    probeEstablishedZDatum,
+    snapshot.connection,
+    snapshot.machine.workCoordinateOffset,
+    snapshot.reconnectCount,
+    snapshot.resetCount,
+    workPositionView.coordinateSystem,
+  ]);
+
+  useEffect(() => {
+    if (
+      !desktopRuntime ||
+      probeEstablishedZDatum ||
+      snapshot.connection !== "connected" ||
+      !selectedMachine?.id
+    ) return;
+    const profileId = selectedMachine.id;
+    const offset = snapshot.machine.workCoordinateOffset;
+    const restoreKey = [
+      profileId,
+      snapshot.resetCount,
+      snapshot.reconnectCount,
+      workPositionView.coordinateSystem,
+      offset?.x,
+      offset?.y,
+      offset?.z,
+    ].join(":");
+    if (zDatumRestoreKey.current === restoreKey) return;
+    zDatumRestoreKey.current = restoreKey;
+    let active = true;
+    void tauriHeightmapGateway.getSession().then((session) => {
+      const stored = session.active;
+      const binding = stored?.map.coordinateBinding;
+      const currentOffset = snapshot.machine.workCoordinateOffset;
+      if (
+        !active ||
+        stored?.machineProfileId !== profileId ||
+        !binding ||
+        !currentOffset ||
+        !heightmapHasCurrentZDatum(
+          stored.map,
+          session.coordinateBindingStale,
+          workPositionView.coordinateSystem.toLowerCase() as WorkCoordinateSystem,
+          currentOffset,
+        )
+      ) return;
+      setProbeEstablishedZDatum({
+        coordinateSystem: binding.coordinateSystem,
+        resetCount: snapshot.resetCount,
+        reconnectCount: snapshot.reconnectCount,
+        source: "heightmap",
+        workCoordinateOffsetZ: currentOffset.z,
+      });
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [
+    desktopRuntime,
+    probeEstablishedZDatum,
+    selectedMachine?.id,
+    snapshot.connection,
+    snapshot.machine.workCoordinateOffset,
+    snapshot.reconnectCount,
+    snapshot.resetCount,
+    workPositionView.coordinateSystem,
+  ]);
 
   useEffect(() => {
     if (transportLocked || !selectedMachine?.connection) return;
@@ -654,6 +816,7 @@ export default function App() {
     setControllerSettings(undefined);
     setOnboardingDraft(undefined);
     setBusy(true);
+    setMachineSyncAttempted(true);
     setUiError(undefined);
     try {
       const outcome = await connectTransport(selectedTransport.id, baudRate);
@@ -683,6 +846,12 @@ export default function App() {
       setSettingsOpen(false);
       await refreshMachineProfiles();
     }
+  };
+
+  const recoverConnectedMachine = async (): Promise<void> => {
+    if (await synchronizeConnectedMachine()) return;
+    await disconnectController();
+    await connectSelectedTransport();
   };
 
   const chooseMachineProfile = async (profileId: string) => {
@@ -977,6 +1146,13 @@ export default function App() {
                   ? previewFixtureProgramGateway
                   : tauriProgramGateway
               }
+              heightmapGateway={
+                developmentFixture === "heightmap"
+                  ? previewHeightmapGateway
+                  : desktopRuntime
+                    ? tauriHeightmapGateway
+                    : undefined
+              }
               initialProgram={developmentPreviewFixture}
               initialSource={
                 developmentPreviewFixture?.lines.map((line) => line.source).join("\n")
@@ -1004,10 +1180,13 @@ export default function App() {
                 busy: controlsBusy,
                 machineBound,
                 machineName: selectedMachine?.name ?? displayedTransport.label,
+                machineProfileId: selectedMachine?.id,
+                machineSyncing,
                 onAcknowledgeReset: () => runAction(acknowledgeReset),
                 onConnect: connectSelectedTransport,
                 onOpenWorkZero: () => setWorkZeroOpen(true),
-                onReturnToWorkZero: returnToWorkZero,
+                onReturnToWorkOrigin: returnToWorkOrigin,
+                onSyncMachine: recoverConnectedMachine,
                 onUnlock: () => runAction(unlockAlarm),
                 snapshot,
                 workPosition: workPositionView.position,
@@ -1251,7 +1430,7 @@ export default function App() {
               machineBound={machineBound}
               maxJogDistanceMm={maxJogDistanceMm}
               maxJogFeedMmPerMin={maxJogFeedMmPerMin}
-              useProbeForZ={selectedMachine?.probeSettings.mode === "workZero"}
+              useProbeForZ={probeEstablishedZDatum !== undefined}
             />
           )}
 
@@ -1417,7 +1596,15 @@ export default function App() {
           {!desktopRuntime && (
             <p className="runtime-note">Управление доступно в окне Tauri.</p>
           )}
-          {displayedError && <p className="error-note">{displayedError}</p>}
+          {displayedError && (
+            <div className="error-note" role="alert">
+              <span>{displayedError}</span>
+              <div>
+                <button onClick={() => setLogOpen(true)} type="button">Журнал</button>
+                <button aria-label="Закрыть ошибку" onClick={() => setUiError(undefined)} type="button">×</button>
+              </div>
+            </div>
+          )}
         </aside>
       </main>
 
@@ -1455,9 +1642,10 @@ export default function App() {
         open={workZeroOpen}
         position={workPositionView.position}
         snapshot={snapshot}
-        useProbeForZ={selectedMachine?.probeSettings.mode === "workZero"}
+        useProbeForZ={probeEstablishedZDatum !== undefined}
       />
       <ZProbeDialog
+        activeCoordinateSystem={workPositionView.coordinateSystem.toLowerCase() as WorkCoordinateSystem}
         desktopRuntime={desktopRuntime || developmentFixture === "heightmap"}
         disabled={controlsBusy}
         gateway={tauriZProbeGateway}
@@ -1488,6 +1676,7 @@ export default function App() {
           });
         }}
         onSnapshot={pluginHost.machineState.publish}
+        onZeroEstablished={rememberProbeEstablishedZDatum}
         onUnlock={unlockAlarm}
         open={zProbeOpen}
         profileId={selectedMachine?.id}

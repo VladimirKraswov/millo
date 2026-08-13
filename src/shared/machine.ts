@@ -274,6 +274,18 @@ export interface ReturnToWorkZeroOutcome {
   snapshot: ControllerSnapshot;
 }
 
+export interface ReturnToWorkOriginRequest {
+  clearanceZMm: number;
+  xyFeedMmPerMin: number;
+  zFeedMmPerMin: number;
+}
+
+export interface ReturnToWorkOriginOutcome {
+  coordinateSystem: WorkCoordinateSystem;
+  commands: string[];
+  snapshot: ControllerSnapshot;
+}
+
 export interface ZProbeSettings {
   mode: "off" | "workZero" | "heightmap";
   plateThicknessMm: number;

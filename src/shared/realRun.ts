@@ -11,6 +11,7 @@ export type ProgramRunIntent = "airRun" | "cutting";
 export interface ProgramExecutionOptions {
   readonly optionalStop: boolean;
   readonly blockDelete: boolean;
+  readonly surfaceMapId?: number;
 }
 
 export type ProgramWorkCoordinateSystem =
@@ -92,6 +93,7 @@ export interface FirstCutConfirmation {
   readonly safeZVerified: boolean;
   readonly manualSpindleRunning: boolean;
   readonly manualSpindleOff: boolean;
+  readonly probeRemoved: boolean;
   readonly pathClear: boolean;
   readonly powerControlReachable: boolean;
 }

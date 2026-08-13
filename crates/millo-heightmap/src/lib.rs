@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use millo_domain::{Position, WorkCoordinateSystem};
 use millo_storage::{backup_path, write_atomically};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -110,7 +111,8 @@ impl HeightmapPlan {
             })
             .sum::<f64>();
         let point_count = self.points.len() as f64;
-        let probe_seconds = request.max_probe_depth_mm / request.probe_feed_mm_per_min * 60.0;
+        let probe_travel_mm = request.clearance_z_mm + request.max_probe_depth_mm;
+        let probe_seconds = probe_travel_mm / request.probe_feed_mm_per_min * 60.0;
         let retract_seconds = (request.clearance_z_mm + request.max_probe_depth_mm)
             / request.retract_feed_mm_per_min
             * 60.0;
@@ -142,12 +144,44 @@ pub struct Heightmap {
     pub schema_version: u16,
     pub plan: HeightmapPlan,
     pub samples: Vec<Option<ProbeSample>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinate_binding: Option<HeightmapCoordinateBinding>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeightmapCoordinateBinding {
+    pub coordinate_system: WorkCoordinateSystem,
+    pub work_coordinate_offset: Position,
+}
+
+impl Heightmap {
+    pub fn reference_z(&self) -> Result<f64, HeightmapError> {
+        self.samples
+            .iter()
+            .flatten()
+            .find(|sample| sample.triggered)
+            .map(|sample| sample.z_mm)
+            .ok_or(HeightmapError::Incomplete)
+    }
+
+    pub fn interpolate_delta_z(&self, x_mm: f64, y_mm: f64) -> Result<f64, HeightmapError> {
+        Ok(self.interpolate_z(x_mm, y_mm)? - self.reference_z()?)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeightmapStartRequest {
     pub plan: HeightmapPlanRequest,
+    pub setup_confirmed: bool,
+    pub contact_available_at_every_point: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeightmapResumeRequest {
+    pub max_probe_depth_mm: f64,
     pub setup_confirmed: bool,
     pub contact_available_at_every_point: bool,
 }
@@ -245,6 +279,12 @@ pub struct SurfaceSession {
     pub pending: Option<PendingSurfaceMap>,
     pub application_enabled: bool,
     pub requires_setup_confirmation: bool,
+    #[serde(default = "default_coordinate_binding_stale")]
+    pub coordinate_binding_stale: bool,
+}
+
+const fn default_coordinate_binding_stale() -> bool {
+    true
 }
 
 impl Default for SurfaceSession {
@@ -257,6 +297,7 @@ impl Default for SurfaceSession {
             pending: None,
             application_enabled: false,
             requires_setup_confirmation: false,
+            coordinate_binding_stale: false,
         }
     }
 }
@@ -363,6 +404,58 @@ impl SurfaceSessionStore {
         self.commit(next)
     }
 
+    pub fn resume_pending(
+        &mut self,
+        machine_profile_id: &str,
+        operation: HeightmapOperationSnapshot,
+        now_unix_ms: u64,
+    ) -> Result<SurfaceSession, SurfaceSessionError> {
+        if operation.state != HeightmapOperationState::Running {
+            return Err(SurfaceSessionError::InvalidOperation(
+                "resumed map must start in Running state",
+            ));
+        }
+        let mut next = self.session.clone();
+        let pending = next
+            .pending
+            .as_mut()
+            .ok_or(SurfaceSessionError::NoPendingMap)?;
+        if pending.machine_profile_id != machine_profile_id {
+            return Err(SurfaceSessionError::PendingMachineMismatch);
+        }
+        let previous = pending
+            .operation
+            .map
+            .as_ref()
+            .ok_or(SurfaceSessionError::NoMap)?;
+        let resumed = operation.map.as_ref().ok_or(SurfaceSessionError::NoMap)?;
+        if !same_resume_grid_and_samples(previous, resumed) {
+            return Err(SurfaceSessionError::ResumeMapMismatch);
+        }
+        pending.operation = operation;
+        pending.updated_at_unix_ms = now_unix_ms;
+        next.revision = next.revision.saturating_add(1);
+        self.commit(next)
+    }
+
+    pub fn restore_pending_after_failed_resume(
+        &mut self,
+        failed_operation_sequence: u64,
+        previous: PendingSurfaceMap,
+    ) -> Result<SurfaceSession, SurfaceSessionError> {
+        let mut next = self.session.clone();
+        let current = next
+            .pending
+            .as_ref()
+            .ok_or(SurfaceSessionError::NoPendingMap)?;
+        if current.operation.operation_sequence != failed_operation_sequence {
+            return Err(SurfaceSessionError::OperationMismatch);
+        }
+        next.pending = Some(previous);
+        next.revision = next.revision.saturating_add(1);
+        self.commit(next)
+    }
+
     pub fn activate_completed(
         &mut self,
         operation_sequence: u64,
@@ -390,6 +483,7 @@ impl SurfaceSessionStore {
         next.next_map_id = next.next_map_id.saturating_add(1);
         next.application_enabled = false;
         next.requires_setup_confirmation = true;
+        next.coordinate_binding_stale = false;
         next.revision = next.revision.saturating_add(1);
         self.commit(next)
     }
@@ -407,9 +501,21 @@ impl SurfaceSessionStore {
             if !setup_confirmed {
                 return Err(SurfaceSessionError::SetupConfirmationRequired);
             }
+            if next.coordinate_binding_stale {
+                return Err(SurfaceSessionError::CoordinateBindingStale);
+            }
         }
         next.application_enabled = enabled;
         next.requires_setup_confirmation = false;
+        next.revision = next.revision.saturating_add(1);
+        self.commit(next)
+    }
+
+    pub fn disarm_for_coordinate_change(&mut self) -> Result<SurfaceSession, SurfaceSessionError> {
+        let mut next = self.session.clone();
+        next.application_enabled = false;
+        next.requires_setup_confirmation = next.active.is_some();
+        next.coordinate_binding_stale = next.active.is_some();
         next.revision = next.revision.saturating_add(1);
         self.commit(next)
     }
@@ -426,6 +532,7 @@ impl SurfaceSessionStore {
         next.active = None;
         next.application_enabled = false;
         next.requires_setup_confirmation = false;
+        next.coordinate_binding_stale = false;
         next.revision = next.revision.saturating_add(1);
         self.commit(next)
     }
@@ -447,12 +554,20 @@ pub enum SurfaceSessionError {
     NoPendingMap,
     #[error("heightmap operation does not match the pending operation")]
     OperationMismatch,
+    #[error("heightmap draft belongs to another machine profile")]
+    PendingMachineMismatch,
+    #[error("resumed heightmap must retain the saved grid and measured samples")]
+    ResumeMapMismatch,
     #[error("there is no completed heightmap")]
     NoMap,
     #[error("heightmap must be complete and every point must have contact")]
     IncompleteMap,
     #[error("confirm that the workpiece and work zero have not moved before applying the map")]
     SetupConfirmationRequired,
+    #[error(
+        "heightmap was measured before the work coordinate system changed; measure a new map after setting work zero"
+    )]
+    CoordinateBindingStale,
     #[error("unsupported surface-session schema version: {0}")]
     UnsupportedSchema(u16),
     #[error("invalid surface-session file: {0}")]
@@ -464,6 +579,12 @@ pub enum SurfaceSessionError {
     },
     #[error("surface-session I/O failed for {path}: {source}")]
     Io { path: PathBuf, source: io::Error },
+}
+
+fn same_resume_grid_and_samples(previous: &Heightmap, resumed: &Heightmap) -> bool {
+    let mut previous_plan = previous.plan.clone();
+    previous_plan.request.max_probe_depth_mm = resumed.plan.request.max_probe_depth_mm;
+    previous_plan == resumed.plan && previous.samples == resumed.samples
 }
 
 fn read_surface_session(path: &Path) -> Result<SurfaceSession, SurfaceSessionError> {
@@ -666,7 +787,19 @@ impl Heightmap {
             schema_version: HEIGHTMAP_SCHEMA_VERSION,
             plan,
             samples: vec![None; point_count],
+            coordinate_binding: None,
         }
+    }
+
+    pub fn bind_coordinates(
+        &mut self,
+        coordinate_system: WorkCoordinateSystem,
+        work_coordinate_offset: Position,
+    ) {
+        self.coordinate_binding = Some(HeightmapCoordinateBinding {
+            coordinate_system,
+            work_coordinate_offset,
+        });
     }
 
     pub fn record_sample(
@@ -878,6 +1011,18 @@ mod tests {
     }
 
     #[test]
+    fn interpolation_delta_is_relative_to_the_first_contact() {
+        let mut map = Heightmap::new(plan(2, 2));
+        for point in map.plan.points.clone() {
+            map.record_sample(point.sequence, 12.5 - point.x_mm * 0.1, true)
+                .unwrap();
+        }
+
+        assert!(map.interpolate_delta_z(0.0, 0.0).unwrap().abs() < 1e-9);
+        assert!((map.interpolate_delta_z(20.0, 0.0).unwrap() + 2.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn refuses_incomplete_maps_and_probe_misses() {
         let mut map = Heightmap::new(plan(2, 2));
         map.record_sample(0, 0.0, true).unwrap();
@@ -961,6 +1106,53 @@ mod tests {
     }
 
     #[test]
+    fn resumes_a_pending_draft_without_changing_its_grid_or_samples() {
+        let mut store = SurfaceSessionStore::in_memory();
+        let mut map = Heightmap::new(plan(2, 2));
+        map.record_sample(0, -0.1, true).unwrap();
+        let running = HeightmapOperationSnapshot::running(7, map.clone());
+        store.begin("machine-a", running, 5).unwrap();
+        let mut failed = HeightmapOperationSnapshot::running(7, map.clone());
+        failed.state = HeightmapOperationState::Failed;
+        failed.current_sequence = Some(1);
+        failed.error = Some("probe miss".to_owned());
+        store.checkpoint(failed, 10).unwrap();
+
+        map.plan.request.max_probe_depth_mm = 8.0;
+        let resumed = HeightmapOperationSnapshot::running(8, map.clone());
+        let session = store.resume_pending("machine-a", resumed, 20).unwrap();
+
+        let pending = session.pending.unwrap();
+        assert_eq!(pending.operation.operation_sequence, 8);
+        assert_eq!(pending.operation.state, HeightmapOperationState::Running);
+        assert_eq!(pending.operation.progress.measured, 1);
+        assert_eq!(
+            pending.operation.map.unwrap().samples[0].unwrap().z_mm,
+            -0.1
+        );
+    }
+
+    #[test]
+    fn resume_rejects_changed_geometry_or_measured_values() {
+        let mut store = SurfaceSessionStore::in_memory();
+        let mut map = Heightmap::new(plan(2, 2));
+        map.record_sample(0, -0.1, true).unwrap();
+        let running = HeightmapOperationSnapshot::running(7, map.clone());
+        store.begin("machine-a", running, 5).unwrap();
+        let mut failed = HeightmapOperationSnapshot::running(7, map.clone());
+        failed.state = HeightmapOperationState::Failed;
+        store.checkpoint(failed, 10).unwrap();
+
+        let mut changed = map;
+        changed.samples[0].as_mut().unwrap().z_mm = -0.2;
+        let resumed = HeightmapOperationSnapshot::running(8, changed);
+        assert!(matches!(
+            store.resume_pending("machine-a", resumed, 20),
+            Err(SurfaceSessionError::ResumeMapMismatch)
+        ));
+    }
+
+    #[test]
     fn contact_mode_never_silently_reuses_a_touch_plate_offset() {
         let direct = HeightmapPlanRequest {
             contact_offset_mm: 19.1,
@@ -991,7 +1183,7 @@ mod tests {
                 y_mm: 5.0
             }
         );
-        assert!((plan.estimated_max_seconds() - 105.8).abs() < 1e-9);
+        assert!((plan.estimated_max_seconds() - 149.0).abs() < 1e-9);
     }
 
     #[test]
@@ -1068,6 +1260,32 @@ mod tests {
         let active = store.session().active.unwrap();
         assert_eq!(active.map_id, 2);
         assert_eq!(active.map.samples[0].unwrap().z_mm, 0.2);
+    }
+
+    #[test]
+    fn coordinate_change_disarms_but_retains_the_map() {
+        let mut store = SurfaceSessionStore::in_memory();
+        store
+            .begin(
+                "machine-1",
+                HeightmapOperationSnapshot::running(1, Heightmap::new(plan(2, 2))),
+                10,
+            )
+            .unwrap();
+        store.checkpoint(completed_operation(1, 0.1), 11).unwrap();
+        store.activate_completed(1, 12).unwrap();
+        store.set_application_enabled(true, true).unwrap();
+
+        let disarmed = store.disarm_for_coordinate_change().unwrap();
+
+        assert!(disarmed.active.is_some());
+        assert!(!disarmed.application_enabled);
+        assert!(disarmed.requires_setup_confirmation);
+        assert!(disarmed.coordinate_binding_stale);
+        assert!(matches!(
+            store.set_application_enabled(true, true),
+            Err(SurfaceSessionError::CoordinateBindingStale)
+        ));
     }
 
     #[test]

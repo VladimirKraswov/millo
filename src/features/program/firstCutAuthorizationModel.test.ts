@@ -20,6 +20,7 @@ const complete: FirstCutConfirmation = {
   safeZVerified: true,
   manualSpindleRunning: true,
   manualSpindleOff: false,
+  probeRemoved: true,
   pathClear: true,
   powerControlReachable: true,
 };
@@ -102,6 +103,7 @@ describe("firstCutAuthorizationControls", () => {
       intent: "airRun",
       toolRemoved: true,
       manualSpindleOff: true,
+      probeRemoved: false,
       xyzZeroVerified: true,
       safeZVerified: true,
       pathClear: true,
@@ -115,5 +117,31 @@ describe("firstCutAuthorizationControls", () => {
         busy: false,
       }),
     ).toEqual({ completedCount: 6, totalCount: 6, complete: true, canAuthorize: true });
+  });
+
+  it("requires the probe plate and wire to be removed for a heightmap cutting run", () => {
+    const withHeightmap: FirstCutConfirmation = {
+      ...complete,
+      executionOptions: {
+        ...complete.executionOptions,
+        surfaceMapId: 4,
+      },
+      probeRemoved: false,
+    };
+
+    expect(
+      firstCutAuthorizationControls(withHeightmap, {
+        report: clearReport,
+        gatewayAvailable: true,
+        busy: false,
+      }),
+    ).toEqual({ completedCount: 7, totalCount: 8, complete: false, canAuthorize: false });
+
+    expect(
+      firstCutAuthorizationControls(
+        { ...withHeightmap, probeRemoved: true },
+        { report: clearReport, gatewayAvailable: true, busy: false },
+      ),
+    ).toEqual({ completedCount: 8, totalCount: 8, complete: true, canAuthorize: true });
   });
 });

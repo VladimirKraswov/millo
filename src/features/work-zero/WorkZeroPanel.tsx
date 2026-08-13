@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { WorkCoordinateGateway } from "../../platform/machine/WorkCoordinateGateway";
 import type {
   ControllerSnapshot,
+  ReturnToWorkOriginOutcome,
   ReturnToWorkZeroOutcome,
   WorkAxis,
   WorkZeroOutcome,
@@ -11,7 +12,7 @@ import type {
 import { WorkZeroInteractor } from "./WorkZeroInteractor";
 
 const axes: readonly WorkAxis[] = ["x", "y", "z"];
-type BusyOperation = WorkAxis | "xyz" | `return-${WorkAxis}`;
+type BusyOperation = WorkAxis | "xyz" | "return-origin";
 
 interface WorkZeroPanelProps {
   readonly activeCoordinateSystem?: string;
@@ -40,7 +41,8 @@ export function WorkZeroPanel({
   const [positionConfirmed, setPositionConfirmed] = useState(false);
   const [busyAxis, setBusyAxis] = useState<BusyOperation>();
   const [outcome, setOutcome] = useState<WorkZeroOutcome>();
-  const [returnOutcome, setReturnOutcome] = useState<ReturnToWorkZeroOutcome>();
+  const [, setReturnOutcome] = useState<ReturnToWorkZeroOutcome>();
+  const [originOutcome, setOriginOutcome] = useState<ReturnToWorkOriginOutcome>();
   const connected = snapshot.connection === "connected";
   const stableIdle =
     connected &&
@@ -49,13 +51,14 @@ export function WorkZeroPanel({
     snapshot.resetNotice === undefined;
   const canSet =
     desktopRuntime && stableIdle && positionConfirmed && !disabled && !busyAxis;
-  const canReturn = desktopRuntime && stableIdle && !disabled && !busyAxis;
+  const canReturn = desktopRuntime && stableIdle && !disabled && !busyAxis && gateway.returnToOrigin !== undefined;
 
   useEffect(() => {
     if (!connected) {
       setPositionConfirmed(false);
       setOutcome(undefined);
       setReturnOutcome(undefined);
+      setOriginOutcome(undefined);
     }
   }, [connected]);
 
@@ -77,15 +80,20 @@ export function WorkZeroPanel({
     }
   };
 
-  const returnToZero = async (axis: WorkAxis) => {
+  const returnToOrigin = async () => {
     if (!canReturn) return;
-    setBusyAxis(`return-${axis}`);
+    setBusyAxis("return-origin");
     setOutcome(undefined);
     setReturnOutcome(undefined);
+    setOriginOutcome(undefined);
     onError(undefined);
     try {
-      const next = await interactor.returnToZero(axis, axis === "z" ? 100 : 300);
-      setReturnOutcome(next);
+      const next = await gateway.returnToOrigin!({
+        clearanceZMm: 2,
+        xyFeedMmPerMin: 300,
+        zFeedMmPerMin: 100,
+      });
+      setOriginOutcome(next);
       onSnapshot(next.snapshot);
     } catch (error) {
       onError(String(error));
@@ -134,24 +142,21 @@ export function WorkZeroPanel({
           <LocateFixed aria-hidden="true" size={16} />
           <span><strong id="work-zero-return-title">Вернуться к сохранённому нулю</strong><small>Двигает ось к 0, но не меняет G54–G59</small></span>
         </div>
-        <div role="group" aria-label="Вернуться к рабочему нулю">
-          {axes.map((axis) => (
-            <button
-              disabled={!canReturn}
-              key={axis}
-              onClick={() => void returnToZero(axis)}
-              type="button"
-            >
-              К {axis.toUpperCase()}0
-            </button>
-          ))}
-        </div>
+        <button
+          className="work-zero-return-all"
+          disabled={!canReturn}
+          onClick={() => void returnToOrigin()}
+          type="button"
+        >
+          <LocateFixed aria-hidden="true" size={15} />
+          Вернуться в рабочий ноль
+        </button>
         <span className="work-zero-return-status" aria-live="polite">
-          {busyAxis?.startsWith("return-")
-            ? "Команда движения и свежая проверка GRBL..."
-            : returnOutcome
-              ? `${returnOutcome.coordinateSystem.toUpperCase()} · движение ${returnOutcome.axis.toUpperCase()} к 0 принято`
-              : "X/Y доступны только при положительном рабочем Z; Z возвращается отдельно"}
+          {busyAxis === "return-origin"
+            ? "Поднимаем Z, возвращаем XY и опускаем Z к нулю..."
+            : originOutcome
+              ? `${originOutcome.coordinateSystem.toUpperCase()} · станок подтверждён в X0 Y0 Z0`
+              : "Безопасный маршрут: Z вверх → XY к нулю → Z к нулю"}
         </span>
       </section>
 
@@ -176,7 +181,7 @@ export function WorkZeroPanel({
         type="button"
       >
         <Crosshair aria-hidden="true" size={15} />
-        {useProbeForZ ? "Установить XY = 0" : "Установить XYZ = 0"}
+        {useProbeForZ ? "Установить только XY = 0" : "Установить XYZ = 0"}
       </button>
 
       <div className="work-zero-actions" role="group" aria-label="Рабочий ноль">
@@ -188,7 +193,7 @@ export function WorkZeroPanel({
             type="button"
           >
             <span>0</span>
-            {axis === "z" && useProbeForZ ? "Z задаётся щупом" : `Только ${axis.toUpperCase()}`}
+            {axis === "z" && useProbeForZ ? "Z0 уже найден щупом" : `Только ${axis.toUpperCase()}`}
           </button>
         ))}
       </div>
@@ -201,7 +206,9 @@ export function WorkZeroPanel({
             {outcome.workPosition.toFixed(3)} mm
           </span>
         )}
-        {!busyAxis && !outcome && <span>После записи координаты повторно считываются из GRBL</span>}
+        {!busyAxis && !outcome && <span>{useProbeForZ
+          ? "Z0 защищён от перезаписи; изменяются только X/Y"
+          : "После записи координаты повторно считываются из GRBL"}</span>}
       </div>
     </section>
   );

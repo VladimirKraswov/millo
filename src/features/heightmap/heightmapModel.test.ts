@@ -9,6 +9,7 @@ import {
   estimateHeightmapSeconds,
   heightColor,
   heightmapCalibrationPlateThickness,
+  heightmapHasCurrentZDatum,
   heightmapSafeWorkZ,
   heightmapSurfaceVariation,
   heightmapMatrix,
@@ -55,8 +56,8 @@ describe("heightmapModel", () => {
       travelFeedMmPerMin: 60,
       retractFeedMmPerMin: 60,
     };
-    // XY is 30 s; each of four points probes for 6 s and retracts for 5 s.
-    expect(estimateHeightmapSeconds(request)).toBe(74);
+    // XY is 30 s; each point searches 5 mm for 10 s and retracts for 5 s.
+    expect(estimateHeightmapSeconds(request)).toBe(90);
   });
 
   it("maps serpentine samples back into a readable numeric matrix", () => {
@@ -107,12 +108,34 @@ describe("heightmapModel", () => {
     expect(heightmapCalibrationPlateThickness(request, 3)).toBe(19.1);
     expect(heightmapCalibrationPlateThickness(defaultHeightmapRequest(), 3)).toBe(3);
     const next = withHeightmapSurfaceVariation(request, 1.5);
-    expect(next.maxProbeDepthMm).toBe(3.5);
+    expect(next.maxProbeDepthMm).toBe(1.5);
     expect(heightmapSurfaceVariation(next)).toBe(1.5);
   });
 
   it("translates a bounded probe miss into an actionable operator message", () => {
     expect(describeHeightmapFailure("probe did not contact the surface", 12)).toContain("12.0 mm");
-    expect(describeHeightmapFailure("ALARM:5", 3)).toContain("подведите фрезу ближе");
+    expect(describeHeightmapFailure("ALARM:5", 3)).toContain("увеличьте запас и продолжите");
+  });
+
+  it("trusts a probe-established Z0 only while the map remains bound to the live WCS and WCO", () => {
+    const plan = buildHeightmapPlan({ ...defaultHeightmapRequest(), columns: 2, rows: 2 });
+    const offset = { x: 140, y: 83, z: -10 };
+    const map: Heightmap = {
+      schemaVersion: 1,
+      plan,
+      samples: [
+        { point: plan.points[0], zMm: 0, triggered: true },
+        null,
+        null,
+        null,
+      ],
+      coordinateBinding: { coordinateSystem: "g54", workCoordinateOffset: offset },
+    };
+
+    expect(heightmapHasCurrentZDatum(map, false, "g54", offset)).toBe(true);
+    expect(heightmapHasCurrentZDatum(map, true, "g54", offset)).toBe(false);
+    expect(heightmapHasCurrentZDatum(map, false, "g55", offset)).toBe(false);
+    expect(heightmapHasCurrentZDatum(map, false, "g54", { ...offset, z: -9.98 })).toBe(false);
+    expect(heightmapHasCurrentZDatum({ ...map, samples: [null, null, null, null] }, false, "g54", offset)).toBe(false);
   });
 });

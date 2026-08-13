@@ -28,4 +28,5 @@ export const emptySurfaceSession: SurfaceSession = {
   nextMapId: 1,
   applicationEnabled: false,
   requiresSetupConfirmation: false,
+  coordinateBindingStale: false,
 };

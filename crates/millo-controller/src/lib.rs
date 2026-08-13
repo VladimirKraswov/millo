@@ -9,9 +9,9 @@ use millo_domain::{
 use millo_dry_run::DryRunLine;
 use millo_grbl::{
     IncomingLine, JogValidationError, StatusParseError, build_device_inspection,
-    encode_heightmap_xy_jog, encode_heightmap_z_jog, encode_return_to_work_zero,
-    encode_set_work_value, encode_set_work_zero, encode_step_jog, encode_z_probe, encode_z_retract,
-    parse_incoming_line,
+    encode_absolute_work_jog, encode_heightmap_xy_jog, encode_heightmap_z_jog,
+    encode_return_to_work_zero, encode_set_work_value, encode_set_work_zero, encode_step_jog,
+    encode_z_probe, encode_z_retract, parse_incoming_line,
 };
 use millo_settings::ValidatedSettingWrite;
 use millo_transport::{Transport, TransportError};
@@ -416,6 +416,17 @@ impl<T: Transport> Controller<T> {
         request: ReturnToWorkZeroRequest,
     ) -> Result<CommandResponse, ControllerError> {
         let command = encode_return_to_work_zero(request)?;
+        self.execute_acknowledged_line(&command).await
+    }
+
+    pub async fn move_to_work_position(
+        &mut self,
+        x_mm: Option<f64>,
+        y_mm: Option<f64>,
+        z_mm: Option<f64>,
+        feed_mm_per_min: f64,
+    ) -> Result<CommandResponse, ControllerError> {
+        let command = encode_absolute_work_jog(x_mm, y_mm, z_mm, feed_mm_per_min)?;
         self.execute_acknowledged_line(&command).await
     }
 

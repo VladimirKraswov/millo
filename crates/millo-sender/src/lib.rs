@@ -1031,6 +1031,7 @@ mod tests {
                 ProgramExecutionOptions {
                     optional_stop: true,
                     block_delete: false,
+                    ..ProgramExecutionOptions::default()
                 },
             ))
             .unwrap();

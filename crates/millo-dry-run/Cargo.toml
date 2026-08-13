@@ -5,7 +5,8 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+millo-domain = { path = "../millo-domain" }
 millo-gcode = { path = "../millo-gcode" }
+millo-heightmap = { path = "../millo-heightmap" }
 serde.workspace = true
 thiserror.workspace = true
-

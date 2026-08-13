@@ -6,6 +6,7 @@ rust-version.workspace = true
 description = "Deterministic probing-grid and heightmap core for Millo"
 
 [dependencies]
+millo-domain = { path = "../millo-domain" }
 millo-storage = { path = "../millo-storage" }
 serde.workspace = true
 serde_json.workspace = true

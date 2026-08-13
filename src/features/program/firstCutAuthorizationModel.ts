@@ -13,6 +13,7 @@ export const emptyFirstCutConfirmation: FirstCutConfirmation = {
   safeZVerified: false,
   manualSpindleRunning: false,
   manualSpindleOff: false,
+  probeRemoved: false,
   pathClear: false,
   powerControlReachable: false,
 };
@@ -40,11 +41,20 @@ export const firstCutConfirmationKeys = (
   ...(intent === "airRun" ? airRunConfirmationKeys : cuttingConfirmationKeys),
 ];
 
+export const requiredFirstCutConfirmationKeys = (
+  confirmation: FirstCutConfirmation,
+): ReadonlyArray<Exclude<keyof FirstCutConfirmation, "intent" | "executionOptions">> => [
+  ...firstCutConfirmationKeys(confirmation.intent),
+  ...(confirmation.intent === "cutting" && confirmation.executionOptions.surfaceMapId !== undefined
+    ? (["probeRemoved"] as const)
+    : []),
+];
+
 export const setFirstCutReadiness = (
   confirmation: FirstCutConfirmation,
   ready: boolean,
 ): FirstCutConfirmation => {
-  const keys = firstCutConfirmationKeys(confirmation.intent);
+  const keys = requiredFirstCutConfirmationKeys(confirmation);
   const confirmed = (
     key: Exclude<keyof FirstCutConfirmation, "intent" | "executionOptions">,
   ) => ready && keys.includes(key);
@@ -57,6 +67,7 @@ export const setFirstCutReadiness = (
     safeZVerified: confirmed("safeZVerified"),
     manualSpindleRunning: confirmed("manualSpindleRunning"),
     manualSpindleOff: confirmed("manualSpindleOff"),
+    probeRemoved: confirmed("probeRemoved"),
     pathClear: confirmed("pathClear"),
     powerControlReachable: confirmed("powerControlReachable"),
   };
@@ -77,7 +88,7 @@ export function firstCutAuthorizationControls(
     readonly busy: boolean;
   },
 ): FirstCutAuthorizationControls {
-  const keys = firstCutConfirmationKeys(confirmation.intent);
+  const keys = requiredFirstCutConfirmationKeys(confirmation);
   const completedCount = keys.filter(
     (key) => confirmation[key],
   ).length;

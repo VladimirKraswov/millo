@@ -7,10 +7,12 @@ import { ZProbeDialog } from "./ZProbeDialog";
 const heightmapGateway = {
   cancel: async () => { throw new Error("not used"); },
   clear: async () => { throw new Error("not used"); },
+  discardDraft: async () => { throw new Error("not used"); },
   getOperation: async () => { throw new Error("not used"); },
   getSession: async () => { throw new Error("not used"); },
   pause: async () => { throw new Error("not used"); },
   resume: async () => { throw new Error("not used"); },
+  resumeDraft: async () => { throw new Error("not used"); },
   setApplication: async () => { throw new Error("not used"); },
   start: async () => { throw new Error("not used"); },
   subscribeOperation: async () => () => undefined,
@@ -21,6 +23,7 @@ describe("ZProbeDialog", () => {
   it("explains the measured plate offset and blocks an already active input", () => {
     const markup = renderToStaticMarkup(
       <ZProbeDialog
+        activeCoordinateSystem="g54"
         desktopRuntime
         gateway={{ run: async () => { throw new Error("not used"); } }}
         heightmapGateway={heightmapGateway}
@@ -71,13 +74,15 @@ describe("ZProbeDialog", () => {
     expect(markup).toContain("Z = 19.100 mm");
     expect(markup).toContain("Z = 22.100 mm");
     expect(markup).toContain("Вход P уже активен");
-    expect(markup).toContain("Общая команда обнулит только X/Y");
+    expect(markup).toContain("Для ровной поверхности");
+    expect(markup).toContain("Применение старой карты будет выключено");
     expect(markup).toContain("disabled");
   });
 
   it("keeps manual Z available while probe zeroing is disabled", () => {
     const markup = renderToStaticMarkup(
       <ZProbeDialog
+        activeCoordinateSystem="g54"
         desktopRuntime
         gateway={{ run: async () => { throw new Error("not used"); } }}
         heightmapGateway={heightmapGateway}
@@ -102,7 +107,8 @@ describe("ZProbeDialog", () => {
       />,
     );
 
-    expect(markup).toContain("Ручное обнуление Z доступно");
+    expect(markup).toContain("Автоматические измерения выключены");
+    expect(markup).toContain("Индикатор A5 продолжает показывать");
     expect(markup).not.toContain("Перед касанием введите измеренную толщину");
     expect(markup).not.toContain("Сохранить параметры");
   });

@@ -10,6 +10,7 @@ export type JobReadinessAction =
   | "reviewProgram"
   | "runPreflight"
   | "runGrblCheck"
+  | "syncMachine"
   | "resolveRecovery"
   | "startProgram";
 
@@ -32,6 +33,7 @@ export interface JobReadinessInput {
   readonly alarm: boolean;
   readonly connection: ConnectionState;
   readonly machineBound: boolean;
+  readonly machineSyncing: boolean;
   readonly machineMode: MachineMode;
   readonly parserEligible: boolean;
   readonly preflightStatus: RealRunPreflightStatus;
@@ -51,6 +53,7 @@ export function jobReadinessModel(input: JobReadinessInput): JobReadinessView {
   const machineReady =
     connected &&
     input.machineBound &&
+    !input.machineSyncing &&
     input.machineMode === "idle" &&
     !input.alarm &&
     !input.resetPending;
@@ -63,7 +66,11 @@ export function jobReadinessModel(input: JobReadinessInput): JobReadinessView {
       "machine",
       machineReady
         ? "ready"
-        : input.alarm || input.resetPending || connected
+        : input.machineSyncing
+          ? "pending"
+          : !input.machineBound && connected
+            ? "action"
+            : input.alarm || input.resetPending || connected
           ? "blocked"
           : "action",
     ),
@@ -109,12 +116,20 @@ export function jobReadinessModel(input: JobReadinessInput): JobReadinessView {
       primaryDisabled: false,
     };
   }
+  if (input.machineSyncing) {
+    return {
+      steps,
+      primaryAction: "syncMachine",
+      primaryLabel: "Синхронизируем профиль...",
+      primaryDisabled: true,
+    };
+  }
   if (!input.machineBound) {
     return {
       steps,
-      primaryAction: "waitForIdle",
-      primaryLabel: "Выберите профиль станка",
-      primaryDisabled: true,
+      primaryAction: "syncMachine",
+      primaryLabel: "Определить подключённый станок",
+      primaryDisabled: false,
     };
   }
   if (input.machineMode !== "idle") {

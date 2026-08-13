@@ -46,6 +46,10 @@ export interface Heightmap {
   schemaVersion: number;
   plan: HeightmapPlan;
   samples: Array<ProbeSample | null>;
+  coordinateBinding?: {
+    coordinateSystem: "g54" | "g55" | "g56" | "g57" | "g58" | "g59";
+    workCoordinateOffset: { x: number; y: number; z: number; a?: number };
+  };
 }
 
 export interface HeightmapProgress {
@@ -78,6 +82,12 @@ export interface HeightmapStartRequest {
   contactAvailableAtEveryPoint: boolean;
 }
 
+export interface HeightmapResumeRequest {
+  maxProbeDepthMm: number;
+  setupConfirmed: boolean;
+  contactAvailableAtEveryPoint: boolean;
+}
+
 export interface StoredSurfaceMap {
   mapId: number;
   machineProfileId: string;
@@ -99,4 +109,5 @@ export interface SurfaceSession {
   pending?: PendingSurfaceMap;
   applicationEnabled: boolean;
   requiresSetupConfirmation: boolean;
+  coordinateBindingStale: boolean;
 }

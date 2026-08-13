@@ -116,6 +116,41 @@ pub fn encode_return_to_work_zero(
     ))
 }
 
+pub fn encode_absolute_work_jog(
+    x_mm: Option<f64>,
+    y_mm: Option<f64>,
+    z_mm: Option<f64>,
+    feed_mm_per_min: f64,
+) -> Result<String, JogValidationError> {
+    if [x_mm, y_mm, z_mm].into_iter().all(|value| value.is_none()) {
+        return Err(JogValidationError::InvalidDistance);
+    }
+    if [x_mm, y_mm, z_mm]
+        .into_iter()
+        .flatten()
+        .any(|value| !value.is_finite())
+    {
+        return Err(JogValidationError::InvalidDistance);
+    }
+    if !feed_mm_per_min.is_finite() {
+        return Err(JogValidationError::InvalidFeed);
+    }
+    if !(MIN_STEP_JOG_FEED_MM_PER_MIN..=MAX_STEP_JOG_FEED_MM_PER_MIN).contains(&feed_mm_per_min) {
+        return Err(JogValidationError::FeedOutOfRange {
+            min_mm_per_min: MIN_STEP_JOG_FEED_MM_PER_MIN,
+            max_mm_per_min: MAX_STEP_JOG_FEED_MM_PER_MIN,
+        });
+    }
+    let mut command = "$J=G90 G21".to_owned();
+    for (axis, value) in [('X', x_mm), ('Y', y_mm), ('Z', z_mm)] {
+        if let Some(value) = value {
+            command.push_str(&format!(" {axis}{value:.3}"));
+        }
+    }
+    command.push_str(&format!(" F{feed_mm_per_min:.3}"));
+    Ok(command)
+}
+
 pub fn encode_heightmap_xy_jog(
     delta_x_mm: f64,
     delta_y_mm: f64,
@@ -779,6 +814,19 @@ mod tests {
             }),
             Err(JogValidationError::FeedOutOfRange { .. })
         ));
+    }
+
+    #[test]
+    fn encodes_an_absolute_multi_axis_work_jog() {
+        assert_eq!(
+            encode_absolute_work_jog(Some(0.0), Some(0.0), None, 300.0).unwrap(),
+            "$J=G90 G21 X0.000 Y0.000 F300.000"
+        );
+        assert_eq!(
+            encode_absolute_work_jog(None, None, Some(2.5), 100.0).unwrap(),
+            "$J=G90 G21 Z2.500 F100.000"
+        );
+        assert!(encode_absolute_work_jog(None, None, None, 100.0).is_err());
     }
 
     #[test]

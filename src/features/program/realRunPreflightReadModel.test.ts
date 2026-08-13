@@ -53,7 +53,7 @@ describe("realRunPreflightControls", () => {
     expect(realRunPreflightControls(undefined, available)).toEqual({
       canCheck: true,
       status: "unchecked",
-      statusLabel: "Not checked",
+      statusLabel: "Не проверено",
     });
   });
 

@@ -10,6 +10,7 @@ import {
   PlugZap,
   RefreshCw,
   ScanSearch,
+  Waves,
 } from "lucide-react";
 
 import type {
@@ -27,6 +28,13 @@ interface JobReadinessPanelProps {
   readonly onIntent: (intent: "airRun" | "cutting") => void;
   readonly onOpenOrigin: () => void;
   readonly onPrimary: (action: JobReadinessAction) => void;
+  readonly onSurfaceMap?: (enabled: boolean) => void;
+  readonly surfaceMap?: {
+    readonly checked: boolean;
+    readonly detail: string;
+    readonly disabled: boolean;
+    readonly warning: boolean;
+  };
   readonly view: JobReadinessView;
 }
 
@@ -49,6 +57,7 @@ function PrimaryIcon({ action, busy }: { readonly action: JobReadinessAction; re
   if (action === "unlock") return <KeyRound aria-hidden="true" size={16} />;
   if (action === "setWorkZero") return <Crosshair aria-hidden="true" size={16} />;
   if (action === "runGrblCheck") return <ScanSearch aria-hidden="true" size={16} />;
+  if (action === "syncMachine") return <RefreshCw aria-hidden="true" size={16} />;
   if (action === "resolveRecovery") return <History aria-hidden="true" size={16} />;
   if (action === "reviewProgram") return <FileWarning aria-hidden="true" size={16} />;
   return <Play aria-hidden="true" size={16} />;
@@ -62,6 +71,8 @@ export function JobReadinessPanel({
   onIntent,
   onOpenOrigin,
   onPrimary,
+  onSurfaceMap,
+  surfaceMap,
   view,
 }: JobReadinessPanelProps) {
   const primaryLabel =
@@ -98,9 +109,42 @@ export function JobReadinessPanel({
         </div>
       </header>
 
+      {surfaceMap && (
+        <label className={`job-surface-map${surfaceMap.warning ? " is-warning" : ""}`}>
+          <Waves aria-hidden="true" size={15} />
+          <span>
+            <strong>Компенсировать по карте</strong>
+            <small>{surfaceMap.detail}</small>
+          </span>
+          <input
+            aria-label="Применить карту высот к заданию"
+            checked={surfaceMap.checked}
+            disabled={busy || surfaceMap.disabled}
+            onChange={(event) => onSurfaceMap?.(event.target.checked)}
+            role="switch"
+            type="checkbox"
+          />
+        </label>
+      )}
+
+      <button
+        className={`job-primary-action is-${view.primaryAction}`}
+        disabled={busy || view.primaryDisabled}
+        onClick={() => onPrimary(view.primaryAction)}
+        type="button"
+      >
+        <PrimaryIcon action={view.primaryAction} busy={busy} />
+        {primaryLabel}
+      </button>
+
       <div className="job-readiness-list">
         {view.steps.map((step) => (
-          <div className={`job-readiness-step is-${step.state}`} key={step.id}>
+          <div
+            aria-label={`${titles[step.id]}: ${details[step.id]}`}
+            className={`job-readiness-step is-${step.state}`}
+            key={step.id}
+            title={details[step.id]}
+          >
             <StepIcon step={step} />
             <span>
               <strong>{titles[step.id]}</strong>
@@ -120,16 +164,6 @@ export function JobReadinessPanel({
           </div>
         ))}
       </div>
-
-      <button
-        className={`job-primary-action is-${view.primaryAction}`}
-        disabled={busy || view.primaryDisabled}
-        onClick={() => onPrimary(view.primaryAction)}
-        type="button"
-      >
-        <PrimaryIcon action={view.primaryAction} busy={busy} />
-        {primaryLabel}
-      </button>
     </section>
   );
 }

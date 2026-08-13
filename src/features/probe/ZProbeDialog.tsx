@@ -6,6 +6,8 @@ import type { HeightmapGateway } from "../../platform/machine/HeightmapGateway";
 import type {
   ControllerSnapshot,
   MachineTravel,
+  WorkCoordinateSystem,
+  ZProbeOutcome,
   ZProbeSettings,
 } from "../../shared/machine";
 import type { GcodeProgram } from "../../shared/program";
@@ -19,6 +21,7 @@ import {
 } from "./zProbeModel";
 
 interface ZProbeDialogProps {
+  readonly activeCoordinateSystem: WorkCoordinateSystem;
   readonly desktopRuntime: boolean;
   readonly disabled?: boolean;
   readonly gateway: ZProbeGateway;
@@ -29,6 +32,10 @@ interface ZProbeDialogProps {
   readonly onError: (error?: string) => void;
   readonly onSaveSettings: (settings: ZProbeSettings) => Promise<void>;
   readonly onSnapshot: (snapshot: ControllerSnapshot) => void;
+  readonly onZeroEstablished?: (
+    outcome: ZProbeOutcome,
+    source: "probe" | "heightmap",
+  ) => void;
   readonly onUnlock: () => Promise<ControllerSnapshot>;
   readonly open: boolean;
   readonly profileId?: string;
@@ -43,6 +50,7 @@ type ProbeStatus = "idle" | "saving" | "probing" | "complete" | "stopped" | "err
 const numeric = (value: string): number => (value === "" ? 0 : Number(value));
 
 export function ZProbeDialog({
+  activeCoordinateSystem,
   desktopRuntime,
   disabled = false,
   gateway,
@@ -53,6 +61,7 @@ export function ZProbeDialog({
   onError,
   onSaveSettings,
   onSnapshot,
+  onZeroEstablished,
   onUnlock,
   open,
   profileId,
@@ -152,6 +161,7 @@ export function ZProbeDialog({
     try {
       const outcome = await gateway.run({ settings: draft, setupConfirmed: true });
       onSnapshot(outcome.snapshot);
+      onZeroEstablished?.(outcome, "probe");
       setStatus("complete");
       setConfirmed(false);
     } catch (error) {
@@ -195,8 +205,8 @@ export function ZProbeDialog({
       >
         <header>
           <div>
-            <span>Щуп · рабочая поверхность</span>
-            <h2 id="z-probe-title">{draft.mode === "heightmap" ? "Карта высот" : "Настроить щуп"}</h2>
+            <span>Вход A5 · контактный щуп</span>
+            <h2 id="z-probe-title">Измерение поверхности</h2>
           </div>
           <button aria-label="Закрыть" disabled={draft.mode === "workZero" && status === "probing"} onClick={onClose} title="Закрыть" type="button">
             <X aria-hidden="true" size={16} />
@@ -222,14 +232,15 @@ export function ZProbeDialog({
                 role="tab"
                 type="button"
               >
-                <strong>{{ off: "Выключен", workZero: "Ноль Z", heightmap: "Карта высот" }[mode]}</strong>
-                <small>{{ off: "Ручное управление", workZero: "Одна точка", heightmap: "Сетка поверхности" }[mode]}</small>
+                <strong>{{ off: "Измерения выкл.", workZero: "Ноль Z", heightmap: "Карта поверхности" }[mode]}</strong>
+                <small>{{ off: "Только индикатор A5", workZero: "Одно касание", heightmap: "Сетка касаний" }[mode]}</small>
               </button>
             ))}
           </div>
 
           {draft.mode === "heightmap" && (
             <HeightmapPanel
+              activeCoordinateSystem={activeCoordinateSystem}
               key={profileId ?? "unbound"}
               desktopRuntime={desktopRuntime}
               disabled={disabled}
@@ -240,6 +251,7 @@ export function ZProbeDialog({
               onError={onError}
               onActivityChange={setHeightmapActive}
               onSnapshot={onSnapshot}
+              onZeroEstablished={onZeroEstablished}
               onSaveMode={() => onSaveSettings(draft)}
               onUnlock={onUnlock}
               program={program}
@@ -250,12 +262,12 @@ export function ZProbeDialog({
           {draft.mode === "off" && (
             <div className="probe-mode-empty">
               <CircleDot aria-hidden="true" size={18} />
-              <span><strong>Щуп только как индикатор</strong><small>Ручное обнуление Z доступно в панели «Рабочий ноль». Карта поверхности не применяется.</small></span>
+              <span><strong>Автоматические измерения выключены</strong><small>Индикатор A5 продолжает показывать электрический контакт. Сохранённая карта не удаляется и включается отдельно в панели запуска задания.</small></span>
             </div>
           )}
 
           {draft.mode === "workZero" && <>
-          <p className="z-probe-profile-note">Общая команда обнулит только X/Y; рабочая Z задаётся этим касанием.</p>
+          <p className="z-probe-workflow-note"><strong>Для ровной поверхности.</strong> Положите съёмную контактную пластину на заготовку. После касания Millo учтёт её толщину, установит Z0 на самой поверхности и поднимет фрезу. Применение старой карты будет выключено.</p>
 
           <div className="z-probe-fields">
             <label>

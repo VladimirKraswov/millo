@@ -13,6 +13,9 @@ describe("WorkZeroPanel", () => {
           returnToZero: async () => {
             throw new Error("not used during server render");
           },
+          returnToOrigin: async () => {
+            throw new Error("not used during server render");
+          },
           setZero: async () => {
             throw new Error("not used during server render");
           },
@@ -32,7 +35,7 @@ describe("WorkZeroPanel", () => {
     expect(markup).toContain("Только Y");
     expect(markup).toContain("Только Z");
     expect(markup).toContain("Вернуться к сохранённому нулю");
-    expect(markup).toContain("К Z0");
+    expect(markup).toContain("Вернуться в рабочий ноль");
   });
 
   it("keeps manual Z zero out of the combined action when probe mode is enabled", () => {
@@ -41,6 +44,7 @@ describe("WorkZeroPanel", () => {
         desktopRuntime
         gateway={{
           returnToZero: async () => { throw new Error("not used"); },
+          returnToOrigin: async () => { throw new Error("not used"); },
           setZero: async () => { throw new Error("not used"); },
         }}
         onError={() => undefined}
@@ -54,7 +58,7 @@ describe("WorkZeroPanel", () => {
       />,
     );
 
-    expect(markup).toContain("Установить XY = 0");
-    expect(markup).toContain("Z задаётся щупом");
+    expect(markup).toContain("Установить только XY = 0");
+    expect(markup).toContain("Z0 уже найден щупом");
   });
 });

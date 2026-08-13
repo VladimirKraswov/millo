@@ -23,15 +23,15 @@ export function realRunPreflightControls(
   const canCheck =
     context.serialAvailable && context.gatewayAvailable && !context.checking;
   if (!context.serialAvailable || !context.gatewayAvailable) {
-    return { canCheck: false, status: "unavailable", statusLabel: "Unavailable" };
+    return { canCheck: false, status: "unavailable", statusLabel: "Недоступно" };
   }
   if (context.checking) {
-    return { canCheck: false, status: "checking", statusLabel: "Reading controller" };
+    return { canCheck: false, status: "checking", statusLabel: "Читаем контроллер" };
   }
   if (!report) {
-    return { canCheck, status: "unchecked", statusLabel: "Not checked" };
+    return { canCheck, status: "unchecked", statusLabel: "Не проверено" };
   }
   return report.ready
-    ? { canCheck, status: "ready", statusLabel: "Preflight clear" }
-    : { canCheck, status: "blocked", statusLabel: "Blocked" };
+    ? { canCheck, status: "ready", statusLabel: "Проверка пройдена" }
+    : { canCheck, status: "blocked", statusLabel: "Нужно действие" };
 }

@@ -138,6 +138,7 @@ async fn execute(
                 safe_z_verified: true,
                 manual_spindle_running: true,
                 manual_spindle_off: false,
+                probe_removed: true,
                 path_clear: true,
                 power_control_reachable: true,
             },

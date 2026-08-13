@@ -6,6 +6,7 @@ const readyInput: JobReadinessInput = {
   alarm: false,
   connection: "connected",
   machineBound: true,
+  machineSyncing: false,
   machineMode: "idle",
   parserEligible: true,
   preflightStatus: "ready",
@@ -48,6 +49,31 @@ describe("jobReadinessModel", () => {
 
     expect(view.primaryAction).toBe("setWorkZero");
     expect(view.steps[2]).toEqual({ id: "origin", state: "action" });
+  });
+
+  it("shows connected profile synchronization as progress instead of an error", () => {
+    const view = jobReadinessModel({
+      ...readyInput,
+      machineBound: false,
+      machineSyncing: true,
+    });
+
+    expect(view.steps[0]).toEqual({ id: "machine", state: "pending" });
+    expect(view.primaryAction).toBe("syncMachine");
+    expect(view.primaryLabel).toBe("Синхронизируем профиль...");
+    expect(view.primaryDisabled).toBe(true);
+  });
+
+  it("offers a recovery action when a connected controller is not bound", () => {
+    const view = jobReadinessModel({
+      ...readyInput,
+      machineBound: false,
+    });
+
+    expect(view.steps[0]).toEqual({ id: "machine", state: "action" });
+    expect(view.primaryAction).toBe("syncMachine");
+    expect(view.primaryLabel).toBe("Определить подключённый станок");
+    expect(view.primaryDisabled).toBe(false);
   });
 
   it("routes a missing cutting certificate to GRBL Check", () => {

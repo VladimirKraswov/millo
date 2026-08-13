@@ -435,6 +435,22 @@ pub struct ReturnToWorkZeroOutcome {
     pub snapshot: ControllerSnapshot,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReturnToWorkOriginRequest {
+    pub clearance_z_mm: f64,
+    pub xy_feed_mm_per_min: f64,
+    pub z_feed_mm_per_min: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReturnToWorkOriginOutcome {
+    pub coordinate_system: WorkCoordinateSystem,
+    pub commands: Vec<String>,
+    pub snapshot: ControllerSnapshot,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProbeWorkflowMode {

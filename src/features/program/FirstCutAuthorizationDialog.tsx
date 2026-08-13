@@ -17,7 +17,6 @@ import type { SenderSnapshot } from "../../shared/dryRun";
 import {
   emptyFirstCutConfirmation,
   firstCutAuthorizationControls,
-  setFirstCutReadiness,
   type FirstCutAuthorizationControls,
 } from "./firstCutAuthorizationModel";
 
@@ -34,77 +33,6 @@ interface FirstCutAuthorizationDialogProps {
   readonly onStarted: (snapshot: SenderSnapshot) => void;
   readonly onClose: () => void;
 }
-
-type ConfirmationKey = Exclude<
-  keyof FirstCutConfirmation,
-  "intent" | "executionOptions"
->;
-
-const commonChecklist: ReadonlyArray<{
-  key: ConfirmationKey;
-  title: string;
-  detail: string;
-}> = [
-  {
-    key: "xyzZeroVerified",
-    title: "Ноль XYZ проверен",
-    detail: "Рабочий ноль активной G54-G59 совпадает с нулём программы.",
-  },
-  {
-    key: "safeZVerified",
-    title: "Safe Z свободен",
-    detail: "Все перемещения Z проходят выше заготовки, крепежа и оснастки.",
-  },
-  {
-    key: "pathClear",
-    title: "Габарит траектории свободен",
-    detail: "Preview проверен; движения XYZ не пересекают упоры, прижимы и раму.",
-  },
-  {
-    key: "powerControlReachable",
-    title: "Питание доступно",
-    detail: "Можно немедленно обесточить шпиндель и станок рукой.",
-  },
-];
-
-const cuttingChecklist: ReadonlyArray<{
-  key: ConfirmationKey;
-  title: string;
-  detail: string;
-}> = [
-  {
-    key: "stockSecured",
-    title: "Заготовка закреплена",
-    detail: "Прижимы затянуты и не пересекают траекторию инструмента.",
-  },
-  {
-    key: "toolSecured",
-    title: "Инструмент установлен",
-    detail: "Фреза соответствует программе и надёжно зажата в цанге.",
-  },
-  {
-    key: "manualSpindleRunning",
-    title: "Ручной шпиндель запущен",
-    detail: "Вращение включено вручную, направление и звук проверены.",
-  },
-];
-
-const airRunChecklist: ReadonlyArray<{
-  key: ConfirmationKey;
-  title: string;
-  detail: string;
-}> = [
-  {
-    key: "toolRemoved",
-    title: "Инструмент снят",
-    detail: "В цанге нет фрезы; случайное касание заготовки исключено.",
-  },
-  {
-    key: "manualSpindleOff",
-    title: "Шпиндель выключен",
-    detail: "Ручное питание шпинделя отключено; sender дополнительно начинает с M5/M9.",
-  },
-];
 
 export function FirstCutAuthorizationDialog({
   open,
@@ -153,10 +81,24 @@ export function FirstCutAuthorizationDialog({
     }
   };
 
-  const checklist = [
-    ...(confirmation.intent === "airRun" ? airRunChecklist : cuttingChecklist),
-    ...commonChecklist,
-  ];
+  const setupReady = confirmation.xyzZeroVerified &&
+    confirmation.safeZVerified &&
+    confirmation.pathClear &&
+    confirmation.powerControlReachable &&
+    (intent === "airRun"
+      ? confirmation.toolRemoved
+      : confirmation.stockSecured && confirmation.toolSecured);
+  const setSetupReady = (ready: boolean) => setConfirmation((current) => ({
+    ...current,
+    xyzZeroVerified: ready,
+    safeZVerified: ready,
+    pathClear: ready,
+    powerControlReachable: ready,
+    stockSecured: current.intent === "cutting" && ready,
+    toolSecured: current.intent === "cutting" && ready,
+    toolRemoved: current.intent === "airRun" && ready,
+  }));
+  const hasSurfaceMap = executionOptions.surfaceMapId !== undefined;
 
   return (
     <div className="machine-dialog-backdrop first-cut-backdrop" role="presentation">
@@ -168,8 +110,8 @@ export function FirstCutAuthorizationDialog({
       >
         <header>
           <div>
-            <span>Перед запуском</span>
-            <h2 id="first-cut-title">Подтвердите готовность</h2>
+            <span>Последнее действие</span>
+            <h2 id="first-cut-title">Начать движение</h2>
           </div>
           <button
             aria-label="Закрыть"
@@ -185,8 +127,8 @@ export function FirstCutAuthorizationDialog({
         <div className="first-cut-intro">
           <CircleAlert aria-hidden="true" size={18} />
           <div>
-            <strong>Все готово к движению?</strong>
-            <span>Контроллер будет повторно проверен автоматически.</span>
+            <strong>Проверьте станок перед стартом</strong>
+            <span>Контроллер и G-code уже проверены. Остались только физические действия.</span>
           </div>
           <code>{intent === "airRun" ? "AIR" : "CUT"}</code>
         </div>
@@ -194,45 +136,66 @@ export function FirstCutAuthorizationDialog({
           <span>Режим</span>
           <strong>{intent === "airRun" ? "Без резания" : "Гравировка с инструментом"}</strong>
         </div>
-        <div className="first-cut-checklist is-compact">
+        <div className="first-cut-checklist">
           <label>
             <input
-              checked={controls.complete}
+              checked={setupReady}
               disabled={busy}
-              onChange={(event) =>
-                setConfirmation((current) =>
-                  setFirstCutReadiness(current, event.target.checked),
-                )
-              }
+              onChange={(event) => setSetupReady(event.target.checked)}
               type="checkbox"
             />
             <span aria-hidden="true" className="first-cut-checkmark">
               <Check size={13} />
             </span>
             <span>
-              <strong>Станок и рабочая зона готовы</strong>
+              <strong>Заготовка, фреза, ноль и траектория готовы</strong>
               <small>
                 {intent === "airRun"
-                  ? "Инструмент снят, шпиндель выключен, ноль и траектория проверены"
-                  : "Заготовка и инструмент закреплены, шпиндель запущен, ноль и траектория проверены"}
+                  ? "Инструмент снят, рабочая зона свободна"
+                  : "Крепёж не пересекает путь, питание доступно"}
               </small>
             </span>
           </label>
-        </div>
-        <details className="confirmation-details">
-          <summary>Что входит в подтверждение</summary>
-          <div>
-            {checklist.map((item) => (
-              <span key={item.key}>
-                <Check aria-hidden="true" size={12} />
-                <span>
-                  <strong>{item.title}</strong>
-                  <small>{item.detail}</small>
-                </span>
+          {intent === "cutting" && hasSurfaceMap && (
+            <label>
+              <input
+                checked={confirmation.probeRemoved}
+                disabled={busy}
+                onChange={(event) => setConfirmation((current) => ({
+                  ...current,
+                  probeRemoved: event.target.checked,
+                }))}
+                type="checkbox"
+              />
+              <span aria-hidden="true" className="first-cut-checkmark"><Check size={13} /></span>
+              <span>
+                <strong>Щуп и провода убраны</strong>
+                <small>Цепь щупа не может попасть под инструмент или оси</small>
               </span>
-            ))}
-          </div>
-        </details>
+            </label>
+          )}
+          <label>
+            <input
+              checked={intent === "airRun"
+                ? confirmation.manualSpindleOff
+                : confirmation.manualSpindleRunning}
+              disabled={busy}
+              onChange={(event) => setConfirmation((current) => ({
+                ...current,
+                manualSpindleOff: current.intent === "airRun" && event.target.checked,
+                manualSpindleRunning: current.intent === "cutting" && event.target.checked,
+              }))}
+              type="checkbox"
+            />
+            <span aria-hidden="true" className="first-cut-checkmark"><Check size={13} /></span>
+            <span>
+              <strong>{intent === "airRun" ? "Шпиндель выключен" : "Шпиндель запущен"}</strong>
+              <small>{intent === "airRun"
+                ? "Прогон выполняется без резания"
+                : "Ручной шпиндель вращается в нужном направлении"}</small>
+            </span>
+          </label>
+        </div>
         <p
           aria-hidden={!error}
           className={`first-cut-error${error ? "" : " is-empty"}`}
@@ -240,7 +203,7 @@ export function FirstCutAuthorizationDialog({
           {error ?? "Нет ошибок"}
         </p>
         <footer>
-          <span>Разрешение создаётся и потребляется одним действием.</span>
+          <button disabled={busy} onClick={onClose} type="button">Отмена</button>
           <button
             className="first-cut-authorize"
             disabled={!controls.canAuthorize}
@@ -251,8 +214,8 @@ export function FirstCutAuthorizationDialog({
             {busy
               ? "Проверка и запуск..."
               : intent === "airRun"
-                ? "Проверить и запустить без резания"
-                : "Проверить и запустить гравировку"}
+                ? "Начать прогон"
+                : "Начать гравировку"}
           </button>
         </footer>
       </section>

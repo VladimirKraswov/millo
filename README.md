@@ -112,7 +112,7 @@ replacement never overwrites the preceding completed map, and restart always
 requires fixture/work-zero reconfirmation.
 The map workspace first finds the highest surface point as Z0, then provides
 automatic program bounds with margin, separate bounded limits for the first Z0
-contact and per-point surface variation, physical grid density, perimeter
+contact and the per-point search reserve below Z0, physical grid density, perimeter
 validation, coordinate-labelled values, and a Three.js
 low-to-high surface view. Incoming samples preserve the operator's current
 3D orbit, pan, and zoom for the same probe area; see
@@ -121,6 +121,18 @@ low-to-high surface view. Incoming samples preserve the operator's current
 The implementation choices and follow-up ideas taken from GRBL, Candle, CNCjs,
 bCNC, and UGS are recorded in
 [Probing and heightmap comparison](docs/PROBING_COMPARISON.md).
+The grid probe travels from safe clearance through Z0 to the configured lower
+reserve, so a 2 mm clearance plus a 3 mm reserve produces a bounded 5 mm probe
+move. A contact miss preserves every completed sample as a resumable draft,
+returns to safe Z without resetting GRBL when the link and coordinates remain
+trusted, and offers continuation from the first missing point. The same draft
+survives application restart; geometry and existing samples cannot be edited
+during resume, while the lower reserve may be increased.
+The saved map is applied explicitly beside job launch, never by merely opening
+the probe window. Rust binds the selected map ID to preflight, GRBL `$C`, the
+one-use authorization, sender planning, and recovery. Long lines and arcs are
+subdivided and bilinearly corrected in Z; safe-clearance motion remains
+unmodified. A map/profile/perimeter mismatch blocks the run before dispatch.
 
 Returning to an existing work zero is a different typed motion command. The
 actor emits one absolute `$J=G90 G21 <axis>0` only after fresh `Idle`, `$G`,

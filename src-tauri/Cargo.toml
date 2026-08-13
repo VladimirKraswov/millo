@@ -20,6 +20,7 @@ millo-controller = { path = "../crates/millo-controller" }
 millo-dry-run = { path = "../crates/millo-dry-run" }
 millo-domain = { path = "../crates/millo-domain" }
 millo-gcode = { path = "../crates/millo-gcode" }
+millo-grbl = { path = "../crates/millo-grbl" }
 millo-heightmap = { path = "../crates/millo-heightmap" }
 millo-journal = { path = "../crates/millo-journal" }
 millo-mock = { path = "../crates/millo-mock" }

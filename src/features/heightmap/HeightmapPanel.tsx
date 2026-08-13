@@ -17,7 +17,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import type { HeightmapGateway } from "../../platform/machine/HeightmapGateway";
 import type { ZProbeGateway } from "../../platform/machine/ZProbeGateway";
-import type { ControllerSnapshot, MachineTravel, Position } from "../../shared/machine";
+import type { ControllerSnapshot, MachineTravel, Position, WorkCoordinateSystem, ZProbeOutcome } from "../../shared/machine";
 import type { HeightmapOperationSnapshot, HeightmapPlanRequest, SurfaceSession } from "../../shared/heightmap";
 import type { GcodeProgram } from "../../shared/program";
 import {
@@ -36,6 +36,7 @@ import {
   describeHeightmapFailure,
   estimateHeightmapSeconds,
   heightmapCalibrationPlateThickness,
+  heightmapHasCurrentZDatum,
   heightmapSafeWorkZ,
   heightmapSurfaceVariation,
   perimeterFromProgram,
@@ -50,6 +51,7 @@ const HeightmapScene = lazy(async () => {
 });
 
 interface HeightmapPanelProps {
+  readonly activeCoordinateSystem: WorkCoordinateSystem;
   readonly desktopRuntime: boolean;
   readonly disabled?: boolean;
   readonly gateway: HeightmapGateway;
@@ -59,6 +61,10 @@ interface HeightmapPanelProps {
   readonly onError: (message?: string) => void;
   readonly onActivityChange?: (active: boolean) => void;
   readonly onSnapshot: (snapshot: ControllerSnapshot) => void;
+  readonly onZeroEstablished?: (
+    outcome: ZProbeOutcome,
+    source: "probe" | "heightmap",
+  ) => void;
   readonly onSaveMode: () => Promise<void>;
   readonly onUnlock: () => Promise<ControllerSnapshot>;
   readonly program?: GcodeProgram;
@@ -72,6 +78,20 @@ const duration = (seconds: number): string => {
 
 const requestFromSession = (session: SurfaceSession): HeightmapPlanRequest | undefined =>
   session.pending?.operation.map?.plan.request ?? session.active?.map.plan.request;
+
+const resumableDraft = (
+  session: SurfaceSession,
+  machineProfileId?: string,
+) => {
+  const pending = session.pending;
+  if (!pending || pending.machineProfileId !== machineProfileId) return undefined;
+  const resumable = pending.operation.state === "running" ||
+    pending.operation.state === "failed" ||
+    pending.operation.state === "cancelled";
+  return resumable && pending.operation.map && !pending.operation.progress.complete
+    ? pending
+    : undefined;
+};
 
 interface SurfaceCalibration {
   readonly calibrationPlateThicknessMm: number;
@@ -88,6 +108,7 @@ const samePosition = (left: Position, right: Position): boolean =>
   Math.abs(left.z - right.z) <= 0.001;
 
 export function HeightmapPanel({
+  activeCoordinateSystem,
   desktopRuntime,
   disabled = false,
   gateway,
@@ -97,6 +118,7 @@ export function HeightmapPanel({
   onActivityChange,
   onError,
   onSnapshot,
+  onZeroEstablished,
   onSaveMode,
   onUnlock,
   program,
@@ -152,7 +174,11 @@ export function HeightmapPanel({
         setSession(nextSession);
         setOperation(nextOperation);
         setRuntimeReady(true);
-        if (!hadStoredDraft) setRequest(requestFromSession(nextSession) ?? defaultHeightmapRequest());
+        const restoredRequest = requestFromSession(nextSession);
+        const nextActive = nextOperation.state === "running" || nextOperation.state === "paused";
+        if ((!nextActive && resumableDraft(nextSession, machineProfileId)) || !hadStoredDraft) {
+          setRequest(restoredRequest ?? defaultHeightmapRequest());
+        }
       })
       .catch((error) => {
         if (disposed) return;
@@ -181,6 +207,7 @@ export function HeightmapPanel({
   }, [machineProfileId, snapshot.connection, snapshot.resetCount, surfaceCalibration]);
 
   const active = operation.state === "running" || operation.state === "paused";
+  const pendingDraft = active ? undefined : resumableDraft(session, machineProfileId);
   useEffect(() => {
     onActivityChange?.(active || busy);
     return () => onActivityChange?.(false);
@@ -190,7 +217,7 @@ export function HeightmapPanel({
     : session.pending?.operation.map ?? session.active?.map;
   const validationError = validateHeightmapRequest(request, machineTravel);
   const controlsBlocked = disabled || busy || !runtimeReady;
-  const settingsLocked = active || controlsBlocked;
+  const settingsLocked = active || controlsBlocked || Boolean(pendingDraft);
   const calibrationPlateThicknessMm = heightmapCalibrationPlateThickness(
     request,
     zeroPlateThicknessMm,
@@ -207,6 +234,16 @@ export function HeightmapPanel({
     Math.abs(surfaceCalibration.perimeter.heightMm - request.heightMm) <= 0.001 &&
     (!surfaceCalibration.workCoordinateOffset || !snapshot.machine.workCoordinateOffset ||
       samePosition(surfaceCalibration.workCoordinateOffset, snapshot.machine.workCoordinateOffset)));
+  const storedMapHasCurrentZDatum = Boolean(
+    session.active?.machineProfileId === machineProfileId &&
+    heightmapHasCurrentZDatum(
+      session.active?.map,
+      session.coordinateBindingStale,
+      activeCoordinateSystem,
+      snapshot.machine.workCoordinateOffset,
+    ),
+  );
+  const zDatumReady = surfaceReady || storedMapHasCurrentZDatum;
   const surfaceVariationMm = heightmapSurfaceVariation(request);
   const safeWorkZ = heightmapSafeWorkZ(request);
   const totalPoints = request.columns * request.rows;
@@ -235,7 +272,6 @@ export function HeightmapPanel({
     setRequest((current) => ({
       ...current,
       clearanceZMm,
-      maxProbeDepthMm: clearanceZMm + heightmapSurfaceVariation(current),
     }));
   };
   const runAction = async (action: () => Promise<void>) => {
@@ -282,6 +318,7 @@ export function HeightmapPanel({
       setupConfirmed: true,
     });
     onSnapshot(outcome.snapshot);
+    onZeroEstablished?.(outcome, "heightmap");
     const calibration = {
       calibrationPlateThicknessMm,
       contactMode: request.contactMode,
@@ -310,7 +347,7 @@ export function HeightmapPanel({
     if (snapshot.machine.pins?.probe) throw new Error("Щуп уже замкнут. Разомкните контакт перед запуском.");
     if (validationError) throw new Error(validationError);
     if (programOutside) throw new Error("Часть задания находится за периметром карты");
-    if (!surfaceReady) throw new Error("Сначала найдите поверхность и установите Z0");
+    if (!zDatumReady) throw new Error("Сначала найдите поверхность и установите Z0");
     await onSaveMode();
     setOperation(await gateway.start({
       plan: request,
@@ -318,8 +355,28 @@ export function HeightmapPanel({
       contactAvailableAtEveryPoint: true,
     }, machineProfileId));
   });
+  const resumeDraft = () => runAction(async () => {
+    if (!machineProfileId || !pendingDraft) throw new Error("Нет незавершённой карты для продолжения");
+    if (snapshot.connection !== "connected" || snapshot.machine.mode !== "idle") {
+      throw new Error("Для продолжения нужен подключённый контроллер в состоянии Idle");
+    }
+    if (snapshot.machine.pins?.probe) throw new Error("Щуп уже замкнут. Разомкните контакт перед продолжением.");
+    if (!Number.isFinite(request.maxProbeDepthMm) || request.maxProbeDepthMm < 0.1 || request.maxProbeDepthMm > 100) {
+      throw new Error("Запас поиска ниже Z0 должен быть от 0.1 до 100 mm");
+    }
+    await onSaveMode();
+    setOperation(await gateway.resumeDraft({
+      maxProbeDepthMm: request.maxProbeDepthMm,
+      setupConfirmed: true,
+      contactAvailableAtEveryPoint: true,
+    }, machineProfileId));
+  });
   const clearSavedMap = () => runAction(async () => {
     setSession(await gateway.clear());
+    setOperation(emptyHeightmapOperation);
+  });
+  const discardDraft = () => runAction(async () => {
+    setSession(await gateway.discardDraft());
     setOperation(emptyHeightmapOperation);
   });
   const togglePause = async () => {
@@ -352,8 +409,8 @@ export function HeightmapPanel({
   };
 
   const operationMessage = describeHeightmapFailure(
-    localError ?? operation.error,
-    operation.state === "failed" ? request.maxProbeDepthMm : surfaceSearchMm,
+    localError ?? operation.error ?? pendingDraft?.operation.error,
+    pendingDraft || operation.state === "failed" ? request.maxProbeDepthMm : surfaceSearchMm,
   );
   const recoveredMap = Boolean(
     session.active && operation.state === "idle" && session.requiresSetupConfirmation,
@@ -369,12 +426,14 @@ export function HeightmapPanel({
       : returningToStart
         ? "Возвращаю фрезу"
         : "Снимаю карту"
-    : operation.state === "failed" || operation.state === "cancelled"
+    : pendingDraft || operation.state === "failed" || operation.state === "cancelled"
       ? "Измерение остановлено"
       : operation.state === "completed" ? "Карта готова · безопасная Z" : "Последняя карта сохранена";
   const surfaceStatusLabel = snapshot.alarm
     ? `ALARM:${snapshot.alarm.code ?? "?"}`
-    : surfaceReady
+    : pendingDraft
+      ? `Черновик ${pendingDraft.operation.progress.measured}/${pendingDraft.operation.progress.total}`
+    : zDatumReady
       ? "Z0 найден"
       : snapshot.connection !== "connected"
         ? "Нет соединения"
@@ -442,17 +501,21 @@ export function HeightmapPanel({
 
       <div className="heightmap-settings">
         <div className="heightmap-settings-scroll">
-        <section className={`heightmap-surface-setup${snapshot.alarm ? " is-alarm" : surfaceReady ? " is-ready" : ""}`}>
+        <section className={`heightmap-surface-setup${snapshot.alarm ? " is-alarm" : zDatumReady ? " is-ready" : ""}`}>
           <header>
             <span>1 · Рабочая поверхность</span>
             <strong>{surfaceStatusLabel}</strong>
           </header>
           <div className="heightmap-surface-state">
-            <span className="heightmap-surface-icon">{surfaceCalibration ? <Check size={15} /> : <Crosshair size={15} />}</span>
+            <span className="heightmap-surface-icon">{zDatumReady ? <Check size={15} /> : <Crosshair size={15} />}</span>
             <div>
-              <strong>{surfaceReady ? "Поверхность найдена" : snapshot.alarm ? "Станок остановлен" : snapshot.connection !== "connected" ? "Подключите станок" : snapshot.machine.mode !== "idle" ? `Дождитесь Idle · сейчас ${snapshot.machine.reportedMode}` : snapshot.machine.pins?.probe ? "Щуп уже замкнут" : "Подведите фрезу над материалом"}</strong>
-              <small>{surfaceReady && surfaceCalibration
+              <strong>{pendingDraft ? "Измеренные точки сохранены" : zDatumReady ? "Поверхность найдена" : snapshot.alarm ? "Станок остановлен" : snapshot.connection !== "connected" ? "Подключите станок" : snapshot.machine.mode !== "idle" ? `Дождитесь Idle · сейчас ${snapshot.machine.reportedMode}` : snapshot.machine.pins?.probe ? "Щуп уже замкнут" : "Подведите фрезу над материалом"}</strong>
+              <small>{pendingDraft
+                ? `Готово ${pendingDraft.operation.progress.measured} из ${pendingDraft.operation.progress.total}. Если заготовка и рабочий ноль не двигались, увеличьте запас ниже Z0 и продолжите.`
+                : surfaceReady && surfaceCalibration
                 ? `Рабочий Z0 установлен, фреза поднята на Z ${surfaceCalibration.finalWorkZ.toFixed(2)} mm. ${request.contactMode === "directSurface" ? "Уберите пластину Z0 перед сеткой: дальше щуп касается самой проводящей поверхности." : "Для сетки оставьте только сплошную пластину, покрывающую весь периметр."}`
+                : storedMapHasCurrentZDatum
+                  ? `Z0 подтверждён сохранённой картой #${session.active?.mapId}. Повторно устанавливать его не нужно, пока заготовка и рабочая система координат не менялись.`
                 : snapshot.alarm
                   ? "Разблокируйте контроллер здесь. Настройки карты уже сохранены."
                   : snapshot.connection !== "connected"
@@ -464,12 +527,12 @@ export function HeightmapPanel({
           </div>
           <div className="heightmap-surface-controls">
             <label><span>Первый контакт</span><span><input disabled={settingsLocked} max="100" min="0.1" onChange={(event) => setSurfaceSearchMm(Number(event.target.value))} step="0.5" type="number" value={surfaceSearchMm} /><small>mm вниз</small></span></label>
-            <label><span>Макс. перепад поверхности</span><span><input disabled={settingsLocked} min="0.1" onChange={(event) => setRequest((current) => withHeightmapSurfaceVariation(current, Number(event.target.value)))} step="0.1" type="number" value={surfaceVariationMm} /><small>mm вниз</small></span></label>
+            <label><span>Запас ниже Z0</span><span><input disabled={active || controlsBlocked} min="0.1" onChange={(event) => setRequest((current) => withHeightmapSurfaceVariation(current, Number(event.target.value)))} step="0.1" type="number" value={surfaceVariationMm} /><small>mm</small></span></label>
           </div>
-          <p className="heightmap-surface-hint">Первый предел нужен только для поиска Z0. Перепад ограничивает поиск в каждой точке сетки — увеличьте его для заметно неровной формы.</p>
+          <p className="heightmap-surface-hint">Первый предел нужен только для поиска Z0. В сетке щуп идёт от безопасной высоты до Z0 и ещё на указанный запас ниже.</p>
           <div className="heightmap-surface-actions">
             {snapshot.alarm && <button className="is-unlock" disabled={controlsBlocked || !desktopRuntime} onClick={() => void unlock()} type="button"><KeyRound size={14} /> Разблокировать</button>}
-            <button className="is-calibrate" disabled={controlsBlocked || active || !desktopRuntime || Boolean(contactConfigurationError) || snapshot.connection !== "connected" || snapshot.machine.mode !== "idle" || Boolean(snapshot.machine.pins?.probe)} onClick={() => void locateSurface()} type="button"><Crosshair size={14} /> {busy ? "Выполняется…" : surfaceReady ? "Найти заново" : "Найти поверхность и установить Z0"}</button>
+            <button className="is-calibrate" disabled={controlsBlocked || active || Boolean(pendingDraft) || !desktopRuntime || Boolean(contactConfigurationError) || snapshot.connection !== "connected" || snapshot.machine.mode !== "idle" || Boolean(snapshot.machine.pins?.probe)} onClick={() => void locateSurface()} type="button"><Crosshair size={14} /> {busy ? "Выполняется…" : zDatumReady ? "Найти Z0 заново" : "Найти поверхность и установить Z0"}</button>
           </div>
         </section>
 
@@ -513,7 +576,7 @@ export function HeightmapPanel({
             {(["probeFeedMmPerMin", "travelFeedMmPerMin", "retractFeedMmPerMin"] as const).map((key) => <label key={key}><span>{{ probeFeedMmPerMin: "Подача щупа", travelFeedMmPerMin: "Переход XY", retractFeedMmPerMin: "Подъём Z" }[key]}</span><input disabled={settingsLocked} min="0.1" onChange={(event) => updateNumber(key, event.target.value)} type="number" value={request[key]} /></label>)}
             {request.contactMode === "fixedPlate" && <label><span>Сплошная пластина сетки</span><input disabled={settingsLocked} min="0.01" onChange={(event) => updateNumber("contactOffsetMm", event.target.value)} step="0.01" type="number" value={request.contactOffsetMm} /></label>}
           </div>
-          <p className="heightmap-safe-z-note">Переходы: Z {safeWorkZ.toFixed(2)} mm · поиск сетки: {request.maxProbeDepthMm.toFixed(2)} mm вниз</p>
+          <p className="heightmap-safe-z-note">Переходы: Z {safeWorkZ.toFixed(2)} mm · ход щупа: {(request.clearanceZMm + request.maxProbeDepthMm).toFixed(2)} mm · нижняя граница: Z −{request.maxProbeDepthMm.toFixed(2)} mm</p>
         </details>
         </div>
 
@@ -521,7 +584,7 @@ export function HeightmapPanel({
         <div aria-hidden={!showProgress} className={`heightmap-progress${showProgress ? "" : " is-empty"}`} aria-live="polite">
           <span><ScanLine size={15} /> {progressLabel}</span>
           <strong>{measuredPoints}/{progressPoints}</strong>
-          {session.active && !active && <button aria-label="Удалить сохранённую карту" className="icon-only" disabled={controlsBlocked} onClick={() => void clearSavedMap()} title="Удалить сохранённую карту" type="button"><Trash2 size={14} /></button>}
+          {session.active && !pendingDraft && !active && <button aria-label="Удалить сохранённую карту" className="icon-only" disabled={controlsBlocked} onClick={() => void clearSavedMap()} title="Удалить сохранённую карту" type="button"><Trash2 size={14} /></button>}
           <i><b style={{ width: `${progressPoints ? measuredPoints / progressPoints * 100 : 0}%` }} /></i>
         </div>
         <div className="heightmap-primary-actions">
@@ -530,9 +593,14 @@ export function HeightmapPanel({
               <button disabled={!desktopRuntime || !runtimeReady || pausePending || stopPending} onClick={() => void togglePause()} type="button">{operation.state === "paused" ? <Play size={15} /> : <Pause size={15} />}{pausePending ? "Команда…" : operation.state === "paused" ? "Продолжить" : "Пауза"}</button>
               <button className="is-danger" disabled={!desktopRuntime || !runtimeReady || stopPending} onClick={() => void stop()} type="button"><Square size={14} /> {stopPending ? "Останавливаю…" : "Остановить"}</button>
             </>
-          ) : <button className="is-primary" disabled={controlsBlocked || !desktopRuntime || !surfaceReady || Boolean(contactConfigurationError) || Boolean(validationError) || programOutside || snapshot.connection !== "connected" || snapshot.machine.mode !== "idle" || Boolean(snapshot.machine.pins?.probe)} onClick={() => void start()} type="button"><Crosshair size={15} /> {busy ? "Выполняется…" : surfaceReady ? `Снять карту · ${totalPoints} точек` : "Сначала найдите поверхность"}</button>}
+          ) : pendingDraft ? (
+            <>
+              <button className="is-primary" disabled={controlsBlocked || !desktopRuntime || snapshot.connection !== "connected" || snapshot.machine.mode !== "idle" || Boolean(snapshot.machine.pins?.probe)} onClick={() => void resumeDraft()} type="button"><Play size={15} /> {busy ? "Подготавливаю…" : `Продолжить с точки ${pendingDraft.operation.progress.measured + 1}`}</button>
+              <button disabled={controlsBlocked} onClick={() => void discardDraft()} type="button"><Trash2 size={14} /> Начать заново</button>
+            </>
+          ) : <button className="is-primary" disabled={controlsBlocked || !desktopRuntime || !zDatumReady || Boolean(contactConfigurationError) || Boolean(validationError) || programOutside || snapshot.connection !== "connected" || snapshot.machine.mode !== "idle" || Boolean(snapshot.machine.pins?.probe)} onClick={() => void start()} type="button"><Crosshair size={15} /> {busy ? "Выполняется…" : zDatumReady ? `Снять карту · ${totalPoints} точек` : "Сначала найдите поверхность"}</button>}
         </div>
-        <p aria-live="polite" className={`heightmap-status-message${operationMessage || contactConfigurationError || validationError || programOutside ? " is-error" : ""}${statusMessage ? "" : " is-empty"}`}>{statusMessage ?? "После последней точки: безопасный подъём → исходные X/Y. При ошибке движение немедленно останавливается."}</p>
+        <p aria-live="polite" className={`heightmap-status-message${operationMessage || contactConfigurationError || validationError || programOutside ? " is-error" : ""}${statusMessage ? "" : " is-empty"}`}>{statusMessage ?? "После последней точки: безопасный подъём → исходные X/Y. При промахе готовые точки сохраняются для продолжения."}</p>
         </div>
       </div>
     </div>
