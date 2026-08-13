@@ -3659,6 +3659,35 @@ textarea:focus-visible {
   display: block;
 }
 
+.heightmap-scene {
+  overflow: hidden;
+  position: relative;
+}
+
+.heightmap-scene-labels {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.heightmap-point-label {
+  background: rgba(9, 15, 18, 0.88);
+  border: 1px solid rgba(211, 232, 226, 0.42);
+  border-radius: 4px;
+  color: #eaf7f2;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 5px;
+  transform: translate(8px, -11px);
+  white-space: nowrap;
+}
+
+.heightmap-point-label.is-current {
+  border-color: #ffc45e;
+  color: #ffc45e;
+}
+
 .heightmap-dimensions {
   position: absolute;
   display: flex;
@@ -3711,6 +3740,7 @@ textarea:focus-visible {
 }
 
 .heightmap-settings-scroll {
+  overflow-x: hidden;
   min-height: 0;
   padding-right: 3px;
   overflow: auto;

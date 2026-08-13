@@ -15,12 +15,13 @@ an unlabelled table of values.
 Millo keeps probe input visibility, one-point Z zero, and heightmap probing in
 one core workflow with three mutually exclusive modes: Off, Work Zero, and
 Heightmap. The Rust command actor owns the complete serpentine operation. It
-validates a bounded XY perimeter and grid, raises to absolute work clearance Z,
-moves one XY point, executes `G38.3`, waits for fresh `Idle` after terminal
+validates a bounded XY perimeter and grid, computes bounded relative Z/XY
+deltas, executes `G38.3`, waits for fresh `Idle` after terminal
 acknowledgement, reads `PRB` through `$#`, records surface Z without writing
 `G10`, and raises before the next point. Hold, Resume, and Soft Reset remain
-preemptive. A failure after contact attempts safe-Z and modal-state cleanup
-before publishing a failed snapshot.
+preemptive. Each internal jog must finish at its expected work target within
+0.05 mm. Failure sends Feed Hold and Soft Reset, publishes a quarantined failed
+snapshot, and issues no automatic recovery motion from an untrusted coordinate.
 
 Map data lives in `surface-session.json`, separate from machine profiles. A
 pending map is checkpointed atomically while the preceding active map remains

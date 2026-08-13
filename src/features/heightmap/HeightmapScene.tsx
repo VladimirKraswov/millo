@@ -1,12 +1,19 @@
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 
 import type { Heightmap, HeightmapPlanRequest } from "../../shared/heightmap";
 import type { GcodeProgram } from "../../shared/program";
 import { buildHeightmapPlan } from "./heightmapModel";
+import {
+  heightmapSampleLabel,
+  heightmapVisualScale,
+  shouldLabelHeightmapSample,
+} from "./heightmapSceneModel";
 
 interface HeightmapSceneProps {
+  readonly currentSequence?: number;
   readonly map?: Heightmap;
   readonly program?: GcodeProgram;
   readonly request: HeightmapPlanRequest;
@@ -33,6 +40,7 @@ const colorFor = (ratio: number): THREE.Color => {
 };
 
 export function HeightmapScene({
+  currentSequence,
   map,
   program,
   request,
@@ -57,7 +65,10 @@ export function HeightmapScene({
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.domElement.setAttribute("aria-label", "Карта высот и периметр измерения");
-    element.replaceChildren(renderer.domElement);
+    const labels = new CSS2DRenderer();
+    labels.domElement.className = "heightmap-scene-labels";
+    labels.domElement.setAttribute("aria-hidden", "true");
+    element.replaceChildren(renderer.domElement, labels.domElement);
 
     const mapRequest = map?.plan.request;
     const minimumX = Math.min(request.originXMm, mapRequest?.originXMm ?? request.originXMm);
@@ -133,20 +144,17 @@ export function HeightmapScene({
     }
 
     const samples = map?.samples.flatMap((sample) => sample ? [sample] : []) ?? [];
-    const zValues = samples.map((sample) => sample.zMm);
-    const minimum = zValues.length > 0 ? Math.min(...zValues) : 0;
-    const maximum = zValues.length > 0 ? Math.max(...zValues) : 0;
-    const zRange = Math.max(maximum - minimum, 0.001);
-    const exaggeration = Math.min(50, Math.max(1, span * 0.08 / zRange));
+    const scale = heightmapVisualScale(samples.map((sample) => sample.zMm), span);
+    const { exaggeration, minimum, range: zRange } = scale;
 
-    if (showInterpolation && map && map.samples.every(Boolean)) {
+    if (showInterpolation && map && samples.length >= 4) {
       const sourceRequest = map.plan.request;
       const columns = Math.max(2, Math.min(150, interpolationColumns));
       const rows = Math.max(2, Math.min(150, interpolationRows));
       const positions: number[] = [];
       const colors: number[] = [];
       const byCell = new Map(map.samples.flatMap((sample) => sample ? [[`${sample.point.row}:${sample.point.column}`, sample]] : []));
-      const sampleZ = (row: number, column: number): number => {
+      const sampleZ = (row: number, column: number): number | undefined => {
         const sourceX = column / (columns - 1) * (map.plan.request.columns - 1);
         const sourceY = row / (rows - 1) * (map.plan.request.rows - 1);
         const left = Math.floor(sourceX);
@@ -155,18 +163,24 @@ export function HeightmapScene({
         const top = Math.min(bottom + 1, map.plan.request.rows - 1);
         const xMix = sourceX - left;
         const yMix = sourceY - bottom;
-        const z00 = byCell.get(`${bottom}:${left}`)?.zMm ?? 0;
-        const z10 = byCell.get(`${bottom}:${right}`)?.zMm ?? z00;
-        const z01 = byCell.get(`${top}:${left}`)?.zMm ?? z00;
-        const z11 = byCell.get(`${top}:${right}`)?.zMm ?? z01;
+        const z00 = byCell.get(`${bottom}:${left}`)?.zMm;
+        const z10 = byCell.get(`${bottom}:${right}`)?.zMm;
+        const z01 = byCell.get(`${top}:${left}`)?.zMm;
+        const z11 = byCell.get(`${top}:${right}`)?.zMm;
+        if (z00 === undefined || z10 === undefined || z01 === undefined || z11 === undefined) {
+          return undefined;
+        }
         return (z00 + (z10 - z00) * xMix) * (1 - yMix) +
           (z01 + (z11 - z01) * xMix) * yMix;
       };
       for (let row = 0; row < rows - 1; row += 1) {
         for (let column = 0; column < columns - 1; column += 1) {
-          const corners = [[row, column], [row, column + 1], [row + 1, column + 1], [row, column], [row + 1, column + 1], [row + 1, column]];
-          for (const [cornerRow, cornerColumn] of corners) {
-            const z = sampleZ(cornerRow, cornerColumn);
+          const corners = [[row, column], [row, column + 1], [row + 1, column + 1], [row, column], [row + 1, column + 1], [row + 1, column]] as const;
+          const values = corners.map(([cornerRow, cornerColumn]) => sampleZ(cornerRow, cornerColumn));
+          if (values.some((value) => value === undefined)) continue;
+          for (let corner = 0; corner < corners.length; corner += 1) {
+            const [cornerRow, cornerColumn] = corners[corner];
+            const z = values[corner]!;
             const x = sourceRequest.originXMm + cornerColumn / (columns - 1) * sourceRequest.widthMm;
             const y = sourceRequest.originYMm + cornerRow / (rows - 1) * sourceRequest.heightMm;
             positions.push(x, y, (z - minimum) * exaggeration);
@@ -175,22 +189,24 @@ export function HeightmapScene({
           }
         }
       }
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-      geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-      geometry.computeVertexNormals();
-      const surface = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
-        opacity: 0.82,
-        side: THREE.DoubleSide,
-        transparent: true,
-        vertexColors: true,
-      }));
-      scene.add(surface);
-      if (showInterpolationGrid) {
-        scene.add(new THREE.LineSegments(
-          new THREE.WireframeGeometry(geometry),
-          new THREE.LineBasicMaterial({ color: 0xdde8ea, opacity: 0.16, transparent: true }),
-        ));
+      if (positions.length > 0) {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+        geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+        geometry.computeVertexNormals();
+        const surface = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({
+          opacity: 0.82,
+          side: THREE.DoubleSide,
+          transparent: true,
+          vertexColors: true,
+        }));
+        scene.add(surface);
+        if (showInterpolationGrid) {
+          scene.add(new THREE.LineSegments(
+            new THREE.WireframeGeometry(geometry),
+            new THREE.LineBasicMaterial({ color: 0xdde8ea, opacity: 0.16, transparent: true }),
+          ));
+        }
       }
     }
 
@@ -227,11 +243,41 @@ export function HeightmapScene({
       const measuredPositions: number[] = [];
       const measuredColors: number[] = [];
       for (const sample of samples) {
-        measuredPositions.push(sample.point.xMm, sample.point.yMm, (sample.zMm - minimum) * exaggeration + 0.08);
+        const visualZ = (sample.zMm - minimum) * exaggeration + 0.08;
+        measuredPositions.push(sample.point.xMm, sample.point.yMm, visualZ);
         const color = colorFor((sample.zMm - minimum) / zRange);
         measuredColors.push(color.r, color.g, color.b);
+
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(Math.max(0.18, span * 0.003), Math.max(0.32, span * 0.005), 24),
+          new THREE.MeshBasicMaterial({
+            color: sample.point.sequence === currentSequence ? 0xffc45e : 0xeaf7f2,
+            side: THREE.DoubleSide,
+          }),
+        );
+        ring.position.set(sample.point.xMm, sample.point.yMm, visualZ + 0.03);
+        scene.add(ring);
+
+        if (shouldLabelHeightmapSample(sample.point.sequence, map?.plan.points.length ?? samples.length, currentSequence)) {
+          const node = document.createElement("span");
+          node.className = `heightmap-point-label${sample.point.sequence === currentSequence ? " is-current" : ""}`;
+          node.textContent = heightmapSampleLabel(sample.zMm);
+          const label = new CSS2DObject(node);
+          label.position.set(sample.point.xMm, sample.point.yMm, visualZ + 0.12);
+          scene.add(label);
+        }
       }
       addPoints(measuredPositions, measuredColors, 7);
+
+      const nextPoint = draftPlan.points.find((point) => point.sequence === currentSequence);
+      if (nextPoint && !map?.samples[nextPoint.sequence]) {
+        const marker = new THREE.Mesh(
+          new THREE.RingGeometry(Math.max(0.25, span * 0.004), Math.max(0.42, span * 0.007), 24),
+          new THREE.MeshBasicMaterial({ color: 0xffc45e, side: THREE.DoubleSide }),
+        );
+        marker.position.set(nextPoint.xMm, nextPoint.yMm, 0.11);
+        scene.add(marker);
+      }
     }
 
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -250,6 +296,7 @@ export function HeightmapScene({
       camera.bottom = -half;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height, false);
+      labels.setSize(width, height);
     };
     const observer = new ResizeObserver(resize);
     observer.observe(element);
@@ -258,6 +305,7 @@ export function HeightmapScene({
     const render = () => {
       controls.update();
       renderer.render(scene, camera);
+      labels.render(scene, camera);
       frame = requestAnimationFrame(render);
     };
     render();
@@ -274,7 +322,7 @@ export function HeightmapScene({
       });
       renderer.dispose();
     };
-  }, [draftPlan, interpolationColumns, interpolationRows, map, program, request, showInterpolation, showInterpolationGrid, showJob, showPerimeter, showProbeGrid, view]);
+  }, [currentSequence, draftPlan, interpolationColumns, interpolationRows, map, program, request, showInterpolation, showInterpolationGrid, showJob, showPerimeter, showProbeGrid, view]);
 
   return <div className="heightmap-scene" ref={host} />;
 }

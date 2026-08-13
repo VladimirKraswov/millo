@@ -12,7 +12,6 @@ describe("HeightmapPanel", () => {
         desktopRuntime
         gateway={previewHeightmapGateway}
         machineProfileId="machine-0001"
-        onAbort={async () => emptySnapshot}
         onError={() => undefined}
         onSaveMode={async () => undefined}
         onSnapshot={() => undefined}
@@ -36,7 +35,8 @@ describe("HeightmapPanel", () => {
     expect(markup).not.toContain("Сильный рельеф");
     expect(markup).not.toContain("Подтвердить ту же установку");
     expect(markup).toContain("Это толщина съёмной шайбы, а не заготовки");
-    expect(markup).toContain("безопасный подъём → исходные X/Y → исходный Z");
+    expect(markup).toContain("безопасный подъём → исходные X/Y");
+    expect(markup).toContain("При ошибке движение немедленно останавливается");
     expect(markup).not.toContain("Пластина для Z0");
   });
 });

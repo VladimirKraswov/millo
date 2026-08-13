@@ -25,8 +25,9 @@ typed Rust operation actor instead of streaming a generated probing program.
 
 - Candle and bCNC normally use `G38.2`; a missed contact raises `ALARM:5` and
   interrupts the generated probe job. Millo uses bounded `G38.3`, verifies the
-  `PRB:...:1` success flag itself, records the exact failed point, and attempts
-  safe-Z and modal cleanup without requiring an avoidable alarm unlock.
+  `PRB:...:1` success flag itself and records the exact failed point. On any
+  uncertain motion outcome Millo stops and quarantines instead of attempting a
+  second move from a coordinate it can no longer trust.
 - Millo has a durable prepare/persist/commit barrier. No probe motion begins
   until the pending session is on disk. A completed map replaces the previous
   workpiece map atomically; partial data remains diagnostic only.

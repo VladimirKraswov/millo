@@ -5,6 +5,7 @@ import { emptySnapshot } from "../../shared/machine";
 import { ZProbeDialog } from "./ZProbeDialog";
 
 const heightmapGateway = {
+  cancel: async () => { throw new Error("not used"); },
   clear: async () => { throw new Error("not used"); },
   getOperation: async () => { throw new Error("not used"); },
   getSession: async () => { throw new Error("not used"); },

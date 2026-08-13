@@ -53,6 +53,11 @@ tests, configuration, and direct/transitive dependency reports.
   execution. They fail immediately with typed Busy; only Status, Hold, Reset and
   the operation's own Pause/Resume/commit controls remain preemptive. A command
   clicked during a long probe therefore cannot move the machine minutes later.
+- Heightmap-internal travel no longer emits absolute `$J=G90`. Bounded relative
+  deltas are verified against fresh work coordinates; a mismatch or timeout
+  produces Feed Hold plus Soft Reset and no follow-up motion. The lifecycle
+  ticker also stands down while the operation actor owns status polling, which
+  prevents duplicate serial traffic and WebView event floods.
 - CAM now uses VTracer 1.0 alpha's library-only pipeline. Existing PNG fixtures
   remain equivalent while old `clap 2`, `atty`, `image 0.23` and `adler` paths
   have left the dependency graph.

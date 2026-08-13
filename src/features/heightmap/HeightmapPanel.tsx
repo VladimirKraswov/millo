@@ -56,7 +56,6 @@ interface HeightmapPanelProps {
   readonly zProbeGateway: ZProbeGateway;
   readonly machineProfileId?: string;
   readonly machineTravel?: MachineTravel;
-  readonly onAbort: () => Promise<ControllerSnapshot>;
   readonly onError: (message?: string) => void;
   readonly onActivityChange?: (active: boolean) => void;
   readonly onSnapshot: (snapshot: ControllerSnapshot) => void;
@@ -95,7 +94,6 @@ export function HeightmapPanel({
   zProbeGateway,
   machineProfileId,
   machineTravel,
-  onAbort,
   onActivityChange,
   onError,
   onSnapshot,
@@ -128,6 +126,8 @@ export function HeightmapPanel({
   const [interpolationColumns, setInterpolationColumns] = useState(50);
   const [interpolationRows, setInterpolationRows] = useState(50);
   const [busy, setBusy] = useState(false);
+  const [pausePending, setPausePending] = useState(false);
+  const [stopPending, setStopPending] = useState(false);
   const [localError, setLocalError] = useState<string>();
 
   useEffect(() => {
@@ -322,6 +322,34 @@ export function HeightmapPanel({
     setSession(await gateway.clear());
     setOperation(emptyHeightmapOperation);
   });
+  const togglePause = async () => {
+    setPausePending(true);
+    setLocalError(undefined);
+    onError(undefined);
+    try {
+      setOperation(operation.state === "paused" ? await gateway.resume() : await gateway.pause());
+    } catch (error) {
+      const message = String(error);
+      setLocalError(message);
+      onError(message);
+    } finally {
+      setPausePending(false);
+    }
+  };
+  const stop = async () => {
+    setStopPending(true);
+    setLocalError(undefined);
+    onError(undefined);
+    try {
+      setOperation(await gateway.cancel());
+    } catch (error) {
+      const message = String(error);
+      setLocalError(message);
+      onError(message);
+    } finally {
+      setStopPending(false);
+    }
+  };
 
   const operationMessage = describeHeightmapFailure(
     localError ?? operation.error,
@@ -343,7 +371,7 @@ export function HeightmapPanel({
         : "Снимаю карту"
     : operation.state === "failed" || operation.state === "cancelled"
       ? "Измерение остановлено"
-      : operation.state === "completed" ? "Карта готова · фреза возвращена" : "Последняя карта сохранена";
+      : operation.state === "completed" ? "Карта готова · безопасная Z" : "Последняя карта сохранена";
   const surfaceStatusLabel = snapshot.alarm
     ? `ALARM:${snapshot.alarm.code ?? "?"}`
     : surfaceReady
@@ -392,6 +420,7 @@ export function HeightmapPanel({
           {representation === "surface" ? (
             <Suspense fallback={<div className="heightmap-scene-loading">3D карта загружается...</div>}>
               <HeightmapScene
+                currentSequence={active ? operation.currentSequence : undefined}
                 interpolationColumns={interpolationColumns}
                 interpolationRows={interpolationRows}
                 map={displayedMap}
@@ -498,12 +527,12 @@ export function HeightmapPanel({
         <div className="heightmap-primary-actions">
           {active ? (
             <>
-              <button disabled={controlsBlocked} onClick={() => void runAction(async () => setOperation(operation.state === "paused" ? await gateway.resume() : await gateway.pause()))} type="button">{operation.state === "paused" ? <Play size={15} /> : <Pause size={15} />}{operation.state === "paused" ? "Продолжить" : "Пауза"}</button>
-              <button className="is-danger" disabled={controlsBlocked} onClick={() => void runAction(async () => { await onAbort(); })} type="button"><Square size={14} /> Остановить</button>
+              <button disabled={!desktopRuntime || !runtimeReady || pausePending || stopPending} onClick={() => void togglePause()} type="button">{operation.state === "paused" ? <Play size={15} /> : <Pause size={15} />}{pausePending ? "Команда…" : operation.state === "paused" ? "Продолжить" : "Пауза"}</button>
+              <button className="is-danger" disabled={!desktopRuntime || !runtimeReady || stopPending} onClick={() => void stop()} type="button"><Square size={14} /> {stopPending ? "Останавливаю…" : "Остановить"}</button>
             </>
           ) : <button className="is-primary" disabled={controlsBlocked || !desktopRuntime || !surfaceReady || Boolean(contactConfigurationError) || Boolean(validationError) || programOutside || snapshot.connection !== "connected" || snapshot.machine.mode !== "idle" || Boolean(snapshot.machine.pins?.probe)} onClick={() => void start()} type="button"><Crosshair size={15} /> {busy ? "Выполняется…" : surfaceReady ? `Снять карту · ${totalPoints} точек` : "Сначала найдите поверхность"}</button>}
         </div>
-        <p aria-live="polite" className={`heightmap-status-message${operationMessage || contactConfigurationError || validationError || programOutside ? " is-error" : ""}${statusMessage ? "" : " is-empty"}`}>{statusMessage ?? "После последней точки: безопасный подъём → исходные X/Y → исходный Z"}</p>
+        <p aria-live="polite" className={`heightmap-status-message${operationMessage || contactConfigurationError || validationError || programOutside ? " is-error" : ""}${statusMessage ? "" : " is-empty"}`}>{statusMessage ?? "После последней точки: безопасный подъём → исходные X/Y. При ошибке движение немедленно останавливается."}</p>
         </div>
       </div>
     </div>

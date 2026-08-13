@@ -2,7 +2,7 @@ mod commands;
 
 use commands::{
     AppState, abort_program_run, acknowledge_reset, active_transport, adjust_feed_override,
-    adjust_spindle_override, authorize_first_cut, cancel_dry_run, cancel_jog,
+    adjust_spindle_override, authorize_first_cut, cancel_dry_run, cancel_heightmap, cancel_jog,
     clear_surface_session, complete_tool_change, configure_script_plugin, confirm_soft_reset,
     connect_transport, controller_settings, controller_snapshot, create_cutting_tool,
     create_machine_profile, delete_cutting_tool, delete_script_plugin, detect_machine_profile,
@@ -69,6 +69,7 @@ pub fn run() {
             start_heightmap,
             pause_heightmap,
             resume_heightmap,
+            cancel_heightmap,
             set_heightmap_application,
             clear_surface_session,
             parse_gcode_program,

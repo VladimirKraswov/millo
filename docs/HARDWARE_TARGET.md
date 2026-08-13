@@ -167,12 +167,18 @@ is used for both Z0 and every grid sample, so two plate offsets cannot be added
 accidentally.
 
 For each serpentine point the command actor requires connected stable Idle and
-an open probe input, raises to the absolute safe plane, moves absolute work XY,
+an open probe input, raises by a bounded relative Z delta, moves by a bounded
+relative XY delta,
 executes bounded `G38.3`, waits for fresh `Idle` after terminal acknowledgement,
 reads `$#`, derives the active-WCS surface Z, and raises before continuing. It
 never writes `G10`. Hold pauses the operation; Resume continues; confirmed Soft
-Reset cancels it. A post-contact failure makes a best-effort safe-Z raise and
-modal restoration. The panel draft is persisted per machine so closing the
+Reset or the dedicated Stop cancels it. After every internal `$J=G91` move the
+actor compares fresh reported work coordinates with the expected target within
+0.05 mm. A timeout or mismatch sends Feed Hold and Soft Reset and quarantines
+the operation; it deliberately sends no automatic recovery movement from an
+untrusted position. If the serial link is already gone, the failure explicitly
+says that Stop was not delivered and power must be removed if motion continues.
+The panel draft is persisted per machine so closing the
 dialog or unlocking an alarm does not erase the perimeter and density; physical
 surface calibration is intentionally never persisted as valid evidence.
 
@@ -181,9 +187,10 @@ starting the grid. That establishes the initial transit plane. Every successful
 sample then raises the plane when necessary to `highest measured surface Z +
 contact offset + clearance`; it never lowers an already conservative plane.
 After the final contact the actor raises to that measured safe plane, returns XY
-to the exact work position captured before the first move, and restores the
-captured Z vertically. The operation is not published as `Completed` until this
-return and modal restoration both reach fresh `Idle`. If a sparse post-reset
+to the exact work position captured before the first move, and leaves Z on the
+measured safe plane. It does not descend to an old pre-scan Z on an unhomed
+machine. The operation is not published as `Completed` until the XY return and
+modal restoration both reach fresh `Idle`. If a sparse post-reset
 status omits `WPos/WCO`, Millo derives work coordinates from `MPos` and `$#`;
 unknown travel falls back to the profile envelope for timeout calculation.
 
@@ -199,6 +206,14 @@ The observed LUNYEE GRBL 1.1f controller reports some accepted `$J` moves as
 in-progress only inside a host-initiated, duration-bounded heightmap move. This
 does not weaken operation-start readiness: unsolicited `Run` is still a blocker,
 and Alarm, Hold, reset, disconnect, or a motion timeout still stop the workflow.
+
+The same controller produced one runaway after an acknowledged absolute
+heightmap jog and a reconnect on 2026-08-13. The saved scan had a highest
+surface sample of `+0.022 mm` and a `2.000 mm` clearance, so the old code could
+request only approximately work `Z2.022`; telemetry later reached work
+`Z102.938` (`MPos Z105.554`). Heightmap
+travel therefore no longer emits absolute `$J=G90`; relative deltas plus
+post-motion target verification are regression-pinned.
 
 The repeatable LUNYEE hardware smoke uses
 `cargo run -p millo-command --example serial_heightmap_smoke -- <port> <width>

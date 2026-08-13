@@ -5,6 +5,7 @@ import type {
 } from "../../shared/heightmap";
 
 export interface HeightmapGateway {
+  cancel(): Promise<HeightmapOperationSnapshot>;
   clear(): Promise<SurfaceSession>;
   getOperation(): Promise<HeightmapOperationSnapshot>;
   getSession(): Promise<SurfaceSession>;

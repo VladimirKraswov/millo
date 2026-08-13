@@ -2192,6 +2192,17 @@ pub async fn resume_heightmap(
 }
 
 #[tauri::command]
+pub async fn cancel_heightmap(
+    state: State<'_, AppState>,
+) -> Result<HeightmapOperationSnapshot, String> {
+    state
+        .arbiter
+        .cancel_heightmap()
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub async fn set_heightmap_application(
     enabled: bool,
     setup_confirmed: bool,

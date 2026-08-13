@@ -198,7 +198,7 @@ export function ZProbeDialog({
             <span>Щуп · рабочая поверхность</span>
             <h2 id="z-probe-title">{draft.mode === "heightmap" ? "Карта высот" : "Настроить щуп"}</h2>
           </div>
-          <button aria-label="Закрыть" disabled={status === "probing" || heightmapActive} onClick={onClose} title="Закрыть" type="button">
+          <button aria-label="Закрыть" disabled={draft.mode === "workZero" && status === "probing"} onClick={onClose} title="Закрыть" type="button">
             <X aria-hidden="true" size={16} />
           </button>
         </header>
@@ -237,7 +237,6 @@ export function ZProbeDialog({
               zProbeGateway={gateway}
               machineProfileId={profileId}
               machineTravel={machineTravel}
-              onAbort={onAbort}
               onError={onError}
               onActivityChange={setHeightmapActive}
               onSnapshot={onSnapshot}

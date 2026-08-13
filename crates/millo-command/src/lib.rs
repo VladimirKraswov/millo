@@ -60,6 +60,8 @@ const WORK_ZERO_TOLERANCE_MM: f64 = 0.002;
 const SENDER_RESPONSE_SLICE: Duration = Duration::from_millis(10);
 const PROBE_START_SETTLE_TIMEOUT: Duration = Duration::from_secs(3);
 const MOTION_SETTLE_MARGIN: Duration = Duration::from_secs(3);
+const MACHINE_OPERATION_STEP_INTERVAL: Duration = Duration::from_millis(100);
+const HEIGHTMAP_POSITION_TOLERANCE_MM: f64 = 0.05;
 
 #[derive(Debug, Error)]
 pub enum ArbiterError {
@@ -158,6 +160,12 @@ pub enum ArbiterError {
     PreparedHeightmapMismatch { expected: u64, actual: u64 },
     #[error("heightmap probing failed: {0}")]
     HeightmapProbe(String),
+    #[error("heightmap {axis} movement ended at {actual:.3} mm, expected {expected:.3} mm")]
+    HeightmapPositionVerification {
+        axis: &'static str,
+        expected: f64,
+        actual: f64,
+    },
     #[error("current work position is unavailable")]
     WorkPositionUnavailable,
     #[error("raise work Z above zero before returning {0:?} to zero")]
@@ -786,6 +794,11 @@ impl CommandArbiter {
             .await
     }
 
+    pub async fn cancel_heightmap(&self) -> Result<HeightmapOperationSnapshot, ArbiterError> {
+        self.call(|response| Request::CancelHeightmap { response })
+            .await
+    }
+
     pub async fn start_dry_run(&self, plan: DryRunPlan) -> Result<SenderSnapshot, ArbiterError> {
         self.call(|response| Request::StartDryRun { plan, response })
             .await
@@ -983,6 +996,9 @@ enum Request {
     ResumeHeightmap {
         response: oneshot::Sender<Result<HeightmapOperationSnapshot, ArbiterError>>,
     },
+    CancelHeightmap {
+        response: oneshot::Sender<Result<HeightmapOperationSnapshot, ArbiterError>>,
+    },
     StartDryRun {
         plan: DryRunPlan,
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
@@ -1050,27 +1066,40 @@ struct ActiveHeightmap {
     paused: bool,
     operation_sequence: u64,
     start_work_xy: Option<(f64, f64)>,
-    start_work_z: Option<f64>,
     last_work_xy: Option<(f64, f64)>,
     last_work_z: Option<f64>,
     highest_measured_surface_z: f64,
-    fallback_xy_distance_mm: f64,
-    fallback_z_distance_mm: f64,
 }
 
 enum HeightmapPhase {
     Raise,
-    WaitForRaise { started: Instant, timeout: Duration },
+    WaitForRaise {
+        started: Instant,
+        timeout: Duration,
+        target_z: f64,
+    },
     MoveXy,
-    WaitForXy { started: Instant, timeout: Duration },
+    WaitForXy {
+        started: Instant,
+        timeout: Duration,
+        target_x: f64,
+        target_y: f64,
+    },
     Probe,
-    PollProbe { command: String },
-    WaitForProbeIdle { started: Instant },
+    PollProbe {
+        command: String,
+    },
+    WaitForProbeIdle {
+        started: Instant,
+    },
     RecordProbe,
     ReturnToStartXy,
-    WaitForReturnXy { started: Instant, timeout: Duration },
-    ReturnToStartZ,
-    WaitForReturnZ { started: Instant, timeout: Duration },
+    WaitForReturnXy {
+        started: Instant,
+        timeout: Duration,
+        target_x: f64,
+        target_y: f64,
+    },
     Finalize,
 }
 
@@ -1097,7 +1126,7 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                     actor.controller.snapshot().connection,
                     ConnectionState::Connected | ConnectionState::Recovering
                 ) {
-                    if (actor.sender.has_in_flight() || machine_operation_active(&actor))
+                    if actor.sender.has_in_flight()
                         && actor.controller.snapshot().connection == ConnectionState::Connected
                     {
                         if let Err(error) = actor.controller.request_interleaved_status().await {
@@ -1109,6 +1138,8 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                                 &actor.sender_snapshots,
                             ).await;
                         }
+                    } else if machine_operation_active(&actor) {
+                        continue;
                     } else {
                         let lifecycle = actor.controller.lifecycle_tick().await;
                         actor.safety.observe(&actor.controller.snapshot(), Instant::now());
@@ -1157,10 +1188,10 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                 )
                 .await;
             }
-            _ = tokio::task::yield_now(), if actor.active_z_probe.is_some() => {
+            _ = tokio::time::sleep(MACHINE_OPERATION_STEP_INTERVAL), if actor.active_z_probe.is_some() => {
                 poll_active_z_probe(&mut actor).await;
             }
-            _ = tokio::task::yield_now(), if actor.active_heightmap.is_some() => {
+            _ = tokio::time::sleep(MACHINE_OPERATION_STEP_INTERVAL), if actor.active_heightmap.is_some() => {
                 poll_active_heightmap(&mut actor).await;
             }
         }
@@ -1792,6 +1823,33 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 let snapshot = heightmap_operation_snapshot(active);
                 let _ = heightmap_snapshots.send(snapshot.clone());
                 Ok(snapshot)
+            }
+            .await;
+            let _ = response.send(result);
+        }
+        Request::CancelHeightmap { response } => {
+            let result = async {
+                let active = active_heightmap
+                    .take()
+                    .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+                let abort = controller.abort_program_stream().await;
+                let mut snapshot = heightmap_operation_snapshot(&active);
+                snapshot.current_sequence = None;
+                match &abort {
+                    Ok(_) => {
+                        snapshot.state = HeightmapOperationState::Cancelled;
+                        snapshot.error = Some("Stopped by operator".to_owned());
+                    }
+                    Err(error) => {
+                        snapshot.state = HeightmapOperationState::Failed;
+                        snapshot.error = Some(format!(
+                            "Stop delivery failed; disconnect controller power if motion continues: {error}"
+                        ));
+                    }
+                }
+                let _ = heightmap_snapshots.send(snapshot.clone());
+                publish(snapshots, controller);
+                abort.map(|_| snapshot).map_err(ArbiterError::from)
             }
             .await;
             let _ = response.send(result);
@@ -2777,14 +2835,6 @@ async fn begin_heightmap(
     let current_work_y = verified_work_axis(&before, &parameters, coordinate_system, WorkAxis::Y)?;
     let current_work_z = verified_work_axis(&before, &parameters, coordinate_system, WorkAxis::Z)?;
     let last_work_xy = Some((current_work_x, current_work_y));
-    let fallback_xy_distance_mm = hardware_profile.travel_mm.map_or_else(
-        || request.plan.width_mm.hypot(request.plan.height_mm),
-        |travel| travel.x.hypot(travel.y),
-    );
-    let fallback_z_distance_mm = hardware_profile.travel_mm.map_or_else(
-        || heightmap_safe_work_z(request.plan) + request.plan.max_probe_depth_mm,
-        |travel| travel.z,
-    );
     Ok(ActiveHeightmap {
         map,
         coordinate_system,
@@ -2794,12 +2844,9 @@ async fn begin_heightmap(
         paused: false,
         operation_sequence,
         start_work_xy: last_work_xy,
-        start_work_z: Some(current_work_z),
         last_work_xy,
         last_work_z: Some(current_work_z),
         highest_measured_surface_z: 0.0,
-        fallback_xy_distance_mm,
-        fallback_z_distance_mm,
     })
 }
 
@@ -2840,12 +2887,14 @@ async fn poll_active_heightmap(actor: &mut ActorState) {
     }
     if let Err(error) = execute_heightmap_phase(actor).await {
         if let Some(active) = actor.active_heightmap.take() {
-            let cleanup_error = cleanup_failed_heightmap(&mut actor.controller, &active).await;
+            let stop_error = quarantine_failed_heightmap(&mut actor.controller).await;
             let mut snapshot = heightmap_operation_snapshot(&active);
             snapshot.state = HeightmapOperationState::Failed;
             snapshot.current_sequence = None;
-            snapshot.error = Some(match cleanup_error {
-                Some(cleanup) => format!("{error}; safe-Z cleanup was incomplete: {cleanup}"),
+            snapshot.error = Some(match stop_error {
+                Some(stop) => format!(
+                    "{error}; automatic motion was disabled, but emergency stop delivery failed: {stop}"
+                ),
                 None => error.to_string(),
             });
             let _ = actor.heightmap_snapshots.send(snapshot);
@@ -2854,46 +2903,20 @@ async fn poll_active_heightmap(actor: &mut ActorState) {
     }
 }
 
-async fn cleanup_failed_heightmap(
+async fn quarantine_failed_heightmap(
     controller: &mut Controller<BoxedTransport>,
-    active: &ActiveHeightmap,
 ) -> Option<String> {
-    let mut failures = Vec::new();
-    let snapshot = controller.snapshot();
-    if snapshot.connection == ConnectionState::Connected
-        && snapshot.machine.mode == MachineMode::Idle
-    {
-        let request = active.map.plan.request;
-        let target_z = heightmap_transit_work_z(request, active.highest_measured_surface_z);
-        let distance = active
-            .last_work_z
-            .map_or(active.fallback_z_distance_mm, |current_z| {
-                (target_z - current_z).abs()
-            });
-        let raise = controller
-            .move_heightmap_z(target_z, request.retract_feed_mm_per_min)
-            .await;
-        match raise {
-            Ok(_) => {
-                if let Err(error) = wait_for_heightmap_cleanup_idle(
-                    controller,
-                    distance,
-                    request.retract_feed_mm_per_min,
-                )
-                .await
-                {
-                    failures.push(format!("safe Z settle: {error}"));
-                }
-            }
-            Err(error) => failures.push(format!("safe Z: {error}")),
-        }
+    if controller.snapshot().connection != ConnectionState::Connected {
+        return Some(format!(
+            "controller link is {:?}; Stop could not be delivered",
+            controller.snapshot().connection
+        ));
     }
-    if controller.snapshot().connection == ConnectionState::Connected
-        && let Err(error) = controller.restore_modal_state(&active.restore_modal).await
-    {
-        failures.push(format!("modal restore: {error}"));
-    }
-    (!failures.is_empty()).then(|| failures.join(", "))
+    controller
+        .abort_program_stream()
+        .await
+        .err()
+        .map(|error| error.to_string())
 }
 
 fn heightmap_safe_work_z(request: millo_heightmap::HeightmapPlanRequest) -> f64 {
@@ -2907,44 +2930,32 @@ fn heightmap_transit_work_z(
     highest_measured_surface_z.max(0.0) + request.contact_offset_mm + request.clearance_z_mm
 }
 
-async fn wait_for_heightmap_cleanup_idle(
-    controller: &mut Controller<BoxedTransport>,
-    distance_mm: f64,
-    feed_mm_per_min: f64,
-) -> Result<(), ArbiterError> {
-    let timeout = bounded_motion_timeout(distance_mm, feed_mm_per_min);
-    let started = Instant::now();
-    loop {
-        let snapshot = controller.refresh_status().await?;
-        match snapshot.machine.mode {
-            MachineMode::Idle => return Ok(()),
-            MachineMode::Jog | MachineMode::Run if started.elapsed() < timeout => {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-            MachineMode::Jog | MachineMode::Run => {
-                return Err(ArbiterError::ZProbeRetractTimeout(
-                    timeout.as_millis().try_into().unwrap_or(u64::MAX),
-                ));
-            }
-            _ => ensure_stable_idle(&snapshot)?,
-        }
-    }
-}
-
 async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterError> {
     let phase = actor
         .active_heightmap
         .as_ref()
         .map(|active| match &active.phase {
             HeightmapPhase::Raise => HeightmapPhase::Raise,
-            HeightmapPhase::WaitForRaise { started, timeout } => HeightmapPhase::WaitForRaise {
+            HeightmapPhase::WaitForRaise {
+                started,
+                timeout,
+                target_z,
+            } => HeightmapPhase::WaitForRaise {
                 started: *started,
                 timeout: *timeout,
+                target_z: *target_z,
             },
             HeightmapPhase::MoveXy => HeightmapPhase::MoveXy,
-            HeightmapPhase::WaitForXy { started, timeout } => HeightmapPhase::WaitForXy {
+            HeightmapPhase::WaitForXy {
+                started,
+                timeout,
+                target_x,
+                target_y,
+            } => HeightmapPhase::WaitForXy {
                 started: *started,
                 timeout: *timeout,
+                target_x: *target_x,
+                target_y: *target_y,
             },
             HeightmapPhase::Probe => HeightmapPhase::Probe,
             HeightmapPhase::PollProbe { command } => HeightmapPhase::PollProbe {
@@ -2955,16 +2966,16 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
             }
             HeightmapPhase::RecordProbe => HeightmapPhase::RecordProbe,
             HeightmapPhase::ReturnToStartXy => HeightmapPhase::ReturnToStartXy,
-            HeightmapPhase::WaitForReturnXy { started, timeout } => {
-                HeightmapPhase::WaitForReturnXy {
-                    started: *started,
-                    timeout: *timeout,
-                }
-            }
-            HeightmapPhase::ReturnToStartZ => HeightmapPhase::ReturnToStartZ,
-            HeightmapPhase::WaitForReturnZ { started, timeout } => HeightmapPhase::WaitForReturnZ {
+            HeightmapPhase::WaitForReturnXy {
+                started,
+                timeout,
+                target_x,
+                target_y,
+            } => HeightmapPhase::WaitForReturnXy {
                 started: *started,
                 timeout: *timeout,
+                target_x: *target_x,
+                target_y: *target_y,
             },
             HeightmapPhase::Finalize => HeightmapPhase::Finalize,
         })
@@ -2977,37 +2988,53 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
                 .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
             let request = active.map.plan.request;
             let transit_z = heightmap_transit_work_z(request, active.highest_measured_surface_z);
-            let distance = active
+            let current_z = active
                 .last_work_z
-                .map_or(active.fallback_z_distance_mm, |current_z| {
-                    (transit_z - current_z).abs()
-                });
-            actor
-                .controller
-                .move_heightmap_z(transit_z, request.retract_feed_mm_per_min)
-                .await?;
-            let timeout = bounded_motion_timeout(distance, request.retract_feed_mm_per_min);
-            actor
-                .active_heightmap
-                .as_mut()
-                .ok_or(ArbiterError::HeightmapOperationUnavailable)?
-                .phase = HeightmapPhase::WaitForRaise {
-                started: Instant::now(),
-                timeout,
-            };
+                .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+            let raise_distance = (transit_z - current_z).max(0.0);
+            if raise_distance <= WORK_ZERO_TOLERANCE_MM {
+                actor
+                    .active_heightmap
+                    .as_mut()
+                    .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                    .phase = if active.next_sequence >= active.map.plan.points.len() {
+                    HeightmapPhase::ReturnToStartXy
+                } else {
+                    HeightmapPhase::MoveXy
+                };
+            } else {
+                actor
+                    .controller
+                    .move_heightmap_z(raise_distance, request.retract_feed_mm_per_min)
+                    .await?;
+                let timeout =
+                    bounded_motion_timeout(raise_distance, request.retract_feed_mm_per_min);
+                actor
+                    .active_heightmap
+                    .as_mut()
+                    .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                    .phase = HeightmapPhase::WaitForRaise {
+                    started: Instant::now(),
+                    timeout,
+                    target_z: transit_z,
+                };
+            }
         }
-        HeightmapPhase::WaitForRaise { started, timeout } => {
+        HeightmapPhase::WaitForRaise {
+            started,
+            timeout,
+            target_z,
+        } => {
             let snapshot = actor.controller.refresh_status().await?;
             match snapshot.machine.mode {
                 MachineMode::Idle => {
+                    let actual_z = verified_heightmap_work_position(&snapshot)?.z;
+                    verify_heightmap_axis("Z", target_z, actual_z)?;
                     let active = actor
                         .active_heightmap
                         .as_mut()
                         .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
-                    active.last_work_z = Some(heightmap_transit_work_z(
-                        active.map.plan.request,
-                        active.highest_measured_surface_z,
-                    ));
+                    active.last_work_z = Some(actual_z);
                     active.phase = if active.next_sequence >= active.map.plan.points.len() {
                         HeightmapPhase::ReturnToStartXy
                     } else {
@@ -3045,13 +3072,14 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
             let current = actor.controller.snapshot().machine.work_position;
             let current_xy = current
                 .map(|position| (position.x, position.y))
-                .or(active.last_work_xy);
-            let distance = current_xy.map_or(active.fallback_xy_distance_mm, |(x, y)| {
-                (point.x_mm - x).hypot(point.y_mm - y)
-            });
+                .or(active.last_work_xy)
+                .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+            let delta_x = point.x_mm - current_xy.0;
+            let delta_y = point.y_mm - current_xy.1;
+            let distance = delta_x.hypot(delta_y);
             actor
                 .controller
-                .move_heightmap_xy(point.x_mm, point.y_mm, feed)
+                .move_heightmap_xy(delta_x, delta_y, feed)
                 .await?;
             let timeout = bounded_motion_timeout(distance, feed);
             actor
@@ -3061,23 +3089,27 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
                 .phase = HeightmapPhase::WaitForXy {
                 started: Instant::now(),
                 timeout,
+                target_x: point.x_mm,
+                target_y: point.y_mm,
             };
         }
-        HeightmapPhase::WaitForXy { started, timeout } => {
+        HeightmapPhase::WaitForXy {
+            started,
+            timeout,
+            target_x,
+            target_y,
+        } => {
             let snapshot = actor.controller.refresh_status().await?;
             match snapshot.machine.mode {
                 MachineMode::Idle => {
+                    let actual = verified_heightmap_work_position(&snapshot)?;
+                    verify_heightmap_axis("X", target_x, actual.x)?;
+                    verify_heightmap_axis("Y", target_y, actual.y)?;
                     let active = actor
                         .active_heightmap
                         .as_mut()
                         .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
-                    let point = active
-                        .map
-                        .plan
-                        .points
-                        .get(active.next_sequence)
-                        .ok_or(HeightmapError::UnknownPoint(active.next_sequence))?;
-                    active.last_work_xy = Some((point.x_mm, point.y_mm));
+                    active.last_work_xy = Some((actual.x, actual.y));
                     active.phase = HeightmapPhase::Probe;
                 }
                 MachineMode::Jog | MachineMode::Run if started.elapsed() < timeout => {}
@@ -3192,26 +3224,27 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
                     .active_heightmap
                     .as_mut()
                     .ok_or(ArbiterError::HeightmapOperationUnavailable)?
-                    .phase = HeightmapPhase::ReturnToStartZ;
+                    .phase = HeightmapPhase::Finalize;
                 return Ok(());
             };
-            let distance = active
+            let (current_x, current_y) = active
                 .last_work_xy
-                .map_or(active.fallback_xy_distance_mm, |(x, y)| {
-                    (target_x - x).hypot(target_y - y)
-                });
+                .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
+            let delta_x = target_x - current_x;
+            let delta_y = target_y - current_y;
+            let distance = delta_x.hypot(delta_y);
             if distance <= WORK_ZERO_TOLERANCE_MM {
                 let active = actor
                     .active_heightmap
                     .as_mut()
                     .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
                 active.last_work_xy = Some((target_x, target_y));
-                active.phase = HeightmapPhase::ReturnToStartZ;
+                active.phase = HeightmapPhase::Finalize;
             } else {
                 let feed = active.map.plan.request.travel_feed_mm_per_min;
                 actor
                     .controller
-                    .move_heightmap_xy(target_x, target_y, feed)
+                    .move_heightmap_xy(delta_x, delta_y, feed)
                     .await?;
                 actor
                     .active_heightmap
@@ -3220,19 +3253,29 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
                     .phase = HeightmapPhase::WaitForReturnXy {
                     started: Instant::now(),
                     timeout: bounded_motion_timeout(distance, feed),
+                    target_x,
+                    target_y,
                 };
             }
         }
-        HeightmapPhase::WaitForReturnXy { started, timeout } => {
+        HeightmapPhase::WaitForReturnXy {
+            started,
+            timeout,
+            target_x,
+            target_y,
+        } => {
             let snapshot = actor.controller.refresh_status().await?;
             match snapshot.machine.mode {
                 MachineMode::Idle => {
+                    let actual = verified_heightmap_work_position(&snapshot)?;
+                    verify_heightmap_axis("X", target_x, actual.x)?;
+                    verify_heightmap_axis("Y", target_y, actual.y)?;
                     let active = actor
                         .active_heightmap
                         .as_mut()
                         .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
-                    active.last_work_xy = active.start_work_xy;
-                    active.phase = HeightmapPhase::ReturnToStartZ;
+                    active.last_work_xy = Some((actual.x, actual.y));
+                    active.phase = HeightmapPhase::Finalize;
                 }
                 MachineMode::Jog | MachineMode::Run if started.elapsed() < timeout => {}
                 MachineMode::Jog | MachineMode::Run => {
@@ -3240,67 +3283,6 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
                         timeout_ms: timeout.as_millis().try_into().unwrap_or(u64::MAX),
                         last_mode: snapshot.machine.mode,
                     });
-                }
-                MachineMode::Hold => {
-                    actor
-                        .active_heightmap
-                        .as_mut()
-                        .ok_or(ArbiterError::HeightmapOperationUnavailable)?
-                        .paused = true;
-                }
-                _ => ensure_stable_idle(&snapshot)?,
-            }
-        }
-        HeightmapPhase::ReturnToStartZ => {
-            let active = actor
-                .active_heightmap
-                .as_ref()
-                .ok_or(ArbiterError::HeightmapOperationUnavailable)?;
-            let Some(target_z) = active.start_work_z else {
-                actor
-                    .active_heightmap
-                    .as_mut()
-                    .ok_or(ArbiterError::HeightmapOperationUnavailable)?
-                    .phase = HeightmapPhase::Finalize;
-                return Ok(());
-            };
-            let distance = active
-                .last_work_z
-                .map_or(active.fallback_z_distance_mm, |z| (target_z - z).abs());
-            if distance <= WORK_ZERO_TOLERANCE_MM {
-                actor
-                    .active_heightmap
-                    .as_mut()
-                    .ok_or(ArbiterError::HeightmapOperationUnavailable)?
-                    .phase = HeightmapPhase::Finalize;
-            } else {
-                let feed = active.map.plan.request.retract_feed_mm_per_min;
-                actor.controller.move_heightmap_z(target_z, feed).await?;
-                actor
-                    .active_heightmap
-                    .as_mut()
-                    .ok_or(ArbiterError::HeightmapOperationUnavailable)?
-                    .phase = HeightmapPhase::WaitForReturnZ {
-                    started: Instant::now(),
-                    timeout: bounded_motion_timeout(distance, feed),
-                };
-            }
-        }
-        HeightmapPhase::WaitForReturnZ { started, timeout } => {
-            let snapshot = actor.controller.refresh_status().await?;
-            match snapshot.machine.mode {
-                MachineMode::Idle => {
-                    actor
-                        .active_heightmap
-                        .as_mut()
-                        .ok_or(ArbiterError::HeightmapOperationUnavailable)?
-                        .phase = HeightmapPhase::Finalize;
-                }
-                MachineMode::Jog | MachineMode::Run if started.elapsed() < timeout => {}
-                MachineMode::Jog | MachineMode::Run => {
-                    return Err(ArbiterError::ZProbeRetractTimeout(
-                        timeout.as_millis().try_into().unwrap_or(u64::MAX),
-                    ));
                 }
                 MachineMode::Hold => {
                     actor
@@ -3451,6 +3433,7 @@ fn request_allowed_during_probe(request: &Request) -> bool {
             | Request::DiscardPreparedHeightmap { .. }
             | Request::PauseHeightmap { .. }
             | Request::ResumeHeightmap { .. }
+            | Request::CancelHeightmap { .. }
     )
 }
 
@@ -3496,7 +3479,8 @@ fn reject_request_during_machine_operation(request: Request) {
         Request::PrepareHeightmap { response, .. }
         | Request::CommitPreparedHeightmap { response, .. }
         | Request::PauseHeightmap { response }
-        | Request::ResumeHeightmap { response } => send_machine_operation_busy(response),
+        | Request::ResumeHeightmap { response }
+        | Request::CancelHeightmap { response } => send_machine_operation_busy(response),
         Request::DiscardPreparedHeightmap { response, .. } => send_machine_operation_busy(response),
     }
 }
@@ -3827,6 +3811,43 @@ fn verified_work_axis(
         0.0
     };
     Ok(position_axis(machine_position, axis) - wcs[axis_index] - g92[axis_index] - tool_offset)
+}
+
+fn verified_heightmap_work_position(
+    snapshot: &ControllerSnapshot,
+) -> Result<Position, ArbiterError> {
+    snapshot
+        .machine
+        .work_position
+        .or_else(|| {
+            snapshot
+                .machine
+                .machine_position
+                .zip(snapshot.machine.work_coordinate_offset)
+                .map(|(machine, offset)| Position {
+                    x: machine.x - offset.x,
+                    y: machine.y - offset.y,
+                    z: machine.z - offset.z,
+                    a: None,
+                })
+        })
+        .ok_or(ArbiterError::WorkPositionUnavailable)
+}
+
+fn verify_heightmap_axis(
+    axis: &'static str,
+    expected: f64,
+    actual: f64,
+) -> Result<(), ArbiterError> {
+    if (actual - expected).abs() <= HEIGHTMAP_POSITION_TOLERANCE_MM {
+        Ok(())
+    } else {
+        Err(ArbiterError::HeightmapPositionVerification {
+            axis,
+            expected,
+            actual,
+        })
+    }
 }
 
 fn parse_xyz_parameter(value: &str) -> Option<[f64; 3]> {
@@ -5686,17 +5707,17 @@ mod tests {
         let writes = control.writes();
         let xy_moves = writes
             .iter()
-            .filter(|write| write.starts_with(b"$J=G90 G21 X"))
+            .filter(|write| write.starts_with(b"$J=G91 G21 X"))
             .cloned()
             .collect::<Vec<_>>();
         assert_eq!(
             xy_moves,
             vec![
-                b"$J=G90 G21 X10.000 Y20.000 F1000.000\n".to_vec(),
-                b"$J=G90 G21 X12.000 Y20.000 F1000.000\n".to_vec(),
-                b"$J=G90 G21 X12.000 Y22.000 F1000.000\n".to_vec(),
-                b"$J=G90 G21 X10.000 Y22.000 F1000.000\n".to_vec(),
-                b"$J=G90 G21 X0.000 Y0.000 F1000.000\n".to_vec(),
+                b"$J=G91 G21 X10.000 Y20.000 F1000.000\n".to_vec(),
+                b"$J=G91 G21 X2.000 Y0.000 F1000.000\n".to_vec(),
+                b"$J=G91 G21 X0.000 Y2.000 F1000.000\n".to_vec(),
+                b"$J=G91 G21 X-2.000 Y0.000 F1000.000\n".to_vec(),
+                b"$J=G91 G21 X-10.000 Y-22.000 F1000.000\n".to_vec(),
             ]
         );
         assert_eq!(
@@ -5707,19 +5728,18 @@ mod tests {
             4
         );
         assert!(!writes.iter().any(|write| write.starts_with(b"G10 L20")));
-        assert!(
-            writes
-                .iter()
-                .any(|write| write.starts_with(b"$J=G90 G21 Z10.000"))
-        );
         assert_eq!(
-            arbiter.snapshot().machine.work_position,
-            Some(Position {
-                x: 0.0,
-                y: 0.0,
-                z: 10.0,
-                a: None,
-            })
+            arbiter
+                .snapshot()
+                .machine
+                .work_position
+                .map(|position| (position.x, position.y)),
+            Some((0.0, 0.0))
+        );
+        assert!(
+            !writes
+                .iter()
+                .any(|write| write.starts_with(b"$J=G90 G21 Z"))
         );
         task.abort();
     }
@@ -5806,13 +5826,13 @@ mod tests {
             control
                 .writes()
                 .iter()
-                .any(|write| write.starts_with(b"$J=G90 G21 Z21.100"))
+                .any(|write| write.starts_with(b"$J=G91 G21 Z"))
         );
         task.abort();
     }
 
     #[tokio::test]
-    async fn heightmap_failure_after_contact_attempts_safe_z_and_modal_cleanup() {
+    async fn heightmap_failure_stops_without_sending_recovery_motion() {
         let transport = MockTransport::with_status(
             "<Idle|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:0,0>",
         );
@@ -5844,12 +5864,93 @@ mod tests {
         assert_eq!(
             writes
                 .iter()
-                .filter(|write| write.starts_with(b"$J=G90 G21 Z2.000"))
+                .filter(|write| write.starts_with(b"$J=G91 G21 Z"))
                 .count(),
-            2,
+            0,
         );
-        assert_eq!(writes.last(), Some(&b"G0 G21 G90 G94\n".to_vec()));
+        assert!(
+            !writes
+                .iter()
+                .any(|write| write.starts_with(b"$J=G90 G21 Z"))
+        );
+        assert_eq!(writes[writes.len() - 2], vec![b'!']);
+        assert_eq!(writes.last(), Some(&vec![0x18]));
         assert!(!writes.iter().any(|write| write.starts_with(b"G10 L20")));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn heightmap_quarantines_a_controller_that_overshoots_relative_z() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        control.set_jog_distance_scale(35.0);
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) =
+            CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        arbiter.start_heightmap(heightmap_request()).await.unwrap();
+        let failed = wait_for_heightmap(&arbiter, HeightmapOperationState::Failed).await;
+
+        assert!(
+            failed.error.as_deref().is_some_and(|error| {
+                error.contains("heightmap Z movement ended") && error.contains("expected 2.000")
+            }),
+            "unexpected failure: {:?}",
+            failed.error
+        );
+        let writes = control.writes();
+        assert_eq!(
+            writes
+                .iter()
+                .filter(|write| write.starts_with(b"G38.3"))
+                .count(),
+            0,
+        );
+        assert_eq!(writes[writes.len() - 2], vec![b'!']);
+        assert_eq!(writes.last(), Some(&vec![0x18]));
+        assert!(!writes.iter().any(|write| write.starts_with(b"$J=G90")));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn heightmap_link_loss_reports_that_emergency_stop_was_not_delivered() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                failures_before_recovery: 1,
+                ..ControllerConfig::default()
+            },
+            profile,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        arbiter.start_heightmap(heightmap_request()).await.unwrap();
+        control.drop_link();
+        let failed = wait_for_heightmap(&arbiter, HeightmapOperationState::Failed).await;
+
+        assert!(failed.error.as_deref().is_some_and(|error| {
+            error.contains("emergency stop delivery failed")
+                && error.contains("Stop could not be delivered")
+        }));
+        assert!(!control.writes().iter().any(|write| write == b"!"));
+        assert!(!control.writes().iter().any(|write| write == &[0x18]));
         task.abort();
     }
 
@@ -5899,6 +6000,48 @@ mod tests {
                 .filter(|write| write.starts_with(b"G91 G21 G94 G38.3"))
                 .count()
                 <= 1
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn dedicated_heightmap_cancel_preempts_the_operation_and_stays_terminal() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        control.set_probe_delay(100);
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) = CommandArbiter::new(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                ..ControllerConfig::default()
+            },
+            profile,
+        );
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        arbiter.start_heightmap(heightmap_request()).await.unwrap();
+
+        let cancelled = arbiter.cancel_heightmap().await.unwrap();
+        assert_eq!(cancelled.state, HeightmapOperationState::Cancelled);
+        assert_eq!(cancelled.current_sequence, None);
+        let writes_after_cancel = control.writes();
+        assert_eq!(
+            writes_after_cancel[writes_after_cancel.len() - 2],
+            vec![b'!']
+        );
+        assert_eq!(writes_after_cancel.last(), Some(&vec![0x18]));
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(control.writes(), writes_after_cancel);
+        assert_eq!(
+            arbiter.heightmap_snapshot().state,
+            HeightmapOperationState::Cancelled
         );
         task.abort();
     }

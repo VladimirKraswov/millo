@@ -421,20 +421,20 @@ impl<T: Transport> Controller<T> {
 
     pub async fn move_heightmap_xy(
         &mut self,
-        x_mm: f64,
-        y_mm: f64,
+        delta_x_mm: f64,
+        delta_y_mm: f64,
         feed_mm_per_min: f64,
     ) -> Result<CommandResponse, ControllerError> {
-        let command = encode_heightmap_xy_jog(x_mm, y_mm, feed_mm_per_min)?;
+        let command = encode_heightmap_xy_jog(delta_x_mm, delta_y_mm, feed_mm_per_min)?;
         self.execute_acknowledged_line(&command).await
     }
 
     pub async fn move_heightmap_z(
         &mut self,
-        z_mm: f64,
+        delta_z_mm: f64,
         feed_mm_per_min: f64,
     ) -> Result<CommandResponse, ControllerError> {
-        let command = encode_heightmap_z_jog(z_mm, feed_mm_per_min)?;
+        let command = encode_heightmap_z_jog(delta_z_mm, feed_mm_per_min)?;
         self.execute_acknowledged_line(&command).await
     }
 

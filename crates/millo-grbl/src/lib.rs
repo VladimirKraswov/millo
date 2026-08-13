@@ -117,11 +117,11 @@ pub fn encode_return_to_work_zero(
 }
 
 pub fn encode_heightmap_xy_jog(
-    x_mm: f64,
-    y_mm: f64,
+    delta_x_mm: f64,
+    delta_y_mm: f64,
     feed_mm_per_min: f64,
 ) -> Result<String, JogValidationError> {
-    if !x_mm.is_finite() || !y_mm.is_finite() {
+    if !delta_x_mm.is_finite() || !delta_y_mm.is_finite() {
         return Err(JogValidationError::InvalidDistance);
     }
     if !feed_mm_per_min.is_finite() {
@@ -134,15 +134,15 @@ pub fn encode_heightmap_xy_jog(
         });
     }
     Ok(format!(
-        "$J=G90 G21 X{x_mm:.3} Y{y_mm:.3} F{feed_mm_per_min:.3}"
+        "$J=G91 G21 X{delta_x_mm:.3} Y{delta_y_mm:.3} F{feed_mm_per_min:.3}"
     ))
 }
 
 pub fn encode_heightmap_z_jog(
-    z_mm: f64,
+    delta_z_mm: f64,
     feed_mm_per_min: f64,
 ) -> Result<String, JogValidationError> {
-    if !z_mm.is_finite() {
+    if !delta_z_mm.is_finite() {
         return Err(JogValidationError::InvalidDistance);
     }
     if !feed_mm_per_min.is_finite() {
@@ -154,7 +154,7 @@ pub fn encode_heightmap_z_jog(
             max_mm_per_min: MAX_STEP_JOG_FEED_MM_PER_MIN,
         });
     }
-    Ok(format!("$J=G90 G21 Z{z_mm:.3} F{feed_mm_per_min:.3}"))
+    Ok(format!("$J=G91 G21 Z{delta_z_mm:.3} F{feed_mm_per_min:.3}"))
 }
 
 pub fn active_work_coordinate_system(modal_state: &[String]) -> Option<WorkCoordinateSystem> {
@@ -643,14 +643,14 @@ mod tests {
     }
 
     #[test]
-    fn encodes_bounded_absolute_heightmap_moves() {
+    fn encodes_bounded_incremental_heightmap_moves() {
         assert_eq!(
             encode_heightmap_xy_jog(12.5, -3.25, 300.0).unwrap(),
-            "$J=G90 G21 X12.500 Y-3.250 F300.000"
+            "$J=G91 G21 X12.500 Y-3.250 F300.000"
         );
         assert_eq!(
             encode_heightmap_z_jog(2.0, 100.0).unwrap(),
-            "$J=G90 G21 Z2.000 F100.000"
+            "$J=G91 G21 Z2.000 F100.000"
         );
         assert!(encode_heightmap_z_jog(f64::NAN, 100.0).is_err());
     }
@@ -782,10 +782,10 @@ mod tests {
     }
 
     #[test]
-    fn encodes_bounded_absolute_xy_heightmap_jog() {
+    fn encodes_bounded_incremental_xy_heightmap_jog() {
         assert_eq!(
             encode_heightmap_xy_jog(12.5, -3.25, 300.0).unwrap(),
-            "$J=G90 G21 X12.500 Y-3.250 F300.000"
+            "$J=G91 G21 X12.500 Y-3.250 F300.000"
         );
         assert!(encode_heightmap_xy_jog(f64::NAN, 0.0, 300.0).is_err());
     }

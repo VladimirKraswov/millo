@@ -38,6 +38,7 @@ struct MockState {
     probe_settle_status_polls: u32,
     probe_settle_polls_remaining: u32,
     jog_reports_run: bool,
+    jog_distance_scale: f64,
     firmware_options: String,
     overrides: [u16; 3],
 }
@@ -188,6 +189,10 @@ impl MockControl {
         self.lock().jog_reports_run = enabled;
     }
 
+    pub fn set_jog_distance_scale(&self, scale: f64) {
+        self.lock().jog_distance_scale = scale;
+    }
+
     fn lock(&self) -> MutexGuard<'_, MockState> {
         self.state
             .lock()
@@ -230,6 +235,7 @@ impl MockTransport {
                     probe_settle_status_polls: 0,
                     probe_settle_polls_remaining: 0,
                     jog_reports_run: false,
+                    jog_distance_scale: 1.0,
                     firmware_options: "V,15,128".to_owned(),
                     overrides: [100, 100, 100],
                 })),
@@ -418,12 +424,11 @@ impl Transport for MockTransport {
             }
         } else if let Some(jog) = parse_xy_jog(data) {
             let mut position = status_position(&state.status_line).unwrap_or([0.0; 3]);
-            let target_x = state.work_offsets[state.active_wcs][0] + jog.x_mm;
-            let target_y = state.work_offsets[state.active_wcs][1] + jog.y_mm;
-            let distance_mm =
-                ((target_x - position[0]).powi(2) + (target_y - position[1]).powi(2)).sqrt();
-            position[0] = target_x;
-            position[1] = target_y;
+            let x_mm = jog.x_mm * state.jog_distance_scale;
+            let y_mm = jog.y_mm * state.jog_distance_scale;
+            let distance_mm = x_mm.hypot(y_mm);
+            position[0] += x_mm;
+            position[1] += y_mm;
             let work_position = subtract_position(position, state.work_offsets[state.active_wcs]);
             let mode = if state.jog_reports_run { "Run" } else { "Jog" };
             state.status_line = format_status(mode, position, work_position, jog.feed_mm_per_min);
@@ -431,22 +436,21 @@ impl Transport for MockTransport {
                 axis: 0,
                 distance_mm,
                 feed_mm_per_min: jog.feed_mm_per_min,
-                absolute: true,
+                absolute: false,
             });
             state
                 .active_reads
                 .push_back(MockRead::Line("ok".to_owned()));
         } else if let Some(jog) = parse_jog(data) {
             let mut position = status_position(&state.status_line).unwrap_or([0.0; 3]);
-            let distance_mm = if jog.absolute {
+            let intended_distance_mm = if jog.absolute {
                 let target = state.work_offsets[state.active_wcs][jog.axis] + jog.distance_mm;
-                let distance = target - position[jog.axis];
-                position[jog.axis] = target;
-                distance
+                target - position[jog.axis]
             } else {
-                position[jog.axis] += jog.distance_mm;
                 jog.distance_mm
             };
+            let distance_mm = intended_distance_mm * state.jog_distance_scale;
+            position[jog.axis] += distance_mm;
             let work_position = subtract_position(position, state.work_offsets[state.active_wcs]);
             let mode = if state.jog_reports_run { "Run" } else { "Jog" };
             state.status_line = format_status(mode, position, work_position, jog.feed_mm_per_min);
@@ -571,7 +575,7 @@ fn parse_xy_jog(data: &[u8]) -> Option<MockXyJog> {
         .ok()?
         .trim_end_matches(['\r', '\n']);
     let words = command
-        .strip_prefix("$J=G90 G21 ")?
+        .strip_prefix("$J=G91 G21 ")?
         .split_whitespace()
         .collect::<Vec<_>>();
     if words.len() != 3 {

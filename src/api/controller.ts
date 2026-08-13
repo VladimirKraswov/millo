@@ -151,6 +151,9 @@ export const pauseHeightmap = (): Promise<HeightmapOperationSnapshot> =>
 export const resumeHeightmap = (): Promise<HeightmapOperationSnapshot> =>
   invoke<HeightmapOperationSnapshot>("resume_heightmap");
 
+export const cancelHeightmap = (): Promise<HeightmapOperationSnapshot> =>
+  invoke<HeightmapOperationSnapshot>("cancel_heightmap");
+
 export const setHeightmapApplication = (
   enabled: boolean,
   setupConfirmed: boolean,

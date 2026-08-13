@@ -792,9 +792,14 @@ explicit new mode wins.
 
 Command-actor tests execute a 2 x 2 map on Mock GRBL, assert exact XY order and
 four contacts, prove every terminal acknowledgement settles to `Idle`, and prove
-no `G10 L20` is written. Failure after a delayed contact
-must attempt a second absolute safe-Z command and restore modal state. A Soft
-Reset fixture cancels before another probe point. A durable-start regression
+no `G10 L20` or absolute heightmap `$J=G90` is written. Failure after a delayed
+contact must issue Feed Hold plus Soft Reset without any recovery motion. A
+runaway regression scales an intended relative jog 35 times, verifies that the
+first target mismatch is detected, and proves no probe or correction command is
+sent. Dedicated Stop must consume the active operation, end in `Cancelled`, and
+remain terminal without delayed writes. A Soft Reset fixture cancels before
+another probe point. A link-loss fixture proves the failure cannot claim a
+successful emergency stop when serial delivery was impossible. A durable-start regression
 holds an operation after `prepare_heightmap`, yields the actor repeatedly, and
 asserts that neither `$J` nor `G38.3` appears and the public operation remains
 Idle. It then discards the exact operation sequence and proves that no motion was
@@ -812,8 +817,9 @@ and XY moves as `Run` rather than `Jog`; both one-point calibration and a full
 serpentine map must complete within computed motion deadlines. A sparse-status
 fixture starts with only `MPos`, proves `$#` is read before motion, derives XYZ,
 and prevents the old three-second timeout on a long first move. The full-grid
-fixture also asserts a final safe-Z/XY/Z return to the captured start position;
-`Completed` is emitted only after this return settles to fresh `Idle`.
+fixture also asserts a final measured-safe-Z and XY return to the captured start
+position. It intentionally does not descend back to an old Z; `Completed` is
+emitted only after XY settles to fresh `Idle`.
 The IPC contract is pinned on both sides: Vitest serializes the complete
 webview request with `originXMm`, `originYMm` and `clearanceZMm`, while a Rust
 fixture deserializes that same camelCase shape into `HeightmapStartRequest`.
@@ -829,3 +835,6 @@ only settings scroll. The 820 px layout places setup before preview without
 overlap or horizontal scrolling. `PCB/relief` presets and a permanent layer
 checkbox row are regressions: actual first-contact and surface-variation limits
 remain visible, while rendering layers live in the on-demand `Слои` menu.
+Measured grids up to 49 points show every signed Z label and a high-contrast
+ring; denser grids thin labels deterministically while retaining endpoints and
+the active point. Partial adjacent cells render incrementally during probing.

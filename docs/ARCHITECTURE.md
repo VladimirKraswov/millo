@@ -320,11 +320,18 @@ does not schedule or execute controller I/O.
   phases. Both one-point Z calibration and every heightmap sample wait through
   transient `Run` until fresh `Idle` before `$#`, `G10`, or the next grid phase;
   a bounded settle timeout fails closed with the last observed mode.
+- Heightmap travel is relative and single-owner. The operation actor alone polls
+  while it is active; the lifecycle ticker does not inject a second status
+  stream. Every relative XY/Z move carries an expected work target that must be
+  observed within 0.05 mm. Timeout, position mismatch, or workflow error enters
+  quarantine through Feed Hold plus Soft Reset and never dispatches automatic
+  recovery G-code from an untrusted coordinate. A dedicated cancel request is
+  admitted by the biased actor queue and atomically removes the active map.
 - Heightmap rendering has no machine capability. A pure model derives the
   auto-perimeter, physical spacing, matrix, and color scale; Three.js consumes
   immutable map/program DTOs for one perimeter, probe points, outside-path
-  warnings, and the interpolated mesh. Render-grid resolution cannot add
-  physical contacts.
+  warnings, measured-point labels, incremental interpolated mesh, and bounded
+  label density. Render-grid resolution cannot add physical contacts.
 - `programLineTableModel` computes a fixed-height overscanned window, and the
   React table mounts only that slice. The full line count is represented by a
   spacer inside a bounded desktop/mobile viewport.

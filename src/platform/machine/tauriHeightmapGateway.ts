@@ -1,4 +1,5 @@
 import {
+  cancelHeightmap,
   clearSurfaceSession,
   getHeightmapSnapshot,
   getSurfaceSession,
@@ -12,6 +13,7 @@ import {
 import type { HeightmapGateway } from "./HeightmapGateway";
 
 export const tauriHeightmapGateway: HeightmapGateway = {
+  cancel: cancelHeightmap,
   clear: clearSurfaceSession,
   getOperation: getHeightmapSnapshot,
   getSession: getSurfaceSession,

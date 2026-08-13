@@ -38,6 +38,11 @@ const session: SurfaceSession = {
 };
 
 export const previewHeightmapGateway: HeightmapGateway = {
+  cancel: async () => ({
+    ...operation,
+    state: "cancelled",
+    error: "Stopped by operator",
+  }),
   clear: async () => ({ ...session, active: undefined }),
   getOperation: async () => operation,
   getSession: async () => session,
