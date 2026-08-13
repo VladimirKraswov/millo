@@ -797,6 +797,9 @@ Idle. It then discards the exact operation sequence and proves that no motion wa
 published. Production Tauri persists the pending surface session between this
 prepare phase and the matching commit, so fast mock runs cannot outrun their
 first durable checkpoint.
+The IPC contract is pinned on both sides: Vitest serializes the complete
+webview request with `originXMm`, `originYMm` and `clearanceZMm`, while a Rust
+fixture deserializes that same camelCase shape into `HeightmapStartRequest`.
 
 Vitest covers auto-perimeter margins, density independent from display
 interpolation, readable serpentine matrix ordering, machine-travel validation,

@@ -1,13 +1,13 @@
 export type HeightmapContactMode = "directSurface" | "fixedPlate";
 
 export interface HeightmapPlanRequest {
-  originXmm: number;
-  originYmm: number;
+  originXMm: number;
+  originYMm: number;
   widthMm: number;
   heightMm: number;
   columns: number;
   rows: number;
-  clearanceZmm: number;
+  clearanceZMm: number;
   maxProbeDepthMm: number;
   probeFeedMmPerMin: number;
   travelFeedMmPerMin: number;

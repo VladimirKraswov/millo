@@ -5,8 +5,8 @@ import { buildHeightmapPlan } from "./heightmapModel";
 
 const request = {
   ...defaultHeightmapRequest(),
-  originXmm: -16,
-  originYmm: -7,
+  originXMm: -16,
+  originYMm: -7,
   widthMm: 32,
   heightMm: 14,
   columns: 7,

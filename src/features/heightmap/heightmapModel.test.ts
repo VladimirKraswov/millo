@@ -20,8 +20,8 @@ describe("heightmapModel", () => {
       size: { x: 29.55, y: 10.42, z: 2.1 },
     };
     const next = perimeterFromProgram(defaultHeightmapRequest(), bounds, 1);
-    expect(next.originXmm).toBe(-15.85);
-    expect(next.originYmm).toBe(-6.22);
+    expect(next.originXMm).toBe(-15.85);
+    expect(next.originYMm).toBe(-6.22);
     expect(next.widthMm).toBe(31.55);
     expect(next.heightMm).toBe(12.42);
   });

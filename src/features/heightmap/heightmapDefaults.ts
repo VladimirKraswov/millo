@@ -1,13 +1,13 @@
 import type { HeightmapOperationSnapshot, HeightmapPlanRequest, SurfaceSession } from "../../shared/heightmap";
 
 export const defaultHeightmapRequest = (): HeightmapPlanRequest => ({
-  originXmm: 0,
-  originYmm: 0,
+  originXMm: 0,
+  originYMm: 0,
   widthMm: 50,
   heightMm: 50,
   columns: 6,
   rows: 6,
-  clearanceZmm: 2,
+  clearanceZMm: 2,
   maxProbeDepthMm: 3,
   probeFeedMmPerMin: 25,
   travelFeedMmPerMin: 300,

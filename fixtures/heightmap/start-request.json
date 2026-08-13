@@ -1,0 +1,19 @@
+{
+  "plan": {
+    "originXMm": -15.85,
+    "originYMm": -6.22,
+    "widthMm": 31.55,
+    "heightMm": 12.42,
+    "columns": 7,
+    "rows": 4,
+    "clearanceZMm": 2,
+    "maxProbeDepthMm": 3,
+    "probeFeedMmPerMin": 25,
+    "travelFeedMmPerMin": 300,
+    "retractFeedMmPerMin": 100,
+    "contactMode": "directSurface",
+    "contactOffsetMm": 0
+  },
+  "setupConfirmed": true,
+  "contactAvailableAtEveryPoint": true
+}

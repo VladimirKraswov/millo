@@ -59,8 +59,8 @@ export function HeightmapScene({
     renderer.domElement.setAttribute("aria-label", "Карта высот и периметр измерения");
     element.replaceChildren(renderer.domElement);
 
-    const centerX = request.originXmm + request.widthMm / 2;
-    const centerY = request.originYmm + request.heightMm / 2;
+    const centerX = request.originXMm + request.widthMm / 2;
+    const centerY = request.originYMm + request.heightMm / 2;
     const span = Math.max(request.widthMm, request.heightMm, 10);
     const camera = new THREE.OrthographicCamera(-span, span, span, -span, 0.01, span * 20);
     camera.up.set(0, 0, 1);
@@ -85,10 +85,10 @@ export function HeightmapScene({
       area.position.set(centerX, centerY, -0.015);
       scene.add(area);
       const shape = new THREE.Shape([
-        new THREE.Vector2(request.originXmm, request.originYmm),
-        new THREE.Vector2(request.originXmm + request.widthMm, request.originYmm),
-        new THREE.Vector2(request.originXmm + request.widthMm, request.originYmm + request.heightMm),
-        new THREE.Vector2(request.originXmm, request.originYmm + request.heightMm),
+        new THREE.Vector2(request.originXMm, request.originYMm),
+        new THREE.Vector2(request.originXMm + request.widthMm, request.originYMm),
+        new THREE.Vector2(request.originXMm + request.widthMm, request.originYMm + request.heightMm),
+        new THREE.Vector2(request.originXMm, request.originYMm + request.heightMm),
       ]);
       const border = new THREE.LineLoop(
         new THREE.BufferGeometry().setFromPoints(shape.getPoints()),
@@ -101,14 +101,14 @@ export function HeightmapScene({
     if (showJob && program) {
       const inside: number[] = [];
       const outside: number[] = [];
-      const maxX = request.originXmm + request.widthMm;
-      const maxY = request.originYmm + request.heightMm;
+      const maxX = request.originXMm + request.widthMm;
+      const maxY = request.originYMm + request.heightMm;
       for (const segment of program.toolpath) {
         for (let index = 1; index < segment.points.length; index += 1) {
           const pair = [segment.points[index - 1], segment.points[index]];
           const target = pair.every((point) =>
-            point.x >= request.originXmm && point.x <= maxX &&
-            point.y >= request.originYmm && point.y <= maxY,
+            point.x >= request.originXMm && point.x <= maxX &&
+            point.y >= request.originYMm && point.y <= maxY,
           ) ? inside : outside;
           for (const point of pair) target.push(point.x, point.y, 0.04);
         }
@@ -155,8 +155,8 @@ export function HeightmapScene({
           const corners = [[row, column], [row, column + 1], [row + 1, column + 1], [row, column], [row + 1, column + 1], [row + 1, column]];
           for (const [cornerRow, cornerColumn] of corners) {
             const z = sampleZ(cornerRow, cornerColumn);
-            const x = request.originXmm + cornerColumn / (columns - 1) * request.widthMm;
-            const y = request.originYmm + cornerRow / (rows - 1) * request.heightMm;
+            const x = request.originXMm + cornerColumn / (columns - 1) * request.widthMm;
+            const y = request.originYMm + cornerRow / (rows - 1) * request.heightMm;
             positions.push(x, y, (z - minimum) * exaggeration);
             const color = colorFor((z - minimum) / zRange);
             colors.push(color.r, color.g, color.b);

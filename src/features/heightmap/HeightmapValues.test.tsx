@@ -10,8 +10,8 @@ describe("HeightmapValues", () => {
   it("renders real XY coordinates, absolute Z and deviation without NaN placeholders", () => {
     const plan = buildHeightmapPlan({
       ...defaultHeightmapRequest(),
-      originXmm: -2,
-      originYmm: 4,
+      originXMm: -2,
+      originYMm: 4,
       widthMm: 4,
       heightMm: 2,
       columns: 3,

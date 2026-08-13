@@ -115,10 +115,10 @@ export function HeightmapPanel({
   const totalPoints = request.columns * request.rows;
   const estimate = useMemo(() => estimateHeightmapSeconds(request), [request]);
   const programOutside = Boolean(program?.summary.bounds && (
-    program.summary.bounds.min.x < request.originXmm ||
-    program.summary.bounds.min.y < request.originYmm ||
-    program.summary.bounds.max.x > request.originXmm + request.widthMm ||
-    program.summary.bounds.max.y > request.originYmm + request.heightMm
+    program.summary.bounds.min.x < request.originXMm ||
+    program.summary.bounds.min.y < request.originYMm ||
+    program.summary.bounds.max.x > request.originXMm + request.widthMm ||
+    program.summary.bounds.max.y > request.originYMm + request.heightMm
   ));
 
   const updateNumber = (key: keyof HeightmapPlanRequest, value: string) => {
@@ -190,7 +190,7 @@ export function HeightmapPanel({
               />
             </Suspense>
           ) : <HeightmapValues map={displayedMap} />}
-          <div className="heightmap-dimensions"><span>X {request.originXmm.toFixed(2)} → {(request.originXmm + request.widthMm).toFixed(2)}</span><span>Y {request.originYmm.toFixed(2)} → {(request.originYmm + request.heightMm).toFixed(2)}</span></div>
+          <div className="heightmap-dimensions"><span>X {request.originXMm.toFixed(2)} → {(request.originXMm + request.widthMm).toFixed(2)}</span><span>Y {request.originYMm.toFixed(2)} → {(request.originYMm + request.heightMm).toFixed(2)}</span></div>
           {displayedMap?.samples.some(Boolean) && <div className="heightmap-color-legend"><span>ниже</span><i /><span>выше</span></div>}
         </div>
         <div className="heightmap-layers">
@@ -206,8 +206,8 @@ export function HeightmapPanel({
           <header><span>Периметр заготовки</span><button disabled={!program?.summary.bounds || active} onClick={autoPerimeter} type="button"><WandSparkles size={14} /> Авто по заданию</button></header>
           <div className="heightmap-margin"><label>Отступ <input min="0" onChange={(event) => setMargin(Number(event.target.value))} step="0.5" type="number" value={margin} /> mm</label></div>
           <div className="heightmap-field-grid">
-            {(["originXmm", "originYmm", "widthMm", "heightMm"] as const).map((key) => (
-              <label key={key}><span>{{ originXmm: "X от", originYmm: "Y от", widthMm: "Ширина", heightMm: "Высота" }[key]}</span><input disabled={active} onChange={(event) => updateNumber(key, event.target.value)} step="0.1" type="number" value={request[key]} /><small>mm</small></label>
+            {(["originXMm", "originYMm", "widthMm", "heightMm"] as const).map((key) => (
+              <label key={key}><span>{{ originXMm: "X от", originYMm: "Y от", widthMm: "Ширина", heightMm: "Высота" }[key]}</span><input disabled={active} onChange={(event) => updateNumber(key, event.target.value)} step="0.1" type="number" value={request[key]} /><small>mm</small></label>
             ))}
           </div>
           {programOutside && <p className="heightmap-warning">Красные участки задания выходят за выбранный периметр.</p>}
@@ -232,7 +232,7 @@ export function HeightmapPanel({
             <label><input checked={request.contactMode === "fixedPlate"} disabled={active} name="contactMode" onChange={() => setRequest((current) => ({ ...current, contactMode: "fixedPlate" }))} type="radio" /> Сплошная пластина на всей области</label>
           </div>
           <div className="heightmap-field-grid two">
-            {(["clearanceZmm", "maxProbeDepthMm", "probeFeedMmPerMin", "travelFeedMmPerMin", "retractFeedMmPerMin"] as const).map((key) => <label key={key}><span>{{ clearanceZmm: "Безопасная Z", maxProbeDepthMm: "Поиск вниз", probeFeedMmPerMin: "Подача щупа", travelFeedMmPerMin: "Переход XY", retractFeedMmPerMin: "Подъём Z" }[key]}</span><input disabled={active} min="0.1" onChange={(event) => updateNumber(key, event.target.value)} type="number" value={request[key]} /></label>)}
+            {(["clearanceZMm", "maxProbeDepthMm", "probeFeedMmPerMin", "travelFeedMmPerMin", "retractFeedMmPerMin"] as const).map((key) => <label key={key}><span>{{ clearanceZMm: "Безопасная Z", maxProbeDepthMm: "Поиск вниз", probeFeedMmPerMin: "Подача щупа", travelFeedMmPerMin: "Переход XY", retractFeedMmPerMin: "Подъём Z" }[key]}</span><input disabled={active} min="0.1" onChange={(event) => updateNumber(key, event.target.value)} type="number" value={request[key]} /></label>)}
             {request.contactMode === "fixedPlate" && <label><span>Толщина пластины</span><input disabled={active} min="0.01" onChange={(event) => updateNumber("contactOffsetMm", event.target.value)} step="0.01" type="number" value={request.contactOffsetMm} /></label>}
           </div>
           <div className="heightmap-interpolation-settings">

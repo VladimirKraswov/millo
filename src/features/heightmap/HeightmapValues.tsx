@@ -16,10 +16,10 @@ export function HeightmapValues({ map }: { readonly map?: Heightmap }) {
   const maximum = values.length ? Math.max(...values) : 0;
   const reference = values[0] ?? 0;
   const xCoordinates = Array.from({ length: map.plan.request.columns }, (_, column) =>
-    map.plan.request.originXmm + map.plan.spacing.xMm * column,
+    map.plan.request.originXMm + map.plan.spacing.xMm * column,
   );
   const yCoordinates = Array.from({ length: map.plan.request.rows }, (_, row) =>
-    map.plan.request.originYmm + map.plan.spacing.yMm * row,
+    map.plan.request.originYMm + map.plan.spacing.yMm * row,
   );
   return (
     <div className="heightmap-values-wrap">

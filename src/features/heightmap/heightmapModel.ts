@@ -34,8 +34,8 @@ export const perimeterFromProgram = (
   const margin = Number.isFinite(marginMm) ? Math.max(0, marginMm) : 0;
   return {
     ...request,
-    originXmm: bounds.min.x - margin,
-    originYmm: bounds.min.y - margin,
+    originXMm: bounds.min.x - margin,
+    originYMm: bounds.min.y - margin,
     widthMm: Math.max(0.01, bounds.size.x + margin * 2),
     heightMm: Math.max(0.01, bounds.size.y + margin * 2),
   };
@@ -55,8 +55,8 @@ export const buildHeightmapPlan = (request: HeightmapPlanRequest): HeightmapPlan
         sequence: points.length,
         row,
         column,
-        xMm: request.originXmm + spacing.xMm * column,
-        yMm: request.originYmm + spacing.yMm * row,
+        xMm: request.originXMm + spacing.xMm * column,
+        yMm: request.originYMm + spacing.yMm * row,
       });
     }
   }
@@ -72,7 +72,7 @@ export const estimateHeightmapSeconds = (request: HeightmapPlanRequest): number 
   const probes = plan.points.length;
   return xyDistance / request.travelFeedMmPerMin * 60 + probes * (
     request.maxProbeDepthMm / request.probeFeedMmPerMin * 60 +
-    (request.clearanceZmm + request.maxProbeDepthMm) /
+    (request.clearanceZMm + request.maxProbeDepthMm) /
       request.retractFeedMmPerMin * 60
   );
 };
@@ -88,8 +88,8 @@ export const validateHeightmapRequest = (
   if (!Number.isInteger(request.columns) || !Number.isInteger(request.rows)) return "Количество точек должно быть целым";
   if (request.columns > 101 || request.rows > 101 || request.columns * request.rows > 10_000) return "Сетка слишком плотная: максимум 10 000 точек";
   if (travel && (request.widthMm > travel.x || request.heightMm > travel.y)) return "Периметр больше рабочего поля выбранного станка";
-  if (travel && request.clearanceZmm > travel.z) return "Безопасная Z больше хода станка";
-  if (request.clearanceZmm <= 0 || request.maxProbeDepthMm <= 0) return "Безопасная Z и глубина поиска должны быть положительными";
+  if (travel && request.clearanceZMm > travel.z) return "Безопасная Z больше хода станка";
+  if (request.clearanceZMm <= 0 || request.maxProbeDepthMm <= 0) return "Безопасная Z и глубина поиска должны быть положительными";
   if (request.contactMode === "directSurface" && request.contactOffsetMm !== 0) return "Для прямого контакта смещение равно 0";
   if (request.contactMode === "fixedPlate" && (request.contactOffsetMm < 0.01 || request.contactOffsetMm > 100)) return "Толщина сплошной пластины должна быть от 0.01 до 100 mm";
   return undefined;

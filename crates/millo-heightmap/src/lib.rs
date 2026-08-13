@@ -24,12 +24,15 @@ pub enum HeightmapContactMode {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeightmapPlanRequest {
+    #[serde(alias = "originXmm")]
     pub origin_x_mm: f64,
+    #[serde(alias = "originYmm")]
     pub origin_y_mm: f64,
     pub width_mm: f64,
     pub height_mm: f64,
     pub columns: usize,
     pub rows: usize,
+    #[serde(alias = "clearanceZmm")]
     pub clearance_z_mm: f64,
     pub max_probe_depth_mm: f64,
     pub probe_feed_mm_per_min: f64,
@@ -888,6 +891,49 @@ mod tests {
             map.interpolate_z(0.0, 10.0),
             Err(HeightmapError::ProbeMiss(3))
         );
+    }
+
+    #[test]
+    fn deserializes_the_webview_start_request_contract() {
+        let request: HeightmapStartRequest = serde_json::from_str(include_str!(
+            "../../../fixtures/heightmap/start-request.json"
+        ))
+        .unwrap();
+
+        assert_eq!(request.plan.origin_x_mm, -15.85);
+        assert_eq!(request.plan.origin_y_mm, -6.22);
+        assert_eq!(request.plan.clearance_z_mm, 2.0);
+        assert_eq!(request.plan.columns, 7);
+        assert_eq!(
+            request.plan.contact_mode,
+            HeightmapContactMode::DirectSurface
+        );
+        assert!(request.setup_confirmed);
+        assert!(request.contact_available_at_every_point);
+    }
+
+    #[test]
+    fn accepts_the_pre_fix_webview_acronym_spelling_for_a_live_window() {
+        let request: HeightmapPlanRequest = serde_json::from_value(serde_json::json!({
+            "originXmm": 1.0,
+            "originYmm": 2.0,
+            "widthMm": 10.0,
+            "heightMm": 10.0,
+            "columns": 2,
+            "rows": 2,
+            "clearanceZmm": 3.0,
+            "maxProbeDepthMm": 2.0,
+            "probeFeedMmPerMin": 25.0,
+            "travelFeedMmPerMin": 300.0,
+            "retractFeedMmPerMin": 100.0,
+            "contactMode": "directSurface",
+            "contactOffsetMm": 0.0
+        }))
+        .unwrap();
+
+        assert_eq!(request.origin_x_mm, 1.0);
+        assert_eq!(request.origin_y_mm, 2.0);
+        assert_eq!(request.clearance_z_mm, 3.0);
     }
 
     #[test]
