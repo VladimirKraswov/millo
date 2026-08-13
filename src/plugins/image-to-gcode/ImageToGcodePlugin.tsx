@@ -151,7 +151,7 @@ export function ImageToGcodePlugin({ jobs, initialOpen = false }: ImageToGcodePl
         type="button"
       >
         <ImagePlus aria-hidden="true" size={16} />
-        <span>Изображение</span>
+        <span>Гравировка по изображению</span>
       </button>
 
       {open && typeof document !== "undefined" && createPortal(

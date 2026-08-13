@@ -114,7 +114,10 @@ The map workspace first finds the highest surface point as Z0, then provides
 automatic program bounds with margin, separate bounded limits for the first Z0
 contact and per-point surface variation, physical grid density, perimeter
 validation, coordinate-labelled values, and a Three.js
-low-to-high surface view. See [ADR 0052](docs/decisions/0052-workpiece-heightmap-session.md).
+low-to-high surface view. Incoming samples preserve the operator's current
+3D orbit, pan, and zoom for the same probe area; see
+[heightmap visualization](docs/HEIGHTMAP_VISUALIZATION.md) and
+[ADR 0052](docs/decisions/0052-workpiece-heightmap-session.md).
 The implementation choices and follow-up ideas taken from GRBL, Candle, CNCjs,
 bCNC, and UGS are recorded in
 [Probing and heightmap comparison](docs/PROBING_COMPARISON.md).

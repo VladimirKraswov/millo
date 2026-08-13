@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  heightmapCameraScope,
   heightmapSampleLabel,
+  heightmapSceneBounds,
   heightmapVisualScale,
   shouldLabelHeightmapSample,
 } from "./heightmapSceneModel";
@@ -24,5 +26,36 @@ describe("heightmapSceneModel", () => {
     expect(heightmapSampleLabel(0.021)).toBe("+0.021 mm");
     expect(heightmapVisualScale([-0.9, 0.1], 50).exaggeration).toBe(4);
     expect(heightmapVisualScale([0, 0], 50).exaggeration).toBe(50);
+  });
+
+  it("keeps one camera scope while samples arrive for the same probe area", () => {
+    const request = {
+      originXMm: 10,
+      originYMm: 20,
+      widthMm: 100,
+      heightMm: 50,
+      columns: 5,
+      rows: 4,
+      clearanceZMm: 5,
+      maxProbeDepthMm: 5,
+      probeFeedMmPerMin: 50,
+      travelFeedMmPerMin: 300,
+      retractFeedMmPerMin: 200,
+      contactMode: "directSurface" as const,
+      contactOffsetMm: 0,
+    };
+    const initial = heightmapSceneBounds(request);
+    const measuring = heightmapSceneBounds(request, { ...request });
+
+    expect(heightmapCameraScope("iso", measuring)).toBe(
+      heightmapCameraScope("iso", initial),
+    );
+    expect(heightmapCameraScope("top", measuring)).not.toBe(
+      heightmapCameraScope("iso", measuring),
+    );
+    expect(heightmapCameraScope("iso", heightmapSceneBounds({
+      ...request,
+      widthMm: 120,
+    }))).not.toBe(heightmapCameraScope("iso", initial));
   });
 });

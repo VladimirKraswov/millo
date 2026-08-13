@@ -7,7 +7,9 @@ import type { Heightmap, HeightmapPlanRequest } from "../../shared/heightmap";
 import type { GcodeProgram } from "../../shared/program";
 import { buildHeightmapPlan } from "./heightmapModel";
 import {
+  heightmapCameraScope,
   heightmapSampleLabel,
+  heightmapSceneBounds,
   heightmapVisualScale,
   shouldLabelHeightmapSample,
 } from "./heightmapSceneModel";
@@ -32,6 +34,14 @@ const cold = new THREE.Color(0x3ba8d8);
 const middle = new THREE.Color(0x72d6b1);
 const hot = new THREE.Color(0xffb55c);
 
+interface SavedCameraState {
+  readonly position: THREE.Vector3;
+  readonly scope: string;
+  readonly target: THREE.Vector3;
+  readonly up: THREE.Vector3;
+  readonly zoom: number;
+}
+
 const colorFor = (ratio: number): THREE.Color => {
   const value = Math.max(0, Math.min(1, ratio));
   return value < 0.5
@@ -54,6 +64,7 @@ export function HeightmapScene({
   interpolationRows,
 }: HeightmapSceneProps) {
   const host = useRef<HTMLDivElement>(null);
+  const savedCamera = useRef<SavedCameraState | undefined>(undefined);
   const draftPlan = useMemo(() => buildHeightmapPlan(request), [request]);
 
   useEffect(() => {
@@ -70,20 +81,9 @@ export function HeightmapScene({
     labels.domElement.setAttribute("aria-hidden", "true");
     element.replaceChildren(renderer.domElement, labels.domElement);
 
-    const mapRequest = map?.plan.request;
-    const minimumX = Math.min(request.originXMm, mapRequest?.originXMm ?? request.originXMm);
-    const minimumY = Math.min(request.originYMm, mapRequest?.originYMm ?? request.originYMm);
-    const maximumX = Math.max(
-      request.originXMm + request.widthMm,
-      mapRequest ? mapRequest.originXMm + mapRequest.widthMm : request.originXMm + request.widthMm,
-    );
-    const maximumY = Math.max(
-      request.originYMm + request.heightMm,
-      mapRequest ? mapRequest.originYMm + mapRequest.heightMm : request.originYMm + request.heightMm,
-    );
-    const centerX = (minimumX + maximumX) / 2;
-    const centerY = (minimumY + maximumY) / 2;
-    const span = Math.max(maximumX - minimumX, maximumY - minimumY, 10);
+    const bounds = heightmapSceneBounds(request, map?.plan.request);
+    const { centerX, centerY, span } = bounds;
+    const cameraScope = heightmapCameraScope(view, bounds);
     const camera = new THREE.OrthographicCamera(-span, span, span, -span, 0.01, span * 20);
     camera.up.set(0, 0, 1);
     camera.position.set(
@@ -284,6 +284,13 @@ export function HeightmapScene({
     controls.enableDamping = true;
     controls.enableRotate = view === "iso";
     controls.target.set(centerX, centerY, 0);
+    if (savedCamera.current?.scope === cameraScope) {
+      camera.position.copy(savedCamera.current.position);
+      camera.up.copy(savedCamera.current.up);
+      camera.zoom = savedCamera.current.zoom;
+      controls.target.copy(savedCamera.current.target);
+      controls.update();
+    }
 
     const resize = () => {
       const width = Math.max(1, element.clientWidth);
@@ -310,6 +317,13 @@ export function HeightmapScene({
     };
     render();
     return () => {
+      savedCamera.current = {
+        position: camera.position.clone(),
+        scope: cameraScope,
+        target: controls.target.clone(),
+        up: camera.up.clone(),
+        zoom: camera.zoom,
+      };
       cancelAnimationFrame(frame);
       observer.disconnect();
       controls.dispose();

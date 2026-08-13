@@ -54,3 +54,12 @@ The first bundled plugin is `io.millo.image-to-gcode`. It is linked into the
 application and explicitly granted `ui.contribute` plus `jobs.create` at the
 composition root. External-code loading, trust, signatures, and per-user grant
 persistence remain future work.
+
+## Operator access
+
+The bundled plugin is enabled by default and opens from the top bar through
+`Create -> Engraving from image` (`Создать -> Гравировка по изображению`). It
+stays in this compact job-creation menu instead of adding another permanent
+workspace button. React development StrictMode is covered by a deferred host
+disposal lifecycle, so its temporary effect cleanup cannot unload bundled
+plugins while the application is still mounted.

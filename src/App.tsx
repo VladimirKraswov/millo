@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { bootstrapPluginHost } from "./app/bootstrapPluginHost";
+import { DeferredDisposal } from "./app/DeferredDisposal";
 import { CapabilityGrantStore } from "./platform/plugins/CapabilityGrantStore";
 import { createImageToGcodePlugin, IMAGE_TO_GCODE_PLUGIN_ID } from "./plugins/image-to-gcode/createImageToGcodePlugin";
 import {
@@ -436,13 +437,18 @@ export default function App() {
     pluginHost.generatedJobs.current,
     pluginHost.generatedJobs.current,
   );
+  const pluginHostLifecycle = useMemo(
+    () => new DeferredDisposal(
+      () => pluginHost.dispose(),
+      (error) => setUiError(String(error)),
+    ),
+    [pluginHost],
+  );
 
   useEffect(() => {
     void pluginHost.ready.catch((error: unknown) => setUiError(String(error)));
-    return () => {
-      void pluginHost.dispose().catch((error: unknown) => setUiError(String(error)));
-    };
-  }, [pluginHost]);
+    return pluginHostLifecycle.mount();
+  }, [pluginHost, pluginHostLifecycle]);
 
   useEffect(() => {
     if (!desktopRuntime) return;

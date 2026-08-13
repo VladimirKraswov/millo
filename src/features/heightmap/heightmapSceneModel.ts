@@ -1,9 +1,68 @@
+import type { HeightmapPlanRequest } from "../../shared/heightmap";
+
 export interface HeightmapVisualScale {
   readonly exaggeration: number;
   readonly maximum: number;
   readonly minimum: number;
   readonly range: number;
 }
+
+export interface HeightmapSceneBounds {
+  readonly centerX: number;
+  readonly centerY: number;
+  readonly maximumX: number;
+  readonly maximumY: number;
+  readonly minimumX: number;
+  readonly minimumY: number;
+  readonly span: number;
+}
+
+export const heightmapSceneBounds = (
+  request: HeightmapPlanRequest,
+  measuredRequest?: HeightmapPlanRequest,
+): HeightmapSceneBounds => {
+  const minimumX = Math.min(
+    request.originXMm,
+    measuredRequest?.originXMm ?? request.originXMm,
+  );
+  const minimumY = Math.min(
+    request.originYMm,
+    measuredRequest?.originYMm ?? request.originYMm,
+  );
+  const maximumX = Math.max(
+    request.originXMm + request.widthMm,
+    measuredRequest
+      ? measuredRequest.originXMm + measuredRequest.widthMm
+      : request.originXMm + request.widthMm,
+  );
+  const maximumY = Math.max(
+    request.originYMm + request.heightMm,
+    measuredRequest
+      ? measuredRequest.originYMm + measuredRequest.heightMm
+      : request.originYMm + request.heightMm,
+  );
+
+  return {
+    centerX: (minimumX + maximumX) / 2,
+    centerY: (minimumY + maximumY) / 2,
+    maximumX,
+    maximumY,
+    minimumX,
+    minimumY,
+    span: Math.max(maximumX - minimumX, maximumY - minimumY, 10),
+  };
+};
+
+export const heightmapCameraScope = (
+  view: "top" | "iso",
+  bounds: HeightmapSceneBounds,
+): string => [
+  view,
+  bounds.minimumX,
+  bounds.minimumY,
+  bounds.maximumX,
+  bounds.maximumY,
+].map((value) => typeof value === "number" ? value.toFixed(4) : value).join(":");
 
 export const heightmapVisualScale = (
   values: readonly number[],

@@ -838,3 +838,6 @@ remain visible, while rendering layers live in the on-demand `Слои` menu.
 Measured grids up to 49 points show every signed Z label and a high-contrast
 ring; denser grids thin labels deterministically while retaining endpoints and
 the active point. Partial adjacent cells render incrementally during probing.
+The scene-model camera-scope fixture proves that another sample in the same
+perimeter preserves the current 3D camera, while changing the perimeter or
+Top/3D mode deliberately requests a fresh frame.

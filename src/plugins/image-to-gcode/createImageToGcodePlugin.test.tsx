@@ -31,7 +31,7 @@ describe("Image to G-code bundled plugin", () => {
       contribution.extension.kind === "global" ? contribution.extension.render() : null,
     );
 
-    expect(markup).toContain("Изображение");
+    expect(markup).toContain("Гравировка по изображению");
     expect(loader.list()[0]?.grantedCapabilities).toEqual(["ui.contribute", "jobs.create"]);
   });
 });
