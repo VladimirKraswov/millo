@@ -7,9 +7,13 @@ import {
   applyDensity,
   buildHeightmapPlan,
   heightColor,
+  heightmapSafeWorkZ,
+  heightmapSurfaceVariation,
   heightmapMatrix,
+  describeHeightmapFailure,
   perimeterFromProgram,
   validateHeightmapRequest,
+  withHeightmapSurfaceVariation,
 } from "./heightmapModel";
 
 describe("heightmapModel", () => {
@@ -56,5 +60,23 @@ describe("heightmapModel", () => {
     )).toContain("больше рабочего поля");
     expect(heightColor(-0.2, -0.2, 0.2)).toContain("205");
     expect(heightColor(0.2, -0.2, 0.2)).toContain("35");
+  });
+
+  it("derives a safe Z above a fixed plate and keeps variation operator-facing", () => {
+    const request = {
+      ...defaultHeightmapRequest(),
+      contactMode: "fixedPlate" as const,
+      contactOffsetMm: 19.1,
+      clearanceZMm: 2,
+    };
+    expect(heightmapSafeWorkZ(request)).toBe(21.1);
+    const next = withHeightmapSurfaceVariation(request, 1.5);
+    expect(next.maxProbeDepthMm).toBe(3.5);
+    expect(heightmapSurfaceVariation(next)).toBe(1.5);
+  });
+
+  it("translates a bounded probe miss into an actionable operator message", () => {
+    expect(describeHeightmapFailure("probe did not contact the surface", 12)).toContain("12.0 mm");
+    expect(describeHeightmapFailure("ALARM:5", 3)).toContain("подведите фрезу ближе");
   });
 });

@@ -1482,6 +1482,7 @@ export default function App() {
           });
         }}
         onSnapshot={pluginHost.machineState.publish}
+        onUnlock={unlockAlarm}
         open={zProbeOpen}
         profileId={selectedMachine?.id}
         program={activeProgram}

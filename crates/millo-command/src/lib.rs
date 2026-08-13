@@ -25,6 +25,8 @@ use millo_grbl::{
     MIN_STEP_JOG_FEED_MM_PER_MIN, active_work_coordinate_system, build_device_inspection,
     work_coordinate_parameter,
 };
+#[cfg(test)]
+use millo_heightmap::HeightmapContactMode;
 use millo_heightmap::{
     Heightmap, HeightmapError, HeightmapOperationSnapshot, HeightmapOperationState,
     HeightmapStartRequest, HeightmapTravelLimits, plan_heightmap,
@@ -99,7 +101,7 @@ pub enum ArbiterError {
     ZProbeConfirmationRequired,
     #[error("the selected machine profile does not declare an installed probe")]
     ZProbeNotInstalled,
-    #[error("Z probe work-zero mode is disabled in the selected machine profile")]
+    #[error("the selected Z probe mode is disabled in the machine profile")]
     ZProbeDisabled,
     #[error("probe input P is already active; open the circuit before probing")]
     ZProbeInputAlreadyActive,
@@ -107,6 +109,15 @@ pub enum ArbiterError {
     InvalidZProbeSettings(&'static str),
     #[error("Z probe result could not be verified: {0}")]
     ZProbeVerification(String),
+    #[error("probe did not contact the surface within the configured search range")]
+    ZProbeContactNotFound,
+    #[error(
+        "Z probe motion did not settle to Idle within {timeout_ms} ms (last mode {last_mode:?})"
+    )]
+    ZProbeSettleTimeout {
+        timeout_ms: u64,
+        last_mode: MachineMode,
+    },
     #[error("Z probe retract did not return to Idle within {0} ms")]
     ZProbeRetractTimeout(u64),
     #[error("Z probe was interrupted by controller reset")]
@@ -959,6 +970,7 @@ enum HeightmapPhase {
     WaitForXy,
     Probe,
     PollProbe { command: String },
+    WaitForProbeIdle { started: Instant },
     RecordProbe,
     Finalize,
 }
@@ -2583,7 +2595,9 @@ async fn begin_z_probe(
     if !hardware_profile.probe_installed {
         return Err(ArbiterError::ZProbeNotInstalled);
     }
-    if request.settings.mode != ProbeWorkflowMode::WorkZero {
+    if request.settings.mode == ProbeWorkflowMode::Off
+        || request.settings.mode != hardware_profile.probe_mode
+    {
         return Err(ArbiterError::ZProbeDisabled);
     }
     validate_z_probe_settings(request.settings)?;
@@ -2641,13 +2655,14 @@ async fn begin_heightmap(
             x_mm: travel.x,
             y_mm: travel.y,
         });
+    let safe_work_z = heightmap_safe_work_z(request.plan);
     if hardware_profile
         .travel_mm
-        .is_some_and(|travel| request.plan.clearance_z_mm > travel.z)
+        .is_some_and(|travel| safe_work_z > travel.z)
     {
         return Err(HeightmapError::ExceedsTravel {
             axis: "Z",
-            requested: request.plan.clearance_z_mm,
+            requested: safe_work_z,
             maximum: hardware_profile.travel_mm.map_or(0.0, |travel| travel.z),
         }
         .into());
@@ -2737,7 +2752,10 @@ async fn cleanup_failed_heightmap(
     {
         let request = active.map.plan.request;
         let raise = controller
-            .move_heightmap_z(request.clearance_z_mm, request.retract_feed_mm_per_min)
+            .move_heightmap_z(
+                heightmap_safe_work_z(request),
+                request.retract_feed_mm_per_min,
+            )
             .await;
         match raise {
             Ok(_) => {
@@ -2756,12 +2774,16 @@ async fn cleanup_failed_heightmap(
     (!failures.is_empty()).then(|| failures.join(", "))
 }
 
+fn heightmap_safe_work_z(request: millo_heightmap::HeightmapPlanRequest) -> f64 {
+    request.contact_offset_mm + request.clearance_z_mm
+}
+
 async fn wait_for_heightmap_cleanup_idle(
     controller: &mut Controller<BoxedTransport>,
     request: millo_heightmap::HeightmapPlanRequest,
 ) -> Result<(), ArbiterError> {
     let timeout = Duration::from_secs_f64(
-        request.clearance_z_mm / request.retract_feed_mm_per_min * 60.0 + 3.0,
+        heightmap_safe_work_z(request) / request.retract_feed_mm_per_min * 60.0 + 3.0,
     );
     let started = Instant::now();
     loop {
@@ -2794,6 +2816,9 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
             HeightmapPhase::PollProbe { command } => HeightmapPhase::PollProbe {
                 command: command.clone(),
             },
+            HeightmapPhase::WaitForProbeIdle { started } => {
+                HeightmapPhase::WaitForProbeIdle { started: *started }
+            }
             HeightmapPhase::RecordProbe => HeightmapPhase::RecordProbe,
             HeightmapPhase::Finalize => HeightmapPhase::Finalize,
         })
@@ -2809,7 +2834,10 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
                 .request;
             actor
                 .controller
-                .move_heightmap_z(request.clearance_z_mm, request.retract_feed_mm_per_min)
+                .move_heightmap_z(
+                    heightmap_safe_work_z(request),
+                    request.retract_feed_mm_per_min,
+                )
                 .await?;
             actor
                 .active_heightmap
@@ -2921,8 +2949,32 @@ async fn execute_heightmap_phase(actor: &mut ActorState) -> Result<(), ArbiterEr
                         .active_heightmap
                         .as_mut()
                         .ok_or(ArbiterError::HeightmapOperationUnavailable)?
-                        .phase = HeightmapPhase::RecordProbe
+                        .phase = HeightmapPhase::WaitForProbeIdle {
+                        started: Instant::now(),
+                    }
                 }
+            }
+        }
+        HeightmapPhase::WaitForProbeIdle { started } => {
+            const SETTLE_TIMEOUT: Duration = Duration::from_secs(3);
+
+            let snapshot = actor.controller.refresh_status().await?;
+            match snapshot.machine.mode {
+                MachineMode::Idle => {
+                    actor
+                        .active_heightmap
+                        .as_mut()
+                        .ok_or(ArbiterError::HeightmapOperationUnavailable)?
+                        .phase = HeightmapPhase::RecordProbe;
+                }
+                MachineMode::Run if started.elapsed() < SETTLE_TIMEOUT => {}
+                MachineMode::Run => {
+                    return Err(ArbiterError::ZProbeSettleTimeout {
+                        timeout_ms: SETTLE_TIMEOUT.as_millis().try_into().unwrap_or(u64::MAX),
+                        last_mode: snapshot.machine.mode,
+                    });
+                }
+                _ => ensure_stable_idle(&snapshot)?,
             }
         }
         HeightmapPhase::RecordProbe => {
@@ -2974,6 +3026,11 @@ async fn complete_z_probe(
     probe_response: CommandResponse,
 ) -> Result<ZProbeOutcome, ArbiterError> {
     let calibration = async {
+        // GRBL may emit the terminal `ok` before the next status report has
+        // transitioned from Run to Idle. Never query PRB or mutate WCS while
+        // the probe motion is still settling. Keep this inside the calibrated
+        // section so every failure still reaches the common cleanup below.
+        wait_for_probe_motion_idle(controller).await?;
         let parameters = query_parameters(controller).await?;
         let contact_machine_position = parse_probe_position(&parameters)?;
         let zero_response = controller
@@ -2984,27 +3041,32 @@ async fn complete_z_probe(
             )
             .await?;
         let offset_parameters = query_parameters(controller).await?;
-        verify_probed_work_z(
+        let zero_snapshot = controller.refresh_status().await?;
+        ensure_stable_idle(&zero_snapshot)?;
+        verify_probe_zero_snapshot(
+            &zero_snapshot,
             &offset_parameters,
             coordinate_system,
-            contact_machine_position,
             request.settings.plate_thickness_mm,
         )?;
         Ok::<_, ArbiterError>((contact_machine_position, zero_response))
     }
     .await;
 
-    // A successful G38.2 may leave the cutter touching the plate. Cleanup is
-    // attempted even when the subsequent PRB/offset verification fails.
+    // A successful probe may leave the cutter touching the plate. A G38.3 miss
+    // ends at the bounded search limit, so return the full search travel rather
+    // than only the normal post-contact clearance.
+    let retract_distance = if matches!(&calibration, Err(ArbiterError::ZProbeContactNotFound)) {
+        request.settings.max_travel_mm
+    } else {
+        request.settings.retract_mm
+    };
     let restore_result = controller.restore_modal_state(&restore_modal).await;
     let retract_result = controller
-        .retract_z(
-            request.settings.retract_mm,
-            request.settings.retract_feed_mm_per_min,
-        )
+        .retract_z(retract_distance, request.settings.retract_feed_mm_per_min)
         .await;
     let settle_result = if retract_result.is_ok() {
-        wait_for_idle_after_probe(controller, request.settings).await
+        wait_for_idle_after_probe(controller, request.settings, retract_distance).await
     } else {
         Ok(controller.snapshot())
     };
@@ -3033,6 +3095,30 @@ async fn complete_z_probe(
         final_work_z,
         snapshot,
     })
+}
+
+async fn wait_for_probe_motion_idle(
+    controller: &mut Controller<BoxedTransport>,
+) -> Result<ControllerSnapshot, ArbiterError> {
+    const SETTLE_TIMEOUT: Duration = Duration::from_secs(3);
+
+    let started = Instant::now();
+    loop {
+        let snapshot = controller.refresh_status().await?;
+        match snapshot.machine.mode {
+            MachineMode::Idle => return Ok(snapshot),
+            MachineMode::Run if started.elapsed() < SETTLE_TIMEOUT => {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            MachineMode::Run => {
+                return Err(ArbiterError::ZProbeSettleTimeout {
+                    timeout_ms: SETTLE_TIMEOUT.as_millis().try_into().unwrap_or(u64::MAX),
+                    last_mode: snapshot.machine.mode,
+                });
+            }
+            _ => ensure_stable_idle(&snapshot)?,
+        }
+    }
 }
 
 fn request_allowed_during_probe(request: &Request) -> bool {
@@ -3161,8 +3247,10 @@ fn validate_z_probe_settings(settings: ZProbeSettings) -> Result<(), ArbiterErro
     let checks = [
         (
             settings.plate_thickness_mm.is_finite()
-                && (0.01..=100.0).contains(&settings.plate_thickness_mm),
-            "plate thickness must be between 0.01 and 100 mm",
+                && (0.0..=100.0).contains(&settings.plate_thickness_mm)
+                && (settings.mode != ProbeWorkflowMode::WorkZero
+                    || settings.plate_thickness_mm >= 0.01),
+            "plate thickness must be 0-100 mm for a heightmap or 0.01-100 mm for work zero",
         ),
         (
             settings.max_travel_mm.is_finite() && (0.1..=100.0).contains(&settings.max_travel_mm),
@@ -3209,9 +3297,7 @@ fn parse_probe_position(parameters: &DeviceInspection) -> Result<Position, Arbit
         .rsplit_once(':')
         .ok_or_else(|| ArbiterError::ZProbeVerification(format!("malformed PRB value: {raw}")))?;
     if success != "1" {
-        return Err(ArbiterError::ZProbeVerification(format!(
-            "probe cycle did not report contact: {raw}"
-        )));
+        return Err(ArbiterError::ZProbeContactNotFound);
     }
     let [x, y, z] = parse_xyz_parameter(position).ok_or_else(|| {
         ArbiterError::ZProbeVerification(format!("malformed PRB position: {raw}"))
@@ -3219,16 +3305,17 @@ fn parse_probe_position(parameters: &DeviceInspection) -> Result<Position, Arbit
     Ok(Position { x, y, z, a: None })
 }
 
-fn verify_probed_work_z(
+fn verify_probe_zero_snapshot(
+    snapshot: &ControllerSnapshot,
     parameters: &DeviceInspection,
     coordinate_system: WorkCoordinateSystem,
-    contact: Position,
     expected_work_z: f64,
 ) -> Result<(), ArbiterError> {
-    let actual = derive_probe_work_z(parameters, coordinate_system, contact)?;
+    let actual = verified_work_axis(snapshot, parameters, coordinate_system, WorkAxis::Z)
+        .map_err(|error| ArbiterError::ZProbeVerification(error.to_string()))?;
     if (actual - expected_work_z).abs() > WORK_ZERO_TOLERANCE_MM {
         return Err(ArbiterError::ZProbeVerification(format!(
-            "expected contact work Z {expected_work_z:.3} mm, derived {actual:.3} mm"
+            "expected current work Z {expected_work_z:.3} mm after G10, read {actual:.3} mm"
         )));
     }
     Ok(())
@@ -3284,10 +3371,10 @@ fn restore_probe_modal_command(modal: &[String]) -> String {
 async fn wait_for_idle_after_probe(
     controller: &mut Controller<BoxedTransport>,
     settings: ZProbeSettings,
+    retract_distance: f64,
 ) -> Result<ControllerSnapshot, ArbiterError> {
-    let timeout = Duration::from_secs_f64(
-        settings.retract_mm / settings.retract_feed_mm_per_min * 60.0 + 3.0,
-    );
+    let timeout =
+        Duration::from_secs_f64(retract_distance / settings.retract_feed_mm_per_min * 60.0 + 3.0);
     let started = Instant::now();
     loop {
         let snapshot = controller.refresh_status().await?;
@@ -4856,6 +4943,7 @@ mod tests {
         control.set_probe_trigger_distance(Some(1.0));
         let mut profile = HardwareProfile::first_machine();
         profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::WorkZero;
         let (arbiter, worker) = CommandArbiter::new(
             Box::new(transport),
             ControllerConfig {
@@ -4874,10 +4962,77 @@ mod tests {
         assert_eq!(outcome.coordinate_system, WorkCoordinateSystem::G54);
         assert_eq!(outcome.contact_machine_position.z, 9.0);
         assert!((outcome.final_work_z - 20.1).abs() <= 0.01);
-        assert_eq!(outcome.probe_command, "G91 G21 G94 G38.2 Z-10.000 F25.000");
+        assert_eq!(outcome.probe_command, "G91 G21 G94 G38.3 Z-10.000 F25.000");
         assert_eq!(outcome.zero_command, "G10 L20 P1 Z19.100");
         assert_eq!(outcome.retract_command, "$J=G91 G21 Z1.000 F1000.000");
         assert!(control.writes().contains(&b"G0 G21 G90 G94\n".to_vec()));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn heightmap_mode_can_calibrate_direct_surface_z_zero() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:10.000,20.000,5.000|WPos:10.000,20.000,5.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) =
+            CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        let mut request = z_probe_request();
+        request.settings.mode = ProbeWorkflowMode::Heightmap;
+        request.settings.plate_thickness_mm = 0.0;
+
+        let outcome = arbiter.probe_z(request).await.unwrap();
+
+        assert_eq!(outcome.zero_command, "G10 L20 P1 Z0.000");
+        assert!((outcome.final_work_z - 1.0).abs() <= 0.01);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn z_probe_waits_for_idle_after_terminal_ack_before_writing_work_zero() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:10.000,20.000,5.000|WPos:10.000,20.000,5.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(1.0));
+        control.set_probe_settle_status_polls(2);
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) =
+            CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        let mut request = z_probe_request();
+        request.settings.mode = ProbeWorkflowMode::Heightmap;
+        request.settings.plate_thickness_mm = 0.0;
+
+        let outcome = arbiter.probe_z(request).await.unwrap();
+
+        assert!((outcome.final_work_z - 1.0).abs() <= 0.01);
+        let writes = control.writes();
+        let probe_index = writes
+            .iter()
+            .position(|write| write.starts_with(b"G91 G21 G94 G38.3"))
+            .unwrap();
+        let zero_index = writes
+            .iter()
+            .position(|write| write.starts_with(b"G10 L20 P1 Z0.000"))
+            .unwrap();
+        assert!(zero_index > probe_index);
+        assert!(
+            writes[probe_index + 1..zero_index]
+                .iter()
+                .filter(|write| write.as_slice() == b"?")
+                .count()
+                >= 2
+        );
         task.abort();
     }
 
@@ -4961,6 +5116,7 @@ mod tests {
         );
         let control = transport.control();
         control.set_probe_trigger_distance(Some(1.0));
+        control.set_probe_settle_status_polls(2);
         let mut profile = HardwareProfile::first_machine();
         profile.probe_installed = true;
         profile.probe_mode = ProbeWorkflowMode::Heightmap;
@@ -5001,11 +5157,42 @@ mod tests {
         assert_eq!(
             writes
                 .iter()
-                .filter(|write| write.starts_with(b"G91 G21 G94 G38.2"))
+                .filter(|write| write.starts_with(b"G91 G21 G94 G38.3"))
                 .count(),
             4
         );
         assert!(!writes.iter().any(|write| write.starts_with(b"G10 L20")));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn fixed_plate_heightmap_raises_above_the_plate_surface() {
+        let transport = MockTransport::with_status(
+            "<Idle|MPos:0.000,0.000,25.000|WPos:0.000,0.000,25.000|FS:0,0>",
+        );
+        let control = transport.control();
+        control.set_probe_trigger_distance(Some(2.0));
+        let mut profile = HardwareProfile::first_machine();
+        profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::Heightmap;
+        let (arbiter, worker) =
+            CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        let mut request = heightmap_request();
+        request.plan.contact_mode = HeightmapContactMode::FixedPlate;
+        request.plan.contact_offset_mm = 19.1;
+
+        arbiter.start_heightmap(request).await.unwrap();
+        let completed = wait_for_heightmap(&arbiter, HeightmapOperationState::Completed).await;
+
+        assert_eq!(completed.progress.measured, 4);
+        assert!(
+            control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"$J=G90 G21 Z21.100"))
+        );
         task.abort();
     }
 
@@ -5094,7 +5281,7 @@ mod tests {
             control
                 .writes()
                 .iter()
-                .filter(|write| write.starts_with(b"G91 G21 G94 G38.2"))
+                .filter(|write| write.starts_with(b"G91 G21 G94 G38.3"))
                 .count()
                 <= 1
         );
@@ -5109,6 +5296,7 @@ mod tests {
         let control = transport.control();
         let mut profile = HardwareProfile::first_machine();
         profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::WorkZero;
         let (arbiter, worker) =
             CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
         let task = tokio::spawn(worker);
@@ -5140,6 +5328,7 @@ mod tests {
         let control = transport.control();
         let mut profile = HardwareProfile::first_machine();
         profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::WorkZero;
         let (arbiter, worker) =
             CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
         let task = tokio::spawn(worker);
@@ -5155,7 +5344,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn z_probe_miss_raises_alarm_without_writing_a_work_offset() {
+    async fn z_probe_miss_returns_to_start_without_alarm_or_work_offset() {
         let transport = MockTransport::with_status(
             "<Idle|MPos:0.000,0.000,10.000|WPos:0.000,0.000,10.000|FS:0,0>",
         );
@@ -5163,6 +5352,7 @@ mod tests {
         control.set_probe_trigger_distance(None);
         let mut profile = HardwareProfile::first_machine();
         profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::WorkZero;
         let (arbiter, worker) =
             CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
         let task = tokio::spawn(worker);
@@ -5170,19 +5360,23 @@ mod tests {
 
         let error = arbiter.probe_z(z_probe_request()).await.unwrap_err();
 
-        assert!(matches!(
-            error,
-            ArbiterError::Controller(ControllerError::CommandRejected {
-                completion: CommandCompletion::Alarm,
-                code: Some(5),
-                ..
-            })
-        ));
+        assert!(matches!(error, ArbiterError::ZProbeContactNotFound));
         assert!(
             !control
                 .writes()
                 .iter()
                 .any(|write| write.starts_with(b"G10 "))
+        );
+        assert!(
+            control
+                .writes()
+                .contains(&b"$J=G91 G21 Z10.000 F1000.000\n".to_vec())
+        );
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"$X"))
         );
         task.abort();
     }
@@ -5196,6 +5390,7 @@ mod tests {
         control.set_probe_delay(50);
         let mut profile = HardwareProfile::first_machine();
         profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::WorkZero;
         let (arbiter, worker) =
             CommandArbiter::new(Box::new(transport), ControllerConfig::default(), profile);
         let task = tokio::spawn(worker);
@@ -5231,6 +5426,7 @@ mod tests {
         control.set_probe_delay(100);
         let mut profile = HardwareProfile::first_machine();
         profile.probe_installed = true;
+        profile.probe_mode = ProbeWorkflowMode::WorkZero;
         let (arbiter, worker) = CommandArbiter::new(
             Box::new(transport),
             ControllerConfig {
@@ -5250,7 +5446,7 @@ mod tests {
             if control
                 .writes()
                 .iter()
-                .any(|write| write.starts_with(b"G91 G21 G94 G38.2"))
+                .any(|write| write.starts_with(b"G91 G21 G94 G38.3"))
             {
                 break;
             }

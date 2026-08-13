@@ -96,8 +96,9 @@ typed Z contact operation; the lamp state itself grants no motion capability.
 
 The selected profile stores plate thickness, maximum downward search, contact
 feed, retract distance, retract feed, and a typed Off / Work Zero / Heightmap
-mode. A zero thickness means "not measured" and blocks one-point contact
-motion. Selecting Work Zero changes the ordinary work-zero UI: the combined
+mode. A zero thickness means "not measured" and blocks the portable-plate Work
+Zero operation; Heightmap may deliberately calibrate direct conductive stock at
+zero offset. Selecting Work Zero changes the ordinary work-zero UI: the combined
 action writes X/Y only, manual `Z=0` is disabled with the label "Z задаётся
 щупом", and the typed contact action becomes available. Disabling it restores
 manual Z zero and disables contact motion without disabling electrical `Pn:P`
@@ -113,24 +114,31 @@ sequence:
    an installed probe profile, and an open `P` input.
 2. Read `$G`, bind the operation to the active G54-G59, and retain the original
    unit, distance, and feed modes.
-3. Send metric incremental `G38.2 Z-... F...` with a timeout derived from search
+3. Send metric incremental `G38.3 Z-... F...` with a timeout derived from search
    distance/feed plus five seconds. The ordinary two-second command timeout is
    unchanged for every other command. The actor polls that response in short
    slices, so realtime status, Hold, and confirmed Soft Reset remain available;
    every non-realtime request is queued until probing has finished.
-4. Read `$#`, require `PRB:...:1`, then write `G10 L20 Pn Z<thickness>` and read
-   `$#` again to verify the resulting contact work coordinate.
-5. Leave probe motion mode with `G0`, restore the original G20/G21, G90/G91, and
+4. After terminal `ok`, continue polling status until fresh `Idle`. GRBL may
+   acknowledge the block while the status stream still reports `Run`; neither
+   `$#` nor `G10` is allowed during that transition.
+5. Read `$#`, require `PRB:...:1`, then write `G10 L20 Pn Z<thickness>`, reread
+   `$#`, and verify the new value against a fresh work-position snapshot.
+6. Leave probe motion mode with `G0`, restore the original G20/G21, G90/G91, and
    G93/G94 state, issue a bounded incremental `$J=` retract, and poll until
    fresh `Idle`. The expected final work Z is `plate thickness + retract`.
 
 The UI cannot send a raw probe line or choose a different WCS. A plate already
-touching the cutter blocks the cycle before motion. `ALARM:5` or any missing
-contact evidence leaves Z unchanged and requires normal controller recovery.
+touching the cutter blocks the cycle before motion. `G38.3` keeps a bounded miss
+out of `ALARM:5`; Millo requires `PRB:...:1`, leaves Z unchanged on a miss, and
+returns the full search distance. Other alarm/reset evidence still uses normal
+controller recovery.
 While contact is moving, the dialog replaces Save with `Остановить касание`;
 that action sends Hold and then consumes a fresh two-stage Soft Reset challenge.
-This implementation is covered against Mock GRBL; no physical `G38.2` was sent
-while adding the feature.
+The first physical direct-surface attempts exposed a valid GRBL ordering where
+`PRB` and terminal `ok` were followed by a short-lived `Run` status. The actor
+now waits for fresh `Idle`; Mock GRBL reproduces `ok -> Run -> Idle` so this
+hardware race remains covered without moving a physical machine in CI.
 
 ## Heightmap procedure
 
@@ -142,12 +150,22 @@ Density presets target approximately 20, 10, or 5 mm spacing, with bounded
 custom X/Y point counts. A separate interpolation grid changes only the surface
 rendering, never the number of physical contacts.
 
+The operator first touches the highest intended point and establishes surface
+Z0; no stock thickness measurement is required for direct conductive probing.
+The safe travel plane is `surface Z0 + clearance`. For strong relief, maximum
+surface variation is the bounded distance below that highest point that each
+probe may search. It must cover the expected relief plus margin, but it remains
+finite so a missing surface cannot send Z downward indefinitely.
+
 For each serpentine point the command actor requires connected stable Idle and
-an open probe input, raises to absolute work clearance Z, moves absolute work
-XY, executes bounded `G38.2`, reads `$#`, derives the active-WCS surface Z, and
-raises before continuing. It never writes `G10`. Hold pauses the operation;
-Resume continues; confirmed Soft Reset cancels it. A post-contact failure makes
-a best-effort safe-Z raise and modal restoration.
+an open probe input, raises to the absolute safe plane, moves absolute work XY,
+executes bounded `G38.3`, waits for fresh `Idle` after terminal acknowledgement,
+reads `$#`, derives the active-WCS surface Z, and raises before continuing. It
+never writes `G10`. Hold pauses the operation; Resume continues; confirmed Soft
+Reset cancels it. A post-contact failure makes a best-effort safe-Z raise and
+modal restoration. The panel draft is persisted per machine so closing the
+dialog or unlocking an alarm does not erase the perimeter and density; physical
+surface calibration is intentionally never persisted as valid evidence.
 
 `surface-session.json` atomically checkpoints the pending operation beside the
 last completed active map. Only all successful contacts replace active data.

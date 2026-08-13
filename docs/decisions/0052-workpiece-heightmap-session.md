@@ -16,10 +16,11 @@ Millo keeps probe input visibility, one-point Z zero, and heightmap probing in
 one core workflow with three mutually exclusive modes: Off, Work Zero, and
 Heightmap. The Rust command actor owns the complete serpentine operation. It
 validates a bounded XY perimeter and grid, raises to absolute work clearance Z,
-moves one XY point, executes `G38.2`, reads `PRB` through `$#`, records surface Z
-without writing `G10`, and raises before the next point. Hold, Resume, and Soft
-Reset remain preemptive. A failure after contact attempts safe-Z and modal-state
-cleanup before publishing a failed snapshot.
+moves one XY point, executes `G38.3`, waits for fresh `Idle` after terminal
+acknowledgement, reads `PRB` through `$#`, records surface Z without writing
+`G10`, and raises before the next point. Hold, Resume, and Soft Reset remain
+preemptive. A failure after contact attempts safe-Z and modal-state cleanup
+before publishing a failed snapshot.
 
 Map data lives in `surface-session.json`, separate from machine profiles. A
 pending map is checkpointed atomically while the preceding active map remains
@@ -45,6 +46,15 @@ outline, top/isometric views, and optional interpolation wireframe.
 The ordinary 19.1 mm touch plate setting is never inherited by a heightmap.
 Heightmap contact is either direct conductive stock with zero offset or an
 explicit fixed plate covering every point.
+
+Direct probing begins with an explicit surface calibration at the highest point
+of the intended perimeter. That contact establishes Z0; the operator does not
+measure arbitrary stock thickness. Safe travel is above that Z0. A separate
+bounded surface-variation value controls how far below the highest point each
+grid contact may search, which supports relief while preserving a finite miss
+condition. Per-machine UI drafts survive dialog closure, but successful physical
+calibration never does: any close, reset, disconnect, or relevant setting change
+requires a new touch.
 
 ## Consequences
 

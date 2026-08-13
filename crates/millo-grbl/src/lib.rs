@@ -205,7 +205,9 @@ const fn coordinate_system_parameter(coordinate_system: WorkCoordinateSystem) ->
 }
 
 pub fn encode_z_probe(max_travel_mm: f64, feed_mm_per_min: f64) -> String {
-    format!("G91 G21 G94 G38.2 Z-{max_travel_mm:.3} F{feed_mm_per_min:.3}")
+    // G38.3 keeps a bounded probe miss recoverable by the host. Millo verifies
+    // PRB explicitly and restores Z instead of leaving GRBL in ALARM:5.
+    format!("G91 G21 G94 G38.3 Z-{max_travel_mm:.3} F{feed_mm_per_min:.3}")
 }
 
 pub fn encode_z_retract(distance_mm: f64, feed_mm_per_min: f64) -> String {
@@ -631,7 +633,7 @@ mod tests {
     fn encodes_guarded_z_probe_offset_and_retract_commands() {
         assert_eq!(
             encode_z_probe(10.0, 25.0),
-            "G91 G21 G94 G38.2 Z-10.000 F25.000"
+            "G91 G21 G94 G38.3 Z-10.000 F25.000"
         );
         assert_eq!(
             encode_set_work_value(WorkAxis::Z, WorkCoordinateSystem::G54, 19.1),

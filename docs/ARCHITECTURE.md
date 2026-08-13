@@ -178,7 +178,7 @@ the physical-run operator pause state while GRBL is in Check.
   the prepared sender without writing a G-code block.
 - Heightmap Start uses the same durable-start shape. `prepare_heightmap` performs
   bounded-plan, fresh-Idle, probe-input, WCS and modal checks but does not publish
-  an active operation or send `$J`/`G38.2`. Tauri atomically creates the pending
+  an active operation or send `$J`/`G38.3`. Tauri atomically creates the pending
   workpiece session, then commits the exact operation sequence. A failed write
   discards the preparation; Reset may preempt either phase. While prepared, the
   actor rejects every ordinary machine command with typed Busy, so no motion can
@@ -312,6 +312,10 @@ does not schedule or execute controller I/O.
   pending replacement beside the last complete map. The profile stores only
   probe hardware/settings and the Off / Work Zero / Heightmap mode. See ADR
   0052.
+- Probe terminal acknowledgement and physical motion state are separate actor
+  phases. Both one-point Z calibration and every heightmap sample wait through
+  transient `Run` until fresh `Idle` before `$#`, `G10`, or the next grid phase;
+  a bounded settle timeout fails closed with the last observed mode.
 - Heightmap rendering has no machine capability. A pure model derives the
   auto-perimeter, physical spacing, matrix, and color scale; Three.js consumes
   immutable map/program DTOs for one perimeter, probe points, outside-path

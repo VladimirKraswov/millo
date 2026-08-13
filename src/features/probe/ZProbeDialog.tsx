@@ -28,6 +28,7 @@ interface ZProbeDialogProps {
   readonly onError: (error?: string) => void;
   readonly onSaveSettings: (settings: ZProbeSettings) => Promise<void>;
   readonly onSnapshot: (snapshot: ControllerSnapshot) => void;
+  readonly onUnlock: () => Promise<ControllerSnapshot>;
   readonly open: boolean;
   readonly profileId?: string;
   readonly program?: GcodeProgram;
@@ -51,6 +52,7 @@ export function ZProbeDialog({
   onError,
   onSaveSettings,
   onSnapshot,
+  onUnlock,
   open,
   profileId,
   program,
@@ -225,13 +227,17 @@ export function ZProbeDialog({
 
           {draft.mode === "heightmap" && (
             <HeightmapPanel
+              key={profileId ?? "unbound"}
               desktopRuntime={desktopRuntime}
               gateway={heightmapGateway}
+              zProbeGateway={gateway}
               machineProfileId={profileId}
               machineTravel={machineTravel}
               onAbort={onAbort}
               onError={onError}
+              onSnapshot={onSnapshot}
               onSaveMode={() => onSaveSettings(draft)}
+              onUnlock={onUnlock}
               program={program}
               snapshot={snapshot}
             />

@@ -759,12 +759,15 @@ to `Idle`, and measured X `+0.000`, Y `+0.000`, Z `+0.100 mm`.
 
 ## Contact probe regression
 
-The typed Z-probe suite is hardware-free. Mock GRBL models a configurable
+The repeatable typed Z-probe suite is hardware-free. Mock GRBL models a configurable
 contact distance, emits `PRB:...:1`, updates the active WCS after `G10 L20`, and
 reports the bounded `$J=` retract through `Jog` back to `Idle`. Tests assert the
 exact probe/offset/retract commands, the contact machine position, final work Z,
 and neutral `G0 G21 G90 G94` restoration. A delayed-response fixture proves
 that confirmed Soft Reset preempts the probe and prevents any later `G10`.
+An acknowledgement-order fixture reproduces the physical controller's
+`PRB -> ok -> Run -> Idle` sequence and proves `G10` is not written before
+fresh `Idle`.
 Separate cases prove that an already
 active `Pn:P` or an uninstalled profile probe performs no probe movement. UI
 tests cover the stable clickable lamp, measured-thickness validation, live
@@ -775,7 +778,7 @@ An actor concurrency fixture starts a delayed contact, submits Work Zero while
 the probe is active, and asserts an immediate `MachineOperationBusy`, no `G10`,
 and no delayed replay after Soft Reset.
 
-Automated tests never execute `G38.2` on a physical transport. The first real
+Automated tests never execute `G38.3` on a physical transport. A real
 contact test must start with a measured plate, stationary spindle, open input,
 short search distance, low feed, and the operator at the machine.
 
@@ -788,11 +791,12 @@ disarming. Domain fixtures preserve legacy `useForWorkZero` profiles while an
 explicit new mode wins.
 
 Command-actor tests execute a 2 x 2 map on Mock GRBL, assert exact XY order and
-four contacts, and prove no `G10 L20` is written. Failure after a delayed contact
+four contacts, prove every terminal acknowledgement settles to `Idle`, and prove
+no `G10 L20` is written. Failure after a delayed contact
 must attempt a second absolute safe-Z command and restore modal state. A Soft
 Reset fixture cancels before another probe point. A durable-start regression
 holds an operation after `prepare_heightmap`, yields the actor repeatedly, and
-asserts that neither `$J` nor `G38.2` appears and the public operation remains
+asserts that neither `$J` nor `G38.3` appears and the public operation remains
 Idle. It then discards the exact operation sequence and proves that no motion was
 published. Production Tauri persists the pending surface session between this
 prepare phase and the matching commit, so fast mock runs cannot outrun their

@@ -35,6 +35,8 @@ struct MockState {
     probe_succeeded: bool,
     probe_trigger_distance_mm: Option<f64>,
     probe_delay_slices: usize,
+    probe_settle_status_polls: u32,
+    probe_settle_polls_remaining: u32,
     firmware_options: String,
     overrides: [u16; 3],
 }
@@ -177,6 +179,10 @@ impl MockControl {
         self.lock().probe_delay_slices = read_slices;
     }
 
+    pub fn set_probe_settle_status_polls(&self, polls: u32) {
+        self.lock().probe_settle_status_polls = polls;
+    }
+
     fn lock(&self) -> MutexGuard<'_, MockState> {
         self.state
             .lock()
@@ -216,6 +222,8 @@ impl MockTransport {
                     probe_succeeded: false,
                     probe_trigger_distance_mm: Some(1.0),
                     probe_delay_slices: 0,
+                    probe_settle_status_polls: 0,
+                    probe_settle_polls_remaining: 0,
                     firmware_options: "V,15,128".to_owned(),
                     overrides: [100, 100, 100],
                 })),
@@ -258,6 +266,12 @@ impl Transport for MockTransport {
                 cycle
             } else {
                 let status_line = state.status_line.clone();
+                if status_line.starts_with("<Run") && state.probe_settle_polls_remaining > 0 {
+                    state.probe_settle_polls_remaining -= 1;
+                    if state.probe_settle_polls_remaining == 0 {
+                        state.status_line = status_with_mode(&status_line, "Idle", 0.0);
+                    }
+                }
                 if status_line.starts_with("<Jog") {
                     state.jog_polls_remaining = state.jog_polls_remaining.saturating_sub(1);
                     if state.jog_polls_remaining == 0 {
@@ -292,6 +306,7 @@ impl Transport for MockTransport {
             state.status_line = DEFAULT_STATUS.to_owned();
             state.overrides = [100, 100, 100];
             state.jog_polls_remaining = 0;
+            state.probe_settle_polls_remaining = 0;
             state.active_reads.clear();
             state
                 .active_reads
@@ -335,10 +350,35 @@ impl Transport for MockTransport {
         } else if let Some(probe) = parse_z_probe(data) {
             let trigger = state.probe_trigger_distance_mm;
             if trigger.is_none_or(|distance| distance > probe.max_travel_mm) {
-                state.status_line = status_with_mode(&state.status_line, "Alarm", 0.0);
-                state
-                    .active_reads
-                    .push_back(MockRead::Line("ALARM:5".to_owned()));
+                if probe.alarm_on_miss {
+                    state.status_line = status_with_mode(&state.status_line, "Alarm", 0.0);
+                    state
+                        .active_reads
+                        .push_back(MockRead::Line("ALARM:5".to_owned()));
+                } else {
+                    let mut machine_position =
+                        status_position(&state.status_line).unwrap_or([0.0; 3]);
+                    machine_position[2] -= probe.max_travel_mm;
+                    state.last_probe = machine_position;
+                    state.probe_succeeded = false;
+                    let work_position =
+                        subtract_position(machine_position, state.work_offsets[state.active_wcs]);
+                    state.probe_settle_polls_remaining = state.probe_settle_status_polls;
+                    let mode = if state.probe_settle_polls_remaining > 0 {
+                        "Run"
+                    } else {
+                        "Idle"
+                    };
+                    state.status_line =
+                        format_status(mode, machine_position, work_position, probe.feed_mm_per_min);
+                    state.active_reads.extend(lines(&[
+                        &format!(
+                            "[PRB:{:.3},{:.3},{:.3}:0]",
+                            machine_position[0], machine_position[1], machine_position[2]
+                        ),
+                        "ok",
+                    ]));
+                }
             } else {
                 let mut machine_position = status_position(&state.status_line).unwrap_or([0.0; 3]);
                 machine_position[2] -= trigger.unwrap_or_default();
@@ -346,7 +386,14 @@ impl Transport for MockTransport {
                 state.probe_succeeded = true;
                 let work_position =
                     subtract_position(machine_position, state.work_offsets[state.active_wcs]);
-                state.status_line = format_status("Idle", machine_position, work_position, 0.0);
+                state.probe_settle_polls_remaining = state.probe_settle_status_polls;
+                let mode = if state.probe_settle_polls_remaining > 0 {
+                    "Run"
+                } else {
+                    "Idle"
+                };
+                state.status_line =
+                    format_status(mode, machine_position, work_position, probe.feed_mm_per_min);
                 let delay_slices = state.probe_delay_slices;
                 state
                     .active_reads
@@ -496,6 +543,8 @@ struct MockWorkZero {
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct MockZProbe {
     max_travel_mm: f64,
+    feed_mm_per_min: f64,
+    alarm_on_miss: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -590,12 +639,19 @@ fn parse_z_probe(data: &[u8]) -> Option<MockZProbe> {
         .ok()?
         .trim_end_matches(['\r', '\n']);
     let words = command.split_whitespace().collect::<Vec<_>>();
-    if words.len() != 6 || words[..4] != ["G91", "G21", "G94", "G38.2"] {
+    if words.len() != 6
+        || words[..3] != ["G91", "G21", "G94"]
+        || !matches!(words[3], "G38.2" | "G38.3")
+    {
         return None;
     }
     let max_travel_mm = -words[4].strip_prefix('Z')?.parse::<f64>().ok()?;
-    let _feed = words[5].strip_prefix('F')?.parse::<f64>().ok()?;
-    (max_travel_mm > 0.0).then_some(MockZProbe { max_travel_mm })
+    let feed_mm_per_min = words[5].strip_prefix('F')?.parse::<f64>().ok()?;
+    (max_travel_mm > 0.0).then_some(MockZProbe {
+        max_travel_mm,
+        feed_mm_per_min,
+        alarm_on_miss: words[3] == "G38.2",
+    })
 }
 
 fn parse_setting_write(data: &[u8]) -> Option<(u16, String)> {

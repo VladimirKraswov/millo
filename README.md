@@ -103,13 +103,16 @@ Probe operation is now one core workflow rather than an optional UI plugin.
 Profiles choose Off, one-point Z Work Zero, or Heightmap mode. Heightmap probing
 uses an actor-owned bounded serpentine plan, preserves the active WCS, records
 `PRB` without mutating `G10`, and keeps Hold/Reset available between short state
-machine steps. A durable prepare/persist/commit barrier prevents the first
+machine steps. GRBL terminal acknowledgement is treated separately from motion
+completion: the actor waits for fresh `Idle` before parameter reads, offset
+writes, or the next map point. A durable prepare/persist/commit barrier prevents the first
 heightmap movement until its pending session is on disk. The current workpiece
 map is checkpointed in a separate atomic `surface-session.json`; a partial
 replacement never overwrites the preceding completed map, and restart always
 requires fixture/work-zero reconfirmation.
-The map workspace provides automatic program bounds with margin, physical grid
-density, perimeter validation, coordinate-labelled values, and a Three.js
+The map workspace first finds the highest surface point as Z0, then provides
+automatic program bounds with margin, flat/strong-relief search presets,
+physical grid density, perimeter validation, coordinate-labelled values, and a Three.js
 low-to-high surface view. See [ADR 0052](docs/decisions/0052-workpiece-heightmap-session.md).
 
 Returning to an existing work zero is a different typed motion command. The

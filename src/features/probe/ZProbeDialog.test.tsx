@@ -28,6 +28,7 @@ describe("ZProbeDialog", () => {
         onError={() => undefined}
         onSaveSettings={async () => undefined}
         onSnapshot={() => undefined}
+        onUnlock={async () => emptySnapshot}
         open
         profileId="machine-0001"
         probeInstalled
@@ -84,6 +85,7 @@ describe("ZProbeDialog", () => {
         onError={() => undefined}
         onSaveSettings={async () => undefined}
         onSnapshot={() => undefined}
+        onUnlock={async () => emptySnapshot}
         open
         profileId="machine-0001"
         probeInstalled

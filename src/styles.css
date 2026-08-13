@@ -3738,6 +3738,167 @@ textarea:focus-visible {
   border-bottom: 1px solid #2c373e;
 }
 
+.heightmap-settings .heightmap-surface-setup {
+  padding: 10px;
+  border: 1px solid #344149;
+  border-radius: 5px;
+  background: #10181d;
+}
+
+.heightmap-settings .heightmap-surface-setup + section {
+  padding-top: 13px;
+}
+
+.heightmap-surface-setup.is-ready {
+  border-color: #397760;
+  background: #10231c;
+}
+
+.heightmap-surface-setup.is-alarm {
+  border-color: #8b4e52;
+  background: #251719;
+}
+
+.heightmap-surface-state {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 47px;
+}
+
+.heightmap-surface-icon {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #40505a;
+  border-radius: 50%;
+  color: #8fa0a8;
+}
+
+.heightmap-surface-setup.is-ready .heightmap-surface-icon {
+  border-color: #4f9a7d;
+  color: #7ad9b5;
+}
+
+.heightmap-surface-state div {
+  display: grid;
+  gap: 3px;
+}
+
+.heightmap-surface-state strong {
+  color: #d7e0e4;
+  font-size: 9px;
+}
+
+.heightmap-surface-state small {
+  color: #829097;
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.heightmap-surface-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 6px;
+  margin: 7px 0;
+}
+
+.heightmap-shape-selector {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+  margin: 7px 0;
+}
+
+.heightmap-shape-selector button {
+  display: grid;
+  min-height: 40px;
+  align-content: center;
+  gap: 2px;
+  padding: 0 8px;
+  border: 1px solid #344149;
+  border-radius: 3px;
+  color: #9aa8ae;
+  background: #11191e;
+  text-align: left;
+}
+
+.heightmap-shape-selector button[aria-pressed="true"] {
+  border-color: #53987f;
+  color: #dff6ed;
+  background: #173128;
+}
+
+.heightmap-shape-selector strong {
+  font-size: 8px;
+}
+
+.heightmap-shape-selector small {
+  color: #76858c;
+  font-size: 7px;
+}
+
+.heightmap-surface-controls > label {
+  display: grid;
+  gap: 4px;
+  color: #7e8d94;
+  font-size: 8px;
+}
+
+.heightmap-surface-controls > label > span:last-child {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.heightmap-surface-controls input {
+  width: 100%;
+  min-width: 0;
+  height: 29px;
+  padding: 0 6px;
+  border: 1px solid #344149;
+  border-radius: 3px;
+  color: #e0e7ea;
+  background: #0d1418;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+}
+
+.heightmap-surface-actions {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px;
+}
+
+.heightmap-surface-actions:has(> button:only-child) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.heightmap-surface-actions button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid #4f987e;
+  border-radius: 4px;
+  color: #dff7ee;
+  background: #1b503f;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.heightmap-surface-actions .is-unlock {
+  border-color: #9b5c60;
+  color: #ffd6d6;
+  background: #51292c;
+}
+
 .heightmap-settings section + section {
   padding-top: 13px;
 }
@@ -3908,6 +4069,43 @@ textarea:focus-visible {
   margin-top: 10px;
 }
 
+.heightmap-zero-plate {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid #2e3a41;
+  background: #0e1519;
+}
+
+.heightmap-zero-plate label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #99a7ad;
+  font-size: 8px;
+}
+
+.heightmap-zero-plate label > span:last-child {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.heightmap-zero-plate input[type="number"] {
+  width: 70px;
+  height: 27px;
+  border: 1px solid #344149;
+  color: #e0e7ea;
+  background: #0a1013;
+}
+
+.heightmap-zero-plate > small {
+  color: #718087;
+  font-size: 7px;
+  line-height: 1.4;
+}
+
 .heightmap-contact-mode label {
   display: flex;
   align-items: center;
@@ -3931,6 +4129,13 @@ textarea:focus-visible {
   grid-column: 1 / -1;
   align-items: center;
   gap: 5px;
+}
+
+.heightmap-safe-z-note {
+  margin: 7px 0 0;
+  color: #718087;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
 }
 
 .heightmap-progress {
@@ -4035,6 +4240,13 @@ textarea:focus-visible {
   color: #74828a;
   font-size: 8px;
   line-height: 1.45;
+}
+
+.heightmap-status-message.is-error {
+  padding: 7px 8px;
+  border-left: 2px solid #df686e;
+  color: #eba0a3;
+  background: #281719;
 }
 
 .heightmap-values-wrap {
