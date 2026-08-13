@@ -807,6 +807,13 @@ without dispatching motion, accepts a fresh `Idle` within three seconds, and
 still proves that neither `$J` nor `G38.x` is written before durable commit.
 Companion fixtures prove that realtime Hold remains serviceable during this
 wait and that an active sender is rejected as Busy without emitting `G38.x`.
+The LUNYEE hardware regression fixture reports host-issued `$J` retract, safe-Z,
+and XY moves as `Run` rather than `Jog`; both one-point calibration and a full
+serpentine map must complete within computed motion deadlines. A sparse-status
+fixture starts with only `MPos`, proves `$#` is read before motion, derives XYZ,
+and prevents the old three-second timeout on a long first move. The full-grid
+fixture also asserts a final safe-Z/XY/Z return to the captured start position;
+`Completed` is emitted only after this return settles to fresh `Idle`.
 The IPC contract is pinned on both sides: Vitest serializes the complete
 webview request with `originXMm`, `originYMm` and `clearanceZMm`, while a Rust
 fixture deserializes that same camelCase shape into `HeightmapStartRequest`.

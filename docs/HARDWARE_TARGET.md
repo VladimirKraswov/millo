@@ -176,12 +176,38 @@ modal restoration. The panel draft is persisted per machine so closing the
 dialog or unlocking an alarm does not erase the perimeter and density; physical
 surface calibration is intentionally never persisted as valid evidence.
 
+The operator locates Z0 over the highest expected part of the perimeter before
+starting the grid. That establishes the initial transit plane. Every successful
+sample then raises the plane when necessary to `highest measured surface Z +
+contact offset + clearance`; it never lowers an already conservative plane.
+After the final contact the actor raises to that measured safe plane, returns XY
+to the exact work position captured before the first move, and restores the
+captured Z vertically. The operation is not published as `Completed` until this
+return and modal restoration both reach fresh `Idle`. If a sparse post-reset
+status omits `WPos/WCO`, Millo derives work coordinates from `MPos` and `$#`;
+unknown travel falls back to the profile envelope for timeout calculation.
+
 After pure setup validation, the arbiter tolerates the short `Run`/`Jog` tail
 reported by GRBL after a previous acknowledged move. It sends status queries
 only and waits up to three seconds for fresh `Idle`; it never starts probing
 from `Run`. Alarm, reset acknowledgement, another controller mode, timeout, or
 loss of connection remain hard blockers and are reported separately in the
 operator UI.
+
+The observed LUNYEE GRBL 1.1f controller reports some accepted `$J` moves as
+`Run` instead of canonical `Jog`. Millo therefore treats both `Jog` and `Run` as
+in-progress only inside a host-initiated, duration-bounded heightmap move. This
+does not weaken operation-start readiness: unsolicited `Run` is still a blocker,
+and Alarm, Hold, reset, disconnect, or a motion timeout still stop the workflow.
+
+The repeatable LUNYEE hardware smoke uses
+`cargo run -p millo-command --example serial_heightmap_smoke -- <port> <width>
+<height> <columns> <rows> <surface-session-path> <max-depth>`. On 2026-08-13 a
+50 x 50 mm, 6 x 6 direct-contact run completed 36/36 samples on the target board
+and persisted Z values from -1.519 to -0.625 mm. A following 2 x 2 mm regression
+completed 4/4 with the new return-to-start phases. These are hardware-specific
+smoke results, not a substitute for checking probe wiring and clearance on a
+different machine.
 
 `surface-session.json` atomically checkpoints the pending operation beside the
 last completed active map. Only all successful contacts replace active data.

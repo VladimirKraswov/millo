@@ -333,11 +333,17 @@ export function HeightmapPanel({
   const statusMessage = operationMessage ?? contactConfigurationError ?? validationError ??
     (programOutside ? "Задание выходит за периметр карты. Исправьте область или снова нажмите «Авто по заданию»." : undefined) ??
     (recoveredMap ? "Карта восстановлена для просмотра. Перед новым измерением снова найдите поверхность." : undefined);
+  const returningToStart = active && operation.progress.total > 0 &&
+    operation.progress.measured === operation.progress.total && operation.currentSequence == null;
   const progressLabel = active
-    ? operation.state === "paused" ? "Карта на паузе" : "Снимаю карту"
+    ? operation.state === "paused"
+      ? "Карта на паузе"
+      : returningToStart
+        ? "Возвращаю фрезу"
+        : "Снимаю карту"
     : operation.state === "failed" || operation.state === "cancelled"
       ? "Измерение остановлено"
-      : operation.state === "completed" ? "Карта готова" : "Последняя карта сохранена";
+      : operation.state === "completed" ? "Карта готова · фреза возвращена" : "Последняя карта сохранена";
   const surfaceStatusLabel = snapshot.alarm
     ? `ALARM:${snapshot.alarm.code ?? "?"}`
     : surfaceReady
@@ -497,7 +503,7 @@ export function HeightmapPanel({
             </>
           ) : <button className="is-primary" disabled={controlsBlocked || !desktopRuntime || !surfaceReady || Boolean(contactConfigurationError) || Boolean(validationError) || programOutside || snapshot.connection !== "connected" || snapshot.machine.mode !== "idle" || Boolean(snapshot.machine.pins?.probe)} onClick={() => void start()} type="button"><Crosshair size={15} /> {busy ? "Выполняется…" : surfaceReady ? `Снять карту · ${totalPoints} точек` : "Сначала найдите поверхность"}</button>}
         </div>
-        <p aria-live="polite" className={`heightmap-status-message${operationMessage || contactConfigurationError || validationError || programOutside ? " is-error" : ""}${statusMessage ? "" : " is-empty"}`}>{statusMessage ?? "Состояние карты без ошибок"}</p>
+        <p aria-live="polite" className={`heightmap-status-message${operationMessage || contactConfigurationError || validationError || programOutside ? " is-error" : ""}${statusMessage ? "" : " is-empty"}`}>{statusMessage ?? "После последней точки: безопасный подъём → исходные X/Y → исходный Z"}</p>
         </div>
       </div>
     </div>

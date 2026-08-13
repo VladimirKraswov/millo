@@ -36,6 +36,7 @@ describe("HeightmapPanel", () => {
     expect(markup).not.toContain("Сильный рельеф");
     expect(markup).not.toContain("Подтвердить ту же установку");
     expect(markup).toContain("Это толщина съёмной шайбы, а не заготовки");
+    expect(markup).toContain("безопасный подъём → исходные X/Y → исходный Z");
     expect(markup).not.toContain("Пластина для Z0");
   });
 });

@@ -37,6 +37,7 @@ struct MockState {
     probe_delay_slices: usize,
     probe_settle_status_polls: u32,
     probe_settle_polls_remaining: u32,
+    jog_reports_run: bool,
     firmware_options: String,
     overrides: [u16; 3],
 }
@@ -183,6 +184,10 @@ impl MockControl {
         self.lock().probe_settle_status_polls = polls;
     }
 
+    pub fn set_jog_reports_run(&self, enabled: bool) {
+        self.lock().jog_reports_run = enabled;
+    }
+
     fn lock(&self) -> MutexGuard<'_, MockState> {
         self.state
             .lock()
@@ -224,6 +229,7 @@ impl MockTransport {
                     probe_delay_slices: 0,
                     probe_settle_status_polls: 0,
                     probe_settle_polls_remaining: 0,
+                    jog_reports_run: false,
                     firmware_options: "V,15,128".to_owned(),
                     overrides: [100, 100, 100],
                 })),
@@ -272,7 +278,9 @@ impl Transport for MockTransport {
                         state.status_line = status_with_mode(&status_line, "Idle", 0.0);
                     }
                 }
-                if status_line.starts_with("<Jog") {
+                if (status_line.starts_with("<Jog") || status_line.starts_with("<Run"))
+                    && state.jog_polls_remaining > 0
+                {
                     state.jog_polls_remaining = state.jog_polls_remaining.saturating_sub(1);
                     if state.jog_polls_remaining == 0 {
                         state.status_line = status_with_mode(&status_line, "Idle", 0.0);
@@ -312,7 +320,9 @@ impl Transport for MockTransport {
                 .active_reads
                 .push_back(MockRead::Line("Grbl 1.1h ['$' for help]".to_owned()));
         } else if data == [0x85] {
-            if state.status_line.starts_with("<Jog") {
+            if state.status_line.starts_with("<Jog")
+                || (state.status_line.starts_with("<Run") && state.jog_polls_remaining > 0)
+            {
                 state.status_line = status_with_mode(&state.status_line, "Idle", 0.0);
                 state.jog_polls_remaining = 0;
             }
@@ -415,7 +425,8 @@ impl Transport for MockTransport {
             position[0] = target_x;
             position[1] = target_y;
             let work_position = subtract_position(position, state.work_offsets[state.active_wcs]);
-            state.status_line = format_status("Jog", position, work_position, jog.feed_mm_per_min);
+            let mode = if state.jog_reports_run { "Run" } else { "Jog" };
+            state.status_line = format_status(mode, position, work_position, jog.feed_mm_per_min);
             state.jog_polls_remaining = mock_jog_status_polls(MockJog {
                 axis: 0,
                 distance_mm,
@@ -437,7 +448,8 @@ impl Transport for MockTransport {
                 jog.distance_mm
             };
             let work_position = subtract_position(position, state.work_offsets[state.active_wcs]);
-            state.status_line = format_status("Jog", position, work_position, jog.feed_mm_per_min);
+            let mode = if state.jog_reports_run { "Run" } else { "Jog" };
+            state.status_line = format_status(mode, position, work_position, jog.feed_mm_per_min);
             state.jog_polls_remaining = mock_jog_status_polls(MockJog { distance_mm, ..jog });
             state
                 .active_reads

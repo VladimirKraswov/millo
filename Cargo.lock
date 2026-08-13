@@ -2030,8 +2030,10 @@ dependencies = [
  "millo-run",
  "millo-safety",
  "millo-sender",
+ "millo-serial",
  "millo-settings",
  "millo-transport",
+ "serde_json",
  "thiserror 2.0.20",
  "tokio",
 ]

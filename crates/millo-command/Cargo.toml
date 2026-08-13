@@ -22,3 +22,9 @@ tokio.workspace = true
 
 [dev-dependencies]
 millo-mock = { path = "../millo-mock" }
+millo-serial = { path = "../millo-serial" }
+serde_json.workspace = true
+
+[[example]]
+name = "serial_heightmap_smoke"
+required-features = []
