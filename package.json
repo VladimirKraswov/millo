@@ -25,6 +25,8 @@
     "verify": "npm test && npm run build && npm run lint:rust",
     "bundle:mac:alpha": "APPLE_SIGNING_IDENTITY=- tauri build --bundles dmg",
     "bundle:linux": "tauri build --bundles deb,appimage",
+    "virtual-controller": "cargo run -p millo-virtual-controller",
+    "virtual-controller:install:mac": "bash scripts/install-virtual-controller-macos.sh",
     "tauri": "tauri"
   },
   "dependencies": {

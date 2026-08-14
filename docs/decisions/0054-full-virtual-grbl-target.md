@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted.
+Superseded by ADR 0055. Retained as history of the in-process approach.
 
 ## Context
 

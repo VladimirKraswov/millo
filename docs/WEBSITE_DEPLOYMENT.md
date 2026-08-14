@@ -54,3 +54,20 @@ The website regression suite derives the desktop version, release channel, and
 sequence from `package.json`, then checks the DMG, AppImage, and DEB links. A
 release metadata change therefore cannot pass `npm run test:site` while the
 public download URLs are stale.
+
+## Mandatory desktop publication step
+
+Every completed desktop change uses the same close-out sequence:
+
+1. Run `npm run verify`.
+2. Build the alpha DMG with `npm run bundle:mac:alpha`.
+3. Replace `/Applications/Millo.app` from the mounted DMG, clear quarantine for
+   the local ad-hoc alpha, verify with `codesign --verify --deep --strict`, and
+   launch the installed bundle.
+4. Recalculate the DMG SHA-256 and update `SHA256SUMS.txt`.
+5. Upload the DMG and checksum file to `v0.1.1-alpha.2` with `--clobber`.
+6. Verify the public GitHub asset URL used by `millo-cnc.ru`.
+
+Linux artifacts are rebuilt and replaced when the change affects a public
+release and a Linux builder is available; a macOS host cannot produce a valid
+AppImage/DEB through the native Tauri target.

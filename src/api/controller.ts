@@ -193,23 +193,6 @@ export const onSurfaceSession = (
 export const cancelJog = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("cancel_jog");
 
-export const triggerMockReset = (): Promise<void> =>
-  invoke<void>("mock_trigger_reset");
-
-export const triggerMockRun = (): Promise<void> =>
-  invoke<void>("mock_start_run");
-
-export const triggerMockAlarm = (code = 3): Promise<void> =>
-  invoke<void>("mock_trigger_alarm", { code });
-
-export const clearMockAlarm = (): Promise<void> => invoke<void>("mock_clear_alarm");
-
-export const triggerMockTimeout = (): Promise<void> =>
-  invoke<void>("mock_trigger_timeout");
-
-export const triggerMockDisconnect = (): Promise<void> =>
-  invoke<void>("mock_trigger_disconnect");
-
 export const onMachineState = (
   handler: (snapshot: ControllerSnapshot) => void,
 ): Promise<UnlistenFn> =>

@@ -1344,7 +1344,7 @@ mod tests {
 
         assert_eq!(
             inspection.firmware_version.as_deref(),
-            Some("1.1h.20240101")
+            Some("1.1h.20260814")
         );
         assert_eq!(
             inspection.settings.get("$30").map(String::as_str),

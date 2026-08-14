@@ -23,7 +23,6 @@ import {
 } from "./plugins/spoilboard-surfacing/createSpoilboardSurfacingPlugin";
 import {
   acknowledgeReset,
-  clearMockAlarm,
   connectTransport,
   confirmSoftReset,
   disconnect,
@@ -36,11 +35,6 @@ import {
   refreshStatus,
   requestSoftReset,
   rollbackControllerSetting,
-  triggerMockAlarm,
-  triggerMockDisconnect,
-  triggerMockRun,
-  triggerMockReset,
-  triggerMockTimeout,
   unlockAlarm,
   updateControllerSetting,
 } from "./api/controller";
@@ -95,7 +89,7 @@ import { tauriProgramGateway } from "./platform/program/tauriProgramGateway";
 import { tauriImageJobGateway } from "./platform/jobs/tauriImageJobGateway";
 import { tauriToolLibraryGateway } from "./platform/tooling/tauriToolLibraryGateway";
 import { tauriScriptPluginGateway } from "./platform/plugins/tauriScriptPluginGateway";
-import { tauriDryRunGateway } from "./platform/program/tauriDryRunGateway";
+import { tauriSenderStateGateway } from "./platform/program/tauriSenderStateGateway";
 import { tauriRealRunPreflightGateway } from "./platform/program/tauriRealRunPreflightGateway";
 import {
   emptySnapshot,
@@ -123,13 +117,11 @@ import type {
 } from "./shared/settings";
 import type { InstalledScriptPlugin } from "./shared/scriptPlugins";
 
-const mockTransport: TransportDescriptor = {
-  id: "mock",
-  kind: "mock",
-  label: "Mock GRBL",
-  detail: "Встроенный тестовый контроллер",
-  likelyGrbl: true,
-  matchReason: "Встроенный тестовый контроллер",
+const disconnectedTransport: TransportDescriptor = {
+  id: "",
+  kind: "serial",
+  label: "Serial controller",
+  likelyGrbl: false,
 };
 
 interface ProbeEstablishedZDatum {
@@ -175,12 +167,10 @@ export default function App() {
     pluginHost.machineState.current,
     pluginHost.machineState.current,
   );
-  const [transports, setTransports] = useState<TransportDescriptor[]>([
-    mockTransport,
-  ]);
-  const [selectedTransportId, setSelectedTransportId] = useState("mock");
+  const [transports, setTransports] = useState<TransportDescriptor[]>([]);
+  const [selectedTransportId, setSelectedTransportId] = useState("");
   const [activeTransport, setActiveTransport] =
-    useState<TransportDescriptor>(mockTransport);
+    useState<TransportDescriptor>(disconnectedTransport);
   const [baudRate, setBaudRate] = useState(115_200);
   const [likelyGrblOnly, setLikelyGrblOnly] = useState(true);
   const [inspection, setInspection] = useState<HardwareInspection>();
@@ -386,15 +376,6 @@ export default function App() {
     }
   };
 
-  const runMockAction = async (action: () => Promise<void>) => {
-    setUiError(undefined);
-    try {
-      await action();
-    } catch (error) {
-      setUiError(String(error));
-    }
-  };
-
   const returnToWorkOrigin = async (clearanceZMm: number): Promise<void> => {
     setBusy(true);
     setUiError(undefined);
@@ -587,6 +568,10 @@ export default function App() {
   };
 
   const connectSelectedTransport = async () => {
+    if (!selectedTransport.id) {
+      setUiError("Последовательный порт не выбран");
+      return;
+    }
     setInspection(undefined);
     setControllerSettings(undefined);
     setOnboardingDraft(undefined);
@@ -901,16 +886,11 @@ export default function App() {
           >
             <ProgramWorkspace
               desktopRuntime={desktopRuntime}
-              dryRunAvailable={
-                desktopRuntime &&
-                activeTransport.kind === "mock" &&
-                isControllerStableIdle(snapshot)
-              }
-              dryRunGateway={
+              senderGateway={
                 developmentFixture === "check-running"
                   ? previewFixtureCheckControlGateway
                   : desktopRuntime
-                    ? tauriDryRunGateway
+                    ? tauriSenderStateGateway
                     : undefined
               }
               gateway={
@@ -1020,16 +1000,10 @@ export default function App() {
         <ConnectionPanel
           actions={{
             onBaudRate: setBaudRate,
-            onClearMockAlarm: () => void runMockAction(clearMockAlarm),
             onConnect: () => void connectSelectedTransport(),
             onDisconnect: () => void disconnectController(),
             onDismissError: () => setUiError(undefined),
             onLikelyGrblOnly: setLikelyGrblOnly,
-            onMockAlarm: () => void runMockAction(() => triggerMockAlarm(3)),
-            onMockDisconnect: () => void runMockAction(triggerMockDisconnect),
-            onMockReset: () => void runMockAction(triggerMockReset),
-            onMockRun: () => void runMockAction(triggerMockRun),
-            onMockTimeout: () => void runMockAction(triggerMockTimeout),
             onOpenLog: () => setLogOpen(true),
             onRefreshStatus: () => void runAction(refreshStatus),
             onRefreshTransports: () => void discoverTransports(),

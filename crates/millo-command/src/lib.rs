@@ -5178,6 +5178,20 @@ mod tests {
         .unwrap()
     }
 
+    async fn wait_for_controller_idle(arbiter: &CommandArbiter) -> ControllerSnapshot {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = arbiter.refresh_status().await.unwrap();
+                if snapshot.machine.mode == MachineMode::Idle {
+                    return snapshot;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("virtual motion did not settle to Idle")
+    }
+
     async fn wait_for_heightmap(
         arbiter: &CommandArbiter,
         expected: HeightmapOperationState,
@@ -5708,7 +5722,7 @@ mod tests {
         arbiter.cancel_jog().await.unwrap();
         assert_eq!(control.writes().last(), Some(&vec![0x85]));
         assert_eq!(
-            arbiter.refresh_status().await.unwrap().machine.mode,
+            wait_for_controller_idle(&arbiter).await.machine.mode,
             MachineMode::Idle
         );
         task.abort();
@@ -5746,7 +5760,7 @@ mod tests {
                 MachineMode::Jog
             );
             assert_eq!(
-                arbiter.refresh_status().await.unwrap().machine.mode,
+                wait_for_controller_idle(&arbiter).await.machine.mode,
                 MachineMode::Idle
             );
         }
@@ -5802,11 +5816,7 @@ mod tests {
         assert!(blocked_while_moving.receipt.is_none());
         assert!(!blocked_while_moving.inspection.readiness.test_jog_ready);
 
-        for _ in 0..6 {
-            if arbiter.refresh_status().await.unwrap().machine.mode == MachineMode::Idle {
-                break;
-            }
-        }
+        wait_for_controller_idle(&arbiter).await;
         let second = arbiter
             .jog_pad_step(JogPadStepRequest {
                 confirmation: operator_confirmation(),
@@ -6911,6 +6921,7 @@ mod tests {
         let control = transport.control();
         control.set_probe_trigger_distance(Some(1.0));
         control.set_jog_distance_scale(35.0);
+        control.set_virtual_motion_enabled(false);
         let mut profile = HardwareProfile::first_machine();
         profile.probe_installed = true;
         profile.probe_mode = ProbeWorkflowMode::Heightmap;

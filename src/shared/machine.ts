@@ -109,7 +109,7 @@ export interface ControllerSnapshot {
   lastError?: string;
 }
 
-export type TransportKind = "mock" | "serial";
+export type TransportKind = "serial";
 
 export interface TransportDescriptor {
   id: string;

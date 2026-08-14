@@ -20,6 +20,18 @@ quietly slowing every startup.
 It runs TypeScript type checking, all Rust workspace tests, the production Vite
 build, Rust formatting checks, and Clippy with warnings denied.
 
+The standalone serial simulator has an additional end-to-end boundary:
+
+```bash
+cargo test -p millo-virtual-controller
+```
+
+The fixture creates a raw PTY, discovers it through `millo-serial`, opens it as
+an ordinary `SerialTransport`, verifies the VMC-3 `$I` identity, sends `$J`, and
+asserts a non-instant accelerating position followed by the exact endpoint and
+fresh `Idle`. Firmware unit tests separately cover braking, Hold/Resume, Jog
+Cancel, arcs, inverse-time feed, overrides, and collinear junction continuity.
+
 The maintainability contract is tested at the same boundaries as behavior:
 
 - controller readiness is a table-tested shared predicate in both TS and Rust;
@@ -74,9 +86,8 @@ and clipboard spans, caret/source-line mapping, G/M/axis/arc/feed/comment syntax
 tokens, deterministic processed export, and the complete editor command
 surface. Type checking keeps Apply bound to a parsed `LoadedProgram`; Rust tests
 keep native export names leaf-only across every supported G-code extension.
-Dry-run read-model tests prove that Mock availability and policy eligibility are
-both required, expose only state-valid controls, and clamp untrusted display
-progress. Toolpath read-model tests verify rapid and cutting buffers, centering,
+Sender read-model tests cover typed failures, acknowledgement heartbeat and
+bounded time presentation. Toolpath read-model tests verify rapid and cutting buffers, centering,
 framing, grid placement, exact selected-line geometry, live tool-coordinate
 mapping, grid projection, and inside/outside job classification independently
 from WebGL. Program-line window tests prove that a large source mounts only a small

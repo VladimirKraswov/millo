@@ -4,11 +4,43 @@ use std::{
     time::{Duration, Instant},
 };
 
-const DEFAULT_SIMULATION_SPEED: f64 = 20.0;
-const MIN_SIMULATED_MOTION: Duration = Duration::from_millis(20);
-const MAX_SIMULATED_MOTION: Duration = Duration::from_secs(2);
-const ARC_CHORD_MM: f64 = 0.5;
-const MAX_ARC_SEGMENTS: usize = 720;
+const DEFAULT_SIMULATION_SPEED: f64 = 1.0;
+const INTEGRATION_STEP: Duration = Duration::from_millis(10);
+const MIN_SPEED_MM_PER_SEC: f64 = 1e-6;
+const MIN_ACCELERATION_MM_PER_SEC2: f64 = 1e-3;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MotionLimits {
+    pub(crate) max_rate_mm_per_min: [f64; 3],
+    pub(crate) acceleration_mm_per_sec2: [f64; 3],
+}
+
+impl MotionLimits {
+    fn max_path_rate(self, delta: [f64; 3], length: f64) -> f64 {
+        directional_limit(self.max_rate_mm_per_min, delta, length).max(0.001)
+    }
+
+    fn path_acceleration(self, delta: [f64; 3], length: f64) -> f64 {
+        directional_limit(self.acceleration_mm_per_sec2, delta, length)
+            .max(MIN_ACCELERATION_MM_PER_SEC2)
+    }
+
+    fn conservative_arc_rate(self) -> f64 {
+        self.max_rate_mm_per_min
+            .into_iter()
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .fold(f64::INFINITY, f64::min)
+            .max(0.001)
+    }
+
+    fn conservative_arc_acceleration(self) -> f64 {
+        self.acceleration_mm_per_sec2
+            .into_iter()
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .fold(f64::INFINITY, f64::min)
+            .max(MIN_ACCELERATION_MM_PER_SEC2)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MotionMode {
@@ -64,19 +96,109 @@ impl Default for ModalState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MotionKind {
+    Program { rapid: bool },
+    Jog,
+}
+
+#[derive(Debug, Clone)]
+enum PathGeometry {
+    Linear {
+        start: [f64; 3],
+        end: [f64; 3],
+        length: f64,
+    },
+    Arc {
+        start: [f64; 3],
+        end: [f64; 3],
+        center: [f64; 2],
+        axes: [usize; 3],
+        radius: f64,
+        start_angle: f64,
+        sweep: f64,
+        length: f64,
+    },
+}
+
+impl PathGeometry {
+    fn linear(start: [f64; 3], end: [f64; 3]) -> Option<Self> {
+        let length = distance(start, end);
+        (length > f64::EPSILON).then_some(Self::Linear { start, end, length })
+    }
+
+    fn length(&self) -> f64 {
+        match self {
+            Self::Linear { length, .. } | Self::Arc { length, .. } => *length,
+        }
+    }
+
+    fn end(&self) -> [f64; 3] {
+        match self {
+            Self::Linear { end, .. } | Self::Arc { end, .. } => *end,
+        }
+    }
+
+    fn point_at(&self, path_distance: f64) -> [f64; 3] {
+        let progress = (path_distance / self.length()).clamp(0.0, 1.0);
+        match self {
+            Self::Linear { start, end, .. } => interpolate(*start, *end, progress),
+            Self::Arc {
+                start,
+                end,
+                center,
+                axes: [u, v, w],
+                radius,
+                start_angle,
+                sweep,
+                ..
+            } => {
+                let angle = start_angle + sweep * progress;
+                let mut point = *end;
+                point[*u] = center[0] + radius * angle.cos();
+                point[*v] = center[1] + radius * angle.sin();
+                point[*w] = start[*w] + (end[*w] - start[*w]) * progress;
+                if progress >= 1.0 { *end } else { point }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum PlannedGeometry {
+    Path(PathGeometry),
+    Dwell(Duration),
+}
+
 #[derive(Debug, Clone)]
 struct PlannedMotion {
-    end: [f64; 3],
-    duration: Duration,
+    geometry: PlannedGeometry,
+    maximum_speed_mm_per_sec: f64,
+    acceleration_mm_per_sec2: f64,
     source_line: Option<u32>,
-    feed_mm_per_min: f64,
+    kind: MotionKind,
 }
 
 #[derive(Debug, Clone)]
 struct ActiveMotion {
-    start: [f64; 3],
     motion: PlannedMotion,
-    elapsed: Duration,
+    path_distance_mm: f64,
+    speed_mm_per_sec: f64,
+    dwell_elapsed: Duration,
+}
+
+impl PlannedMotion {
+    fn linear_direction(&self) -> Option<[f64; 3]> {
+        let PlannedGeometry::Path(PathGeometry::Linear { start, end, length }) = &self.geometry
+        else {
+            return None;
+        };
+        Some([
+            (end[0] - start[0]) / length,
+            (end[1] - start[1]) / length,
+            (end[2] - start[2]) / length,
+        ])
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -87,8 +209,11 @@ pub(crate) struct VirtualGrbl {
     queued: VecDeque<PlannedMotion>,
     active: Option<ActiveMotion>,
     held: bool,
+    hold_requested: bool,
+    jog_cancel_requested: bool,
     manages_status: bool,
     current_source_line: Option<u32>,
+    next_entry_speed_mm_per_sec: f64,
     last_update: Instant,
     simulation_speed: f64,
 }
@@ -102,8 +227,11 @@ impl VirtualGrbl {
             queued: VecDeque::new(),
             active: None,
             held: false,
+            hold_requested: false,
+            jog_cancel_requested: false,
             manages_status: false,
             current_source_line: None,
+            next_entry_speed_mm_per_sec: 0.0,
             last_update: Instant::now(),
             simulation_speed: DEFAULT_SIMULATION_SPEED,
         }
@@ -114,6 +242,7 @@ impl VirtualGrbl {
         command: &str,
         work_offsets: &[[f64; 3]; 6],
         active_wcs: &mut usize,
+        limits: MotionLimits,
         check_mode: bool,
     ) -> Result<(), u16> {
         let words = parse_words(command)?;
@@ -191,11 +320,12 @@ impl VirtualGrbl {
         }
 
         if let Some(seconds) = dwell_seconds.filter(|seconds| *seconds > 0.0) {
-            self.enqueue_motion(PlannedMotion {
-                end: self.planned_position,
-                duration: self.simulated_duration(seconds),
+            self.enqueue(PlannedMotion {
+                geometry: PlannedGeometry::Dwell(Duration::from_secs_f64(seconds)),
+                maximum_speed_mm_per_sec: 0.0,
+                acceleration_mm_per_sec2: limits.conservative_arc_acceleration(),
                 source_line,
-                feed_mm_per_min: 0.0,
+                kind: MotionKind::Program { rapid: false },
             });
         }
 
@@ -211,12 +341,7 @@ impl VirtualGrbl {
             );
             match self.modal.motion {
                 MotionMode::Rapid | MotionMode::Linear => {
-                    let feed = if self.modal.motion == MotionMode::Rapid {
-                        2_000.0
-                    } else {
-                        self.modal.feed.max(0.001)
-                    };
-                    self.enqueue_linear(start, target, source_line, feed);
+                    self.enqueue_linear(start, target, source_line, limits);
                 }
                 MotionMode::ClockwiseArc | MotionMode::CounterclockwiseArc => {
                     self.enqueue_arc(
@@ -225,6 +350,7 @@ impl VirtualGrbl {
                         &words,
                         source_line,
                         self.modal.motion == MotionMode::ClockwiseArc,
+                        limits,
                     )?;
                 }
             }
@@ -240,6 +366,35 @@ impl VirtualGrbl {
         Ok(())
     }
 
+    pub(crate) fn enqueue_jog(
+        &mut self,
+        target: [f64; 3],
+        feed_mm_per_min: f64,
+        limits: MotionLimits,
+    ) -> Result<(), u16> {
+        if self.active.is_some() || !self.queued.is_empty() || self.held {
+            return Err(8);
+        }
+        let start = self.position;
+        let Some(path) = PathGeometry::linear(start, target) else {
+            return Ok(());
+        };
+        let delta = subtract(target, start);
+        let length = path.length();
+        let maximum_rate = feed_mm_per_min
+            .max(0.001)
+            .min(limits.max_path_rate(delta, length));
+        self.planned_position = target;
+        self.enqueue(PlannedMotion {
+            geometry: PlannedGeometry::Path(path),
+            maximum_speed_mm_per_sec: maximum_rate / 60.0,
+            acceleration_mm_per_sec2: limits.path_acceleration(delta, length),
+            source_line: None,
+            kind: MotionKind::Jog,
+        });
+        Ok(())
+    }
+
     pub(crate) fn status_line(
         &mut self,
         work_offset: [f64; 3],
@@ -251,10 +406,14 @@ impl VirtualGrbl {
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.last_update);
         self.last_update = now;
-        self.advance(elapsed);
+        self.advance(elapsed, overrides);
         let running = self.active.is_some() || !self.queued.is_empty();
         let mode = if self.held {
             "Hold:0"
+        } else if self.hold_requested {
+            "Hold:1"
+        } else if self.active_kind() == Some(MotionKind::Jog) {
+            "Jog"
         } else if running {
             "Run"
         } else {
@@ -263,13 +422,15 @@ impl VirtualGrbl {
         let feed = self
             .active
             .as_ref()
-            .map_or(0.0, |active| active.motion.feed_mm_per_min);
+            .map_or(0.0, |active| active.speed_mm_per_sec * 60.0);
         let work = subtract(self.position, work_offset);
         let line = self
             .active
             .as_ref()
             .and_then(|active| active.motion.source_line)
             .or(self.current_source_line);
+        let used_planner_blocks = usize::from(self.active.is_some()) + self.queued.len();
+        let available_planner_blocks = 15_usize.saturating_sub(used_planner_blocks.min(15));
         let mut fields = vec![
             mode.to_owned(),
             format_position("MPos", self.position),
@@ -282,7 +443,7 @@ impl VirtualGrbl {
                     0.0
                 }
             ),
-            "Bf:15,128".to_owned(),
+            format!("Bf:{available_planner_blocks},128"),
             format!("Ov:{},{},{}", overrides[0], overrides[1], overrides[2]),
         ];
         if let Some(line) = line {
@@ -293,7 +454,7 @@ impl VirtualGrbl {
             fields.push(format!("A:{accessories}"));
         }
         let status = format!("<{}>", fields.join("|"));
-        if !running && !self.held {
+        if !running && !self.held && !self.hold_requested {
             self.manages_status = false;
         }
         Some(status)
@@ -337,19 +498,35 @@ impl VirtualGrbl {
         )
     }
 
-    pub(crate) fn hold(&mut self) {
+    pub(crate) fn hold(&mut self, overrides: [u16; 3]) {
+        self.advance_from_clock(overrides);
         if self.active.is_some() || !self.queued.is_empty() {
-            self.advance_from_clock();
-            self.held = true;
+            self.hold_requested = true;
             self.manages_status = true;
         }
     }
 
     pub(crate) fn resume(&mut self) {
-        if self.held {
+        if self.held || self.hold_requested {
             self.held = false;
+            self.hold_requested = false;
             self.last_update = Instant::now();
             self.manages_status = self.active.is_some() || !self.queued.is_empty();
+        }
+    }
+
+    pub(crate) fn cancel_jog(&mut self, overrides: [u16; 3]) {
+        self.advance_from_clock(overrides);
+        if self.active_kind() == Some(MotionKind::Jog)
+            || self
+                .queued
+                .iter()
+                .any(|motion| motion.kind == MotionKind::Jog)
+        {
+            self.jog_cancel_requested = true;
+            self.held = false;
+            self.hold_requested = false;
+            self.manages_status = true;
         }
     }
 
@@ -357,10 +534,14 @@ impl VirtualGrbl {
         self.queued.clear();
         self.active = None;
         self.held = false;
+        self.hold_requested = false;
+        self.jog_cancel_requested = false;
         self.position = position;
         self.planned_position = position;
         self.current_source_line = None;
+        self.next_entry_speed_mm_per_sec = 0.0;
         self.manages_status = false;
+        self.next_entry_speed_mm_per_sec = 0.0;
         self.last_update = Instant::now();
         self.reset_modal();
     }
@@ -371,12 +552,14 @@ impl VirtualGrbl {
         self.queued.clear();
         self.active = None;
         self.held = false;
+        self.hold_requested = false;
+        self.jog_cancel_requested = false;
         self.manages_status = false;
         self.last_update = Instant::now();
     }
 
-    pub(crate) fn advance_for_test(&mut self, elapsed: Duration) {
-        self.advance(elapsed);
+    pub(crate) fn advance_for_test(&mut self, elapsed: Duration, overrides: [u16; 3]) {
+        self.advance(elapsed, overrides);
     }
 
     fn enqueue_linear(
@@ -384,21 +567,30 @@ impl VirtualGrbl {
         start: [f64; 3],
         end: [f64; 3],
         source_line: Option<u32>,
-        feed_mm_per_min: f64,
+        limits: MotionLimits,
     ) {
-        let distance = distance(start, end);
-        if distance <= f64::EPSILON {
+        let Some(path) = PathGeometry::linear(start, end) else {
             return;
-        }
-        let seconds = match self.modal.feed_mode {
-            FeedMode::UnitsPerMinute => distance / feed_mm_per_min.max(0.001) * 60.0,
-            FeedMode::InverseTime => 60.0 / feed_mm_per_min.max(0.001),
         };
-        self.enqueue_motion(PlannedMotion {
-            end,
-            duration: self.simulated_duration(seconds),
+        let delta = subtract(end, start);
+        let length = path.length();
+        let axis_rate = limits.max_path_rate(delta, length);
+        let requested_rate = if self.modal.motion == MotionMode::Rapid {
+            axis_rate
+        } else {
+            match self.modal.feed_mode {
+                FeedMode::UnitsPerMinute => self.modal.feed.max(0.001),
+                FeedMode::InverseTime => length * self.modal.feed.max(0.001),
+            }
+        };
+        self.enqueue(PlannedMotion {
+            geometry: PlannedGeometry::Path(path),
+            maximum_speed_mm_per_sec: requested_rate.min(axis_rate) / 60.0,
+            acceleration_mm_per_sec2: limits.path_acceleration(delta, length),
             source_line,
-            feed_mm_per_min,
+            kind: MotionKind::Program {
+                rapid: self.modal.motion == MotionMode::Rapid,
+            },
         });
     }
 
@@ -409,11 +601,17 @@ impl VirtualGrbl {
         words: &[Word],
         source_line: Option<u32>,
         clockwise: bool,
+        limits: MotionLimits,
     ) -> Result<(), u16> {
-        let (u, v, w, center_u_letter, center_v_letter) = match self.modal.plane {
-            Plane::Xy => (0, 1, 2, 'I', 'J'),
-            Plane::Xz => (0, 2, 1, 'I', 'K'),
-            Plane::Yz => (1, 2, 0, 'J', 'K'),
+        let [u, v, w] = match self.modal.plane {
+            Plane::Xy => [0, 1, 2],
+            Plane::Xz => [0, 2, 1],
+            Plane::Yz => [1, 2, 0],
+        };
+        let [center_u_letter, center_v_letter] = match self.modal.plane {
+            Plane::Xy => ['I', 'J'],
+            Plane::Xz => ['I', 'K'],
+            Plane::Yz => ['J', 'K'],
         };
         let scale = self.unit_scale();
         let start_uv = [start[u], start[v]];
@@ -434,92 +632,167 @@ impl VirtualGrbl {
         let end_angle = (end_uv[1] - center[1]).atan2(end_uv[0] - center[0]);
         let full_circle = distance_2d(start_uv, end_uv) <= 1e-9;
         let sweep = directed_sweep(start_angle, end_angle, clockwise, full_circle);
-        let arc_length = radius * sweep.abs();
-        let segments = ((arc_length / ARC_CHORD_MM).ceil() as usize)
-            .max((sweep.abs() / (PI / 36.0)).ceil() as usize)
-            .clamp(1, MAX_ARC_SEGMENTS);
-        let feed = self.modal.feed.max(0.001);
-        let mut previous = start;
-        for index in 1..=segments {
-            let t = index as f64 / segments as f64;
-            let angle = start_angle + sweep * t;
-            let mut point = end;
-            point[u] = center[0] + radius * angle.cos();
-            point[v] = center[1] + radius * angle.sin();
-            point[w] = start[w] + (end[w] - start[w]) * t;
-            if index == segments {
-                point = end;
-            }
-            let segment_length = distance(previous, point);
-            let seconds = match self.modal.feed_mode {
-                FeedMode::UnitsPerMinute => segment_length / feed * 60.0,
-                FeedMode::InverseTime => 60.0 / feed / segments as f64,
-            };
-            self.enqueue_motion(PlannedMotion {
-                end: point,
-                duration: self.simulated_duration(seconds),
-                source_line,
-                feed_mm_per_min: feed,
-            });
-            previous = point;
+        let planar_length = radius * sweep.abs();
+        let length = planar_length.hypot(end[w] - start[w]);
+        if !length.is_finite() || length <= f64::EPSILON {
+            return Err(33);
         }
+        let requested_rate = match self.modal.feed_mode {
+            FeedMode::UnitsPerMinute => self.modal.feed.max(0.001),
+            FeedMode::InverseTime => length * self.modal.feed.max(0.001),
+        };
+        let maximum_rate = requested_rate.min(limits.conservative_arc_rate());
+        self.enqueue(PlannedMotion {
+            geometry: PlannedGeometry::Path(PathGeometry::Arc {
+                start,
+                end,
+                center,
+                axes: [u, v, w],
+                radius,
+                start_angle,
+                sweep,
+                length,
+            }),
+            maximum_speed_mm_per_sec: maximum_rate / 60.0,
+            acceleration_mm_per_sec2: limits.conservative_arc_acceleration(),
+            source_line,
+            kind: MotionKind::Program { rapid: false },
+        });
         Ok(())
     }
 
-    fn enqueue_motion(&mut self, motion: PlannedMotion) {
+    fn enqueue(&mut self, motion: PlannedMotion) {
         self.queued.push_back(motion);
         self.manages_status = true;
         self.last_update = Instant::now();
     }
 
-    fn advance_from_clock(&mut self) {
+    fn active_kind(&self) -> Option<MotionKind> {
+        self.active
+            .as_ref()
+            .map(|active| active.motion.kind)
+            .or_else(|| self.queued.front().map(|motion| motion.kind))
+    }
+
+    fn advance_from_clock(&mut self, overrides: [u16; 3]) {
         let now = Instant::now();
         let elapsed = now.saturating_duration_since(self.last_update);
         self.last_update = now;
-        self.advance(elapsed);
+        self.advance(elapsed, overrides);
     }
 
-    fn advance(&mut self, mut budget: Duration) {
-        if self.held {
-            return;
-        }
-        while !budget.is_zero() {
+    fn advance(&mut self, elapsed: Duration, overrides: [u16; 3]) {
+        let mut budget = elapsed.mul_f64(self.simulation_speed);
+        while !budget.is_zero() && !self.held {
             if self.active.is_none() {
+                if self.hold_requested {
+                    self.held = true;
+                    self.hold_requested = false;
+                    break;
+                }
                 let Some(motion) = self.queued.pop_front() else {
                     break;
                 };
                 self.current_source_line = motion.source_line;
                 self.active = Some(ActiveMotion {
-                    start: self.position,
+                    speed_mm_per_sec: self
+                        .next_entry_speed_mm_per_sec
+                        .min(motion.maximum_speed_mm_per_sec),
                     motion,
-                    elapsed: Duration::ZERO,
+                    path_distance_mm: 0.0,
+                    dwell_elapsed: Duration::ZERO,
                 });
+                self.next_entry_speed_mm_per_sec = 0.0;
             }
-            let active = self.active.as_mut().expect("active motion initialized");
-            let remaining = active.motion.duration.saturating_sub(active.elapsed);
-            let consumed = budget.min(remaining);
-            active.elapsed += consumed;
-            budget -= consumed;
-            let progress = if active.motion.duration.is_zero() {
-                1.0
-            } else {
-                active.elapsed.as_secs_f64() / active.motion.duration.as_secs_f64()
-            }
-            .clamp(0.0, 1.0);
-            self.position = interpolate(active.start, active.motion.end, progress);
-            if active.elapsed >= active.motion.duration {
-                self.position = active.motion.end;
-                self.current_source_line = active.motion.source_line;
+
+            let step = budget.min(INTEGRATION_STEP);
+            budget -= step;
+            if self.advance_active(step, overrides) {
+                let exit_speed = self
+                    .active
+                    .as_ref()
+                    .map_or(0.0, |active| active.speed_mm_per_sec);
+                self.next_entry_speed_mm_per_sec = self
+                    .active
+                    .as_ref()
+                    .and_then(|active| {
+                        self.queued
+                            .front()
+                            .map(|next| junction_speed(&active.motion, next, exit_speed))
+                    })
+                    .unwrap_or(0.0);
                 self.active = None;
-            } else {
-                break;
+                if self.jog_cancel_requested {
+                    self.queued.retain(|motion| motion.kind != MotionKind::Jog);
+                    self.jog_cancel_requested = false;
+                    self.planned_position = self.position;
+                }
             }
         }
     }
 
-    fn simulated_duration(&self, physical_seconds: f64) -> Duration {
-        Duration::from_secs_f64((physical_seconds / self.simulation_speed).max(0.0))
-            .clamp(MIN_SIMULATED_MOTION, MAX_SIMULATED_MOTION)
+    fn advance_active(&mut self, step: Duration, overrides: [u16; 3]) -> bool {
+        let active = self.active.as_mut().expect("active motion initialized");
+        match &active.motion.geometry {
+            PlannedGeometry::Dwell(duration) => {
+                if self.hold_requested {
+                    self.held = true;
+                    self.hold_requested = false;
+                    return false;
+                }
+                active.dwell_elapsed += step;
+                active.dwell_elapsed >= *duration
+            }
+            PlannedGeometry::Path(path) => {
+                let total_length = path.length();
+                let remaining = (total_length - active.path_distance_mm).max(0.0);
+                let acceleration = active
+                    .motion
+                    .acceleration_mm_per_sec2
+                    .max(MIN_ACCELERATION_MM_PER_SEC2);
+                let stopping = self.hold_requested || self.jog_cancel_requested;
+                let override_factor = match active.motion.kind {
+                    MotionKind::Program { rapid: true } => f64::from(overrides[1]) / 100.0,
+                    MotionKind::Program { rapid: false } => f64::from(overrides[0]) / 100.0,
+                    MotionKind::Jog => 1.0,
+                };
+                let programmed_limit = active.motion.maximum_speed_mm_per_sec * override_factor;
+                let exit_speed = if stopping {
+                    0.0
+                } else {
+                    self.queued.front().map_or(0.0, |next| {
+                        junction_speed(&active.motion, next, programmed_limit)
+                    })
+                };
+                let braking_limit = (exit_speed.powi(2) + 2.0 * acceleration * remaining).sqrt();
+                let desired_speed = if stopping {
+                    0.0
+                } else {
+                    programmed_limit.min(braking_limit)
+                };
+                let seconds = step.as_secs_f64();
+                let previous_speed = active.speed_mm_per_sec;
+                active.speed_mm_per_sec =
+                    approach(previous_speed, desired_speed, acceleration * seconds);
+                let travelled = (previous_speed + active.speed_mm_per_sec) * 0.5 * seconds;
+                active.path_distance_mm = (active.path_distance_mm + travelled).min(total_length);
+                self.position = path.point_at(active.path_distance_mm);
+
+                if stopping && active.speed_mm_per_sec <= MIN_SPEED_MM_PER_SEC {
+                    if self.jog_cancel_requested {
+                        return true;
+                    }
+                    self.held = true;
+                    self.hold_requested = false;
+                    return false;
+                }
+                if active.path_distance_mm >= total_length - 1e-9 {
+                    self.position = path.end();
+                    return true;
+                }
+                false
+            }
+        }
     }
 
     fn unit_scale(&self) -> f64 {
@@ -670,6 +943,17 @@ fn target_position(
     target
 }
 
+fn directional_limit(axis_limits: [f64; 3], delta: [f64; 3], length: f64) -> f64 {
+    delta
+        .into_iter()
+        .zip(axis_limits)
+        .filter_map(|(component, limit)| {
+            let ratio = component.abs() / length;
+            (ratio > f64::EPSILON && limit.is_finite() && limit > 0.0).then_some(limit / ratio)
+        })
+        .fold(f64::INFINITY, f64::min)
+}
+
 fn radius_center(
     start: [f64; 2],
     end: [f64; 2],
@@ -722,6 +1006,28 @@ fn distance(left: [f64; 3], right: [f64; 3]) -> f64 {
         .sqrt()
 }
 
+fn junction_speed(current: &PlannedMotion, next: &PlannedMotion, candidate: f64) -> f64 {
+    if current.kind != next.kind || matches!(current.kind, MotionKind::Jog) {
+        return 0.0;
+    }
+    let (Some(current_direction), Some(next_direction)) =
+        (current.linear_direction(), next.linear_direction())
+    else {
+        return 0.0;
+    };
+    let alignment = current_direction
+        .into_iter()
+        .zip(next_direction)
+        .map(|(left, right)| left * right)
+        .sum::<f64>();
+    if alignment < 0.999_999 {
+        return 0.0;
+    }
+    candidate
+        .min(current.maximum_speed_mm_per_sec)
+        .min(next.maximum_speed_mm_per_sec)
+}
+
 fn distance_2d(left: [f64; 2], right: [f64; 2]) -> f64 {
     (right[0] - left[0]).hypot(right[1] - left[1])
 }
@@ -738,6 +1044,14 @@ fn subtract(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
     [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
 }
 
+fn approach(current: f64, target: f64, maximum_change: f64) -> f64 {
+    if current < target {
+        (current + maximum_change).min(target)
+    } else {
+        (current - maximum_change).max(target)
+    }
+}
+
 fn format_position(name: &str, position: [f64; 3]) -> String {
     format!(
         "{name}:{:.3},{:.3},{:.3}",
@@ -749,8 +1063,15 @@ fn format_position(name: &str, position: [f64; 3]) -> String {
 mod tests {
     use super::*;
 
+    fn limits() -> MotionLimits {
+        MotionLimits {
+            max_rate_mm_per_min: [1_000.0, 1_000.0, 500.0],
+            acceleration_mm_per_sec2: [50.0, 50.0, 30.0],
+        }
+    }
+
     fn finish(machine: &mut VirtualGrbl) {
-        machine.advance_for_test(Duration::from_secs(60));
+        machine.advance_for_test(Duration::from_secs(3_600), [100; 3]);
     }
 
     #[test]
@@ -764,11 +1085,12 @@ mod tests {
                 "N1 G21 G90 G94 G1 X10 Y5 Z-1 F300",
                 &offsets,
                 &mut wcs,
+                limits(),
                 false,
             )
             .unwrap();
         machine
-            .execute_line("N2 G91 X2 Y-1", &offsets, &mut wcs, false)
+            .execute_line("N2 G91 X2 Y-1", &offsets, &mut wcs, limits(), false)
             .unwrap();
         finish(&mut machine);
 
@@ -777,18 +1099,84 @@ mod tests {
     }
 
     #[test]
-    fn interpolates_arcs_instead_of_jumping_across_the_chord() {
+    fn acceleration_and_braking_are_visible_in_intermediate_status() {
         let mut machine = VirtualGrbl::new([0.0; 3]);
         let offsets = [[0.0; 3]; 6];
         let mut wcs = 0;
         machine
-            .execute_line("N1 G21 G90 G94 G1 X10 F300", &offsets, &mut wcs, false)
+            .execute_line(
+                "N5 G21 G90 G94 G1 X100 F1000",
+                &offsets,
+                &mut wcs,
+                limits(),
+                false,
+            )
+            .unwrap();
+
+        machine.advance_for_test(Duration::from_millis(100), [100; 3]);
+        let accelerating_speed = machine.active.as_ref().unwrap().speed_mm_per_sec;
+        machine.advance_for_test(Duration::from_secs(2), [100; 3]);
+        let cruising_speed = machine.active.as_ref().unwrap().speed_mm_per_sec;
+        assert!(accelerating_speed > 0.0 && accelerating_speed < cruising_speed);
+
+        machine.advance_for_test(Duration::from_millis(4_100), [100; 3]);
+        let braking_speed = machine.active.as_ref().unwrap().speed_mm_per_sec;
+        assert!(braking_speed < cruising_speed);
+        finish(&mut machine);
+        assert_eq!(machine.position, [100.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn collinear_program_blocks_cross_the_source_line_without_a_false_stop() {
+        let mut machine = VirtualGrbl::new([0.0; 3]);
+        let offsets = [[0.0; 3]; 6];
+        let mut wcs = 0;
+        machine
+            .execute_line(
+                "N1 G21 G90 G94 G1 X10 F600",
+                &offsets,
+                &mut wcs,
+                limits(),
+                false,
+            )
+            .unwrap();
+        machine
+            .execute_line("N2 G1 X20 F600", &offsets, &mut wcs, limits(), false)
+            .unwrap();
+
+        machine.advance_for_test(Duration::from_millis(1_150), [100; 3]);
+
+        assert!(machine.position[0] > 10.0);
+        assert!(machine.active.as_ref().unwrap().speed_mm_per_sec > 9.0);
+        finish(&mut machine);
+        assert_eq!(machine.position, [20.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn interpolates_arcs_without_segment_stops() {
+        let mut machine = VirtualGrbl::new([0.0; 3]);
+        let offsets = [[0.0; 3]; 6];
+        let mut wcs = 0;
+        machine
+            .execute_line(
+                "N1 G21 G90 G94 G1 X10 F300",
+                &offsets,
+                &mut wcs,
+                limits(),
+                false,
+            )
             .unwrap();
         finish(&mut machine);
         machine
-            .execute_line("N2 G17 G3 X20 Y10 I0 J10 F300", &offsets, &mut wcs, false)
+            .execute_line(
+                "N2 G17 G3 X20 Y10 I0 J10 F300",
+                &offsets,
+                &mut wcs,
+                limits(),
+                false,
+            )
             .unwrap();
-        machine.advance_for_test(Duration::from_millis(250));
+        machine.advance_for_test(Duration::from_millis(500), [100; 3]);
 
         assert!(machine.position[0] > 10.0 && machine.position[0] < 20.0);
         assert!(machine.position[1] > 0.0 && machine.position[1] < 10.0);
@@ -797,18 +1185,29 @@ mod tests {
     }
 
     #[test]
-    fn hold_freezes_and_resume_continues_the_same_motion() {
+    fn hold_decelerates_before_freezing_and_resume_accelerates_again() {
         let mut machine = VirtualGrbl::new([0.0; 3]);
         let offsets = [[0.0; 3]; 6];
         let mut wcs = 0;
         machine
-            .execute_line("N7 G21 G90 G94 G1 X100 F100", &offsets, &mut wcs, false)
+            .execute_line(
+                "N7 G21 G90 G94 G1 X100 F1000",
+                &offsets,
+                &mut wcs,
+                limits(),
+                false,
+            )
             .unwrap();
-        machine.advance_for_test(Duration::from_millis(100));
-        machine.hold();
-        let held = machine.position;
-        machine.advance_for_test(Duration::from_secs(10));
-        assert_eq!(machine.position, held);
+        machine.advance_for_test(Duration::from_secs(1), [100; 3]);
+        machine.hold([100; 3]);
+        let requested_at = machine.position[0];
+        machine.advance_for_test(Duration::from_millis(100), [100; 3]);
+        assert!(machine.position[0] > requested_at);
+        machine.advance_for_test(Duration::from_secs(1), [100; 3]);
+        assert!(machine.held);
+        let held_at = machine.position;
+        machine.advance_for_test(Duration::from_secs(10), [100; 3]);
+        assert_eq!(machine.position, held_at);
 
         machine.resume();
         finish(&mut machine);
@@ -825,6 +1224,7 @@ mod tests {
                 "N9 G21 G90 G94 G1 X50 F200 S12000 M3",
                 &offsets,
                 &mut wcs,
+                limits(),
                 true,
             )
             .unwrap();
@@ -848,6 +1248,7 @@ mod tests {
                 "N12G21G90G1X3.5(comment)Y-2F120; ignored",
                 &offsets,
                 &mut wcs,
+                limits(),
                 false,
             )
             .unwrap();
@@ -858,15 +1259,21 @@ mod tests {
     }
 
     #[test]
-    fn inverse_time_linear_feed_is_a_block_duration() {
+    fn inverse_time_linear_feed_is_a_block_duration_before_acceleration_limits() {
         let mut machine = VirtualGrbl::new([0.0; 3]);
         let offsets = [[0.0; 3]; 6];
         let mut wcs = 0;
 
         machine
-            .execute_line("N3 G21 G90 G93 G1 X100 F1", &offsets, &mut wcs, false)
+            .execute_line(
+                "N3 G21 G90 G93 G1 X100 F1",
+                &offsets,
+                &mut wcs,
+                limits(),
+                false,
+            )
             .unwrap();
-        machine.advance_for_test(Duration::from_millis(500));
+        machine.advance_for_test(Duration::from_secs(30), [100; 3]);
 
         assert!(machine.position[0] > 0.0 && machine.position[0] < 100.0);
         finish(&mut machine);

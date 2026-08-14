@@ -39,16 +39,10 @@ export interface ConnectionPanelView {
 
 export interface ConnectionPanelActions {
   readonly onBaudRate: (baudRate: number) => void;
-  readonly onClearMockAlarm: () => void;
   readonly onConnect: () => void;
   readonly onDisconnect: () => void;
   readonly onDismissError: () => void;
   readonly onLikelyGrblOnly: (enabled: boolean) => void;
-  readonly onMockAlarm: () => void;
-  readonly onMockDisconnect: () => void;
-  readonly onMockReset: () => void;
-  readonly onMockRun: () => void;
-  readonly onMockTimeout: () => void;
   readonly onOpenLog: () => void;
   readonly onRefreshStatus: () => void;
   readonly onRefreshTransports: () => void;
@@ -116,7 +110,7 @@ export function ConnectionPanel({ actions, controls, view }: ConnectionPanelProp
         ) : (
           <button
             className="primary-action"
-            disabled={controlsBusy || !desktopRuntime}
+            disabled={controlsBusy || !desktopRuntime || !selectedTransport.id}
             onClick={actions.onConnect}
             type="button"
           >
@@ -159,6 +153,9 @@ export function ConnectionPanel({ actions, controls, view }: ConnectionPanelProp
               onChange={(event) => actions.onTransport(event.target.value)}
               value={selectedTransport.id}
             >
+              {visibleTransports.length === 0 && (
+                <option value="">Порты не найдены</option>
+              )}
               {visibleTransports.map((transport) => (
                 <option key={transport.id} value={transport.id}>
                   {transport.label}
@@ -228,9 +225,6 @@ export function ConnectionPanel({ actions, controls, view }: ConnectionPanelProp
             <kbd>?</kbd>
           </button>
 
-          {displayedTransport.kind === "mock" && (
-            <MockScenarios actions={actions} disabled={controlsBusy || !isConnected} snapshot={snapshot} />
-          )}
         </details>
       )}
 
@@ -257,38 +251,6 @@ function Metric({ label, value }: { readonly label: string; readonly value: stri
     <div>
       <span>{label}</span>
       <strong>{value}</strong>
-    </div>
-  );
-}
-
-function MockScenarios({
-  actions,
-  disabled,
-  snapshot,
-}: {
-  readonly actions: ConnectionPanelActions;
-  readonly disabled: boolean;
-  readonly snapshot: ControllerSnapshot;
-}) {
-  const scenarios = [
-    ["Run state", actions.onMockRun, false],
-    ["Reset banner", actions.onMockReset, false],
-    ["ALARM:3", actions.onMockAlarm, false],
-    ["Clear alarm", actions.onClearMockAlarm, snapshot.alarm === undefined],
-    ["Timeout ×2", actions.onMockTimeout, false],
-    ["Link drop", actions.onMockDisconnect, false],
-  ] as const;
-
-  return (
-    <div className="mock-scenarios">
-      <span>Сценарии Mock GRBL</span>
-      <div>
-        {scenarios.map(([label, onClick, unavailable]) => (
-          <button disabled={disabled || unavailable} key={label} onClick={onClick} type="button">
-            {label}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }

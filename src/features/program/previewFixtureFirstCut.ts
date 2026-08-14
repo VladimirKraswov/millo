@@ -1,7 +1,7 @@
 import type { GcodeProgram } from "../../shared/program";
 import type { ProgramGateway } from "../../platform/program/ProgramGateway";
 import { idleSenderSnapshot } from "../../shared/dryRun";
-import type { DryRunGateway, SenderSnapshot } from "../../shared/dryRun";
+import type { SenderSnapshot, SenderStateGateway } from "../../shared/dryRun";
 import type {
   FirstCutPreparation,
   RealRunPreflightGateway,
@@ -111,16 +111,8 @@ export const previewFixtureCheckRunningSender: SenderSnapshot = {
   timeEstimateComplete: false,
 };
 
-export const previewFixtureCheckControlGateway: DryRunGateway = {
+export const previewFixtureCheckControlGateway: SenderStateGateway = {
   snapshot: async () => previewFixtureCheckRunningSender,
-  start: async () => previewFixtureCheckRunningSender,
-  pause: async () => previewFixtureCheckRunningSender,
-  resume: async () => previewFixtureCheckRunningSender,
-  cancel: async () => ({
-    ...previewFixtureCheckRunningSender,
-    state: "cancelled",
-    inFlightLines: 0,
-  }),
   subscribe: async () => () => undefined,
 };
 

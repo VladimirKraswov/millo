@@ -59,7 +59,7 @@ wiring, spindle workflows, or failure modes.
 
 ### Included
 
-- native serial and deterministic Mock GRBL transports;
+- native serial plus an optional standalone VMC-3 PTY controller;
 - typed controller lifecycle, Inspector, Jog, work-zero, Hold, Reset, and Unlock;
 - parser-backed Three.js program preview and syntax-highlighted editor;
 - GRBL Check, Air run, cutting preflight, bounded sender, tool-change barriers,

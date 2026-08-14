@@ -7,26 +7,20 @@ import { ConnectionPanel } from "./ConnectionPanel";
 
 type Props = ComponentProps<typeof ConnectionPanel>;
 
-const mockTransport: TransportDescriptor = {
-  id: "mock",
-  kind: "mock",
-  label: "Mock GRBL",
-  detail: "Встроенный тестовый контроллер",
+const serialTransport: TransportDescriptor = {
+  id: "serial:/dev/cu.usbmodem101",
+  kind: "serial",
+  label: "/dev/cu.usbmodem101",
+  detail: "USB CNC controller",
   likelyGrbl: true,
 };
 
 const actions: Props["actions"] = {
   onBaudRate: () => undefined,
-  onClearMockAlarm: () => undefined,
   onConnect: () => undefined,
   onDisconnect: () => undefined,
   onDismissError: () => undefined,
   onLikelyGrblOnly: () => undefined,
-  onMockAlarm: () => undefined,
-  onMockDisconnect: () => undefined,
-  onMockReset: () => undefined,
-  onMockRun: () => undefined,
-  onMockTimeout: () => undefined,
   onOpenLog: () => undefined,
   onRefreshStatus: () => undefined,
   onRefreshTransports: () => undefined,
@@ -39,14 +33,14 @@ const baseView: Props["view"] = {
   controlsBusy: false,
   desktopRuntime: true,
   discovering: false,
-  displayedTransport: mockTransport,
+  displayedTransport: serialTransport,
   hasConnection: false,
   isConnected: false,
   likelyGrblOnly: true,
-  selectedTransport: mockTransport,
+  selectedTransport: serialTransport,
   snapshot: emptySnapshot,
   transportLocked: false,
-  visibleTransports: [mockTransport],
+  visibleTransports: [serialTransport],
 };
 
 describe("ConnectionPanel", () => {
@@ -80,7 +74,7 @@ describe("ConnectionPanel", () => {
     expect(markup).toContain("Станок: LUNYEE CNC");
     expect(markup).toContain("Jog fixture");
     expect(markup).toContain("Запросить статус");
-    expect(markup).toContain("Сценарии Mock GRBL");
+    expect(markup).not.toContain("Сценарии Mock GRBL");
     expect(markup).not.toContain(">Подключить<");
   });
 

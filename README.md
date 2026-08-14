@@ -23,7 +23,7 @@ milling without tying the application to one machine type.
 The current slices form this path:
 
 ```text
-Serial / Mock -> command arbiter -> GRBL lifecycle/parser -> typed Tauri IPC -> React
+Serial endpoint -> command arbiter -> GRBL lifecycle/parser -> typed Tauri IPC -> React
 File source -> millo-gcode parser -> immutable program DTO -> Three.js preview
 SVG/PNG -> millo-cam (VTracer/usvg) -> validated G-code -> normal Program workflow
 Tool library -> millo-tooling -> surfacing CAM -> validated G-code -> Program workflow
@@ -60,10 +60,11 @@ typed planner/RX availability, feed/rapid/spindle overrides, input pins,
 accessories, and line number when GRBL reports them. A separate Rust readiness
 policy evaluates the inspected values against the selected profile. The desktop
 API exposes typed operations and a policy-approved file sender, never an
-arbitrary raw-line endpoint. Mock GRBL is a full virtual machine target: it owns
-a persistent profile and runs the same Check, authorization, sender, recovery,
-probing, heightmap, and operator UI as a serial controller while publishing
-intermediate tool positions without hardware.
+arbitrary raw-line endpoint. The optional `millo-virtual-controller` companion
+publishes a real PTY serial endpoint and runs the same Check, authorization,
+sender, recovery, probing, heightmap, and operator UI as USB hardware. The
+desktop has no simulation transport or special execution path; see
+[Virtual controller](docs/VIRTUAL_CONTROLLER.md).
 
 The first safety controls are now available without opening a G-code endpoint.
 Feed Hold sends the GRBL realtime `!` byte when the controller reports active
@@ -162,10 +163,11 @@ builds an opaque plan with an `M5/M9` safety preamble. `millo-sender` permits
 only a bounded GRBL RX window and advances only after correlated FIFO `ok`
 responses; `error`, `ALARM`, disconnect, reset, timeout, or invalid controller
 state stops the run.
-The same production state machine serves virtual and serial targets. Mock GRBL
-parses accepted programs into an accelerated time-based planner, so Run, Hold,
-Resume, Reset, line number, modal state, and intermediate XYZ positions are
-observable through the ordinary controller event stream. A lazily loaded
+The same production state machine serves every serial endpoint. VMC-3 parses
+accepted programs into a wall-clock planner with configured rates, acceleration,
+braking and conservative junction handling, so Run, Hold, Resume, Reset, line
+number, modal state, and intermediate XYZ positions are observable through the
+ordinary controller event stream. A lazily loaded
 Three.js adapter renders rapid and
 cutting geometry from a pure read model with top/isometric views. Loading and
 preview have no access to the command actor, serial transport, or machine
@@ -408,8 +410,8 @@ commands are enabled only inside Tauri.
 
 The operator shell uses progressive disclosure: connection, controller state,
 coordinates, preview, run actions, Hold/Reset, and jog stay primary. Port tuning,
-passed readiness evidence, G-code rows, optional stream semantics, lifecycle
-metrics, and Mock scenarios open only on demand. Parser warnings and failed
+passed readiness evidence, G-code rows, optional stream semantics, and lifecycle
+metrics open only on demand. Parser warnings and failed
 preflight evidence open their diagnostics automatically. This hierarchy is
 recorded in [ADR 0039](docs/decisions/0039-progressive-operator-shell.md).
 
@@ -458,9 +460,9 @@ starts the spindle or reaches the sender. See [Tool library](docs/TOOL_LIBRARY.m
 [Surfacing](docs/SURFACING.md), and
 [ADR 0046](docs/decisions/0046-core-tool-library-and-surfacing-plugin.md).
 
-The Mock diagnostics disclosure can inject reset, alarm, timeout, and link-drop scenarios. Alarm
-remains active until `Clear alarm`; two consecutive silent polls exercise the
-automatic recovery path.
+Reset, alarm, timeout, and link-drop injection remains isolated in Rust fixtures;
+production connection diagnostics expose only behavior reported by the selected
+serial controller.
 
 The first physical-program candidate is the ordinary file
 `fixtures/programs/air-square-20mm.nc`. Its repeatable read-only and confirmed
@@ -476,9 +478,10 @@ On macOS, the same USB interface is normally exposed as both `/dev/cu.*` and
 `/dev/tty.*`. Millo collapses that pair and keeps the `/dev/cu.*` callout path,
 which is the appropriate endpoint for initiating a controller connection.
 
-`Только вероятные GRBL` is enabled by default. It keeps Mock GRBL and USB ports
-whose metadata or vendor ID resembles common GRBL/FluidNC controllers and
-USB-UART bridges. Disable it to inspect every serial port. This is discovery
+`Только вероятные GRBL` is enabled by default. It keeps serial endpoints whose
+metadata explicitly names GRBL/CNC and USB ports whose metadata or vendor ID
+resembles common GRBL/FluidNC controllers and USB-UART bridges. Disable it to
+inspect every serial port. This is discovery
 filtering, not device authentication: Millo confirms the protocol only after a
 successful GRBL status exchange.
 
@@ -495,7 +498,8 @@ successful GRBL status exchange.
 | `millo-restart` | Safe selected-line planner with clearance rewind and modal/WCS/tool restoration |
 | `millo-grbl` | GRBL wire-format parsing and encoding |
 | `millo-transport` | Controller-independent I/O contract |
-| `millo-mock` | Deterministic virtual GRBL machine for tests and full job rehearsal |
+| `millo-mock` | Deterministic GRBL firmware and fault fixtures below production adapters |
+| `millo-virtual-controller` | Standalone PTY serial controller with wall-clock GRBL motion |
 | `millo-profile` | Validated machine profiles, GRBL-derived drafts, and JSON persistence |
 | `millo-settings` | GRBL settings catalog, validated writes, session baselines, and per-machine revisions |
 | `millo-serial` | Native asynchronous serial discovery and byte/line I/O |
@@ -509,7 +513,7 @@ successful GRBL status exchange.
 The current cross-layer review, closed findings, dependency evidence, and
 remaining release boundaries are recorded in [`docs/CODE_AUDIT.md`](docs/CODE_AUDIT.md).
 | `millo-safety` | Reset challenges and short-lived test-jog authorization |
-| `millo-sender` | Bounded GRBL RX/FIFO sender with Mock, air-run, and cutting modes |
+| `millo-sender` | Bounded GRBL RX/FIFO sender with Check, verification, and machining modes |
 | `millo-desktop` | Thin Tauri command/event adapter |
 
 See [Architecture](docs/ARCHITECTURE.md), the decisions for the
@@ -564,6 +568,8 @@ draft/parse/apply editor boundary in
 [ADR 0049](docs/decisions/0049-safe-program-editor.md). The separation between
 trusted React plugins and imported Rhai packages is recorded in
 [ADR 0053](docs/decisions/0053-two-tier-plugin-contract.md). The
+external serial virtual-machine boundary is recorded in
+[ADR 0055](docs/decisions/0055-external-serial-virtual-controller.md). The
 required verification workflow is recorded in [Testing](docs/TESTING.md); the
 known first-machine configuration is in [Hardware target](docs/HARDWARE_TARGET.md).
 

@@ -136,7 +136,7 @@ export const developmentProfileFixture: MachineProfileState = {
         retractFeedMmPerMin: 100,
       },
       emergencyStopInstalled: false,
-      connection: { transportId: "mock", baudRate: 115_200 },
+      connection: { transportId: "serial:/dev/cu.fixture-grbl", baudRate: 115_200 },
       detectedController: { firmwareVersion: "1.1f.20230316" },
     },
   ],

@@ -30,8 +30,10 @@ not invent readiness or motion states outside that contract.
                                +---------+  +----+-----+
                                                   |
                                              +----v-----+
-                                             |Mock/Serial|
+                                             |   Serial   |
                                              +-----------+
+                                                   ^
+                                      USB hardware | PTY companion
 ```
 
 Dependencies point inward. Domain types do not import Tauri, an I/O library, or
@@ -107,14 +109,14 @@ Surfacing CAM resolves the requested tool ID in Rust and never accepts plugin-
 supplied geometry. Generated output remains motion-free until it enters the
 ordinary Program preflight and sender gates.
 
-Mock dry-run execution is a separate, explicitly gated path:
+Program execution is minted only by the Rust policy:
 
 ```text
 Original source -> Rust reparse -> millo-dry-run -> opaque DryRunPlan
                                                     |
                                             command actor/sender
                                                     |
-                                      Controller -> Mock or serial GRBL
+                                           Controller -> serial GRBL
 ```
 
 Neither an immutable preview DTO nor a React flag can become a sender plan.
@@ -232,12 +234,13 @@ identity, so changing it cannot reuse stale validation evidence.
 
 ## Implemented vertical slices
 
-The desktop command `connect_transport` selects either the full virtual GRBL
-machine or a discovered native serial port, sends the GRBL realtime `?` byte, parses the returned status frame, updates
+The desktop command `connect_transport` selects a discovered serial endpoint,
+sends the GRBL realtime `?` byte, parses the returned status frame, updates
 `ControllerSnapshot`, emits `machine-state`, and returns the same snapshot to the
-caller. The UI treats the event as authoritative. A first virtual connection
-creates and binds a persistent profile from its inspected travel settings;
-there is no fake "machine bound" exception for Mock.
+caller. The UI treats the event as authoritative. Native USB ports and external
+PTY endpoints use the same `SerialTransport`, Inspector, fingerprint, profile,
+readiness and sender path. The standalone VMC-3 process is documented in
+`docs/VIRTUAL_CONTROLLER.md`; `millo-desktop` does not depend on its firmware.
 
 ### Machine profiles
 
@@ -453,13 +456,7 @@ does not schedule or execute controller I/O.
 - Sender reconciliation distinguishes a newly observed status frame from a
   pending read or terminal response. Stale preflight `Idle` can never release a
   deferred `M2/M30`.
-- Tauri checks the active descriptor and the actor checks `DryRunTarget`; both
-  must identify Mock GRBL. Serial replacement automatically disables and
-  cancels dry-run execution.
-- Mock Pause and Resume are target-checked again inside the actor. Direct IPC or
-  a future adapter cannot apply host-only dry-run transitions to an Air/Cutting
-  sender; physical pause/resume remains the typed Feed Hold/Cycle Start workflow.
-- React receives a separate `dry-run-state` event with bounded progress,
+- React receives a separate `sender-state` event with bounded progress,
   current source line, and terminal error. Plugins receive no sender or raw-line
   capability. `jobs.create` remains reserved.
 - The same event bridge passes snapshots through a bounded queue to a dedicated
@@ -513,8 +510,8 @@ does not schedule or execute controller I/O.
   does not decide whether a program or controller is ready.
 - Tauri reparses the retained original source. The preview DTO and its
   `dryRunEligible` flag are not accepted as execution evidence.
-- Both Tauri and the command actor require the serial execution target. Mock and
-  disabled targets fail before controller I/O.
+- Both Tauri and the command actor require the serial execution target. A
+  disabled startup placeholder fails before controller I/O.
 - The actor performs one serialized `?`, `$I`, `$$`, `$G`, `$#`, `?`
   transaction. It requires stable `Idle` before Inspector and assesses the final
   status, so a stale UI snapshot cannot clear preflight.
@@ -556,8 +553,8 @@ does not schedule or execute controller I/O.
 - Production Start refreshes status, rebuilds the intent-specific plan, consumes
   the matching lease, and starts the shared bounded-RX state machine in one
   actor request. Authorization alone still emits no program command.
-- `SenderSnapshot.mode` distinguishes legacy `mockDryRun`, `checkRun`, `airRun`, and `cutRun`
-  without creating separate implementations. `M0` pauses after `ok`; `M1`
+- Production `SenderSnapshot.mode` distinguishes `checkRun`, `airRun`, and
+  `cutRun` without creating separate implementations. `M0` pauses after `ok`; `M1`
   does so only when Optional Stop was bound into the plan;
   `M2/M30` terminate dispatch. For physical modes the terminal line is retained
   as an unsent barrier while the sender enters `Draining`; a fresh `Idle`
@@ -567,15 +564,13 @@ does not schedule or execute controller I/O.
   lines may already be accepted by GRBL, a physical command rejection or
   response failure triggers best-effort realtime Hold followed by Soft Reset to
   flush the controller receive and planner queues.
-- Mock and Serial are both machine-capable execution targets. The normal desktop
-  Mock route uses `checkRun`, `airRun`, and `cutRun` through the same preflight,
-  one-use lease and sender APIs as Serial. `mockDryRun` remains only as a narrow
-  compatibility/diagnostic API and is not the operator workflow.
-- `millo-mock::virtual_grbl` owns simulated modal and planner state separately
-  from transport framing. Status polls advance an accelerated bounded clock and
-  emit intermediate coordinates and line numbers. Low-level Serial fixtures can
-  switch the virtual planner off and inject status frames deterministically;
-  production Mock sessions cannot enter that scripted mode through the UI.
+- The standalone VMC-3 process owns simulated modal/planner state and PTY
+  framing. It identifies as an ordinary serial controller. Millo contains no
+  virtual transport kind, built-in profile exception, fault IPC, or simulator UI.
+- VMC-3 status advances a wall-clock motion planner using `$110-$112` rates and
+  `$120-$122` acceleration. Low-level test fixtures may still inject scripted
+  frames below the production adapter, but that control surface is not linked
+  into `millo-desktop`.
 - Physical modes cannot use plain Cancel. Operator stop is Feed Hold followed by
   Soft Reset in one typed actor request. React uses a short two-press inline
   confirmation, while the actor verifies that an Air/Cut sender is active,
@@ -629,13 +624,17 @@ does not schedule or execute controller I/O.
 
 - `millo-serial` owns OS port discovery, baud configuration, asynchronous byte
   writes, and CR/LF line framing.
-- It implements the same `Transport` contract as `millo-mock`; neither serial
-  nor mock parses GRBL or changes machine state.
+- It implements the `Transport` contract without parsing GRBL or changing
+  machine state.
 - The command actor stores `Controller<BoxedTransport>`, so transport selection
   changes construction only, not controller policy.
-- Serial targets are checked against fresh native discovery before opening.
-- The default UI filter uses only discovery metadata: USB transport kind,
-  GRBL/CNC/FluidNC names, common board and USB-UART names, and known vendor IDs.
+- Serial targets are checked against fresh merged discovery before opening.
+- Native hardware discovery is merged with a bounded external-endpoint registry.
+  Registered entries contain only path/manufacturer/product/serial metadata and
+  are ignored after the underlying path disappears. This permits a standalone
+  PTY controller without exposing an emulator flag above `millo-serial`.
+- The default UI filter uses only discovery metadata: explicit GRBL/CNC names on
+  any serial endpoint plus USB transport kind, common board/USB-UART names, and known vendor IDs.
   It is intentionally advisory and can be disabled to expose every port.
 - EOF and pre-connect I/O become `TransportError::NotConnected`; platform I/O
   failures preserve their message as `TransportError::Io`.

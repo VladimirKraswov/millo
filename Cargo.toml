@@ -25,6 +25,7 @@ members = [
   "crates/millo-storage",
   "crates/millo-tooling",
   "crates/millo-transport",
+  "crates/millo-virtual-controller",
   "src-tauri",
 ]
 
@@ -39,5 +40,5 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
-tokio = { version = "1", features = ["io-util", "macros", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "signal", "sync", "time"] }
 rhai = { version = "1.25.1", features = ["serde", "sync"] }

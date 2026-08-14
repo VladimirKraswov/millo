@@ -24,6 +24,32 @@ pub trait Transport: Send {
 
 pub type BoxedTransport = Box<dyn Transport>;
 
+#[derive(Debug, Default)]
+pub struct DisconnectedTransport;
+
+#[async_trait]
+impl Transport for DisconnectedTransport {
+    async fn connect(&mut self) -> Result<(), TransportError> {
+        Err(TransportError::NotConnected)
+    }
+
+    async fn disconnect(&mut self) -> Result<(), TransportError> {
+        Ok(())
+    }
+
+    async fn write(&mut self, _data: &[u8]) -> Result<(), TransportError> {
+        Err(TransportError::NotConnected)
+    }
+
+    async fn read_line(&mut self) -> Result<String, TransportError> {
+        Err(TransportError::NotConnected)
+    }
+
+    fn is_connected(&self) -> bool {
+        false
+    }
+}
+
 #[async_trait]
 impl<T: Transport + ?Sized> Transport for Box<T> {
     async fn connect(&mut self) -> Result<(), TransportError> {
@@ -96,5 +122,22 @@ mod tests {
         assert_eq!(transport.read_line().await.unwrap(), "ok");
         transport.disconnect().await.unwrap();
         assert!(!transport.is_connected());
+    }
+
+    #[tokio::test]
+    async fn disconnected_transport_is_a_non_connectable_startup_placeholder() {
+        let mut transport = DisconnectedTransport;
+
+        assert_eq!(transport.connect().await, Err(TransportError::NotConnected));
+        assert_eq!(
+            transport.write(b"?").await,
+            Err(TransportError::NotConnected)
+        );
+        assert_eq!(
+            transport.read_line().await,
+            Err(TransportError::NotConnected)
+        );
+        assert!(!transport.is_connected());
+        assert_eq!(transport.disconnect().await, Ok(()));
     }
 }

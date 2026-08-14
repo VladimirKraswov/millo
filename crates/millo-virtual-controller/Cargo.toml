@@ -1,0 +1,13 @@
+[package]
+name = "millo-virtual-controller"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Standalone GRBL virtual CNC controller exposed through a serial PTY"
+
+[dependencies]
+libc = "0.2"
+millo-mock = { path = "../millo-mock" }
+millo-serial = { path = "../millo-serial" }
+millo-transport = { path = "../millo-transport" }
+tokio.workspace = true

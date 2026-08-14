@@ -9611,8 +9611,7 @@ button.real-run-check:hover {
   border-bottom: 0;
 }
 
-.lifecycle-metrics span,
-.mock-scenarios > span {
+.lifecycle-metrics span {
   color: #75838c;
   font-size: 9px;
   text-transform: uppercase;
@@ -9622,42 +9621,6 @@ button.real-run-check:hover {
   font-family: "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
   font-weight: 500;
-}
-
-.mock-scenarios {
-  padding: 0 0 10px;
-  border-bottom: 0;
-}
-
-.mock-scenarios > div {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px;
-  margin-top: 8px;
-}
-
-.mock-scenarios button {
-  min-height: 30px;
-  padding: 0 8px;
-  overflow: hidden;
-  border: 1px solid #344149;
-  border-radius: 4px;
-  color: #aab6bd;
-  background: #141c21;
-  cursor: pointer;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.mock-scenarios button:hover:not(:disabled) {
-  border-color: #62737d;
-  color: #e2e8eb;
-}
-
-.mock-scenarios button:disabled {
-  opacity: 0.38;
-  cursor: default;
 }
 
 kbd {

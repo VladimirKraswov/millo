@@ -2066,7 +2066,6 @@ dependencies = [
  "millo-grbl",
  "millo-heightmap",
  "millo-journal",
- "millo-mock",
  "millo-profile",
  "millo-recovery",
  "millo-restart",
@@ -2285,6 +2284,17 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
+name = "millo-virtual-controller"
+version = "0.1.1"
+dependencies = [
+ "libc",
+ "millo-mock",
+ "millo-serial",
+ "millo-transport",
  "tokio",
 ]
 

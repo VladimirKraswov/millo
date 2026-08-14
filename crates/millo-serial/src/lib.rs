@@ -1,13 +1,24 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
 use millo_transport::{Transport, TransportError};
 use thiserror::Error;
-use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
-use tokio_serial::{SerialPortBuilderExt, SerialPortType, SerialStream};
+use tokio::io::{
+    AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadHalf,
+    WriteHalf,
+};
+use tokio_serial::{SerialPortBuilderExt, SerialPortType};
 
-type SerialReader = BufReader<ReadHalf<SerialStream>>;
-type SerialWriter = WriteHalf<SerialStream>;
+trait SerialIo: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> SerialIo for T {}
+
+type BoxedSerialIo = Box<dyn SerialIo>;
+type SerialReader = BufReader<ReadHalf<BoxedSerialIo>>;
+type SerialWriter = WriteHalf<BoxedSerialIo>;
 const MAX_SERIAL_LINE_BYTES: usize = 4 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,8 +71,43 @@ pub struct SerialPortDescriptor {
     pub serial_number: Option<String>,
 }
 
+pub struct ExternalSerialRegistration {
+    path: PathBuf,
+}
+
+impl Drop for ExternalSerialRegistration {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+pub fn register_external_serial_endpoint(
+    descriptor: &SerialPortDescriptor,
+) -> Result<ExternalSerialRegistration, TransportError> {
+    if !Path::new(&descriptor.port_name).is_absolute() {
+        return Err(TransportError::Io(
+            "external serial endpoint path must be absolute".to_owned(),
+        ));
+    }
+    let root = external_endpoint_root();
+    fs::create_dir_all(&root).map_err(|error| TransportError::Io(error.to_string()))?;
+    let identity = descriptor
+        .serial_number
+        .as_deref()
+        .unwrap_or(&descriptor.port_name)
+        .chars()
+        .filter(|character| character.is_ascii_alphanumeric() || *character == '-')
+        .collect::<String>();
+    let path = root.join(format!("{}.endpoint", identity.to_ascii_lowercase()));
+    let temporary = root.join(format!(".{}.tmp", std::process::id()));
+    let contents = serialize_external_endpoint(descriptor)?;
+    fs::write(&temporary, contents).map_err(|error| TransportError::Io(error.to_string()))?;
+    fs::rename(&temporary, &path).map_err(|error| TransportError::Io(error.to_string()))?;
+    Ok(ExternalSerialRegistration { path })
+}
+
 pub fn available_ports() -> Result<Vec<SerialPortDescriptor>, TransportError> {
-    let ports = tokio_serial::available_ports()
+    let mut ports = tokio_serial::available_ports()
         .map_err(|error| TransportError::Io(error.to_string()))?
         .into_iter()
         .map(|port| {
@@ -96,7 +142,83 @@ pub fn available_ports() -> Result<Vec<SerialPortDescriptor>, TransportError> {
             descriptor
         })
         .collect::<Vec<_>>();
+    ports.extend(registered_external_ports(&external_endpoint_root()));
     Ok(deduplicate_native_ports(ports))
+}
+
+fn external_endpoint_root() -> PathBuf {
+    std::env::var_os("MILLO_SERIAL_ENDPOINT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("millo-serial-endpoints"))
+}
+
+fn serialize_external_endpoint(
+    descriptor: &SerialPortDescriptor,
+) -> Result<String, TransportError> {
+    let values = [
+        ("port", Some(descriptor.port_name.as_str())),
+        ("manufacturer", descriptor.manufacturer.as_deref()),
+        ("product", descriptor.product.as_deref()),
+        ("serial", descriptor.serial_number.as_deref()),
+    ];
+    if values
+        .iter()
+        .filter_map(|(_, value)| *value)
+        .any(|value| value.contains(['\n', '\r']))
+    {
+        return Err(TransportError::Io(
+            "external serial metadata contains a newline".to_owned(),
+        ));
+    }
+    Ok(values
+        .into_iter()
+        .filter_map(|(key, value)| value.map(|value| format!("{key}={value}\n")))
+        .collect())
+}
+
+fn registered_external_ports(root: &Path) -> Vec<SerialPortDescriptor> {
+    let Ok(entries) = fs::read_dir(root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|value| value == "endpoint")
+        })
+        .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+        .filter_map(|contents| parse_external_endpoint(&contents))
+        .filter(|descriptor| Path::new(&descriptor.port_name).exists())
+        .collect()
+}
+
+fn parse_external_endpoint(contents: &str) -> Option<SerialPortDescriptor> {
+    let fields = contents
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect::<BTreeMap<_, _>>();
+    let port_name = fields.get("port")?.trim();
+    if port_name.is_empty() || !Path::new(port_name).is_absolute() {
+        return None;
+    }
+    let optional = |key: &str| {
+        fields
+            .get(key)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    };
+    Some(SerialPortDescriptor {
+        port_name: port_name.to_owned(),
+        kind: SerialPortKind::Unknown,
+        vendor_id: None,
+        product_id: None,
+        manufacturer: optional("manufacturer"),
+        product: optional("product"),
+        serial_number: optional("serial"),
+    })
 }
 
 fn deduplicate_native_ports(ports: Vec<SerialPortDescriptor>) -> Vec<SerialPortDescriptor> {
@@ -167,9 +289,28 @@ impl Transport for SerialTransport {
         self.reader = None;
         self.writer = None;
 
-        let stream = tokio_serial::new(&self.config.port_name, self.config.baud_rate)
-            .open_native_async()
-            .map_err(|error| TransportError::Io(error.to_string()))?;
+        let stream: BoxedSerialIo = match tokio_serial::new(
+            &self.config.port_name,
+            self.config.baud_rate,
+        )
+        .open_native_async()
+        {
+            Ok(stream) => Box::new(stream),
+            Err(serial_error) if is_registered_external_port(&self.config.port_name) => {
+                let stream = tokio::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .open(&self.config.port_name)
+                    .await
+                    .map_err(|fallback_error| {
+                        TransportError::Io(format!(
+                            "serial open failed ({serial_error}); raw TTY fallback failed ({fallback_error})"
+                        ))
+                    })?;
+                Box::new(stream)
+            }
+            Err(error) => return Err(TransportError::Io(error.to_string())),
+        };
         let (reader, writer) = tokio::io::split(stream);
         self.reader = Some(BufReader::new(reader));
         self.writer = Some(writer);
@@ -202,6 +343,12 @@ impl Transport for SerialTransport {
     fn is_connected(&self) -> bool {
         self.reader.is_some() && self.writer.is_some()
     }
+}
+
+fn is_registered_external_port(port_name: &str) -> bool {
+    registered_external_ports(&external_endpoint_root())
+        .iter()
+        .any(|descriptor| descriptor.port_name == port_name)
 }
 
 async fn read_serial_line<R: AsyncBufRead + Unpin>(
@@ -374,6 +521,24 @@ mod tests {
         );
         assert!(unique.iter().any(|port| port.port_name == "COM4"));
         assert!(unique.iter().any(|port| port.port_name == "COM5"));
+    }
+
+    #[test]
+    fn external_endpoint_metadata_round_trips_without_an_emulator_flag() {
+        let descriptor = SerialPortDescriptor {
+            port_name: "/dev/ttys123".to_owned(),
+            kind: SerialPortKind::Unknown,
+            vendor_id: None,
+            product_id: None,
+            manufacturer: Some("Millo".to_owned()),
+            product: Some("Millo VMC-3 GRBL Controller".to_owned()),
+            serial_number: Some("MILLO-VMC3-0001".to_owned()),
+        };
+
+        let parsed =
+            parse_external_endpoint(&serialize_external_endpoint(&descriptor).unwrap()).unwrap();
+
+        assert_eq!(parsed, descriptor);
     }
 
     fn test_port(port_name: &str) -> SerialPortDescriptor {

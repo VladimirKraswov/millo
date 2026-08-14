@@ -30,8 +30,8 @@ import type {
 } from "../../shared/machine";
 import {
   idleSenderSnapshot,
-  type DryRunGateway,
   type SenderSnapshot,
+  type SenderStateGateway,
 } from "../../shared/dryRun";
 import type { GcodeProgram } from "../../shared/program";
 import type { PublishedJob } from "../../shared/jobs";
@@ -57,7 +57,6 @@ import { JobReadinessPanel } from "./JobReadinessPanel";
 import { ProgramFilePicker } from "./ProgramFilePicker";
 import { ProgramEditor } from "./ProgramEditor";
 import { ProgramInspection, type ProgramDiagnosticView } from "./ProgramInspection";
-import { ProgramMockRunCard } from "./ProgramMockRunCard";
 import { ProgramLoader, type LoadedProgram } from "./ProgramLoader";
 import { ProgramPreviewStage } from "./ProgramPreviewStage";
 import { ProgramRecoveryDialog } from "./ProgramRecoveryDialog";
@@ -65,15 +64,11 @@ import { ProgramRunCard } from "./ProgramRunCard";
 import { SafeStartDialog } from "./SafeStartDialog";
 import { ToolChangeDialog } from "./ToolChangeDialog";
 import { canStartCheckRun } from "./checkRunReadModel";
-import {
-  dryRunControls,
-  senderFailureSummary,
-} from "./dryRunReadModel";
+import { senderFailureSummary } from "./dryRunReadModel";
 import { realRunPreflightControls } from "./realRunPreflightReadModel";
 import {
   checkSenderAction,
   physicalSenderActionLayout,
-  senderActionLayout,
   senderRunIsVisibleForProgram,
 } from "./operatorLayoutModel";
 import {
@@ -92,7 +87,6 @@ import {
   sameExecutionOptions,
 } from "./executionOptionsModel";
 import { isSenderActive } from "./senderStateModel";
-import { senderStateLabel } from "./senderPresentationModel";
 
 export interface ProgramMachineContext {
   readonly activeCoordinateSystem: string;
@@ -113,8 +107,6 @@ export interface ProgramMachineContext {
 
 interface ProgramWorkspaceProps {
   readonly desktopRuntime: boolean;
-  readonly dryRunAvailable?: boolean;
-  readonly dryRunGateway?: DryRunGateway;
   readonly gateway: ProgramGateway;
   readonly heightmapGateway?: HeightmapGateway;
   readonly initialProgram?: GcodeProgram;
@@ -128,6 +120,7 @@ interface ProgramWorkspaceProps {
   readonly realRunAvailable?: boolean;
   readonly realRunGateway?: RealRunPreflightGateway;
   readonly realRunTarget?: boolean;
+  readonly senderGateway?: SenderStateGateway;
 }
 
 interface SafeStartContext {
@@ -137,8 +130,6 @@ interface SafeStartContext {
 
 export function ProgramWorkspace({
   desktopRuntime,
-  dryRunAvailable = false,
-  dryRunGateway,
   gateway,
   heightmapGateway,
   initialProgram,
@@ -152,6 +143,7 @@ export function ProgramWorkspace({
   realRunAvailable = false,
   realRunGateway,
   realRunTarget = false,
+  senderGateway,
 }: ProgramWorkspaceProps) {
   const loader = useMemo(() => new ProgramLoader(gateway), [gateway]);
   const [loaded, setLoaded] = useState<LoadedProgram | undefined>(
@@ -270,10 +262,10 @@ export function ProgramWorkspace({
   ]);
 
   useEffect(() => {
-    if (!desktopRuntime || !dryRunGateway) return;
+    if (!desktopRuntime || !senderGateway) return;
     let active = true;
     let unsubscribe: (() => void) | undefined;
-    void dryRunGateway
+    void senderGateway
       .snapshot()
       .then((snapshot) => {
         if (active) setSender(snapshot);
@@ -281,7 +273,7 @@ export function ProgramWorkspace({
       .catch((reason: unknown) => {
         if (active) setError(String(reason));
       });
-    void dryRunGateway
+    void senderGateway
       .subscribe((snapshot) => {
         if (active) setSender(snapshot);
       })
@@ -296,7 +288,7 @@ export function ProgramWorkspace({
       active = false;
       unsubscribe?.();
     };
-  }, [desktopRuntime, dryRunGateway]);
+  }, [desktopRuntime, senderGateway]);
 
   useEffect(() => {
     if (!realRunGateway) {
@@ -600,16 +592,6 @@ export function ProgramWorkspace({
       setSenderCommandBusy(false);
     }
   };
-  const startDryRun = () => {
-    if (!loaded || !dryRunGateway) return;
-    setDiagnosticsOpen(false);
-    void runSenderAction(() =>
-      dryRunGateway.start({
-        sourceName: loaded.program.sourceName,
-        source: loaded.source,
-      }),
-    );
-  };
   const senderForProgram = senderRunIsVisibleForProgram(
     sender,
     program?.sourceName,
@@ -617,12 +599,9 @@ export function ProgramWorkspace({
   );
   const displayedSender = senderForProgram ? sender : idleSenderSnapshot;
   const displayedSenderFailure = senderFailureSummary(displayedSender);
-  const controls = dryRunControls(displayedSender, {
-    mockAvailable: dryRunAvailable,
-    policyEligible: program?.summary.dryRunEligible ?? false,
-    loading,
-  });
-  const progressPercent = controls.progressPercent;
+  const progressPercent = Math.round(
+    Math.min(1, Math.max(0, displayedSender.progress)) * 100,
+  );
   const depthCorrection = useMemo(
     () => depthCorrectionView(program, programExecutionOptions.cuttingDepthAdjustmentUm),
     [program, programExecutionOptions.cuttingDepthAdjustmentUm],
@@ -906,18 +885,8 @@ export function ProgramWorkspace({
     programLoaded: loaded !== undefined,
     serialAvailable: realRunAvailable,
   });
-  const mockActions = senderActionLayout(displayedSender.state);
   const physicalActions = physicalSenderActionLayout(displayedSender.state);
   const checkAction = checkSenderAction(displayedSender.state);
-  const mockStatus = displayedSenderFailure
-    ? displayedSenderFailure
-    : !dryRunAvailable
-      ? "Подключите Mock GRBL в состоянии Idle"
-      : displayedSender.state === "completed"
-        ? "Все строки подтверждены Mock GRBL"
-        : displayedSender.state === "cancelled"
-          ? "Тест остановлен оператором"
-          : "Каждая строка сопоставляется с ответом контроллера";
 
   const returnFromCheck = () => {
     setClearedSenderRunSequence(sender.runSequence);
@@ -927,17 +896,6 @@ export function ProgramWorkspace({
     }));
     setRealRunReport(undefined);
     setDiagnosticsOpen(displayedSender.state === "failed");
-  };
-
-  const runMockPrimaryAction = () => {
-    if (!dryRunGateway) return;
-    if (mockActions.primary === "start") startDryRun();
-    if (mockActions.primary === "pause") {
-      void runSenderAction(dryRunGateway.pause);
-    }
-    if (mockActions.primary === "resume") {
-      void runSenderAction(dryRunGateway.resume);
-    }
   };
 
   useEffect(() => {
@@ -1139,12 +1097,12 @@ export function ProgramWorkspace({
               <ProgramRunCard
                 busy={senderCommandBusy}
                 checkAction={checkAction}
-                checkControlsAvailable={dryRunGateway !== undefined}
+                checkControlsAvailable={realRunGateway !== undefined}
                 checkRun={checkRunVisible}
                 failureSummary={displayedSenderFailure}
                 machineContextAvailable={machineContext !== undefined}
                 onCancelCheck={() => {
-                  if (dryRunGateway) void runSenderAction(dryRunGateway.cancel);
+                  if (realRunGateway) void runSenderAction(realRunGateway.abortProgram);
                 }}
                 onPause={() => {
                   if (realRunGateway) void runSenderAction(realRunGateway.pauseProgram);
@@ -1267,23 +1225,7 @@ export function ProgramWorkspace({
                   </button>
                 </details>
               </div>
-            ) : (
-              <ProgramMockRunCard
-                actions={mockActions}
-                controls={controls}
-                dryRunAvailable={dryRunAvailable}
-                failure={displayedSenderFailure !== undefined}
-                gatewayAvailable={dryRunGateway !== undefined}
-                onCancel={() => {
-                  if (dryRunGateway && mockActions.cancelVisible) {
-                    void runSenderAction(dryRunGateway.cancel);
-                  }
-                }}
-                onPrimary={runMockPrimaryAction}
-                sender={displayedSender}
-                status={mockStatus}
-              />
-            )}
+            ) : null}
             <ProgramInspection
               diagnosticView={diagnosticView}
               motionSourceLines={motionSourceLines}
@@ -1298,13 +1240,13 @@ export function ProgramWorkspace({
             />
           </aside>
         </div>
-      ) : senderActive && dryRunGateway ? (
+      ) : senderActive && realRunGateway ? (
         <div className="program-dropzone sender-recovery" role="status">
           <ShieldAlert aria-hidden="true" size={28} />
           <strong>{sender.sourceName ?? "Проверка движения"}</strong>
-          <span>{senderStateLabel(sender.state)}</span>
+          <span>Выполнение активно</span>
           <button
-            onClick={() => void runSenderAction(dryRunGateway.cancel)}
+            onClick={() => void runSenderAction(realRunGateway.abortProgram)}
             type="button"
           >
             <X aria-hidden="true" size={13} />

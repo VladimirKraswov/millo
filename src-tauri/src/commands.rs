@@ -23,8 +23,7 @@ use millo_domain::{
     WorkZeroRequest, ZProbeOutcome, ZProbeRequest,
 };
 use millo_dry_run::{
-    DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy, build_dry_run_plan,
-    build_program_run_plan_with_options,
+    ProgramExecutionOptions, ProgramRunPolicy, build_program_run_plan_with_options,
 };
 use millo_gcode::{
     GcodeProgram, ProgramParseOptions, ProgramParseRequest, parse_program,
@@ -36,7 +35,6 @@ use millo_heightmap::{
     HeightmapStartRequest, SurfaceSession, SurfaceSessionStore,
 };
 use millo_journal::{RunJournal, RunJournalEntry};
-use millo_mock::{MockControl, MockTransport};
 use millo_profile::{
     DetectedController, IdentityConfidence, MachineConnectionPreset, MachineFingerprint,
     MachineLocalSettingsUpdate, MachineProfile, MachineProfileDraft, MachineProfileState,
@@ -65,7 +63,7 @@ use millo_settings::{
     build_settings_snapshot,
 };
 use millo_tooling::{CuttingToolDraft, ToolLibraryState, ToolLibraryStore};
-use millo_transport::BoxedTransport;
+use millo_transport::{BoxedTransport, DisconnectedTransport};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter, State};
@@ -83,7 +81,6 @@ pub use script_command_model::{
 };
 use script_command_model::{ensure_script_motion_confirmed, jog_axis, work_axis};
 
-const MOCK_TRANSPORT_ID: &str = "mock";
 const SERIAL_TRANSPORT_PREFIX: &str = "serial:";
 
 fn unix_time_ms() -> u64 {
@@ -152,7 +149,6 @@ fn audit_operation<T>(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TransportKind {
-    Mock,
     Serial,
 }
 
@@ -197,7 +193,6 @@ pub struct ConnectOutcome {
 struct ResolvedTransport {
     transport: BoxedTransport,
     descriptor: TransportDescriptor,
-    mock: Option<MockControl>,
     execution_target: ExecutionTarget,
 }
 
@@ -210,26 +205,12 @@ struct ActiveControllerSettings {
     revision: u64,
 }
 
-impl ResolvedTransport {
-    fn mock() -> Self {
-        let transport = MockTransport::default();
-        let mock = transport.control();
-        Self {
-            transport: Box::new(transport),
-            descriptor: mock_descriptor(),
-            mock: Some(mock),
-            execution_target: ExecutionTarget::Mock,
-        }
-    }
-}
-
 pub struct AppState {
     arbiter: CommandArbiter,
     audit: AuditLog,
     profiles: Mutex<MachineProfileStore>,
     tools: Mutex<ToolLibraryStore>,
     active_transport: Mutex<TransportDescriptor>,
-    mock: Mutex<Option<MockControl>>,
     transition_lock: Mutex<()>,
     event_task: Mutex<Option<JoinHandle<()>>>,
     settings_root: Option<PathBuf>,
@@ -350,9 +331,7 @@ impl AppState {
         settings_root: Option<PathBuf>,
         audit: AuditLog,
     ) -> Self {
-        let initial = ResolvedTransport::mock();
-        let descriptor = initial.descriptor;
-        let mock = initial.mock;
+        let descriptor = disconnected_descriptor();
         let hardware_profile = stores
             .profiles
             .state()
@@ -360,10 +339,10 @@ impl AppState {
             .map(|profile| profile.hardware_profile())
             .unwrap_or_else(HardwareProfile::first_machine);
         let (arbiter, worker) = CommandArbiter::new_with_execution_target(
-            initial.transport,
+            Box::new(DisconnectedTransport),
             ControllerConfig::default(),
             hardware_profile,
-            initial.execution_target,
+            ExecutionTarget::Disabled,
         );
         tauri::async_runtime::spawn(worker);
 
@@ -373,7 +352,6 @@ impl AppState {
             profiles: Mutex::new(stores.profiles),
             tools: Mutex::new(stores.tools),
             active_transport: Mutex::new(descriptor),
-            mock: Mutex::new(mock),
             transition_lock: Mutex::new(()),
             event_task: Mutex::new(None),
             settings_root,
@@ -460,7 +438,7 @@ impl AppState {
                             format!("{:?} at source line {:?}", snapshot.state, snapshot.current_source_line),
                             serde_json::to_value(&snapshot).unwrap_or(Value::Null),
                         );
-                        if let Err(error) = app.emit("dry-run-state", snapshot.clone()) {
+                        if let Err(error) = app.emit("sender-state", snapshot.clone()) {
                             audit.record(
                                 AuditLevel::Error,
                                 AuditCategory::Ui,
@@ -1120,9 +1098,7 @@ pub async fn list_transports() -> Result<Vec<TransportDescriptor>, String> {
         .map_err(|error| format!("serial discovery task failed: {error}"))?
         .map_err(|error| error.to_string())?;
 
-    let mut transports = vec![mock_descriptor()];
-    transports.extend(serial_ports.into_iter().map(serial_descriptor));
-    Ok(transports)
+    Ok(serial_ports.into_iter().map(serial_descriptor).collect())
 }
 
 #[tauri::command]
@@ -1186,7 +1162,6 @@ pub async fn connect_transport(
     }
     *state.settings_session.lock().await = None;
     *state.active_transport.lock().await = descriptor.clone();
-    *state.mock.lock().await = replacement.mock;
 
     let result = async {
         state
@@ -1215,7 +1190,7 @@ pub async fn connect_transport(
             baud_rate,
             fingerprint: Some(fingerprint.clone()),
         };
-        let mut profile_match = {
+        let profile_match = {
             let profiles = state.profiles.lock().await.state();
             match_machine_profile(
                 &profiles,
@@ -1224,22 +1199,6 @@ pub async fn connect_transport(
                 &initial_inspection.device,
             )?
         };
-        if descriptor.kind == TransportKind::Mock && profile_match.is_none() {
-            let profiles = state.profiles.lock().await.state();
-            let draft = virtual_machine_profile_draft(
-                &profiles,
-                &initial_inspection.device,
-                connection.clone(),
-            )?;
-            let created = state
-                .profiles
-                .lock()
-                .await
-                .create_and_select(draft)
-                .map_err(|error| error.to_string())?;
-            profile_match = created.selected().cloned();
-        }
-
         let mut profile_id = None;
         let mut archive = None;
         if let Some(profile) = profile_match.as_ref() {
@@ -1486,42 +1445,6 @@ async fn ensure_machine_bound(state: &AppState) -> Result<(), String> {
     }
 }
 
-fn available_virtual_machine_name(profiles: &MachineProfileState) -> String {
-    const BASE: &str = "Виртуальный GRBL";
-    if !profiles
-        .profiles
-        .iter()
-        .any(|profile| profile.name.eq_ignore_ascii_case(BASE))
-    {
-        return BASE.to_owned();
-    }
-    (2_u32..)
-        .map(|suffix| format!("{BASE} {suffix}"))
-        .find(|candidate| {
-            !profiles
-                .profiles
-                .iter()
-                .any(|profile| profile.name.eq_ignore_ascii_case(candidate))
-        })
-        .expect("unbounded virtual profile suffix iterator")
-}
-
-fn virtual_machine_profile_draft(
-    profiles: &MachineProfileState,
-    inspection: &DeviceInspection,
-    connection: MachineConnectionPreset,
-) -> Result<MachineProfileDraft, String> {
-    let mut draft = MachineProfileDraft::from_grbl_inspection(
-        available_virtual_machine_name(profiles),
-        inspection,
-        connection,
-    )
-    .map_err(|error| error.to_string())?;
-    draft.probe_installed = true;
-    draft.probe_settings.mode = millo_domain::ProbeWorkflowMode::Heightmap;
-    Ok(draft)
-}
-
 fn settings_state(active: &ActiveControllerSettings) -> ControllerSettingsState {
     let (session_baseline, previous_baseline, revision_count) = active
         .archive
@@ -1631,13 +1554,6 @@ fn machine_fingerprint(
     descriptor: &TransportDescriptor,
     inspection: &DeviceInspection,
 ) -> MachineFingerprint {
-    if descriptor.kind == TransportKind::Mock {
-        return MachineFingerprint {
-            key: "mock:built-in-grbl".to_owned(),
-            confidence: IdentityConfidence::Synthetic,
-            label: "Built-in Mock GRBL".to_owned(),
-        };
-    }
     let vendor = descriptor.vendor_id.unwrap_or_default();
     let product = descriptor.product_id.unwrap_or_default();
     if let Some(serial) = descriptor
@@ -3565,78 +3481,6 @@ pub async fn sender_snapshot(state: State<'_, AppState>) -> Result<SenderSnapsho
 }
 
 #[tauri::command]
-pub async fn start_mock_dry_run(
-    request: ProgramParseRequest,
-    state: State<'_, AppState>,
-) -> Result<SenderSnapshot, String> {
-    if state.active_transport.lock().await.kind != TransportKind::Mock {
-        return Err("dry run is currently available only on Mock GRBL".to_owned());
-    }
-    let plan = tokio::task::spawn_blocking(move || prepare_dry_run(request))
-        .await
-        .map_err(|error| format!("dry-run policy task failed: {error}"))??;
-    state
-        .arbiter
-        .start_dry_run(plan)
-        .await
-        .map_err(|error| error.to_string())
-}
-
-#[tauri::command]
-pub async fn pause_dry_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
-    let result = state
-        .arbiter
-        .pause_dry_run()
-        .await
-        .map_err(|error| error.to_string());
-    audit_operation(
-        &state.audit,
-        AuditCategory::Sender,
-        "sender.pause",
-        "Sender paused",
-        Value::Null,
-        &result,
-    );
-    result
-}
-
-#[tauri::command]
-pub async fn resume_dry_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
-    let result = state
-        .arbiter
-        .resume_dry_run()
-        .await
-        .map_err(|error| error.to_string());
-    audit_operation(
-        &state.audit,
-        AuditCategory::Sender,
-        "sender.resume",
-        "Sender resumed",
-        Value::Null,
-        &result,
-    );
-    result
-}
-
-#[tauri::command]
-pub async fn cancel_dry_run(state: State<'_, AppState>) -> Result<SenderSnapshot, String> {
-    let result = state
-        .arbiter
-        .cancel_dry_run()
-        .await
-        .map_err(|error| error.to_string());
-    audit_operation(
-        &state.audit,
-        AuditCategory::Sender,
-        "sender.cancel",
-        "Sender cancelled",
-        Value::Null,
-        &result,
-    );
-    result
-}
-
-#[tauri::command]
 pub async fn cancel_jog(state: State<'_, AppState>) -> Result<ControllerSnapshot, String> {
     let result = state
         .arbiter
@@ -3654,63 +3498,10 @@ pub async fn cancel_jog(state: State<'_, AppState>) -> Result<ControllerSnapshot
     result
 }
 
-#[tauri::command]
-pub async fn mock_trigger_reset(state: State<'_, AppState>) -> Result<(), String> {
-    active_mock(&state).await?.queue_reset("1.1h");
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn mock_start_run(state: State<'_, AppState>) -> Result<(), String> {
-    active_mock(&state)
-        .await?
-        .set_status("<Run|MPos:1.000,2.000,3.000|WPos:1.000,2.000,3.000|FS:120,0>");
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn mock_trigger_alarm(code: u16, state: State<'_, AppState>) -> Result<(), String> {
-    active_mock(&state).await?.queue_alarm(code);
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn mock_clear_alarm(state: State<'_, AppState>) -> Result<(), String> {
-    active_mock(&state).await?.clear_alarm();
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn mock_trigger_timeout(state: State<'_, AppState>) -> Result<(), String> {
-    let mock = active_mock(&state).await?;
-    mock.queue_stall();
-    mock.queue_stall();
-    Ok(())
-}
-
-#[tauri::command]
-pub async fn mock_trigger_disconnect(state: State<'_, AppState>) -> Result<(), String> {
-    active_mock(&state).await?.queue_disconnect();
-    Ok(())
-}
-
-async fn active_mock(state: &State<'_, AppState>) -> Result<MockControl, String> {
-    state
-        .mock
-        .lock()
-        .await
-        .clone()
-        .ok_or_else(|| "mock scenarios require the Mock GRBL transport".to_owned())
-}
-
 async fn resolve_transport(
     transport_id: &str,
     baud_rate: u32,
 ) -> Result<ResolvedTransport, String> {
-    if transport_id == MOCK_TRANSPORT_ID {
-        return Ok(ResolvedTransport::mock());
-    }
-
     let port_name = serial_port_name(transport_id)?;
     let available = tokio::task::spawn_blocking(available_serial_ports)
         .await
@@ -3726,41 +3517,19 @@ async fn resolve_transport(
     Ok(ResolvedTransport {
         transport: Box::new(SerialTransport::new(config)),
         descriptor: serial_descriptor(port),
-        mock: None,
         execution_target: ExecutionTarget::Serial,
     })
 }
 
-fn prepare_dry_run(request: ProgramParseRequest) -> Result<DryRunPlan, String> {
-    let program = parse_program(request).map_err(|error| error.to_string())?;
-    build_dry_run_plan(&program).map_err(format_dry_run_policy_error)
-}
-
-fn format_dry_run_policy_error(error: DryRunPolicyError) -> String {
-    match error {
-        DryRunPolicyError::Rejected(_, blockers) => blockers
-            .into_iter()
-            .map(|blocker| {
-                let location = blocker
-                    .source_line
-                    .map_or_else(|| "program".to_owned(), |line| format!("line {line}"));
-                format!("{location}: {}", blocker.message)
-            })
-            .collect::<Vec<_>>()
-            .join("; "),
-        DryRunPolicyError::EmptyProgram => error.to_string(),
-    }
-}
-
-fn mock_descriptor() -> TransportDescriptor {
+fn disconnected_descriptor() -> TransportDescriptor {
     TransportDescriptor {
-        id: MOCK_TRANSPORT_ID.to_owned(),
-        kind: TransportKind::Mock,
-        label: "Mock GRBL".to_owned(),
-        detail: Some("Deterministic test controller".to_owned()),
+        id: String::new(),
+        kind: TransportKind::Serial,
+        label: "Serial controller".to_owned(),
+        detail: None,
         port_name: None,
-        likely_grbl: true,
-        match_reason: Some("Built-in test controller".to_owned()),
+        likely_grbl: false,
+        match_reason: None,
         vendor_id: None,
         product_id: None,
         manufacturer: None,
@@ -3771,6 +3540,10 @@ fn mock_descriptor() -> TransportDescriptor {
 
 fn serial_descriptor(port: SerialPortDescriptor) -> TransportDescriptor {
     let match_reason = grbl_match_reason(&port).map(str::to_owned);
+    let label = port.product.as_ref().map_or_else(
+        || port.port_name.clone(),
+        |product| format!("{product} · {}", port.port_name),
+    );
     let detail = match port.kind {
         SerialPortKind::Usb => port
             .product
@@ -3785,13 +3558,16 @@ fn serial_descriptor(port: SerialPortDescriptor) -> TransportDescriptor {
             }),
         SerialPortKind::Bluetooth => Some("Bluetooth serial port".to_owned()),
         SerialPortKind::Pci => Some("PCI serial port".to_owned()),
-        SerialPortKind::Unknown => Some("Serial port".to_owned()),
+        SerialPortKind::Unknown => port
+            .manufacturer
+            .clone()
+            .or_else(|| Some("Serial port".to_owned())),
     };
 
     TransportDescriptor {
         id: format!("{SERIAL_TRANSPORT_PREFIX}{}", port.port_name),
         kind: TransportKind::Serial,
-        label: port.port_name.clone(),
+        label,
         detail,
         port_name: Some(port.port_name),
         likely_grbl: match_reason.is_some(),
@@ -3805,10 +3581,6 @@ fn serial_descriptor(port: SerialPortDescriptor) -> TransportDescriptor {
 }
 
 fn grbl_match_reason(port: &SerialPortDescriptor) -> Option<&'static str> {
-    if port.kind != SerialPortKind::Usb {
-        return None;
-    }
-
     let searchable = [
         Some(port.port_name.as_str()),
         port.manufacturer.as_deref(),
@@ -3825,6 +3597,10 @@ fn grbl_match_reason(port: &SerialPortDescriptor) -> Option<&'static str> {
         .any(|needle| searchable.contains(needle))
     {
         return Some("GRBL/CNC metadata");
+    }
+
+    if port.kind != SerialPortKind::Usb {
+        return None;
     }
 
     if [
@@ -3992,34 +3768,6 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_adapter_reparses_source_and_rejects_spindle_commands() {
-        let error = prepare_dry_run(ProgramParseRequest {
-            source_name: "unsafe.nc".to_owned(),
-            source: "G21\nM3 S1000\nG1 X1".to_owned(),
-        })
-        .unwrap_err();
-
-        assert!(error.contains("line 2"));
-        assert!(error.contains("spindle"));
-    }
-
-    #[test]
-    fn dry_run_adapter_returns_an_opaque_policy_plan_for_safe_source() {
-        let plan = prepare_dry_run(ProgramParseRequest {
-            source_name: "safe.nc".to_owned(),
-            source: "G21 G90\nG0 X1\nG1 X2 F10".to_owned(),
-        })
-        .unwrap();
-
-        assert_eq!(plan.source_name(), "safe.nc");
-        assert_eq!(plan.lines().len(), 7);
-        assert_eq!(plan.lines().first().unwrap().command(), "M5");
-        assert_eq!(plan.lines().get(1).unwrap().command(), "M9");
-        assert_eq!(plan.lines().get(5).unwrap().command(), "M5");
-        assert_eq!(plan.lines().last().unwrap().command(), "M9");
-    }
-
-    #[test]
     fn selected_run_adapter_builds_a_policy_valid_exact_remainder() {
         let source = "G21 G90 G94 G17 G54\nG0 Z5\nG0 X0 Y0\nG1 Z-0.2 F100\nG1 X10\nG0 Z5\nG0 X20 Y0\nG1 Z-0.2 F100\nG1 X30\nM30";
         let package = prepare_selected_run(SelectedRunPreparationRequest {
@@ -4066,7 +3814,7 @@ mod tests {
 
         assert_eq!(descriptor.kind, TransportKind::Serial);
         assert_eq!(descriptor.id, "serial:/dev/cu.usbmodem101");
-        assert_eq!(descriptor.label, "/dev/cu.usbmodem101");
+        assert_eq!(descriptor.label, "Uno · /dev/cu.usbmodem101");
         assert_eq!(descriptor.detail.as_deref(), Some("Uno"));
         assert!(descriptor.likely_grbl);
         assert_eq!(
@@ -4120,12 +3868,22 @@ mod tests {
             product: Some("FluidNC controller".to_owned()),
             serial_number: None,
         };
+        let external_grbl = SerialPortDescriptor {
+            port_name: "/dev/ttys003".to_owned(),
+            kind: SerialPortKind::Unknown,
+            vendor_id: None,
+            product_id: None,
+            manufacturer: Some("Millo".to_owned()),
+            product: Some("Millo VMC-3 GRBL Controller".to_owned()),
+            serial_number: Some("MILLO-VMC3-0001".to_owned()),
+        };
 
         assert_eq!(
             grbl_match_reason(&ch340),
             Some("Known controller or USB-UART vendor")
         );
         assert_eq!(grbl_match_reason(&fluidnc), Some("GRBL/CNC metadata"));
+        assert_eq!(grbl_match_reason(&external_grbl), Some("GRBL/CNC metadata"));
     }
 
     #[test]
@@ -4188,59 +3946,6 @@ mod tests {
             machine_fingerprint(&descriptor, &upgraded).key,
             fallback.key
         );
-    }
-
-    #[test]
-    fn virtual_machine_profile_uses_controller_travel_and_a_unique_name() {
-        let inspection = DeviceInspection {
-            firmware_version: Some("1.1h".to_owned()),
-            settings: BTreeMap::from([
-                ("$130".to_owned(), "300.000".to_owned()),
-                ("$131".to_owned(), "180.000".to_owned()),
-                ("$132".to_owned(), "80.000".to_owned()),
-            ]),
-            ..Default::default()
-        };
-        let existing = MachineProfile {
-            id: "machine-virtual-1".to_owned(),
-            name: "Виртуальный GRBL".to_owned(),
-            travel_mm: millo_domain::MachineTravel {
-                x: 1.0,
-                y: 1.0,
-                z: 1.0,
-            },
-            max_jog_distance_mm: 1.0,
-            spindle_control: millo_domain::SpindleControl::Manual,
-            homing_installed: false,
-            limit_switches_installed: false,
-            probe_installed: false,
-            probe_settings: millo_domain::ZProbeSettings::default(),
-            emergency_stop_installed: false,
-            connection: None,
-            detected_controller: None,
-        };
-        let profiles = MachineProfileState {
-            profiles: vec![existing],
-            selected_profile_id: None,
-        };
-        let connection = MachineConnectionPreset {
-            transport_id: MOCK_TRANSPORT_ID.to_owned(),
-            baud_rate: 115_200,
-            fingerprint: None,
-        };
-
-        let draft = virtual_machine_profile_draft(&profiles, &inspection, connection).unwrap();
-
-        assert_eq!(draft.name, "Виртуальный GRBL 2");
-        assert_eq!(draft.travel_mm.x, 300.0);
-        assert_eq!(draft.travel_mm.y, 180.0);
-        assert_eq!(draft.travel_mm.z, 80.0);
-        assert!(draft.probe_installed);
-        assert_eq!(
-            draft.probe_settings.mode,
-            millo_domain::ProbeWorkflowMode::Heightmap
-        );
-        assert_eq!(draft.connection.unwrap().transport_id, MOCK_TRANSPORT_ID);
     }
 
     #[test]

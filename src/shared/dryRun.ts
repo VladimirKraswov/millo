@@ -1,5 +1,3 @@
-import type { ProgramParseRequest } from "./program";
-
 export type SenderState =
   | "idle"
   | "ready"
@@ -11,7 +9,7 @@ export type SenderState =
   | "failed"
   | "cancelled";
 
-export type SenderMode = "mockDryRun" | "checkRun" | "airRun" | "cutRun";
+export type SenderMode = "checkRun" | "airRun" | "cutRun";
 
 export type SenderFailureKind =
   | "grblError"
@@ -61,12 +59,8 @@ export interface SenderSnapshot {
   readonly timeEstimateComplete: boolean;
 }
 
-export interface DryRunGateway {
+export interface SenderStateGateway {
   snapshot(): Promise<SenderSnapshot>;
-  start(request: ProgramParseRequest): Promise<SenderSnapshot>;
-  pause(): Promise<SenderSnapshot>;
-  resume(): Promise<SenderSnapshot>;
-  cancel(): Promise<SenderSnapshot>;
   subscribe(listener: (snapshot: SenderSnapshot) => void): Promise<() => void>;
 }
 
