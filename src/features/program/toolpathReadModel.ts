@@ -3,6 +3,7 @@ import type {
   ProgramBounds,
   ProgramPoint,
 } from "../../shared/program";
+import { adjustCuttingZ } from "./depthCorrectionModel";
 
 export interface ToolpathReadModel {
   readonly rapidPositions: Float32Array;
@@ -37,9 +38,7 @@ export function buildToolpathReadModel(
     kind: GcodeProgram["toolpath"][number]["kind"],
   ): ProgramPoint => ({
     ...point,
-    z: kind !== "rapid" && point.z < -1e-9
-      ? Math.min(0, point.z + cuttingDepthAdjustmentMm)
-      : point.z,
+    z: adjustCuttingZ(point.z, kind, cuttingDepthAdjustmentMm),
   });
   const adjustedPoints = program.toolpath.flatMap((segment) =>
     segment.points.map((point) => adjustedPoint(point, segment.kind)),
@@ -139,9 +138,7 @@ export function buildToolpathHighlightReadModel(
     for (let index = 1; index < segment.points.length; index += 1) {
       const adjust = (point: ProgramPoint): ProgramPoint => ({
         ...point,
-        z: segment.kind !== "rapid" && point.z < -1e-9
-          ? Math.min(0, point.z + cuttingDepthAdjustmentMm)
-          : point.z,
+        z: adjustCuttingZ(point.z, segment.kind, cuttingDepthAdjustmentMm),
       });
       const start = adjust(segment.points[index - 1]);
       const end = adjust(segment.points[index]);

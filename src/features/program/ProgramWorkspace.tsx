@@ -84,10 +84,13 @@ import type { PreviewView } from "./ToolpathPreview";
 import { suggestedSafeZ } from "./safeStartModel";
 import { surfaceMapExecutionView } from "./surfaceMapExecutionModel";
 import {
-  depthAdjustmentUmForTarget,
+  depthAdjustmentUm,
   depthCorrectionView,
 } from "./depthCorrectionModel";
-import { sameExecutionOptions } from "./executionOptionsModel";
+import {
+  executionOptionsForNewProgram,
+  sameExecutionOptions,
+} from "./executionOptionsModel";
 import { isSenderActive } from "./senderStateModel";
 import { senderStateLabel } from "./senderPresentationModel";
 
@@ -375,6 +378,7 @@ export function ProgramWorkspace({
     try {
       const next = await loader.load(file);
       setLoaded(next);
+      setProgramExecutionOptions(executionOptionsForNewProgram);
       setClearedSenderRunSequence(sender.runSequence || undefined);
       setSender(idleSenderSnapshot);
       setSelectedSourceLine(undefined);
@@ -666,13 +670,10 @@ export function ProgramWorkspace({
       cuttingDepthAdjustmentUm: enabled ? 0 : undefined,
     }));
   };
-  const setDepthTarget = (targetDepthMm: number) => {
-    if (depthCorrection.fileDepthMm === undefined || !Number.isFinite(targetDepthMm)) return;
+  const setDepthAdjustment = (adjustmentMm: number) => {
+    if (!Number.isFinite(adjustmentMm)) return;
     try {
-      const cuttingDepthAdjustmentUm = depthAdjustmentUmForTarget(
-        depthCorrection.fileDepthMm,
-        targetDepthMm,
-      );
+      const cuttingDepthAdjustmentUm = depthAdjustmentUm(adjustmentMm);
       setError(undefined);
       setRealRunReport(undefined);
       setProgramExecutionOptions((current) => ({
@@ -1212,7 +1213,7 @@ export function ProgramWorkspace({
                   onOpenOrigin={() => machineContext?.onOpenWorkZero()}
                   depthCorrection={depthCorrection}
                   onDepthCorrectionEnabled={setDepthCorrectionEnabled}
-                  onDepthTarget={setDepthTarget}
+                  onDepthAdjustment={setDepthAdjustment}
                   onPrimary={runReadinessAction}
                   onSurfaceMap={(enabled) => void setSurfaceMapApplication(enabled)}
                   surfaceMap={surfaceMap ? {
@@ -1360,13 +1361,8 @@ export function ProgramWorkspace({
 
       <FirstCutAuthorizationDialog
         depthCorrection={
-          depthCorrection.enabled &&
-          depthCorrection.fileDepthMm !== undefined &&
-          depthCorrection.targetDepthMm !== undefined
-            ? {
-                fileDepthMm: depthCorrection.fileDepthMm,
-                targetDepthMm: depthCorrection.targetDepthMm,
-              }
+          depthCorrection.enabled
+            ? { adjustmentMm: depthCorrection.adjustmentMm }
             : undefined
         }
         executionOptions={programExecutionOptions}

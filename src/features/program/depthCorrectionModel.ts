@@ -5,11 +5,9 @@ export const maximumDepthAdjustmentMm = 10;
 export interface DepthCorrectionView {
   readonly available: boolean;
   readonly enabled: boolean;
-  readonly fileDepthMm?: number;
-  readonly targetDepthMm?: number;
   readonly adjustmentMm: number;
-  readonly minimumTargetMm?: number;
-  readonly maximumTargetMm: number;
+  readonly minimumAdjustmentMm: number;
+  readonly maximumAdjustmentMm: number;
 }
 
 export function deepestCuttingZ(program: GcodeProgram | undefined): number | undefined {
@@ -29,35 +27,32 @@ export function depthCorrectionView(
   program: GcodeProgram | undefined,
   adjustmentUm: number | undefined,
 ): DepthCorrectionView {
-  const fileDepthMm = deepestCuttingZ(program);
+  const available = deepestCuttingZ(program) !== undefined;
   const adjustmentMm = adjustmentUm === undefined ? 0 : adjustmentUm / 1_000;
   return {
-    available: fileDepthMm !== undefined,
+    available,
     enabled: adjustmentUm !== undefined,
-    fileDepthMm,
-    targetDepthMm: fileDepthMm === undefined ? undefined : fileDepthMm + adjustmentMm,
     adjustmentMm,
-    minimumTargetMm:
-      fileDepthMm === undefined ? undefined : fileDepthMm - maximumDepthAdjustmentMm,
-    maximumTargetMm: 0,
+    minimumAdjustmentMm: -maximumDepthAdjustmentMm,
+    maximumAdjustmentMm: maximumDepthAdjustmentMm,
   };
 }
 
-export function depthAdjustmentUmForTarget(
-  fileDepthMm: number,
-  targetDepthMm: number,
-): number {
-  if (!Number.isFinite(fileDepthMm) || fileDepthMm >= 0) {
-    throw new Error("В файле нет рабочей глубины ниже Z0");
+export function depthAdjustmentUm(adjustmentMm: number): number {
+  if (!Number.isFinite(adjustmentMm)) {
+    throw new Error("Смещение глубины должно быть числом");
   }
-  if (!Number.isFinite(targetDepthMm) || targetDepthMm > 0) {
-    throw new Error("Итоговая глубина должна быть не выше Z0");
-  }
-  const adjustmentUm = Math.round((targetDepthMm - fileDepthMm) * 1_000);
+  const adjustmentUm = Math.round(adjustmentMm * 1_000);
   if (Math.abs(adjustmentUm) > maximumDepthAdjustmentMm * 1_000) {
     throw new Error("Коррекция глубины ограничена диапазоном ±10 мм");
   }
   return adjustmentUm;
+}
+
+export function depthAdjustmentFromDraft(draft: string): number | undefined {
+  if (draft.trim() === "") return undefined;
+  const adjustmentMm = Number(draft);
+  return Number.isFinite(adjustmentMm) ? adjustmentMm : undefined;
 }
 
 export function adjustCuttingZ(
@@ -65,5 +60,5 @@ export function adjustCuttingZ(
   kind: GcodeProgram["toolpath"][number]["kind"],
   adjustmentMm: number,
 ): number {
-  return kind !== "rapid" && z < -1e-9 ? Math.min(0, z + adjustmentMm) : z;
+  return kind !== "rapid" && z < -1e-9 ? z + adjustmentMm : z;
 }

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ProgramExecutionOptions } from "../../shared/realRun";
-import { sameExecutionOptions } from "./executionOptionsModel";
+import {
+  executionOptionsForNewProgram,
+  sameExecutionOptions,
+} from "./executionOptionsModel";
 
 const baseline: ProgramExecutionOptions = {
   optionalStop: false,
@@ -22,5 +25,16 @@ describe("sameExecutionOptions", () => {
     { cuttingDepthAdjustmentUm: 100 },
   ])("rejects a changed bound option: %o", (change) => {
     expect(sameExecutionOptions(baseline, { ...baseline, ...change })).toBe(false);
+  });
+});
+
+describe("executionOptionsForNewProgram", () => {
+  it("does not carry a job-specific depth offset into a newly loaded file", () => {
+    expect(executionOptionsForNewProgram(baseline)).toEqual({
+      optionalStop: false,
+      blockDelete: false,
+      surfaceMapId: 7,
+      cuttingDepthAdjustmentUm: undefined,
+    });
   });
 });

@@ -12,6 +12,7 @@ import {
   ScanSearch,
   Waves,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import type {
   JobReadinessAction,
@@ -19,6 +20,7 @@ import type {
   JobReadinessStepId,
   JobReadinessView,
 } from "./jobReadinessModel";
+import { depthAdjustmentFromDraft } from "./depthCorrectionModel";
 
 interface JobReadinessPanelProps {
   readonly busy: boolean;
@@ -32,13 +34,12 @@ interface JobReadinessPanelProps {
   readonly depthCorrection?: {
     readonly available: boolean;
     readonly enabled: boolean;
-    readonly fileDepthMm?: number;
-    readonly targetDepthMm?: number;
-    readonly minimumTargetMm?: number;
-    readonly maximumTargetMm: number;
+    readonly adjustmentMm: number;
+    readonly minimumAdjustmentMm: number;
+    readonly maximumAdjustmentMm: number;
   };
   readonly onDepthCorrectionEnabled?: (enabled: boolean) => void;
-  readonly onDepthTarget?: (targetDepthMm: number) => void;
+  readonly onDepthAdjustment?: (adjustmentMm: number) => void;
   readonly surfaceMap?: {
     readonly checked: boolean;
     readonly detail: string;
@@ -81,13 +82,21 @@ export function JobReadinessPanel({
   onIntent,
   depthCorrection,
   onDepthCorrectionEnabled,
-  onDepthTarget,
+  onDepthAdjustment,
   onOpenOrigin,
   onPrimary,
   onSurfaceMap,
   surfaceMap,
   view,
 }: JobReadinessPanelProps) {
+  const [depthAdjustmentDraft, setDepthAdjustmentDraft] = useState(
+    formatDepthAdjustmentInput(depthCorrection?.adjustmentMm ?? 0),
+  );
+
+  useEffect(() => {
+    setDepthAdjustmentDraft(formatDepthAdjustmentInput(depthCorrection?.adjustmentMm ?? 0));
+  }, [depthCorrection?.adjustmentMm, depthCorrection?.enabled]);
+
   const primaryLabel =
     view.primaryAction === "startProgram"
       ? intent === "cutting"
@@ -146,10 +155,9 @@ export function JobReadinessPanel({
             <span>
               <strong>Коррекция глубины</strong>
               <small>
-                Файл {depthCorrection.fileDepthMm?.toFixed(3)} мм
-                {depthCorrection.enabled && depthCorrection.targetDepthMm !== undefined
-                  ? ` · итог ${depthCorrection.targetDepthMm.toFixed(3)} мм`
-                  : ""}
+                {depthCorrection.enabled
+                  ? `ΔZ ${formatSignedOffset(depthCorrection.adjustmentMm)} мм`
+                  : "Исходная глубина без изменений"}
               </small>
             </span>
             <input
@@ -162,16 +170,24 @@ export function JobReadinessPanel({
             />
           </label>
           <div className="job-depth-value" aria-hidden={!depthCorrection.enabled}>
-            <span>Глубина</span>
+            <span>Смещение Z</span>
             <input
-              aria-label="Итоговая глубина обработки"
+              aria-label="Смещение глубины обработки"
               disabled={busy || !depthCorrection.enabled}
-              max={depthCorrection.maximumTargetMm}
-              min={depthCorrection.minimumTargetMm}
-              onChange={(event) => onDepthTarget?.(event.target.valueAsNumber)}
+              max={depthCorrection.maximumAdjustmentMm}
+              min={depthCorrection.minimumAdjustmentMm}
+              onBlur={() => setDepthAdjustmentDraft(
+                formatDepthAdjustmentInput(depthCorrection.adjustmentMm),
+              )}
+              onChange={(event) => {
+                const draft = event.target.value;
+                setDepthAdjustmentDraft(draft);
+                const adjustmentMm = depthAdjustmentFromDraft(draft);
+                if (adjustmentMm !== undefined) onDepthAdjustment?.(adjustmentMm);
+              }}
               step="0.01"
               type="number"
-              value={depthCorrection.targetDepthMm?.toFixed(3) ?? ""}
+              value={depthAdjustmentDraft}
             />
             <code>мм</code>
           </div>
@@ -217,4 +233,13 @@ export function JobReadinessPanel({
       </div>
     </section>
   );
+}
+
+function formatSignedOffset(value: number): string {
+  if (Math.abs(value) < 0.0005) return "0.000";
+  return `${value > 0 ? "+" : "−"}${Math.abs(value).toFixed(3)}`;
+}
+
+function formatDepthAdjustmentInput(value: number): string {
+  return value.toFixed(3);
 }

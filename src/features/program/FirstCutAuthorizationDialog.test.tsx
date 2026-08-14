@@ -4,10 +4,10 @@ import { describe, expect, it } from "vitest";
 import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
 
 describe("FirstCutAuthorizationDialog", () => {
-  it("shows the processing mode and the effective depth before motion starts", () => {
+  it("shows the processing mode and signed Z offset before motion starts", () => {
     const markup = renderToStaticMarkup(
       <FirstCutAuthorizationDialog
-        depthCorrection={{ fileDepthMm: -0.2, targetDepthMm: -0.3 }}
+        depthCorrection={{ adjustmentMm: -0.1 }}
         executionOptions={{
           blockDelete: false,
           cuttingDepthAdjustmentUm: -100,
@@ -29,7 +29,7 @@ describe("FirstCutAuthorizationDialog", () => {
 
     expect(markup).toContain("Обработка");
     expect(markup).toContain("Коррекция глубины");
-    expect(markup).toContain("−0.200 → −0.300 мм");
+    expect(markup).toContain("ΔZ −0.100 мм");
     expect(markup).toContain("Начать обработку");
   });
 

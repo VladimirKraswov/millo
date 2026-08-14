@@ -25,8 +25,7 @@ interface FirstCutAuthorizationDialogProps {
   readonly intent: ProgramRunIntent;
   readonly executionOptions: ProgramExecutionOptions;
   readonly depthCorrection?: {
-    readonly fileDepthMm: number;
-    readonly targetDepthMm: number;
+    readonly adjustmentMm: number;
   };
   readonly report?: RunPreflightReport;
   readonly onAuthorize: (
@@ -144,10 +143,7 @@ export function FirstCutAuthorizationDialog({
         {intent === "cutting" && depthCorrection && (
           <div className="program-run-mode-summary">
             <span>Коррекция глубины</span>
-            <strong>
-              {formatDepth(depthCorrection.fileDepthMm)} →{" "}
-              {formatDepth(depthCorrection.targetDepthMm)} мм
-            </strong>
+            <strong>ΔZ {formatSignedOffset(depthCorrection.adjustmentMm)} мм</strong>
           </div>
         )}
         <div className="first-cut-checklist">
@@ -237,6 +233,7 @@ export function FirstCutAuthorizationDialog({
   );
 }
 
-function formatDepth(value: number): string {
-  return `${value < 0 ? "−" : ""}${Math.abs(value).toFixed(3)}`;
+function formatSignedOffset(value: number): string {
+  if (Math.abs(value) < 0.0005) return "0.000";
+  return `${value > 0 ? "+" : "−"}${Math.abs(value).toFixed(3)}`;
 }

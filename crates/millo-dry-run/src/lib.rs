@@ -590,19 +590,13 @@ fn validate_cutting_depth_adjustment(
             "cutting depth adjustment exceeds the 10 mm safety limit",
         ));
     }
-    let Some(file_depth_mm) = deepest_cutting_z(program) else {
+    if deepest_cutting_z(program).is_none() {
         return Err(depth_adjustment_rejection(
             None,
             "cutting depth adjustment requires a cutting move below work Z0",
         ));
-    };
-    let adjustment_mm = f64::from(adjustment_um) / 1_000.0;
-    if file_depth_mm + adjustment_mm > 1e-9 {
-        return Err(depth_adjustment_rejection(
-            None,
-            "adjusted deepest point cannot be above work Z0",
-        ));
     }
+    let adjustment_mm = f64::from(adjustment_um) / 1_000.0;
     Ok(Some(adjustment_mm))
 }
 
@@ -628,7 +622,7 @@ pub fn program_bounds_with_execution_options(
     if adjustment_mm.abs() < f64::EPSILON {
         return Some(original);
     }
-    let min_z = program
+    let (min_z, max_z) = program
         .toolpath
         .iter()
         .flat_map(|segment| {
@@ -638,12 +632,20 @@ pub fn program_bounds_with_execution_options(
             })
         })
         .map(|point| point.z)
-        .reduce(f64::min)?;
+        .fold(None, |bounds, z| {
+            Some(match bounds {
+                Some((min_z, max_z)) => (f64::min(min_z, z), f64::max(max_z, z)),
+                None => (z, z),
+            })
+        })?;
     let min = ProgramPoint {
         z: min_z,
         ..original.min
     };
-    let max = original.max;
+    let max = ProgramPoint {
+        z: max_z,
+        ..original.max
+    };
     Some(ProgramBounds {
         min,
         max,
@@ -771,7 +773,7 @@ fn append_compensated_segment(
 
 fn adjusted_cutting_z(z: f64, kind: ToolpathKind, adjustment_mm: f64) -> f64 {
     if kind != ToolpathKind::Rapid && z < -1e-9 {
-        (z + adjustment_mm).min(0.0)
+        z + adjustment_mm
     } else {
         z
     }
@@ -1524,7 +1526,7 @@ mod tests {
     }
 
     #[test]
-    fn shallower_adjustment_clamps_intermediate_passes_at_work_z_zero() {
+    fn positive_offset_is_added_exactly_without_deriving_a_target_depth() {
         let options = ProgramExecutionOptions {
             cutting_depth_adjustment_um: Some(100),
             ..ProgramExecutionOptions::default()
@@ -1542,8 +1544,7 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert!(commands.iter().any(|command| command.contains("Z-0.1000")));
-        assert!(commands.iter().any(|command| command.contains("Z0.0000")));
-        assert!(!commands.iter().any(|command| command.contains("Z0.0500")));
+        assert!(commands.iter().any(|command| command.contains("Z0.0500")));
     }
 
     #[test]

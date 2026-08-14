@@ -8,3 +8,10 @@ export const sameExecutionOptions = (
   left.blockDelete === right.blockDelete &&
   left.surfaceMapId === right.surfaceMapId &&
   left.cuttingDepthAdjustmentUm === right.cuttingDepthAdjustmentUm;
+
+export const executionOptionsForNewProgram = (
+  current: ProgramExecutionOptions,
+): ProgramExecutionOptions => ({
+  ...current,
+  cuttingDepthAdjustmentUm: undefined,
+});

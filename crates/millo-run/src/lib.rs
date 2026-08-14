@@ -654,7 +654,7 @@ pub fn assess_real_run_preflight_with_options(
         },
         None,
     ));
-    if let (Some(adjustment_um), Some(file_depth_mm)) = (
+    if let (Some(adjustment_um), Some(_)) = (
         execution_options.cutting_depth_adjustment_um,
         deepest_cutting_z(program),
     ) {
@@ -663,10 +663,7 @@ pub fn assess_real_run_preflight_with_options(
             "cutting-depth-adjustment",
             RunPreflightLevel::Pass,
             "Cutting depth adjustment",
-            format!(
-                "File depth {file_depth_mm:.3} mm · adjustment {adjustment_mm:+.3} mm · target {:.3} mm",
-                file_depth_mm + adjustment_mm
-            ),
+            format!("Signed Z offset {adjustment_mm:+.3} mm on every cutting point below work Z0"),
             None,
         ));
     }

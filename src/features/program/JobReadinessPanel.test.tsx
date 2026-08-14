@@ -94,22 +94,37 @@ describe("JobReadinessPanel", () => {
     expect(markup).toContain("Карта #3");
   });
 
-  it("shows file and target depth only for processing mode", () => {
+  it("shows a signed Z offset instead of a derived target depth", () => {
     const markup = renderPanel({
       depthCorrection: {
         available: true,
         enabled: true,
-        fileDepthMm: -0.2,
-        targetDepthMm: -0.3,
-        minimumTargetMm: -10.2,
-        maximumTargetMm: 0,
+        adjustmentMm: -0.1,
+        minimumAdjustmentMm: -10,
+        maximumAdjustmentMm: 10,
       },
     });
 
     expect(markup).toContain("Коррекция глубины");
-    expect(markup).toContain("Файл -0.200 мм · итог -0.300 мм");
-    expect(markup).toContain("Итоговая глубина обработки");
+    expect(markup).toContain("ΔZ −0.100 мм");
+    expect(markup).toContain("Смещение глубины обработки");
+    expect(markup).not.toContain("Итоговая глубина");
     expect(markup).toContain("Обработка");
+  });
+
+  it("shows zero as the disabled default without deriving file depth", () => {
+    const markup = renderPanel({
+      depthCorrection: {
+        available: true,
+        enabled: false,
+        adjustmentMm: 0,
+        minimumAdjustmentMm: -10,
+        maximumAdjustmentMm: 10,
+      },
+    });
+
+    expect(markup).toContain("Исходная глубина без изменений");
+    expect(markup).toContain('value="0.000"');
   });
 
   it.each([

@@ -98,17 +98,20 @@ the cutting setup disabled; GRBL Check remains the separate firmware-only
 validation without motion.
 
 For a program with cutting motion below work Z0, the launch panel can enable a
-depth correction. Millo derives the file depth from the lowest non-rapid
-toolpath point and uses it as the initial target. Editing the target stores an
-exact micrometre delta in the execution options. The Rust plan applies that
-same delta to every negative non-rapid Z point, preserving relative multi-pass
-depths while clamping shallower points at Z0. Rapid moves, safe Z, and all
-points at or above Z0 are unchanged.
+signed Z offset. It is disabled by default and starts at `0.000 mm`, so no
+depth is inferred from an arbitrary program point. `-0.100 mm` makes every
+negative non-rapid Z point exactly 0.100 mm deeper; `+0.100 mm` makes it exactly
+0.100 mm shallower. Rapid moves, safe Z, and points originally at or above Z0
+are unchanged.
 
-The adjustment is bounded to +/-10 mm. Heightmap compensation is applied after
-the nominal cutting-depth correction. Changing the correction invalidates the
-previous preflight and GRBL Check certificate because the execution options and
-physical trajectory have changed.
+The offset is stored as exact micrometres and bounded to +/-10 mm. Heightmap
+compensation is applied after the nominal Z offset. Changing the correction
+invalidates the previous preflight and GRBL Check certificate because the
+execution options and physical trajectory have changed.
+
+The correction belongs to the loaded job. Selecting another G-code file disables
+it and restores `0.000 mm`; recovery of the same interrupted job keeps its bound
+execution options.
 
 ## Errors
 
