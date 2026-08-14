@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const SCHEMA_VERSION: u16 = 1;
+const PRESET_CATALOG_VERSION: u16 = 1;
+const CCT01_2F_06050_PRESET_ID: &str = "preset-inreko-cct01-2f-06050-06";
 const MAX_TOOLS: usize = 256;
 const MAX_NAME_BYTES: usize = 100;
 const MAX_DESCRIPTION_BYTES: usize = 2_000;
@@ -109,6 +111,8 @@ pub struct ToolLibraryState {
 #[serde(rename_all = "camelCase")]
 struct StoredToolLibrary {
     schema_version: u16,
+    #[serde(default)]
+    preset_catalog_version: u16,
     next_id: u64,
     tools: Vec<CuttingTool>,
     revision: u64,
@@ -118,6 +122,7 @@ impl Default for StoredToolLibrary {
     fn default() -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
+            preset_catalog_version: PRESET_CATALOG_VERSION,
             next_id: 1,
             tools: factory_presets(),
             revision: 0,
@@ -165,6 +170,7 @@ impl ToolLibraryStore {
         } else {
             (load_document(&backup)?, true)
         };
+        let migrated = migrate_preset_catalog(&mut document);
         let refreshed = refresh_unedited_preset_descriptions(&mut document);
         if recovered && path.exists() {
             fs::remove_file(&path).map_err(|source| ToolLibraryError::Io {
@@ -172,7 +178,9 @@ impl ToolLibraryStore {
                 source,
             })?;
         }
-        if recovered || refreshed {
+        if recovered || migrated || refreshed {
+            validate_document(&document)
+                .map_err(|error| ToolLibraryError::InvalidFile(error.to_string()))?;
             save_document(&path, &document)?;
         }
         Ok(Self {
@@ -424,6 +432,27 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             ),
         }),
         factory_tool(FactoryToolSpec {
+            id: CCT01_2F_06050_PRESET_ID,
+            name: "Концевая твердосплавная 6 мм · CCT01-2F-06050.06",
+            description: "Двухзубая плоская цельнотвердосплавная фреза 6×15×50 мм для пазов, карманов, контуров и выборки материала. Две широкие канавки помогают отводить стружку. Подбирайте подачу и обороты под конкретный материал: режимы для дерева, алюминия и стали нельзя переносить без проверки.",
+            kind: ToolKind::FlatEndMill,
+            diameter_mm: 6.0,
+            shank_diameter_mm: 6.0,
+            cutting_length_mm: 15.0,
+            flute_count: 2,
+            included_angle_degrees: None,
+            feed_mm_per_min: 450.0,
+            plunge_mm_per_min: 100.0,
+            spindle_rpm: 12_000,
+            stepdown_mm: 0.5,
+            stepover_percent: 30.0,
+            reference: ToolReference {
+                manufacturer: "ИНРЕКО".to_owned(),
+                product: "CCT01-2F-06050.06 6×15×50".to_owned(),
+                url: "https://inreko.ru/katalog/".to_owned(),
+            },
+        }),
+        factory_tool(FactoryToolSpec {
             id: "preset-carbide3d-202",
             name: "Шаровая 6,35 мм · #202",
             description: "Шаровая фреза для чистовых проходов по рельефам и плавным 3D-поверхностям. Обычно применяется после черновой выборки плоской фрезой с небольшим поперечным шагом.",
@@ -526,6 +555,30 @@ pub fn factory_presets() -> Vec<CuttingTool> {
     ]
 }
 
+fn migrate_preset_catalog(document: &mut StoredToolLibrary) -> bool {
+    if document.preset_catalog_version >= PRESET_CATALOG_VERSION {
+        return false;
+    }
+
+    if document.preset_catalog_version < 1 {
+        let preset = factory_presets()
+            .into_iter()
+            .find(|tool| tool.id == CCT01_2F_06050_PRESET_ID)
+            .expect("introduced factory preset must exist");
+        let already_present = document
+            .tools
+            .iter()
+            .any(|tool| tool.id == preset.id || tool.name.eq_ignore_ascii_case(&preset.name));
+        if document.tools.len() < MAX_TOOLS && !already_present {
+            document.tools.push(preset);
+        }
+    }
+
+    document.preset_catalog_version = PRESET_CATALOG_VERSION;
+    document.revision = document.revision.saturating_add(1);
+    true
+}
+
 fn refresh_unedited_preset_descriptions(document: &mut StoredToolLibrary) -> bool {
     let presets = factory_presets()
         .into_iter()
@@ -547,6 +600,11 @@ fn refresh_unedited_preset_descriptions(document: &mut StoredToolLibrary) -> boo
 fn validate_document(document: &StoredToolLibrary) -> Result<(), ToolLibraryError> {
     if document.schema_version != SCHEMA_VERSION {
         return Err(ToolLibraryError::UnsupportedSchema(document.schema_version));
+    }
+    if document.preset_catalog_version > PRESET_CATALOG_VERSION {
+        return Err(ToolLibraryError::UnsupportedPresetCatalog(
+            document.preset_catalog_version,
+        ));
     }
     if document.tools.len() > MAX_TOOLS {
         return Err(ToolLibraryError::ToolLimit(MAX_TOOLS));
@@ -656,6 +714,8 @@ fn save_document(path: &Path, document: &StoredToolLibrary) -> Result<(), ToolLi
 pub enum ToolLibraryError {
     #[error("tool library has unsupported schema version {0}")]
     UnsupportedSchema(u16),
+    #[error("tool library has unsupported preset catalog version {0}")]
+    UnsupportedPresetCatalog(u16),
     #[error("tool library contains invalid id: {0}")]
     InvalidId(String),
     #[error("tool name must contain 1 to {MAX_NAME_BYTES} bytes")]
@@ -723,14 +783,45 @@ mod tests {
     fn starts_with_valid_editable_factory_presets() {
         let mut store = ToolLibraryStore::in_memory();
         let initial = store.state();
-        assert_eq!(initial.tools.len(), 7);
+        assert_eq!(initial.tools.len(), 8);
         assert!(initial.tools.iter().all(|tool| tool.factory_preset));
+        let requested = initial
+            .tools
+            .iter()
+            .find(|tool| tool.id == CCT01_2F_06050_PRESET_ID)
+            .unwrap();
+        assert_eq!(requested.diameter_mm, 6.0);
+        assert_eq!(requested.shank_diameter_mm, 6.0);
+        assert_eq!(requested.cutting_length_mm, 15.0);
+        assert_eq!(requested.flute_count, 2);
         let tool = initial.tools.first().unwrap();
         let mut edited = CuttingToolDraft::from(tool);
         edited.feed_mm_per_min = 321.0;
         let state = store.update(&tool.id, edited).unwrap();
         assert_eq!(state.tools.first().unwrap().feed_mm_per_min, 321.0);
         assert!(state.tools.first().unwrap().factory_preset);
+    }
+
+    #[test]
+    fn migrates_new_presets_once_and_respects_later_deletion() {
+        let path = test_path("preset-catalog-migration");
+        let mut legacy = StoredToolLibrary {
+            preset_catalog_version: 0,
+            ..StoredToolLibrary::default()
+        };
+        legacy
+            .tools
+            .retain(|tool| tool.id != CCT01_2F_06050_PRESET_ID);
+        save_document(&path, &legacy).unwrap();
+
+        let mut store = ToolLibraryStore::load(&path).unwrap();
+        assert!(store.get(CCT01_2F_06050_PRESET_ID).is_some());
+        store.delete(CCT01_2F_06050_PRESET_ID).unwrap();
+
+        let reloaded = ToolLibraryStore::load(&path).unwrap();
+        assert!(reloaded.get(CCT01_2F_06050_PRESET_ID).is_none());
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
     }
 
     #[test]

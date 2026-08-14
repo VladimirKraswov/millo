@@ -23,6 +23,7 @@ Desktop-хранилище `cutting-tools.json` записывается ато�
 | --- | --- | --- |
 | Carbide 3D #102, плоская 3,175 мм | небольшие пазы, карманы и контуры | [официальная карточка #102](https://shop.carbide3d.com/products/102-125-end-mill-cutter) |
 | Carbide 3D #201, плоская 6,35 мм | крупные выборки, раскрой и черновая обработка | [официальная карточка #201](https://shop.carbide3d.com/products/201-25-end-mill-cutter) |
+| INREKO CCT01-2F-06050.06, плоская 6 мм | пазы, карманы, контуры и выборка; Ø6, рабочая длина 15, общая длина 50 мм, 2 зуба | [каталог INREKO](https://inreko.ru/katalog/) |
 | Carbide 3D #202, шаровая 6,35 мм | чистовая обработка рельефов и 3D-поверхностей | [официальная карточка #202](https://shop.carbide3d.com/products/202-25-ball-cutter) |
 | Carbide 3D #302, V 60° | тонкие надписи и V-carving | [каталог Carbide 3D](https://shop.carbide3d.com/collections/carbide-3d-cutters) |
 | Carbide 3D #301, V 90° | широкие надписи и фаски | [официальная карточка #301](https://shop.carbide3d.com/products/301-v-bit-cutter-90) |
