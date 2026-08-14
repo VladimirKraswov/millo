@@ -766,9 +766,6 @@ pub async fn prepare_program_recovery(
         ));
     }
     ensure_machine_bound(&state).await?;
-    if state.active_transport.lock().await.kind != TransportKind::Serial {
-        return Err("program recovery requires an active serial transport".to_owned());
-    }
     let snapshot = state
         .arbiter
         .refresh_status()
@@ -1218,7 +1215,7 @@ pub async fn connect_transport(
             baud_rate,
             fingerprint: Some(fingerprint.clone()),
         };
-        let profile_match = if descriptor.kind == TransportKind::Serial {
+        let mut profile_match = {
             let profiles = state.profiles.lock().await.state();
             match_machine_profile(
                 &profiles,
@@ -1226,9 +1223,22 @@ pub async fn connect_transport(
                 &descriptor.id,
                 &initial_inspection.device,
             )?
-        } else {
-            None
         };
+        if descriptor.kind == TransportKind::Mock && profile_match.is_none() {
+            let profiles = state.profiles.lock().await.state();
+            let draft = virtual_machine_profile_draft(
+                &profiles,
+                &initial_inspection.device,
+                connection.clone(),
+            )?;
+            let created = state
+                .profiles
+                .lock()
+                .await
+                .create_and_select(draft)
+                .map_err(|error| error.to_string())?;
+            profile_match = created.selected().cloned();
+        }
 
         let mut profile_id = None;
         let mut archive = None;
@@ -1459,9 +1469,6 @@ async fn apply_controller_setting(
 }
 
 async fn ensure_machine_bound(state: &AppState) -> Result<(), String> {
-    if state.active_transport.lock().await.kind == TransportKind::Mock {
-        return Ok(());
-    }
     if state
         .settings_session
         .lock()
@@ -1477,6 +1484,42 @@ async fn ensure_machine_bound(state: &AppState) -> Result<(), String> {
                 .to_owned(),
         )
     }
+}
+
+fn available_virtual_machine_name(profiles: &MachineProfileState) -> String {
+    const BASE: &str = "Виртуальный GRBL";
+    if !profiles
+        .profiles
+        .iter()
+        .any(|profile| profile.name.eq_ignore_ascii_case(BASE))
+    {
+        return BASE.to_owned();
+    }
+    (2_u32..)
+        .map(|suffix| format!("{BASE} {suffix}"))
+        .find(|candidate| {
+            !profiles
+                .profiles
+                .iter()
+                .any(|profile| profile.name.eq_ignore_ascii_case(candidate))
+        })
+        .expect("unbounded virtual profile suffix iterator")
+}
+
+fn virtual_machine_profile_draft(
+    profiles: &MachineProfileState,
+    inspection: &DeviceInspection,
+    connection: MachineConnectionPreset,
+) -> Result<MachineProfileDraft, String> {
+    let mut draft = MachineProfileDraft::from_grbl_inspection(
+        available_virtual_machine_name(profiles),
+        inspection,
+        connection,
+    )
+    .map_err(|error| error.to_string())?;
+    draft.probe_installed = true;
+    draft.probe_settings.mode = millo_domain::ProbeWorkflowMode::Heightmap;
+    Ok(draft)
 }
 
 fn settings_state(active: &ActiveControllerSettings) -> ControllerSettingsState {
@@ -2991,9 +3034,6 @@ pub async fn preflight_real_run(
     });
     let result = async {
         ensure_machine_bound(&state).await?;
-        if state.active_transport.lock().await.kind != TransportKind::Serial {
-            return Err("real-run preflight requires an active serial transport".to_owned());
-        }
         let heightmap = selected_surface_map_for_active_profile(execution_options, &state)
             .await?
             .map(|stored| stored.map);
@@ -3057,9 +3097,6 @@ pub async fn authorize_first_cut(
     });
     let result = async {
         ensure_machine_bound(&state).await?;
-        if state.active_transport.lock().await.kind != TransportKind::Serial {
-            return Err("first-cut authorization requires an active serial transport".to_owned());
-        }
         let execution_options = confirmation.execution_options;
         let heightmap = selected_surface_map_for_active_profile(execution_options, &state)
             .await?
@@ -3133,9 +3170,6 @@ async fn start_program_run_impl(
 ) -> Result<SenderSnapshot, String> {
     let _transition = state.transition_lock.lock().await;
     ensure_machine_bound(state).await?;
-    if state.active_transport.lock().await.kind != TransportKind::Serial {
-        return Err("program run requires an active serial transport".to_owned());
-    }
     let (machine_fingerprint, profile_id) = state
         .settings_session
         .lock()
@@ -3408,9 +3442,6 @@ async fn start_check_run_impl(
 ) -> Result<SenderSnapshot, String> {
     let _transition = state.transition_lock.lock().await;
     ensure_machine_bound(state).await?;
-    if state.active_transport.lock().await.kind != TransportKind::Serial {
-        return Err("GRBL Check requires an active serial transport".to_owned());
-    }
     let heightmap = selected_surface_map_for_active_profile(execution_options, state)
         .await?
         .map(|stored| stored.map);
@@ -3437,9 +3468,6 @@ pub async fn pause_program_run(state: State<'_, AppState>) -> Result<SenderSnaps
     let _transition = state.transition_lock.lock().await;
     let result = async {
         ensure_machine_bound(&state).await?;
-        if state.active_transport.lock().await.kind != TransportKind::Serial {
-            return Err("program pause requires an active serial transport".to_owned());
-        }
         state
             .arbiter
             .pause_program_run()
@@ -3463,9 +3491,6 @@ pub async fn resume_program_run(state: State<'_, AppState>) -> Result<SenderSnap
     let _transition = state.transition_lock.lock().await;
     let result = async {
         ensure_machine_bound(&state).await?;
-        if state.active_transport.lock().await.kind != TransportKind::Serial {
-            return Err("program resume requires an active serial transport".to_owned());
-        }
         state
             .arbiter
             .resume_program_run()
@@ -3489,9 +3514,6 @@ pub async fn abort_program_run(state: State<'_, AppState>) -> Result<SenderSnaps
     let _transition = state.transition_lock.lock().await;
     let result = async {
         ensure_machine_bound(&state).await?;
-        if state.active_transport.lock().await.kind != TransportKind::Serial {
-            return Err("program stop requires an active serial transport".to_owned());
-        }
         state
             .arbiter
             .abort_program_run()
@@ -3519,9 +3541,6 @@ pub async fn complete_tool_change(
     let context = serde_json::to_value(confirmation).unwrap_or(Value::Null);
     let result = async {
         ensure_machine_bound(&state).await?;
-        if state.active_transport.lock().await.kind != TransportKind::Serial {
-            return Err("tool change requires an active serial transport".to_owned());
-        }
         state
             .arbiter
             .complete_tool_change(confirmation)
@@ -4169,6 +4188,59 @@ mod tests {
             machine_fingerprint(&descriptor, &upgraded).key,
             fallback.key
         );
+    }
+
+    #[test]
+    fn virtual_machine_profile_uses_controller_travel_and_a_unique_name() {
+        let inspection = DeviceInspection {
+            firmware_version: Some("1.1h".to_owned()),
+            settings: BTreeMap::from([
+                ("$130".to_owned(), "300.000".to_owned()),
+                ("$131".to_owned(), "180.000".to_owned()),
+                ("$132".to_owned(), "80.000".to_owned()),
+            ]),
+            ..Default::default()
+        };
+        let existing = MachineProfile {
+            id: "machine-virtual-1".to_owned(),
+            name: "Виртуальный GRBL".to_owned(),
+            travel_mm: millo_domain::MachineTravel {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+            max_jog_distance_mm: 1.0,
+            spindle_control: millo_domain::SpindleControl::Manual,
+            homing_installed: false,
+            limit_switches_installed: false,
+            probe_installed: false,
+            probe_settings: millo_domain::ZProbeSettings::default(),
+            emergency_stop_installed: false,
+            connection: None,
+            detected_controller: None,
+        };
+        let profiles = MachineProfileState {
+            profiles: vec![existing],
+            selected_profile_id: None,
+        };
+        let connection = MachineConnectionPreset {
+            transport_id: MOCK_TRANSPORT_ID.to_owned(),
+            baud_rate: 115_200,
+            fingerprint: None,
+        };
+
+        let draft = virtual_machine_profile_draft(&profiles, &inspection, connection).unwrap();
+
+        assert_eq!(draft.name, "Виртуальный GRBL 2");
+        assert_eq!(draft.travel_mm.x, 300.0);
+        assert_eq!(draft.travel_mm.y, 180.0);
+        assert_eq!(draft.travel_mm.z, 80.0);
+        assert!(draft.probe_installed);
+        assert_eq!(
+            draft.probe_settings.mode,
+            millo_domain::ProbeWorkflowMode::Heightmap
+        );
+        assert_eq!(draft.connection.unwrap().transport_id, MOCK_TRANSPORT_ID);
     }
 
     #[test]

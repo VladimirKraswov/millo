@@ -467,10 +467,8 @@ export default function App() {
       : machineProfiles;
   const selectedMachine = selectedMachineProfile(effectiveMachineProfiles);
   const machineBound =
-    activeTransport.kind === "mock" || (
-      controllerSettings?.profileId !== undefined &&
-      selectedMachine?.id === controllerSettings.profileId
-    );
+    controllerSettings?.profileId !== undefined &&
+    selectedMachine?.id === controllerSettings.profileId;
   const jogAxisRates = ["$110", "$111", "$112"]
     .map((key) =>
       Number(
@@ -970,7 +968,6 @@ export default function App() {
               realRunAvailable={
                 developmentPreflightFixture ||
                 (desktopRuntime &&
-                  activeTransport.kind === "serial" &&
                   isControllerStableIdle(snapshot) &&
                   machineBound)
               }
@@ -986,9 +983,7 @@ export default function App() {
                         : undefined
               }
               realRunTarget={
-                developmentPreflightFixture ||
-                activeTransport.kind === "serial" ||
-                selectedTransport.kind === "serial"
+                developmentPreflightFixture || desktopRuntime
               }
             />
           </div>

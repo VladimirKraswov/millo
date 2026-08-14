@@ -182,9 +182,9 @@ pub enum ArbiterError {
     Sender(#[from] SenderError),
     #[error("dry run is disabled for the active transport")]
     DryRunTransportUnavailable,
-    #[error("real-run preflight requires the serial transport target")]
+    #[error("program execution is disabled for the active transport target")]
     RealRunTransportUnavailable,
-    #[error("GRBL Check run requires the serial transport target")]
+    #[error("GRBL Check is disabled for the active transport target")]
     CheckRunTransportUnavailable,
     #[error("program run can resume only from GRBL Hold or Idle, current mode is {0:?}")]
     ProgramRunResumeUnavailable(MachineMode),
@@ -238,6 +238,12 @@ pub enum ExecutionTarget {
     Disabled,
     Mock,
     Serial,
+}
+
+impl ExecutionTarget {
+    fn supports_machine_execution(self) -> bool {
+        matches!(self, Self::Mock | Self::Serial)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1499,7 +1505,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             response,
         } => {
             first_cut.invalidate();
-            let result = if *execution_target != ExecutionTarget::Serial {
+            let result = if !execution_target.supports_machine_execution() {
                 Err(ArbiterError::RealRunTransportUnavailable)
             } else {
                 execute_real_run_preflight(
@@ -1527,7 +1533,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             response,
         } => {
             first_cut.invalidate();
-            let result = if *execution_target != ExecutionTarget::Serial {
+            let result = if !execution_target.supports_machine_execution() {
                 Err(ArbiterError::RealRunTransportUnavailable)
             } else if !confirmation.is_complete() {
                 Err(FirstCutAuthorizationError::IncompleteConfirmation {
@@ -1559,7 +1565,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             dispatch_immediately,
             response,
         } => {
-            let result = if *execution_target != ExecutionTarget::Serial {
+            let result = if !execution_target.supports_machine_execution() {
                 Err(ArbiterError::RealRunTransportUnavailable)
             } else {
                 execute_authorized_program_run_start(
@@ -1585,7 +1591,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         } => {
             *sender_dispatch_enabled = true;
             let binding = ProgramCheckBinding::from_program(&program, execution_options);
-            let result = if *execution_target != ExecutionTarget::Serial {
+            let result = if !execution_target.supports_machine_execution() {
                 Err(ArbiterError::CheckRunTransportUnavailable)
             } else {
                 execute_check_run_start(
@@ -1606,7 +1612,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let _ = response.send(result);
         }
         Request::ResumeProgramRun { response } => {
-            let result = if *execution_target != ExecutionTarget::Serial {
+            let result = if !execution_target.supports_machine_execution() {
                 Err(ArbiterError::RealRunTransportUnavailable)
             } else {
                 execute_program_run_resume(controller, sender).await
@@ -1617,7 +1623,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         }
         Request::PauseProgramRun { response } => {
             invalidate_authorizations(safety, first_cut);
-            let result = if *execution_target != ExecutionTarget::Serial {
+            let result = if !execution_target.supports_machine_execution() {
                 Err(ArbiterError::RealRunTransportUnavailable)
             } else {
                 execute_program_run_pause(controller, sender).await
@@ -1630,7 +1636,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             invalidate_authorizations(safety, first_cut);
             program_check.invalidate();
             *pending_program_check = None;
-            let result = if *execution_target != ExecutionTarget::Serial {
+            let result = if !execution_target.supports_machine_execution() {
                 Err(ArbiterError::RealRunTransportUnavailable)
             } else {
                 execute_program_run_abort(controller, sender).await
@@ -1646,7 +1652,7 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             confirmation,
             response,
         } => {
-            let result = if *execution_target != ExecutionTarget::Serial {
+            let result = if !execution_target.supports_machine_execution() {
                 Err(ArbiterError::RealRunTransportUnavailable)
             } else {
                 execute_tool_change_completion(controller, sender, confirmation).await
@@ -5079,6 +5085,28 @@ mod tests {
         (arbiter, control, worker)
     }
 
+    fn disabled_execution_arbiter() -> (
+        CommandArbiter,
+        millo_mock::MockControl,
+        impl Future<Output = ()> + Send + 'static,
+    ) {
+        let transport = MockTransport::default();
+        let control = transport.control();
+        control.set_virtual_motion_enabled(false);
+        let (arbiter, worker) = CommandArbiter::new_with_execution_target(
+            Box::new(transport),
+            ControllerConfig {
+                poll_interval: Duration::from_secs(60),
+                status_timeout: Duration::from_millis(20),
+                command_timeout: Duration::from_millis(50),
+                failures_before_recovery: 2,
+            },
+            HardwareProfile::first_machine(),
+            ExecutionTarget::Disabled,
+        );
+        (arbiter, control, worker)
+    }
+
     fn serial_preflight_arbiter() -> (
         CommandArbiter,
         millo_mock::MockControl,
@@ -5096,6 +5124,7 @@ mod tests {
     ) {
         let transport = MockTransport::default();
         let control = transport.control();
+        control.set_virtual_motion_enabled(false);
         let (arbiter, worker) = CommandArbiter::new_with_execution_target(
             Box::new(transport),
             ControllerConfig {
@@ -5117,6 +5146,7 @@ mod tests {
     ) {
         let transport = MockTransport::default();
         let control = transport.control();
+        control.set_virtual_motion_enabled(false);
         let (arbiter, worker) = CommandArbiter::new_with_execution_target(
             Box::new(transport),
             ControllerConfig {
@@ -7256,7 +7286,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_run_preflight_is_serial_only_and_performs_read_only_fresh_queries() {
+    async fn machine_run_preflight_performs_read_only_fresh_queries() {
         let (arbiter, control, worker) = serial_preflight_arbiter();
         let task = tokio::spawn(worker);
         arbiter.connect().await.unwrap();
@@ -7286,8 +7316,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn real_run_preflight_rejects_non_serial_target_before_controller_io() {
-        let (arbiter, control, worker) = mock_dry_run_arbiter();
+    async fn real_run_preflight_rejects_a_disabled_execution_target_before_controller_io() {
+        let (arbiter, control, worker) = disabled_execution_arbiter();
         let task = tokio::spawn(worker);
         arbiter.connect().await.unwrap();
 
@@ -7840,18 +7870,47 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn check_run_rejects_mock_target_before_controller_io() {
+    async fn mock_target_runs_the_same_grbl_check_workflow() {
         let (arbiter, control, worker) = mock_dry_run_arbiter();
         let task = tokio::spawn(worker);
         arbiter.connect().await.unwrap();
 
-        let error = arbiter
+        let started = arbiter
             .start_check_run(parsed_program("G21 G90 G94\nG1 X1 F10"))
             .await
-            .unwrap_err();
+            .unwrap();
+        let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
 
-        assert!(matches!(error, ArbiterError::CheckRunTransportUnavailable));
-        assert!(control.writes().is_empty());
+        assert_eq!(started.mode, Some(millo_sender::SenderMode::CheckRun));
+        assert_eq!(completed.acknowledged_lines, completed.total_lines);
+        assert_eq!(
+            control
+                .writes()
+                .iter()
+                .filter(|write| write.as_slice() == b"$C\n")
+                .count(),
+            2
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn mock_target_executes_an_authorized_program_and_reports_machine_motion() {
+        let source = "G21 G90 G94\nG0 Z2\nG1 X20 Y10 Z-0.2 F300\nM30";
+        let (arbiter, control, worker) = mock_dry_run_arbiter();
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        authorize_and_start_serial_fixture(&arbiter, source, true).await;
+        wait_for_sender(&arbiter, SenderState::Draining).await;
+        control.advance_program(Duration::from_secs(60));
+        let snapshot = arbiter.refresh_status().await.unwrap();
+        let completed = wait_for_sender(&arbiter, SenderState::Completed).await;
+
+        assert_eq!(completed.acknowledged_lines, completed.total_lines);
+        assert_eq!(snapshot.machine.machine_position.unwrap().x, 20.0);
+        assert_eq!(snapshot.machine.machine_position.unwrap().y, 10.0);
+        assert_eq!(snapshot.machine.machine_position.unwrap().z, -0.2);
         task.abort();
     }
 
@@ -8202,6 +8261,7 @@ mod tests {
     async fn physical_sender_uses_interleaved_status_as_a_liveness_heartbeat() {
         let transport = MockTransport::default();
         let control = transport.control();
+        control.set_virtual_motion_enabled(false);
         // Keep the acknowledgement pending long enough to observe a poll frame
         // deterministically, even when the test runner is under light load.
         control.queue_program_delay(80);

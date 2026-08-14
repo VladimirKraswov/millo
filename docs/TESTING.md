@@ -394,7 +394,9 @@ port names remain untouched.
 - `ProgramCheckGate` tests cover exact program and execution-option binding,
   15-minute expiry, reset/reconnect invalidation, disconnect observation, and
   stable-Idle-only issuance.
-- Actor fixtures model a Serial execution target with deterministic Mock GRBL.
+- Actor fixtures model a Serial execution target with deterministic Mock GRBL
+  in explicit scripted-telemetry mode. Application Mock sessions instead keep
+  the virtual planner enabled by default.
   A successful authorization repeats exactly `?`, `$I`, `$$`, `$G`, `$#`, `?`,
   leaves the sender Idle, and emits no program line. Incomplete confirmation
   fails before controller I/O.
@@ -409,6 +411,13 @@ port names remain untouched.
   Hold/Resume, Reset cancellation, and terminal-command timeout while deferred.
   Physical command failures also verify automatic Hold plus Soft Reset and that
   reset flushes every queued Mock GRBL response.
+- Virtual-machine fixtures run the same GRBL Check and authorized production
+  sender used by Serial, then assert `Run -> Idle`, acknowledged source lines,
+  and final XYZ. Planner unit tests cover compact words and inline comments,
+  absolute/incremental motion, interpolated arcs, G93 block timing,
+  Hold/Resume, and Check-without-motion. Desktop tests verify that the stable
+  mock fingerprint produces one persistent profile with travel derived from
+  `$130/$131/$132` and an enabled probe workflow.
 - Cutting `M6` fixtures prove that `Tn` is acknowledged before an empty-FIFO
   host barrier, no `M6` bytes reach Mock/serial transport, ordinary Resume is
   rejected, stale line/tool confirmation is rejected before I/O, and valid

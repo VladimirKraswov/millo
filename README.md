@@ -60,8 +60,10 @@ typed planner/RX availability, feed/rapid/spindle overrides, input pins,
 accessories, and line number when GRBL reports them. A separate Rust readiness
 policy evaluates the inspected values against the selected profile. The desktop
 API exposes typed operations and a policy-approved file sender, never an
-arbitrary raw-line endpoint. Mock GRBL remains available for development and
-lifecycle tests without hardware.
+arbitrary raw-line endpoint. Mock GRBL is a full virtual machine target: it owns
+a persistent profile and runs the same Check, authorization, sender, recovery,
+probing, heightmap, and operator UI as a serial controller while publishing
+intermediate tool positions without hardware.
 
 The first safety controls are now available without opening a G-code endpoint.
 Feed Hold sends the GRBL realtime `!` byte when the controller reports active
@@ -160,8 +162,11 @@ builds an opaque plan with an `M5/M9` safety preamble. `millo-sender` permits
 only a bounded GRBL RX window and advances only after correlated FIFO `ok`
 responses; `error`, `ALARM`, disconnect, reset, timeout, or invalid controller
 state stops the run.
-The same state machine serves Mock dry runs and authorized serial runs. A lazily
-loaded Three.js adapter renders rapid and
+The same production state machine serves virtual and serial targets. Mock GRBL
+parses accepted programs into an accelerated time-based planner, so Run, Hold,
+Resume, Reset, line number, modal state, and intermediate XYZ positions are
+observable through the ordinary controller event stream. A lazily loaded
+Three.js adapter renders rapid and
 cutting geometry from a pure read model with top/isometric views. Loading and
 preview have no access to the command actor, serial transport, or machine
 capabilities; only the separate policy can mint sender lines.
@@ -490,7 +495,7 @@ successful GRBL status exchange.
 | `millo-restart` | Safe selected-line planner with clearance rewind and modal/WCS/tool restoration |
 | `millo-grbl` | GRBL wire-format parsing and encoding |
 | `millo-transport` | Controller-independent I/O contract |
-| `millo-mock` | Deterministic virtual machine for tests |
+| `millo-mock` | Deterministic virtual GRBL machine for tests and full job rehearsal |
 | `millo-profile` | Validated machine profiles, GRBL-derived drafts, and JSON persistence |
 | `millo-settings` | GRBL settings catalog, validated writes, session baselines, and per-machine revisions |
 | `millo-serial` | Native asynchronous serial discovery and byte/line I/O |

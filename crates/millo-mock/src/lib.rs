@@ -2,10 +2,15 @@ use std::{
     collections::{BTreeMap, VecDeque},
     future::pending,
     sync::{Arc, Mutex, MutexGuard},
+    time::Duration,
 };
 
 use async_trait::async_trait;
 use millo_transport::{Transport, TransportError};
+
+mod virtual_grbl;
+
+use virtual_grbl::VirtualGrbl;
 
 const DEFAULT_STATUS: &str = "<Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:0,0>";
 
@@ -41,6 +46,8 @@ struct MockState {
     jog_distance_scale: f64,
     firmware_options: String,
     overrides: [u16; 3],
+    virtual_motion_enabled: bool,
+    virtual_grbl: VirtualGrbl,
 }
 
 #[derive(Debug, Clone)]
@@ -50,7 +57,10 @@ pub struct MockControl {
 
 impl MockControl {
     pub fn set_status(&self, status_line: impl Into<String>) {
-        self.lock().status_line = status_line.into();
+        let mut state = self.lock();
+        state.status_line = status_line.into();
+        let position = status_position(&state.status_line).unwrap_or([0.0; 3]);
+        state.virtual_grbl.sync_external_position(position);
     }
 
     pub fn queue_reset(&self, version: &str) {
@@ -193,6 +203,23 @@ impl MockControl {
         self.lock().jog_distance_scale = scale;
     }
 
+    /// Lets protocol tests provide every status frame explicitly while the
+    /// application-facing mock keeps virtual motion enabled by default.
+    pub fn set_virtual_motion_enabled(&self, enabled: bool) {
+        let mut state = self.lock();
+        state.virtual_motion_enabled = enabled;
+        if !enabled {
+            let position = status_position(&state.status_line).unwrap_or([0.0; 3]);
+            state.virtual_grbl.sync_external_position(position);
+        }
+    }
+
+    pub fn advance_program(&self, elapsed: Duration) {
+        let mut state = self.lock();
+        state.virtual_grbl.advance_for_test(elapsed);
+        refresh_virtual_status(&mut state);
+    }
+
     fn lock(&self) -> MutexGuard<'_, MockState> {
         self.state
             .lock()
@@ -213,11 +240,13 @@ impl Default for MockTransport {
 
 impl MockTransport {
     pub fn with_status(status_line: impl Into<String>) -> Self {
+        let status_line = status_line.into();
+        let position = status_position(&status_line).unwrap_or([0.0; 3]);
         Self {
             control: MockControl {
                 state: Arc::new(Mutex::new(MockState {
                     connected: false,
-                    status_line: status_line.into(),
+                    status_line,
                     planned_cycles: VecDeque::new(),
                     planned_queries: VecDeque::new(),
                     planned_settings: VecDeque::new(),
@@ -238,6 +267,8 @@ impl MockTransport {
                     jog_distance_scale: 1.0,
                     firmware_options: "V,15,128".to_owned(),
                     overrides: [100, 100, 100],
+                    virtual_motion_enabled: true,
+                    virtual_grbl: VirtualGrbl::new(position),
                 })),
             },
         }
@@ -277,6 +308,7 @@ impl Transport for MockTransport {
             let cycle = if let Some(cycle) = state.planned_cycles.pop_front() {
                 cycle
             } else {
+                refresh_virtual_status(&mut state);
                 let status_line = state.status_line.clone();
                 if status_line.starts_with("<Run") && state.probe_settle_polls_remaining > 0 {
                     state.probe_settle_polls_remaining -= 1;
@@ -305,6 +337,7 @@ impl Transport for MockTransport {
                 }
             }
         } else if data == b"!" {
+            state.virtual_grbl.hold();
             if state.status_line.starts_with("<Run") || state.status_line.starts_with("<Jog") {
                 state.status_line = state
                     .status_line
@@ -313,11 +346,15 @@ impl Transport for MockTransport {
                 state.jog_polls_remaining = 0;
             }
         } else if data == b"~" {
+            state.virtual_grbl.resume();
             if state.status_line.starts_with("<Hold") {
                 state.status_line = state.status_line.replacen("<Hold:0", "<Run", 1);
             }
         } else if data == b"\x18" {
-            state.status_line = DEFAULT_STATUS.to_owned();
+            let position = status_position(&state.status_line).unwrap_or([0.0; 3]);
+            let work_position = subtract_position(position, state.work_offsets[state.active_wcs]);
+            state.virtual_grbl.stop(position);
+            state.status_line = format_status("Idle", position, work_position, 0.0);
             state.overrides = [100, 100, 100];
             state.jog_polls_remaining = 0;
             state.probe_settle_polls_remaining = 0;
@@ -331,6 +368,8 @@ impl Transport for MockTransport {
             {
                 state.status_line = status_with_mode(&state.status_line, "Idle", 0.0);
                 state.jog_polls_remaining = 0;
+                let position = status_position(&state.status_line).unwrap_or([0.0; 3]);
+                state.virtual_grbl.sync_external_position(position);
             }
         } else if let Some((index, value)) = override_update(data, state.overrides) {
             state.overrides[index] = value;
@@ -387,6 +426,7 @@ impl Transport for MockTransport {
                     };
                     state.status_line =
                         format_status(mode, machine_position, work_position, probe.feed_mm_per_min);
+                    state.virtual_grbl.sync_external_position(machine_position);
                     state.active_reads.extend(lines(&[
                         &format!(
                             "[PRB:{:.3},{:.3},{:.3}:0]",
@@ -410,6 +450,7 @@ impl Transport for MockTransport {
                 };
                 state.status_line =
                     format_status(mode, machine_position, work_position, probe.feed_mm_per_min);
+                state.virtual_grbl.sync_external_position(machine_position);
                 let delay_slices = state.probe_delay_slices;
                 state
                     .active_reads
@@ -442,6 +483,7 @@ impl Transport for MockTransport {
             let work_position = subtract_position(position, state.work_offsets[state.active_wcs]);
             let mode = if state.jog_reports_run { "Run" } else { "Jog" };
             state.status_line = format_status(mode, position, work_position, jog.feed_mm_per_min);
+            state.virtual_grbl.sync_external_position(position);
             state.jog_polls_remaining = mock_jog_status_polls(MockJog {
                 axis: 0,
                 distance_mm,
@@ -464,6 +506,7 @@ impl Transport for MockTransport {
             let work_position = subtract_position(position, state.work_offsets[state.active_wcs]);
             let mode = if state.jog_reports_run { "Run" } else { "Jog" };
             state.status_line = format_status(mode, position, work_position, jog.feed_mm_per_min);
+            state.virtual_grbl.sync_external_position(position);
             state.jog_polls_remaining = mock_jog_status_polls(MockJog { distance_mm, ..jog });
             state
                 .active_reads
@@ -505,7 +548,35 @@ impl Transport for MockTransport {
                 .planned_program
                 .pop_front()
                 .unwrap_or_else(|| lines(&["ok"]));
-            state.active_reads.extend(response);
+            let accepted = response
+                .back()
+                .is_some_and(|read| matches!(read, MockRead::Line(line) if line == "ok"));
+            if accepted && state.virtual_motion_enabled {
+                let command = std::str::from_utf8(data)
+                    .map_err(|_| TransportError::Io("program line is not UTF-8".to_owned()))?
+                    .trim_end_matches(['\r', '\n'])
+                    .to_owned();
+                let check_mode = status_mode(&state.status_line) == Some("Check");
+                let work_offsets = state.work_offsets;
+                let mut active_wcs = state.active_wcs;
+                match state.virtual_grbl.execute_line(
+                    &command,
+                    &work_offsets,
+                    &mut active_wcs,
+                    check_mode,
+                ) {
+                    Ok(()) => {
+                        state.active_wcs = active_wcs;
+                        refresh_virtual_status(&mut state);
+                        state.active_reads.extend(response);
+                    }
+                    Err(code) => state
+                        .active_reads
+                        .push_back(MockRead::Line(format!("error:{code}"))),
+                }
+            } else {
+                state.active_reads.extend(response);
+            }
         }
         Ok(())
     }
@@ -710,6 +781,14 @@ fn status_position(status: &str) -> Option<[f64; 3]> {
     status_named_position(status, "MPos")
 }
 
+fn refresh_virtual_status(state: &mut MockState) {
+    let work_offset = state.work_offsets[state.active_wcs];
+    let overrides = state.overrides;
+    if let Some(status) = state.virtual_grbl.status_line(work_offset, overrides) {
+        state.status_line = status;
+    }
+}
+
 fn status_named_position(status: &str, name: &str) -> Option<[f64; 3]> {
     let values = status
         .split('|')
@@ -850,10 +929,7 @@ fn device_query_response(command: &[u8], state: &MockState) -> Option<VecDeque<M
             Some(response)
         }
         b"$G\n" => Some(lines(&[
-            &format!(
-                "[GC:G0 G{} G17 G21 G90 G94 M5 M9 T0 F0 S0]",
-                state.active_wcs + 54
-            ),
+            &state.virtual_grbl.modal_report(state.active_wcs),
             "ok",
         ])),
         b"$#\n" => {
@@ -1074,7 +1150,10 @@ mod tests {
             "Grbl 1.1h ['$' for help]"
         );
         transport.write(b"?").await.unwrap();
-        assert_eq!(transport.read_line().await.unwrap(), DEFAULT_STATUS);
+        assert_eq!(
+            transport.read_line().await.unwrap(),
+            "<Idle|MPos:1.000,2.000,3.000|WPos:1.000,2.000,3.000|FS:0.000,0>"
+        );
     }
 
     #[tokio::test]
@@ -1161,10 +1240,36 @@ mod tests {
         transport.write(b"G1 X1 F10\n").await.unwrap();
         transport.write(b"?").await.unwrap();
 
-        assert!(transport.read_line().await.unwrap().starts_with("<Idle|"));
+        assert!(transport.read_line().await.unwrap().starts_with("<Run|"));
         let delayed = tokio::time::timeout(Duration::from_millis(2), transport.read_line()).await;
         assert!(delayed.is_err());
         assert_eq!(transport.read_line().await.unwrap(), "ok");
+    }
+
+    #[tokio::test]
+    async fn accepted_program_motion_reports_run_line_and_final_position() {
+        let mut transport = MockTransport::default();
+        let control = transport.control();
+        transport.connect().await.unwrap();
+
+        transport
+            .write(b"N12 G21 G90 G94 G1 X10 Y5 Z-1 F300\n")
+            .await
+            .unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), "ok");
+        transport.write(b"?").await.unwrap();
+        let running = transport.read_line().await.unwrap();
+        assert!(running.starts_with("<Run|"), "{running}");
+        assert!(running.contains("|Ln:12"), "{running}");
+
+        control.advance_program(Duration::from_secs(10));
+        transport.write(b"?").await.unwrap();
+        let completed = transport.read_line().await.unwrap();
+        assert!(completed.starts_with("<Idle|"), "{completed}");
+        assert!(
+            completed.contains("MPos:10.000,5.000,-1.000"),
+            "{completed}"
+        );
     }
 
     #[tokio::test]

@@ -232,10 +232,12 @@ identity, so changing it cannot reuse stale validation evidence.
 
 ## Implemented vertical slices
 
-The desktop command `connect_transport` selects either a deterministic mock or a
-discovered native serial port, sends the GRBL realtime `?` byte, parses the returned status frame, updates
+The desktop command `connect_transport` selects either the full virtual GRBL
+machine or a discovered native serial port, sends the GRBL realtime `?` byte, parses the returned status frame, updates
 `ControllerSnapshot`, emits `machine-state`, and returns the same snapshot to the
-caller. The UI treats the event as authoritative.
+caller. The UI treats the event as authoritative. A first virtual connection
+creates and binds a persistent profile from its inspected travel settings;
+there is no fake "machine bound" exception for Mock.
 
 ### Machine profiles
 
@@ -554,7 +556,7 @@ does not schedule or execute controller I/O.
 - Production Start refreshes status, rebuilds the intent-specific plan, consumes
   the matching lease, and starts the shared bounded-RX state machine in one
   actor request. Authorization alone still emits no program command.
-- `SenderSnapshot.mode` distinguishes `mockDryRun`, `checkRun`, `airRun`, and `cutRun`
+- `SenderSnapshot.mode` distinguishes legacy `mockDryRun`, `checkRun`, `airRun`, and `cutRun`
   without creating separate implementations. `M0` pauses after `ok`; `M1`
   does so only when Optional Stop was bound into the plan;
   `M2/M30` terminate dispatch. For physical modes the terminal line is retained
@@ -565,6 +567,15 @@ does not schedule or execute controller I/O.
   lines may already be accepted by GRBL, a physical command rejection or
   response failure triggers best-effort realtime Hold followed by Soft Reset to
   flush the controller receive and planner queues.
+- Mock and Serial are both machine-capable execution targets. The normal desktop
+  Mock route uses `checkRun`, `airRun`, and `cutRun` through the same preflight,
+  one-use lease and sender APIs as Serial. `mockDryRun` remains only as a narrow
+  compatibility/diagnostic API and is not the operator workflow.
+- `millo-mock::virtual_grbl` owns simulated modal and planner state separately
+  from transport framing. Status polls advance an accelerated bounded clock and
+  emit intermediate coordinates and line numbers. Low-level Serial fixtures can
+  switch the virtual planner off and inject status frames deterministically;
+  production Mock sessions cannot enter that scripted mode through the UI.
 - Physical modes cannot use plain Cancel. Operator stop is Feed Hold followed by
   Soft Reset in one typed actor request. React uses a short two-press inline
   confirmation, while the actor verifies that an Air/Cut sender is active,
