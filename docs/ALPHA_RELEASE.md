@@ -1,5 +1,33 @@
 # Alpha release notes
 
+## v0.1.1-alpha.1
+
+This alpha consolidates the first complete operator workflow used on real GRBL
+hardware. It remains an unsigned hardware-testing release.
+
+### Included since Alpha 1
+
+- probe and heightmap workflows with resumable acquisition, numeric and 3D
+  inspection, and opt-in toolpath compensation;
+- clearer Check and Machining modes, final start confirmation, depth correction,
+  work-zero return, and recovery controls;
+- production-gated serial sender with GRBL flow control, Hold, Reset, disconnect
+  handling, recovery evidence, selected-line start, and modal reconstruction;
+- syntax-highlighted G-code editor, machine profiles, tool library, macros, and
+  capability-gated bundled and external plugins;
+- image-to-toolpath and spoilboard-surfacing system plugins;
+- refactored operator boundaries and controller orchestration with expanded Rust,
+  UI, fixture, architecture, security, and website regression coverage.
+
+### Distribution
+
+- macOS 11+ for Apple Silicon: DMG;
+- x86_64 Linux: AppImage and Debian/Ubuntu DEB;
+- all artifacts are unsigned and accompanied by `SHA256SUMS.txt`.
+
+The AppImage may need its executable bit restored after downloading:
+`chmod +x Millo_0.1.1_amd64.AppImage`.
+
 ## v0.1.0-alpha.1
 
 This is the first public hardware-testing build of Millo. It is not a production

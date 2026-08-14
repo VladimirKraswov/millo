@@ -1994,7 +1994,7 @@ dependencies = [
 
 [[package]]
 name = "millo-audit"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2003,7 +2003,7 @@ dependencies = [
 
 [[package]]
 name = "millo-cam"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64 0.22.1",
  "image",
@@ -2017,7 +2017,7 @@ dependencies = [
 
 [[package]]
 name = "millo-command"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-controller",
  "millo-domain",
@@ -2040,7 +2040,7 @@ dependencies = [
 
 [[package]]
 name = "millo-controller"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-domain",
  "millo-dry-run",
@@ -2054,7 +2054,7 @@ dependencies = [
 
 [[package]]
 name = "millo-desktop"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-audit",
  "millo-cam",
@@ -2087,7 +2087,7 @@ dependencies = [
 
 [[package]]
 name = "millo-domain"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2095,7 +2095,7 @@ dependencies = [
 
 [[package]]
 name = "millo-dry-run"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-domain",
  "millo-gcode",
@@ -2106,7 +2106,7 @@ dependencies = [
 
 [[package]]
 name = "millo-gcode"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2115,7 +2115,7 @@ dependencies = [
 
 [[package]]
 name = "millo-grbl"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-domain",
  "serde",
@@ -2125,7 +2125,7 @@ dependencies = [
 
 [[package]]
 name = "millo-heightmap"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-domain",
  "millo-storage",
@@ -2136,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "millo-journal"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-sender",
  "millo-storage",
@@ -2147,7 +2147,7 @@ dependencies = [
 
 [[package]]
 name = "millo-mock"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "millo-transport",
@@ -2156,7 +2156,7 @@ dependencies = [
 
 [[package]]
 name = "millo-profile"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-domain",
  "millo-storage",
@@ -2167,7 +2167,7 @@ dependencies = [
 
 [[package]]
 name = "millo-readiness"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-domain",
  "millo-grbl",
@@ -2177,7 +2177,7 @@ dependencies = [
 
 [[package]]
 name = "millo-recovery"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-domain",
  "millo-dry-run",
@@ -2193,7 +2193,7 @@ dependencies = [
 
 [[package]]
 name = "millo-restart"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-gcode",
  "serde",
@@ -2202,7 +2202,7 @@ dependencies = [
 
 [[package]]
 name = "millo-run"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-domain",
  "millo-dry-run",
@@ -2214,7 +2214,7 @@ dependencies = [
 
 [[package]]
 name = "millo-safety"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-domain",
  "thiserror 2.0.20",
@@ -2222,7 +2222,7 @@ dependencies = [
 
 [[package]]
 name = "millo-script"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-gcode",
  "millo-storage",
@@ -2235,7 +2235,7 @@ dependencies = [
 
 [[package]]
 name = "millo-sender"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-dry-run",
  "millo-gcode",
@@ -2245,7 +2245,7 @@ dependencies = [
 
 [[package]]
 name = "millo-serial"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "millo-transport",
@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "millo-settings"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-domain",
  "millo-storage",
@@ -2267,11 +2267,11 @@ dependencies = [
 
 [[package]]
 name = "millo-storage"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "millo-tooling"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "millo-storage",
  "serde",
@@ -2281,7 +2281,7 @@ dependencies = [
 
 [[package]]
 name = "millo-transport"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "thiserror 2.0.20",

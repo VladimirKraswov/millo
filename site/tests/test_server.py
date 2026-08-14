@@ -1,6 +1,7 @@
 import importlib.util
 import json
 import os
+import re
 import tempfile
 import threading
 import unittest
@@ -74,6 +75,29 @@ class SiteServerTest(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as context:
             urllib.request.urlopen(self.base_url + "/../server.py", timeout=2)
         self.assertEqual(context.exception.code, 404)
+
+    def test_download_links_match_desktop_version_and_release(self):
+        package = json.loads((ROOT.parent / "package.json").read_text(encoding="utf-8"))
+        version = package["version"]
+        release_tag = f"v{version}-alpha.1"
+
+        with urllib.request.urlopen(self.base_url + "/", timeout=2) as response:
+            page = response.read().decode("utf-8")
+
+        asset_names = re.findall(
+            rf"/releases/download/{re.escape(release_tag)}/(Millo_{re.escape(version)}_[^\"]+)",
+            page,
+        )
+        self.assertEqual(
+            sorted(asset_names),
+            sorted(
+                [
+                    f"Millo_{version}_aarch64.dmg",
+                    f"Millo_{version}_amd64.AppImage",
+                    f"Millo_{version}_amd64.deb",
+                ]
+            ),
+        )
 
 
 if __name__ == "__main__":
