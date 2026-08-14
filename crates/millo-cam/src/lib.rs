@@ -233,6 +233,21 @@ pub fn generate_surfacing_job(
         tool.spindle_rpm
     )
     .unwrap();
+    writeln!(
+        &mut source,
+        "(Area origin X{} Y{}; first cutter center X{} Y{})",
+        number(settings.origin_x_mm),
+        number(settings.origin_y_mm),
+        number(min_x),
+        number(min_y)
+    )
+    .unwrap();
+    writeln!(
+        &mut source,
+        "(Safe approach: retract Z{} before rapid XY)",
+        number(settings.safe_z_mm)
+    )
+    .unwrap();
     writeln!(&mut source, "G21 G90 G94 G17").unwrap();
     writeln!(&mut source, "M5").unwrap();
     writeln!(&mut source, "M9").unwrap();
@@ -1223,6 +1238,16 @@ mod tests {
         let bounds = result.program.summary.bounds.unwrap();
 
         assert_eq!(result.summary.edge_overrun_mm, 12.7);
+        assert!(
+            result
+                .source
+                .contains("(Area origin X0 Y0; first cutter center X0 Y0)")
+        );
+        assert!(
+            result
+                .source
+                .contains("G0 Z5\n(Pass 1/2; Z -0.2)\nG0 X0 Y0")
+        );
         assert!((bounds.max.x - 100.0).abs() < 0.001);
         assert!((bounds.max.y - 80.0).abs() < 0.001);
 

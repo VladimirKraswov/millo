@@ -2355,6 +2355,19 @@ textarea:focus-visible {
   gap: 6px;
 }
 
+.surfacing-start-mode {
+  margin: 0 0 6px;
+}
+
+.surfacing-start-note {
+  display: block;
+  min-height: 28px;
+  margin: 0 0 8px;
+  color: #829198;
+  font-size: 9px;
+  line-height: 14px;
+}
+
 .surfacing-axis button {
   height: 32px;
   border: 1px solid #35434c;
@@ -2374,7 +2387,7 @@ textarea:focus-visible {
 .surfacing-estimate {
   display: grid;
   margin: 0;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border: 1px solid #2f3b42;
   border-radius: 4px;
   background: #0d1418;

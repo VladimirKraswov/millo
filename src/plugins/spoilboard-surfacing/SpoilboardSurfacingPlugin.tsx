@@ -52,6 +52,8 @@ const defaultSettings: SurfacingJobSettings = Object.freeze({
   rasterAxis: "x",
 });
 
+type SurfacingStartMode = "workZero" | "insideArea";
+
 export function SpoilboardSurfacingPlugin({
   initialOpen = false,
   jobs,
@@ -73,6 +75,7 @@ export function SpoilboardSurfacingPlugin({
     [toolLibrary.tools],
   );
   const [toolId, setToolId] = useState<string>();
+  const [startMode, setStartMode] = useState<SurfacingStartMode>("workZero");
   const [settings, setSettings] = useState<SurfacingJobSettings>(defaultSettings);
   const [generated, setGenerated] = useState<GeneratedSurfacingJob>();
   const [busy, setBusy] = useState<"generate" | "save">();
@@ -92,10 +95,10 @@ export function SpoilboardSurfacingPlugin({
       feedMmPerMin: selectedTool.feedMmPerMin,
       plungeMmPerMin: selectedTool.plungeMmPerMin,
       stepoverPercent: selectedTool.stepoverPercent,
-      edgeOverrunMm: Math.min(current.edgeOverrunMm, selectedTool.diameterMm / 2),
+      edgeOverrunMm: startMode === "workZero" ? selectedTool.diameterMm / 2 : 0,
     }));
     setGenerated(undefined);
-  }, [selectedTool]);
+  }, [selectedTool, startMode]);
 
   useEffect(() => {
     if (!open) return;
@@ -112,6 +115,15 @@ export function SpoilboardSurfacingPlugin({
     setNotice(undefined);
     setError(undefined);
   };
+  const selectStartMode = (mode: SurfacingStartMode) => {
+    setStartMode(mode);
+    setGenerated(undefined);
+    setNotice(undefined);
+    setError(undefined);
+  };
+  const toolRadiusMm = (selectedTool?.diameterMm ?? 0) / 2;
+  const startXMm = settings.originXMm + toolRadiusMm - settings.edgeOverrunMm;
+  const startYMm = settings.originYMm + toolRadiusMm - settings.edgeOverrunMm;
   const validation = validate(selectedTool?.diameterMm, settings);
   const generate = async () => {
     if (!selectedTool || validation || busy) return;
@@ -188,13 +200,21 @@ export function SpoilboardSurfacingPlugin({
 
               <section className="surfacing-settings">
                 <fieldset>
-                  <legend>Область от рабочего нуля</legend>
+                  <legend>Область и старт</legend>
+                  <div className="surfacing-axis surfacing-start-mode" role="group" aria-label="Положение первой точки">
+                    <button aria-pressed={startMode === "workZero"} onClick={() => selectStartMode("workZero")} type="button">Старт из X0 Y0</button>
+                    <button aria-pressed={startMode === "insideArea"} onClick={() => selectStartMode("insideArea")} type="button">Фреза внутри границ</button>
+                  </div>
+                  <small className="surfacing-start-note">
+                    {startMode === "workZero"
+                      ? `Центр фрезы начнёт в X${number(startXMm)} Y${number(startYMm)}; половина диаметра выйдет за начальные края.`
+                      : `Центр фрезы начнёт в X${number(startXMm)} Y${number(startYMm)}; режущая часть останется внутри области.`}
+                  </small>
                   <div className="surfacing-fields">
                     <NumberField label="Ширина X" max={100000} min={0.1} onChange={(value) => updateNumber("widthMm", value)} step={1} suffix="mm" value={settings.widthMm} />
                     <NumberField label="Высота Y" max={100000} min={0.1} onChange={(value) => updateNumber("heightMm", value)} step={1} suffix="mm" value={settings.heightMm} />
                     <NumberField label="Начало X" max={100000} min={-100000} onChange={(value) => updateNumber("originXMm", value)} step={1} suffix="mm" value={settings.originXMm} />
                     <NumberField label="Начало Y" max={100000} min={-100000} onChange={(value) => updateNumber("originYMm", value)} step={1} suffix="mm" value={settings.originYMm} />
-                    <NumberField label="Выход за край" max={selectedTool ? selectedTool.diameterMm / 2 : 0} min={0} onChange={(value) => updateNumber("edgeOverrunMm", value)} step={0.1} suffix="mm" value={settings.edgeOverrunMm} />
                   </div>
                 </fieldset>
                 <fieldset>
@@ -218,12 +238,13 @@ export function SpoilboardSurfacingPlugin({
                   </div>
                 </fieldset>
                 <dl className="surfacing-estimate">
+                  <div><dt>Первый XY</dt><dd>X{number(startXMm)} · Y{number(startYMm)}</dd></div>
                   <div><dt>Шаг</dt><dd>{selectedTool ? number(selectedTool.diameterMm * settings.stepoverPercent / 100) : "—"} mm</dd></div>
                   <div><dt>Проходов Z</dt><dd>{settings.depthPerPassMm > 0 ? Math.ceil(settings.removalMm / settings.depthPerPassMm) : "—"}</dd></div>
                   <div><dt>Шпиндель</dt><dd>{selectedTool?.spindleRpm.toLocaleString("ru-RU") ?? "—"} rpm</dd></div>
                 </dl>
                 <div className={`surfacing-status${error || validation ? " is-error" : generated ? " is-ready" : ""}`} aria-live="polite">
-                  {error ?? validation ?? (notice ? <><Check aria-hidden="true" size={14} />{notice}</> : "Шпиндель запускается вручную; G-code не содержит M3/M4.")}
+                  {error ?? validation ?? (notice ? <><Check aria-hidden="true" size={14} />{notice}</> : `Перед XY станок поднимет Z до ${number(settings.safeZMm)} mm. Шпиндель запускается вручную.`)}
                 </div>
               </section>
             </div>
