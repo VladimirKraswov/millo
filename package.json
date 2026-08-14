@@ -2,6 +2,10 @@
   "name": "millo",
   "private": true,
   "version": "0.1.1",
+  "milloRelease": {
+    "channel": "alpha",
+    "sequence": 2
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -10,14 +14,17 @@
     "test:ui": "vitest run",
     "test:brand": "node scripts/check-brand.mjs",
     "test:security": "node scripts/check-security.mjs",
+    "test:release": "node scripts/check-release.mjs",
     "test:architecture": "node scripts/check-architecture.mjs",
     "test:dependencies": "npm audit --audit-level=moderate",
     "test:bundle": "node scripts/check-bundle.mjs",
     "test:site": "python3 -m unittest discover -s site/tests -v",
     "test:rust": "cargo test --workspace",
-    "test": "npm run typecheck && npm run test:ui && npm run test:brand && npm run test:security && npm run test:architecture && npm run test:site && npm run test:rust",
+    "test": "npm run typecheck && npm run test:ui && npm run test:brand && npm run test:security && npm run test:release && npm run test:architecture && npm run test:site && npm run test:rust",
     "lint:rust": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings",
     "verify": "npm test && npm run build && npm run lint:rust",
+    "bundle:mac:alpha": "APPLE_SIGNING_IDENTITY=- tauri build --bundles dmg",
+    "bundle:linux": "tauri build --bundles deb,appimage",
     "tauri": "tauri"
   },
   "dependencies": {

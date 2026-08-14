@@ -79,7 +79,8 @@ class SiteServerTest(unittest.TestCase):
     def test_download_links_match_desktop_version_and_release(self):
         package = json.loads((ROOT.parent / "package.json").read_text(encoding="utf-8"))
         version = package["version"]
-        release_tag = f"v{version}-alpha.1"
+        release = package["milloRelease"]
+        release_tag = f"v{version}-{release['channel']}.{release['sequence']}"
 
         with urllib.request.urlopen(self.base_url + "/", timeout=2) as response:
             page = response.read().decode("utf-8")

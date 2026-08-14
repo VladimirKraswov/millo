@@ -1,5 +1,15 @@
 # Alpha release notes
 
+## v0.1.1-alpha.2
+
+This packaging-only follow-up seals the complete macOS application bundle with
+an ad-hoc signature. Alpha 1 contained only the Mach-O linker's partial
+signature, so Gatekeeper incorrectly reported the downloaded app as damaged.
+
+The bundle now passes `codesign --verify --deep --strict`. It is still not
+Developer ID signed or notarized, so macOS may require one explicit approval in
+**System Settings > Privacy & Security > Open Anyway** after the first launch.
+
 ## v0.1.1-alpha.1
 
 This alpha consolidates the first complete operator workflow used on real GRBL
@@ -27,6 +37,19 @@ hardware. It remains an unsigned hardware-testing release.
 
 The AppImage may need its executable bit restored after downloading:
 `chmod +x Millo_0.1.1_amd64.AppImage`.
+
+## macOS alpha packaging
+
+Use `npm run bundle:mac:alpha`, not a raw Tauri bundle command. It supplies the
+`APPLE_SIGNING_IDENTITY=-` identity so Tauri seals the whole `.app` before
+creating the DMG. The release gate is:
+
+```bash
+codesign --verify --deep --strict --verbose=4 /path/to/Millo.app
+```
+
+A production release must replace ad-hoc signing with an Apple Developer ID
+Application identity and notarization credentials.
 
 ## v0.1.0-alpha.1
 

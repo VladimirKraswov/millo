@@ -46,10 +46,11 @@ names resolve publicly and certificate renewal has been verified.
 ## Release links
 
 The website points to the immutable GitHub release tag
-`v0.1.1-alpha.1`. Each uploaded desktop artifact must have a SHA-256 checksum
+`v0.1.1-alpha.2`. Each uploaded desktop artifact must have a SHA-256 checksum
 in the release notes. Current alpha packages are intentionally described as
 unsigned until platform signing and notarization are added.
 
-The website regression suite derives the desktop version from `package.json`
-and checks the DMG, AppImage, and DEB links. A release version change therefore
-cannot pass `npm run test:site` while the public download URLs are stale.
+The website regression suite derives the desktop version, release channel, and
+sequence from `package.json`, then checks the DMG, AppImage, and DEB links. A
+release metadata change therefore cannot pass `npm run test:site` while the
+public download URLs are stale.
