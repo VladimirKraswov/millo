@@ -213,6 +213,22 @@ fn rejects_incremental_gerber_instead_of_guessing_the_geometry() {
 }
 
 #[test]
+fn accepts_easyeda_legacy_absolute_coordinate_command() {
+    let request = PcbInspectRequest {
+        files: vec![source(
+            "Gerber_BottomLayer.GBL",
+            PcbLayerRole::Copper,
+            b"G04 EasyEDA fixture*\n%FSLAX24Y24*%\n%MOMM*%\nG90*\n%ADD10C,0.200*%\nD10*\nX010000Y010000D03*\nM02*\n",
+        )],
+        transform: PcbTransform::default(),
+    };
+
+    let inspection = inspect_pcb(request).expect("legacy absolute mode is equivalent to FSLA");
+    assert_eq!(inspection.files[0].source_name, "Gerber_BottomLayer.GBL");
+    assert_eq!(inspection.paths.len(), 1);
+}
+
+#[test]
 fn rejects_an_empty_excellon_layer_instead_of_silently_omitting_it() {
     let request = PcbInspectRequest {
         files: vec![source(

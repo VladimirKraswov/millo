@@ -20,8 +20,10 @@ pub(crate) fn parse_gerber(
     role: PcbLayerRole,
     bytes: &[u8],
 ) -> Result<LayerGeometry, PcbError> {
-    let layer = GerberLayerData::from_type(layer_type(role), BufReader::new(Cursor::new(bytes)))
-        .map_err(|error| PcbError::InvalidGerber(source_name.to_owned(), error.to_string()))?;
+    let normalized = normalize_legacy_coordinate_commands(source_name, bytes)?;
+    let layer =
+        GerberLayerData::from_type(layer_type(role), BufReader::new(Cursor::new(normalized)))
+            .map_err(|error| PcbError::InvalidGerber(source_name.to_owned(), error.to_string()))?;
     if layer.coordinate_format.coordinate_mode == CoordinateMode::Incremental {
         return Err(PcbError::UnsupportedGerberFeature(
             source_name.to_owned(),
@@ -197,6 +199,54 @@ pub(crate) fn parse_gerber(
         role,
         paths: image,
     })
+}
+
+fn normalize_legacy_coordinate_commands(
+    source_name: &str,
+    bytes: &[u8],
+) -> Result<Vec<u8>, PcbError> {
+    const ABSOLUTE: &[u8] = b"G90*";
+    const INCREMENTAL: &[u8] = b"G91*";
+    const ABSOLUTE_COMMENT: &[u8] = b"G04 Millo accepted legacy G90 absolute mode*";
+
+    let mut normalized = Vec::with_capacity(bytes.len());
+    let mut copied_until = 0usize;
+    let mut command_start = 0usize;
+    let mut in_extended = false;
+
+    for (index, byte) in bytes.iter().copied().enumerate() {
+        if byte == b'%' {
+            in_extended = !in_extended;
+            if !in_extended {
+                command_start = index + 1;
+            }
+            continue;
+        }
+        if in_extended || byte != b'*' {
+            continue;
+        }
+
+        let command = &bytes[command_start..=index];
+        let leading_whitespace = command
+            .iter()
+            .position(|byte| !byte.is_ascii_whitespace())
+            .unwrap_or(command.len());
+        let trimmed = &command[leading_whitespace..];
+        if trimmed == INCREMENTAL {
+            return Err(PcbError::UnsupportedGerberFeature(
+                source_name.to_owned(),
+                "incremental coordinates".to_owned(),
+            ));
+        }
+        if trimmed == ABSOLUTE {
+            normalized.extend_from_slice(&bytes[copied_until..command_start + leading_whitespace]);
+            normalized.extend_from_slice(ABSOLUTE_COMMENT);
+            copied_until = index + 1;
+        }
+        command_start = index + 1;
+    }
+    normalized.extend_from_slice(&bytes[copied_until..]);
+    Ok(normalized)
 }
 
 fn layer_type(role: PcbLayerRole) -> LayerType {
