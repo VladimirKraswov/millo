@@ -218,7 +218,7 @@ fn accepts_easyeda_legacy_absolute_coordinate_command() {
         files: vec![source(
             "Gerber_BottomLayer.GBL",
             PcbLayerRole::Copper,
-            b"G04 EasyEDA fixture*\n%FSLAX24Y24*%\n%MOMM*%\nG90*\n%ADD10C,0.200*%\nD10*\nX010000Y010000D03*\nM02*\n",
+            b"G04 EasyEDA fixture*\n%FSLAX24Y24*%\n%MOMM*%\nG90*\nG71D02*\n%ADD10C,0.200*%\nD10*\nX010000Y010000D03*\nM02*\n",
         )],
         transform: PcbTransform::default(),
     };
