@@ -8,8 +8,16 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const SCHEMA_VERSION: u16 = 1;
-const PRESET_CATALOG_VERSION: u16 = 1;
+const PRESET_CATALOG_VERSION: u16 = 3;
 const CCT01_2F_06050_PRESET_ID: &str = "preset-inreko-cct01-2f-06050-06";
+const MEASURED_LONG_4F_PRESET_ID: &str = "preset-measured-4f-d6-5-l34-oal75";
+const PHOTOGRAPHED_PRESET_IDS: &[&str] = &[
+    "preset-dreanique-sp1f-d1-0-l03",
+    "preset-dreanique-sp1f-d2-0-l04",
+    "preset-xc-nlj3-2001",
+    "preset-v-engraver-90-0-1",
+    "preset-downcut-3-175-2-17",
+];
 const MAX_TOOLS: usize = 256;
 const MAX_NAME_BYTES: usize = 100;
 const MAX_DESCRIPTION_BYTES: usize = 2_000;
@@ -453,6 +461,87 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             },
         }),
         factory_tool(FactoryToolSpec {
+            id: "preset-dreanique-sp1f-d1-0-l03",
+            name: "Однозаходная 1 мм · SP1F-D1.0-L03",
+            description: "Полированная твердосплавная однозаходная фреза DreaNique с удалением стружки вверх: диаметр 1 мм, рабочая длина 3 мм, хвостовик 3,175 мм. Подходит для мелких пазов и контуров в пластиках, дереве и цветных металлах. Тонкая рабочая часть чувствительна к биению, чрезмерному вылету и резкому врезанию.",
+            kind: ToolKind::FlatEndMill,
+            diameter_mm: 1.0,
+            shank_diameter_mm: 3.175,
+            cutting_length_mm: 3.0,
+            flute_count: 1,
+            included_angle_degrees: None,
+            feed_mm_per_min: 250.0,
+            plunge_mm_per_min: 60.0,
+            spindle_rpm: 18_000,
+            stepdown_mm: 0.2,
+            stepover_percent: 30.0,
+            reference: ToolReference {
+                manufacturer: "DreaNique".to_owned(),
+                product: "SP1F-D1.0-L03".to_owned(),
+                url: "https://www.dreanique.com/milling-cutter/engraving-and-carving-end-mills/solid-carbide-single-flute-spiral-end-mills.html".to_owned(),
+            },
+        }),
+        factory_tool(FactoryToolSpec {
+            id: "preset-dreanique-sp1f-d2-0-l04",
+            name: "Однозаходная 2 мм · SP1F-D2.0-L04",
+            description: "Полированная твердосплавная однозаходная фреза DreaNique с удалением стружки вверх: диаметр 2 мм, рабочая длина 4 мм, хвостовик 3,175 мм. Удобна для небольших пазов, контуров и выборок в акриле, дереве и цветных металлах. Восходящая спираль хорошо выводит стружку, но тонкую заготовку нужно надёжно прижать.",
+            kind: ToolKind::FlatEndMill,
+            diameter_mm: 2.0,
+            shank_diameter_mm: 3.175,
+            cutting_length_mm: 4.0,
+            flute_count: 1,
+            included_angle_degrees: None,
+            feed_mm_per_min: 400.0,
+            plunge_mm_per_min: 100.0,
+            spindle_rpm: 18_000,
+            stepdown_mm: 0.4,
+            stepover_percent: 35.0,
+            reference: ToolReference {
+                manufacturer: "DreaNique".to_owned(),
+                product: "SP1F-D2.0-L04".to_owned(),
+                url: "https://www.dreanique.com/milling-cutter/engraving-and-carving-end-mills/solid-carbide-single-flute-spiral-end-mills.html".to_owned(),
+            },
+        }),
+        factory_tool(FactoryToolSpec {
+            id: "preset-downcut-3-175-2-17",
+            name: "Однозаходная 2 мм, стружка вниз · 3,175×2×17",
+            description: "Твердосплавная однозаходная фреза с удалением стружки вниз: хвостовик 3,175 мм, диаметр 2 мм, рабочая длина 17 мм. Прижимает верхний слой и уменьшает сколы на фанере, MDF и ламинированных листах. Стружка остаётся в пазу, поэтому нужны неглубокие проходы, паузы для очистки и особенно надёжное закрепление заготовки.",
+            kind: ToolKind::FlatEndMill,
+            diameter_mm: 2.0,
+            shank_diameter_mm: 3.175,
+            cutting_length_mm: 17.0,
+            flute_count: 1,
+            included_angle_degrees: None,
+            feed_mm_per_min: 350.0,
+            plunge_mm_per_min: 80.0,
+            spindle_rpm: 18_000,
+            stepdown_mm: 0.4,
+            stepover_percent: 35.0,
+            reference: ToolReference {
+                manufacturer: "Без маркировки производителя".to_owned(),
+                product: "Downcut 3,175×2×17".to_owned(),
+                url: "https://www.walmart.com/ip/3-175mm-Milling-Cutter-Left-hand-CNC-Carbide-End-Mill-Spiral-Woodworking-Tool-For-Power-Tools-Drill-Bits-Accessory/16606166421".to_owned(),
+            },
+        }),
+        CuttingTool {
+            id: MEASURED_LONG_4F_PRESET_ID.to_owned(),
+            name: "Концевая длинная 4-зубая 6,5 мм · 6,5×34×75".to_owned(),
+            description: "Длинная четырёхзубая концевая фреза без читаемого артикула: диаметр и хвостовик 6,5 мм, рабочая длина около 34 мм, общая длина 75 мм. Четыре кромки дают чистую поверхность, но требуют жёсткого станка и устойчивого отвода стружки. Перед глубоким проходом измерьте рабочую длину и хвостовик конкретной фрезы штангенциркулем; стартовые режимы намеренно занижены.".to_owned(),
+            kind: ToolKind::FlatEndMill,
+            diameter_mm: 6.5,
+            shank_diameter_mm: 6.5,
+            cutting_length_mm: 34.0,
+            flute_count: 4,
+            included_angle_degrees: None,
+            feed_mm_per_min: 300.0,
+            plunge_mm_per_min: 60.0,
+            spindle_rpm: 12_000,
+            stepdown_mm: 0.3,
+            stepover_percent: 25.0,
+            factory_preset: true,
+            reference: None,
+        },
+        factory_tool(FactoryToolSpec {
             id: "preset-carbide3d-202",
             name: "Шаровая 6,35 мм · #202",
             description: "Шаровая фреза для чистовых проходов по рельефам и плавным 3D-поверхностям. Обычно применяется после черновой выборки плоской фрезой с небольшим поперечным шагом.",
@@ -533,6 +622,48 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             ),
         }),
         factory_tool(FactoryToolSpec {
+            id: "preset-xc-nlj3-2001",
+            name: "Гравёр 20° × 0,1 мм · XC-NLJ3.2001",
+            description: "Твердосплавный V-гравёр с кончиком 0,1 мм, углом 20°, хвостовиком 3,175 мм и общей длиной 40 мм. Подходит для тонкой маркировки, PCB, дерева, акрила и мягких цветных металлов. Режущая длина не указана на футляре, поэтому пресет консервативно ограничивает её 3 мм; перед более глубоким проходом измерьте конкретную фрезу.",
+            kind: ToolKind::Engraving,
+            diameter_mm: 0.1,
+            shank_diameter_mm: 3.175,
+            cutting_length_mm: 3.0,
+            flute_count: 1,
+            included_angle_degrees: Some(20.0),
+            feed_mm_per_min: 120.0,
+            plunge_mm_per_min: 40.0,
+            spindle_rpm: 18_000,
+            stepdown_mm: 0.05,
+            stepover_percent: 10.0,
+            reference: ToolReference {
+                manufacturer: "XC".to_owned(),
+                product: "XC-NLJ3.2001".to_owned(),
+                url: "https://www.didacticaselectronicas.com/shop/xc-nlj3-2001-broca-para-grabado-de-3-175mm-vastago-en-forma-de-v-20-grados-23631".to_owned(),
+            },
+        }),
+        factory_tool(FactoryToolSpec {
+            id: "preset-v-engraver-90-0-1",
+            name: "V-гравёр 90° × 0,1 мм",
+            description: "Твердосплавный V-гравёр с кончиком 0,1 мм, углом 90° и хвостовиком 3,175 мм. Формирует более широкую канавку при небольшой глубине и подходит для надписей, фасок и декоративной гравировки. На футляре нет артикула: перед работой проверьте фактические 2 кромки и рабочую длину 14 мм, взятые из справочного аналога.",
+            kind: ToolKind::Engraving,
+            diameter_mm: 0.1,
+            shank_diameter_mm: 3.175,
+            cutting_length_mm: 14.0,
+            flute_count: 2,
+            included_angle_degrees: Some(90.0),
+            feed_mm_per_min: 180.0,
+            plunge_mm_per_min: 50.0,
+            spindle_rpm: 18_000,
+            stepdown_mm: 0.1,
+            stepover_percent: 10.0,
+            reference: ToolReference {
+                manufacturer: "Без маркировки производителя".to_owned(),
+                product: "V-гравёр 90° × 0,1 мм".to_owned(),
+                url: "https://www.harfington.com/products/p-1869351".to_owned(),
+            },
+        }),
+        factory_tool(FactoryToolSpec {
             id: "preset-carbide3d-mcfly",
             name: "Торцевая 25,4 мм · McFly",
             description: "Широкая сменнопластинчатая фреза для выравнивания жертвенного стола и деревянных плит. Производитель указывает её для дерева и рекомендует неглубокий проход.",
@@ -560,17 +691,28 @@ fn migrate_preset_catalog(document: &mut StoredToolLibrary) -> bool {
         return false;
     }
 
-    if document.preset_catalog_version < 1 {
-        let preset = factory_presets()
-            .into_iter()
-            .find(|tool| tool.id == CCT01_2F_06050_PRESET_ID)
-            .expect("introduced factory preset must exist");
-        let already_present = document
-            .tools
-            .iter()
-            .any(|tool| tool.id == preset.id || tool.name.eq_ignore_ascii_case(&preset.name));
-        if document.tools.len() < MAX_TOOLS && !already_present {
-            document.tools.push(preset);
+    let presets = factory_presets()
+        .into_iter()
+        .map(|tool| (tool.id.clone(), tool))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    for version in (document.preset_catalog_version + 1)..=PRESET_CATALOG_VERSION {
+        let introduced_ids: &[&str] = match version {
+            1 => &[CCT01_2F_06050_PRESET_ID],
+            2 => PHOTOGRAPHED_PRESET_IDS,
+            3 => &[MEASURED_LONG_4F_PRESET_ID],
+            _ => &[],
+        };
+        for id in introduced_ids {
+            let preset = presets
+                .get(*id)
+                .expect("introduced factory preset must exist");
+            let already_present = document
+                .tools
+                .iter()
+                .any(|tool| tool.id == preset.id || tool.name.eq_ignore_ascii_case(&preset.name));
+            if document.tools.len() < MAX_TOOLS && !already_present {
+                document.tools.push(preset.clone());
+            }
         }
     }
 
@@ -783,7 +925,7 @@ mod tests {
     fn starts_with_valid_editable_factory_presets() {
         let mut store = ToolLibraryStore::in_memory();
         let initial = store.state();
-        assert_eq!(initial.tools.len(), 8);
+        assert_eq!(initial.tools.len(), 14);
         assert!(initial.tools.iter().all(|tool| tool.factory_preset));
         let requested = initial
             .tools
@@ -820,6 +962,87 @@ mod tests {
 
         let reloaded = ToolLibraryStore::load(&path).unwrap();
         assert!(reloaded.get(CCT01_2F_06050_PRESET_ID).is_none());
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
+    }
+
+    #[test]
+    fn migrates_photographed_presets_from_catalog_v1_once() {
+        let path = test_path("photographed-preset-migration");
+        let mut previous_catalog = StoredToolLibrary {
+            preset_catalog_version: 1,
+            ..StoredToolLibrary::default()
+        };
+        previous_catalog
+            .tools
+            .retain(|tool| !PHOTOGRAPHED_PRESET_IDS.contains(&tool.id.as_str()));
+        save_document(&path, &previous_catalog).unwrap();
+
+        let mut store = ToolLibraryStore::load(&path).unwrap();
+        assert!(
+            PHOTOGRAPHED_PRESET_IDS
+                .iter()
+                .all(|id| store.get(id).is_some())
+        );
+        let deleted_id = PHOTOGRAPHED_PRESET_IDS[0];
+        store.delete(deleted_id).unwrap();
+
+        let reloaded = ToolLibraryStore::load(&path).unwrap();
+        assert!(reloaded.get(deleted_id).is_none());
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
+    }
+
+    #[test]
+    fn photographed_presets_keep_label_geometry() {
+        let store = ToolLibraryStore::in_memory();
+        let cases = [
+            ("preset-dreanique-sp1f-d1-0-l03", 1.0, 3.175, 3.0, 1),
+            ("preset-dreanique-sp1f-d2-0-l04", 2.0, 3.175, 4.0, 1),
+            ("preset-downcut-3-175-2-17", 2.0, 3.175, 17.0, 1),
+        ];
+        for (id, diameter, shank, length, flutes) in cases {
+            let tool = store.get(id).unwrap();
+            assert_eq!(tool.diameter_mm, diameter);
+            assert_eq!(tool.shank_diameter_mm, shank);
+            assert_eq!(tool.cutting_length_mm, length);
+            assert_eq!(tool.flute_count, flutes);
+        }
+
+        for (id, angle) in [
+            ("preset-xc-nlj3-2001", 20.0),
+            ("preset-v-engraver-90-0-1", 90.0),
+        ] {
+            let tool = store.get(id).unwrap();
+            assert_eq!(tool.diameter_mm, 0.1);
+            assert_eq!(tool.shank_diameter_mm, 3.175);
+            assert_eq!(tool.included_angle_degrees, Some(angle));
+        }
+    }
+
+    #[test]
+    fn migrates_measured_long_end_mill_from_catalog_v2_once() {
+        let path = test_path("measured-long-preset-migration");
+        let mut previous_catalog = StoredToolLibrary {
+            preset_catalog_version: 2,
+            ..StoredToolLibrary::default()
+        };
+        previous_catalog
+            .tools
+            .retain(|tool| tool.id != MEASURED_LONG_4F_PRESET_ID);
+        save_document(&path, &previous_catalog).unwrap();
+
+        let mut store = ToolLibraryStore::load(&path).unwrap();
+        let tool = store.get(MEASURED_LONG_4F_PRESET_ID).unwrap();
+        assert_eq!(tool.diameter_mm, 6.5);
+        assert_eq!(tool.shank_diameter_mm, 6.5);
+        assert_eq!(tool.cutting_length_mm, 34.0);
+        assert_eq!(tool.flute_count, 4);
+        assert!(tool.reference.is_none());
+        store.delete(MEASURED_LONG_4F_PRESET_ID).unwrap();
+
+        let reloaded = ToolLibraryStore::load(&path).unwrap();
+        assert!(reloaded.get(MEASURED_LONG_4F_PRESET_ID).is_none());
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(backup_path(&path));
     }
