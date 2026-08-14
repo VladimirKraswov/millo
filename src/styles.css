@@ -7106,6 +7106,10 @@ button.real-run-check:hover {
   color: #aeb9bf;
 }
 
+.program-warning.is-managed {
+  color: #73d7b6;
+}
+
 .warning-line {
   padding-top: 1px;
   color: #77858e;

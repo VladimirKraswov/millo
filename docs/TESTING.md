@@ -131,6 +131,12 @@ output and final `millo-gcode` parse. Vitest checks extension registration,
 role inference, nearest drill selection, immutable inspection and core-issued
 job identity. Use `/?fixture=pcb` for the modal layout fixture.
 
+Program diagnostics tests additionally prove that a host-managed `M6` is shown
+as a localized expected tool-change event, does not mark a successfully parsed
+file as defective, and still leaves malformed or incomplete previews blocked.
+The execution policy remains authoritative: Air run rejects `M6`, while Cutting
+accepts only the isolated barrier form.
+
 Machine-state host tests prove that mutable controller DTOs are cloned and
 deeply frozen, publication stops after an idempotent unsubscribe, and a state
 source does not imply a grant. Loader tests cover current/future read access,

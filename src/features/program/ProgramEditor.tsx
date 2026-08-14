@@ -28,6 +28,11 @@ import type { ProgramGateway } from "../../platform/program/ProgramGateway";
 import type { GcodeProgram } from "../../shared/program";
 import type { LoadedProgram } from "./ProgramLoader";
 import {
+  formatProgramDiagnostics,
+  programDiagnosticsSummary,
+  programWarningPresentation,
+} from "./programDiagnosticsModel";
+import {
   buildProcessedProgramSource,
   commitProgramEditorSource,
   createProgramEditorHistory,
@@ -314,7 +319,7 @@ export function ProgramEditor({
               {parseState === "parsing"
                 ? "Обновляем preview"
                 : parseState === "ready"
-                  ? `${preview.summary.motionCount} движений · ${preview.warnings.length} замечаний`
+                  ? `${preview.summary.motionCount} движений · ${formatProgramDiagnostics(programDiagnosticsSummary(preview)) || "без замечаний"}`
                   : "Правка не разобрана"}
             </span>
           </div>
@@ -433,7 +438,7 @@ export function ProgramEditor({
             </div>
             <div className="program-editor-warnings">
               <div>
-                <span>Замечания parser</span>
+                <span>Диагностика parser</span>
                 <strong>{currentRevisionReady ? preview.warnings.length : "--"}</strong>
               </div>
               {parseError ? (
@@ -441,17 +446,20 @@ export function ProgramEditor({
               ) : preview.warnings.length === 0 ? (
                 <p className="is-clear">Ошибок и предупреждений нет</p>
               ) : (
-                preview.warnings.slice(0, 4).map((warning, index) => (
-                  <button
-                    className={`is-${warning.severity}`}
-                    key={`${warning.sourceLine}-${warning.code}-${index}`}
-                    onClick={() => focusSourceLine(warning.sourceLine)}
-                    type="button"
-                  >
-                    <code>L{warning.sourceLine}</code>
-                    <span>{warning.message}</span>
-                  </button>
-                ))
+                preview.warnings.slice(0, 4).map((warning, index) => {
+                  const presentation = programWarningPresentation(warning);
+                  return (
+                    <button
+                      className={`is-${presentation.kind}`}
+                      key={`${warning.sourceLine}-${warning.code}-${index}`}
+                      onClick={() => focusSourceLine(warning.sourceLine)}
+                      type="button"
+                    >
+                      <code>L{warning.sourceLine}</code>
+                      <span>{presentation.detail}</span>
+                    </button>
+                  );
+                })
               )}
             </div>
           </aside>

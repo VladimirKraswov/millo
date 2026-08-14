@@ -1,9 +1,14 @@
-import { ChevronDown, ShieldAlert, TriangleAlert } from "lucide-react";
+import { ChevronDown, ShieldAlert, TriangleAlert, Wrench } from "lucide-react";
 
 import type { GcodeProgram, ProgramWarning } from "../../shared/program";
 import type { RunPreflightReport } from "../../shared/realRun";
 import { ProgramLineTable } from "./ProgramLineTable";
 import { ProgramPreflightReport } from "./ProgramPreflightReport";
+import {
+  formatProgramDiagnostics,
+  programDiagnosticsSummary,
+  programWarningPresentation,
+} from "./programDiagnosticsModel";
 
 export type ProgramDiagnosticView = "lines" | "warnings" | "preflight";
 
@@ -32,6 +37,8 @@ export function ProgramInspection({
   report,
   selectedSourceLine,
 }: ProgramInspectionProps) {
+  const diagnostics = programDiagnosticsSummary(program);
+  const diagnosticsLabel = formatProgramDiagnostics(diagnostics);
   return (
     <details
       className="program-inspection"
@@ -42,9 +49,7 @@ export function ProgramInspection({
         <span>Программа и диагностика</span>
         <code>
           {program.lines.length} строк
-          {program.warnings.length > 0
-            ? ` · ${program.warnings.length} предупреждений`
-            : ""}
+          {diagnosticsLabel ? ` · ${diagnosticsLabel}` : ""}
         </code>
         <ChevronDown aria-hidden="true" size={13} />
       </summary>
@@ -66,7 +71,7 @@ export function ProgramInspection({
           controls="program-warnings-panel"
           count={program.warnings.length}
           id="program-warnings-tab"
-          label="Замечания"
+          label="Диагностика"
           onClick={() => onView("warnings")}
         />
         {realRunTarget && (
@@ -180,22 +185,25 @@ function WarningRow({
   readonly selected: boolean;
   readonly warning: ProgramWarning;
 }) {
+  const presentation = programWarningPresentation(warning);
   return (
     <button
       aria-pressed={selected}
-      className={`program-warning is-${warning.severity}`}
+      className={`program-warning is-${presentation.kind}`}
       onClick={onSelect}
       type="button"
     >
       <span className="warning-line">L{warning.sourceLine}</span>
-      {warning.severity === "safety" ? (
+      {presentation.kind === "managed" ? (
+        <Wrench aria-hidden="true" size={13} />
+      ) : warning.severity === "safety" ? (
         <ShieldAlert aria-hidden="true" size={13} />
       ) : (
         <TriangleAlert aria-hidden="true" size={13} />
       )}
       <div>
-        <strong>{warning.code.replaceAll("-", " ")}</strong>
-        <span>{warning.message}</span>
+        <strong>{presentation.title}</strong>
+        <span>{presentation.detail}</span>
       </div>
     </button>
   );

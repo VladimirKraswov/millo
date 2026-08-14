@@ -87,6 +87,12 @@ import {
   sameExecutionOptions,
 } from "./executionOptionsModel";
 import { isSenderActive } from "./senderStateModel";
+import {
+  formatProgramDiagnostics,
+  hasActionableProgramWarnings,
+  programCanEnterPreflight,
+  programDiagnosticsSummary,
+} from "./programDiagnosticsModel";
 
 export interface ProgramMachineContext {
   readonly activeCoordinateSystem: string;
@@ -160,7 +166,7 @@ export function ProgramWorkspace({
   const [dragging, setDragging] = useState(false);
   const [diagnosticView, setDiagnosticView] = useState<ProgramDiagnosticView>("lines");
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(
-    (initialProgram?.warnings.length ?? 0) > 0,
+    initialProgram ? hasActionableProgramWarnings(initialProgram) : false,
   );
   const [selectedSourceLine, setSelectedSourceLine] = useState<number>();
   const [realRunReport, setRealRunReport] = useState<RunPreflightReport>();
@@ -242,8 +248,9 @@ export function ProgramWorkspace({
     setClearedSenderRunSequence(sender.runSequence || undefined);
     setSender(idleSenderSnapshot);
     setSelectedSourceLine(undefined);
-    setDiagnosticView(incomingJob.job.program.warnings.length > 0 ? "warnings" : "lines");
-    setDiagnosticsOpen(incomingJob.job.program.warnings.length > 0);
+    const hasWarnings = hasActionableProgramWarnings(incomingJob.job.program);
+    setDiagnosticView(hasWarnings ? "warnings" : "lines");
+    setDiagnosticsOpen(hasWarnings);
     setRealRunReport(undefined);
     setFirstCutOpen(false);
     setSafeStartOpen(false);
@@ -374,8 +381,9 @@ export function ProgramWorkspace({
       setClearedSenderRunSequence(sender.runSequence || undefined);
       setSender(idleSenderSnapshot);
       setSelectedSourceLine(undefined);
-      setDiagnosticView(next.program.warnings.length > 0 ? "warnings" : "lines");
-      setDiagnosticsOpen(next.program.warnings.length > 0);
+      const hasWarnings = hasActionableProgramWarnings(next.program);
+      setDiagnosticView(hasWarnings ? "warnings" : "lines");
+      setDiagnosticsOpen(hasWarnings);
       setRealRunReport(undefined);
       setFirstCutOpen(false);
       setToolChangeOpen(false);
@@ -504,8 +512,9 @@ export function ProgramWorkspace({
     setClearedSenderRunSequence(sender.runSequence || undefined);
     setSender(idleSenderSnapshot);
     setSelectedSourceLine(undefined);
-    setDiagnosticView(next.program.warnings.length > 0 ? "warnings" : "lines");
-    setDiagnosticsOpen(next.program.warnings.length > 0);
+    const hasWarnings = hasActionableProgramWarnings(next.program);
+    setDiagnosticView(hasWarnings ? "warnings" : "lines");
+    setDiagnosticsOpen(hasWarnings);
     setRealRunReport(undefined);
     setFirstCutOpen(false);
     setSafeStartOpen(false);
@@ -712,7 +721,7 @@ export function ProgramWorkspace({
     machineBound: machineContext?.machineBound ?? false,
     machineSyncing: machineContext?.machineSyncing ?? false,
     machineMode: machineContext?.snapshot.machine.mode ?? "unknown",
-    parserEligible: program?.summary.dryRunEligible ?? false,
+    parserEligible: program ? programCanEnterPreflight(program) : false,
     preflightStatus: preflightControls.status,
     resetPending: machineContext?.snapshot.resetNotice !== undefined,
     recoveryStatus: !recoveryChecked
@@ -736,9 +745,17 @@ export function ProgramWorkspace({
               ? "Профиль не синхронизирован с подключённым контроллером"
           : `${machineContext.machineName} · ${machineContext.snapshot.machine.reportedMode}`
     : "Не подключен";
-  const fileDetail = program?.summary.dryRunEligible
-    ? `${program.summary.lineCount} строк · ${program.warnings.length} замечаний`
-    : `${program?.warnings.length ?? 0} замечаний требуют внимания`;
+  const programDiagnostics = program ? programDiagnosticsSummary(program) : undefined;
+  const programDiagnosticsDetail = programDiagnostics
+    ? formatProgramDiagnostics(programDiagnostics)
+    : "";
+  const fileDetail = program && programCanEnterPreflight(program)
+    ? `${program.summary.lineCount} строк${programDiagnosticsDetail ? ` · ${programDiagnosticsDetail}` : ""}`
+    : programDiagnostics?.actionableCount
+      ? `${programDiagnostics.actionableCount} замечаний требуют внимания`
+      : program
+        ? "Не удалось построить полный preview"
+        : "Файл не загружен";
   const originDetail = machineContext?.workPosition
     ? `${machineContext.activeCoordinateSystem} · X ${machineContext.workPosition.x.toFixed(3)} · Y ${machineContext.workPosition.y.toFixed(3)} · Z ${machineContext.workPosition.z.toFixed(3)}`
     : `${machineContext?.activeCoordinateSystem ?? "G54"} · не установлен`;
