@@ -11,3 +11,4 @@ thiserror.workspace = true
 
 [dev-dependencies]
 millo-gcode = { path = "../millo-gcode" }
+serde_json.workspace = true

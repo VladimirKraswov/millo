@@ -186,6 +186,7 @@ pub struct PcbOperationSummary {
 pub struct PcbJobSummary {
     pub bounds: PcbBounds,
     pub operations: Vec<PcbOperationSummary>,
+    pub tool_count: usize,
     pub tool_change_count: usize,
     pub warning_count: usize,
 }

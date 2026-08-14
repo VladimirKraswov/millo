@@ -326,7 +326,7 @@ export function PcbFabricationPlugin({
             </div>
 
             <footer>
-              <div className="pcb-result">{generated ? <><strong>{generated.program.lines.length} строк</strong><span>{generated.summary.operations.length} операций · {generated.summary.toolChangeCount} инструментов</span></> : <><strong>{inspection ? `${inspection.drillHits.length} отверстий` : "Нет расчёта"}</strong><span>{inspection ? `${inspection.paths.length} контуров` : "Загрузите плату"}</span></>}</div>
+              <div className="pcb-result">{generated ? <><strong>{generated.program.lines.length} строк</strong><span>{generated.summary.operations.length} операций · {generated.summary.toolCount} инструментов · {generated.summary.toolChangeCount} смен</span></> : <><strong>{inspection ? `${inspection.drillHits.length} отверстий` : "Нет расчёта"}</strong><span>{inspection ? `${inspection.paths.length} контуров` : "Загрузите плату"}</span></>}</div>
               <div>
                 <button disabled={!generated || Boolean(busy)} onClick={() => void save()} type="button"><Download aria-hidden="true" size={15} />{busy === "save" ? "Сохранение" : "Сохранить .nc"}</button>
                 <button className="pcb-generate" disabled={Boolean(validation) || Boolean(busy)} onClick={() => void generate()} type="button"><Sparkles aria-hidden="true" size={15} />{busy === "generate" ? "Расчёт" : generated ? "Пересчитать" : "Создать G-code"}</button>

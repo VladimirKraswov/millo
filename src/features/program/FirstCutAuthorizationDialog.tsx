@@ -28,6 +28,7 @@ interface FirstCutAuthorizationDialogProps {
     readonly adjustmentMm: number;
   };
   readonly report?: RunPreflightReport;
+  readonly startingToolNumber?: number;
   readonly onAuthorize: (
     confirmation: FirstCutConfirmation,
   ) => Promise<FirstCutPreparation>;
@@ -43,6 +44,7 @@ export function FirstCutAuthorizationDialog({
   executionOptions,
   depthCorrection,
   report,
+  startingToolNumber,
   onAuthorize,
   onAuthorized,
   onStart,
@@ -146,6 +148,12 @@ export function FirstCutAuthorizationDialog({
             <strong>ΔZ {formatSignedOffset(depthCorrection.adjustmentMm)} мм</strong>
           </div>
         )}
+        {intent === "cutting" && startingToolNumber !== undefined && (
+          <div className="program-run-mode-summary">
+            <span>Стартовый инструмент</span>
+            <strong>T{startingToolNumber}</strong>
+          </div>
+        )}
         <div className="first-cut-checklist">
           <label>
             <input
@@ -158,11 +166,15 @@ export function FirstCutAuthorizationDialog({
               <Check size={13} />
             </span>
             <span>
-              <strong>Заготовка, фреза, ноль и траектория готовы</strong>
+              <strong>
+                Заготовка, фреза{intent === "cutting" && startingToolNumber !== undefined
+                  ? ` T${startingToolNumber}`
+                  : ""}, ноль и траектория готовы
+              </strong>
               <small>
                 {intent === "airRun"
                   ? "Инструмент снят, рабочая зона свободна"
-                  : "Крепёж не пересекает путь, питание доступно"}
+                  : `${startingToolNumber === undefined ? "Фреза установлена" : `Установлен T${startingToolNumber}`}; крепёж не пересекает путь, питание доступно`}
               </small>
             </span>
           </label>

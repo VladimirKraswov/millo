@@ -49,13 +49,14 @@ impl Default for SenderLimits {
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "camelCase")]
 pub enum SenderState {
     #[default]
     Idle,
     Ready,
     Running,
     Paused,
+    #[serde(alias = "toolchange")]
     ToolChange,
     Draining,
     Completed,
@@ -1115,7 +1116,7 @@ mod tests {
     fn tool_change_time_is_excluded_from_sender_elapsed_time() {
         let mut sender = Sender::default();
         sender
-            .load_cut_run(cutting_plan("G21\nT1 M6\nG1 X1 F10"))
+            .load_cut_run(cutting_plan("G21\nG1 X1 F10\nT2 M6\nG1 X2 F10"))
             .unwrap();
         sender.start().unwrap();
         loop {
@@ -1452,6 +1453,18 @@ mod tests {
                 actual: 12,
                 limit: 8,
             }
+        );
+    }
+
+    #[test]
+    fn sender_state_json_matches_the_webview_contract_and_reads_legacy_toolchange() {
+        assert_eq!(
+            serde_json::to_string(&SenderState::ToolChange).unwrap(),
+            "\"toolChange\""
+        );
+        assert_eq!(
+            serde_json::from_str::<SenderState>("\"toolchange\"").unwrap(),
+            SenderState::ToolChange
         );
     }
 }

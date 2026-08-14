@@ -87,6 +87,7 @@ import {
   sameExecutionOptions,
 } from "./executionOptionsModel";
 import { isSenderActive } from "./senderStateModel";
+import { initialProgramToolNumber } from "./programToolPlanModel";
 import {
   formatProgramDiagnostics,
   hasActionableProgramWarnings,
@@ -1341,6 +1342,7 @@ export function ProgramWorkspace({
         }}
         open={firstCutOpen}
         report={reportForProgram}
+        startingToolNumber={program ? initialProgramToolNumber(program) : undefined}
       />
 
       {displayedSender.state === "toolChange" &&

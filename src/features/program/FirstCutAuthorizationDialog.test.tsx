@@ -24,6 +24,7 @@ describe("FirstCutAuthorizationDialog", () => {
         }}
         onStarted={() => undefined}
         open
+        startingToolNumber={2}
       />,
     );
 
@@ -31,6 +32,8 @@ describe("FirstCutAuthorizationDialog", () => {
     expect(markup).toContain("Коррекция глубины");
     expect(markup).toContain("ΔZ −0.100 мм");
     expect(markup).toContain("Начать обработку");
+    expect(markup).toContain("Стартовый инструмент");
+    expect(markup).toContain("T2");
   });
 
   it("uses an explicit motion-check label for a non-cutting run", () => {

@@ -455,11 +455,13 @@ does not schedule or execute controller I/O.
   `ok`, and models Ready/Running/Paused/ToolChange/Draining/Completed/Failed/Cancelled.
 - Every successful plan load increments `runSequence`; it is stable for the
   complete run and independent from the per-acknowledgement progress sequence.
-- Cutting policy compiles isolated `M6` into a private host barrier. Any `Tn`
-  is sent and acknowledged first; the barrier waits for an empty FIFO and never
-  reaches GRBL. Completion is a separate typed actor request bound to source
-  line/tool, full operator confirmation, fresh `Idle`, Inspector, G54-G59, and
-  final `Idle`. See ADR 0034.
+- Before the first cutting motion, a known `Tn M6` is startup setup already
+  covered by the final operator confirmation and does not create a redundant
+  pause. Later isolated `M6` blocks compile into private host barriers. Their
+  `Tn` is sent and acknowledged first; the barrier waits for an empty FIFO and
+  never reaches GRBL. Completion is a separate typed actor request bound to
+  source line/tool, full operator confirmation, fresh `Idle`, Inspector,
+  G54-G59, and final `Idle`. See ADR 0034.
 - Sender dispatch runs inside the existing command actor. Requests remain
   prioritized between lines, lifecycle polling uses the same controller, and
   no second task can write to the transport.
@@ -540,10 +542,11 @@ does not schedule or execute controller I/O.
   certificate. Rechecking a different file or changing Optional Stop/Block
   Delete cannot authorize the current preflight. `AirRun` remains available as
   the spindle-off physical validation path.
-- An isolated Cutting `M6` is the exception: it becomes a host-only barrier,
-  and the operator must verify the replacement tool, Z zero, safe Z, remaining
-  path, manual spindle, and power access. Ordinary Resume cannot leave this
-  state; the actor repeats fresh `Idle -> Inspector -> Idle` before dispatch.
+- A Cutting `M6` after cutting has started becomes a host-only barrier, and the
+  operator must verify the replacement tool, Z zero, safe Z, remaining path,
+  manual spindle, and power access. Ordinary Resume cannot leave this state;
+  the actor repeats fresh `Idle -> Inspector -> Idle` before dispatch. A known
+  initial tool is shown in the final start confirmation instead.
 - Before relevant motion, the file must explicitly establish `G21` units,
   `G90` distance mode, either `G93` or `G94` feed mode, and `G17`, `G18`, or
   `G19` before its first arc. Ambient GRBL modal state cannot fill parser

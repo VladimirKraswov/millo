@@ -442,10 +442,16 @@ port names remain untouched.
   Hold/Resume, and Check-without-motion. Desktop tests verify that the stable
   mock fingerprint produces one persistent profile with travel derived from
   `$130/$131/$132` and an enabled probe workflow.
-- Cutting `M6` fixtures prove that `Tn` is acknowledged before an empty-FIFO
-  host barrier, no `M6` bytes reach Mock/serial transport, ordinary Resume is
-  rejected, stale line/tool confirmation is rejected before I/O, and valid
-  completion repeats fresh status, Inspector, G54-G59, and final status checks.
+- Cutting `M6` fixtures prove that a known initial tool before the first cutting
+  motion is confirmed as startup setup without a redundant barrier. A later
+  `Tn` is acknowledged before an empty-FIFO host barrier, no `M6` bytes reach
+  Mock/serial transport, ordinary Resume is rejected, stale line/tool
+  confirmation is rejected before I/O, and valid completion repeats fresh
+  status, Inspector, G54-G59, and final status checks. An ambiguous startup
+  `M6` without a selected tool remains a barrier.
+- Sender JSON contract tests pin the Rust state spelling to `toolChange`, which
+  is the value consumed by the TypeScript read model, while accepting legacy
+  persisted `toolchange` values during deserialization.
 - TypeScript tests bind all six operator facts to the exact line/tool dialog;
   sender read models keep `toolChange` active and non-restartable.
 - Parser fixtures validate exact XOR checksums before normalization, reject

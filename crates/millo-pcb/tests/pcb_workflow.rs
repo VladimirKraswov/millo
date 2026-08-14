@@ -129,8 +129,11 @@ fn emits_one_valid_program_with_manual_tool_change_barriers() {
 
     let job = generate_pcb_job(request, &tools).unwrap();
     assert_eq!(job.summary.operations.len(), 4);
-    assert_eq!(job.summary.tool_change_count, 3);
-    assert_eq!(job.source.matches(" M6").count(), 3);
+    assert_eq!(job.summary.tool_count, 3);
+    assert_eq!(job.summary.tool_change_count, 2);
+    assert_eq!(job.source.matches(" M6").count(), 2);
+    assert!(job.source.lines().any(|line| line == "T1"));
+    assert!(!job.source.lines().any(|line| line == "T1 M6"));
     assert!(
         !job.source
             .lines()

@@ -229,6 +229,7 @@ export interface PcbOperationSummary {
 export interface PcbJobSummary {
   readonly bounds: PcbBounds;
   readonly operations: readonly PcbOperationSummary[];
+  readonly toolCount: number;
   readonly toolChangeCount: number;
   readonly warningCount: number;
 }

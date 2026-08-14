@@ -17,9 +17,12 @@ work coordinate system, spindle, or emergency power access were rechecked.
 
 - Cutting policy accepts `M6` only in a block containing `N`, `T`, and `M6`.
   Air policy continues to reject it.
+- A known initial `Tn M6` before the first cutting motion is startup setup. The
+  final start dialog shows `Tn`, and the initial `M6` does not create a redundant
+  pause. An unknown initial `M6` remains a barrier.
 - A same-block `Tn` is split into a normal `Tn` controller line followed by an
-  opaque host-only barrier. A previously selected `Tn` is carried into the
-  barrier metadata.
+  opaque host-only barrier for every later change. A previously selected `Tn`
+  is carried into the barrier metadata.
 - Sender dispatch waits for an empty response FIFO before entering
   `ToolChange`. The `M6` text is never passed to the transport.
 - GRBL Check sends and validates `Tn`, accounts for the host barrier locally,
@@ -37,6 +40,8 @@ work coordinate system, spindle, or emergency power access were rechecked.
 - Buffered motion is acknowledged before the barrier, and continuation cannot
   occur while the controller still reports motion.
 - The operator gets an explicit line/tool workflow instead of a generic pause.
+- Starting a job with the already installed first tool no longer presents a
+  misleading tool-change interruption.
 - Jogging, probing, or zero mutation inside the barrier remain future typed
   interventions. They must capture and revalidate modal/position state before
   they are enabled.

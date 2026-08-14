@@ -84,7 +84,7 @@ pub fn generate_pcb_job(
                     .simplify(0.004, false),
             );
         }
-        emitter.tool_change(tool, "Изоляция меди");
+        emitter.use_tool(tool, "Изоляция меди");
         let motions = emitter.engrave_paths(
             &paths,
             request.settings.isolation.depth_mm,
@@ -110,7 +110,7 @@ pub fn generate_pcb_job(
                 "drilling",
                 &[ToolKind::Drill, ToolKind::FlatEndMill, ToolKind::Engraving],
             )?;
-            emitter.tool_change(
+            emitter.use_tool(
                 tool,
                 &format!(
                     "Сверление {} · Ø{} mm",
@@ -138,7 +138,7 @@ pub fn generate_pcb_job(
         if paths.is_empty() {
             return Err(PcbError::MissingLayer("marking"));
         }
-        emitter.tool_change(tool, "Маркировка");
+        emitter.use_tool(tool, "Маркировка");
         let motions = emitter.engrave_paths(
             &paths,
             request.settings.marking.depth_mm,
@@ -162,7 +162,7 @@ pub fn generate_pcb_job(
             )
             .simplify(0.004, false);
         let path = largest_path(&compensated).ok_or(PcbError::MissingLayer("outline"))?;
-        emitter.tool_change(tool, "Контур платы");
+        emitter.use_tool(tool, "Контур платы");
         let motions = emitter.cut_outline(
             path,
             request.settings.outline.depth_mm,
@@ -181,6 +181,7 @@ pub fn generate_pcb_job(
     writeln!(emitter.source, "M9").unwrap();
     writeln!(emitter.source, "M30").unwrap();
     let operations = std::mem::take(&mut emitter.operations);
+    let tool_count = emitter.tool_numbers.len();
     let tool_change_count = emitter.tool_change_count;
     drop(emitter);
     if source.len() > MAX_SOURCE_BYTES {
@@ -199,6 +200,7 @@ pub fn generate_pcb_job(
         summary: PcbJobSummary {
             bounds: inspection.bounds,
             operations,
+            tool_count,
             tool_change_count,
             warning_count: inspection.warnings.len(),
         },
@@ -217,19 +219,25 @@ struct Emitter<'a> {
 }
 
 impl Emitter<'_> {
-    fn tool_change(&mut self, tool: &CuttingTool, label: &str) {
+    fn use_tool(&mut self, tool: &CuttingTool, label: &str) {
         writeln!(self.source, "; {label}").unwrap();
         if self.current_tool_id.as_deref() == Some(&tool.id) {
             return;
         }
+        let initial_tool = self.current_tool_id.is_none();
         let next_number = self.tool_numbers.len() + 1;
         let tool_number = *self
             .tool_numbers
             .entry(tool.id.clone())
             .or_insert(next_number);
-        writeln!(self.source, "G0 Z{}", number(self.safe_z_mm)).unwrap();
-        writeln!(self.source, "M5").unwrap();
-        writeln!(self.source, "T{tool_number} M6").unwrap();
+        if initial_tool {
+            writeln!(self.source, "T{tool_number}").unwrap();
+        } else {
+            writeln!(self.source, "G0 Z{}", number(self.safe_z_mm)).unwrap();
+            writeln!(self.source, "M5").unwrap();
+            writeln!(self.source, "T{tool_number} M6").unwrap();
+            self.tool_change_count += 1;
+        }
         writeln!(
             self.source,
             "; Tool: {} · Ø{} mm",
@@ -238,7 +246,6 @@ impl Emitter<'_> {
         )
         .unwrap();
         self.current_tool_id = Some(tool.id.clone());
-        self.tool_change_count += 1;
     }
 
     fn operation(&mut self, kind: &str, tool: &CuttingTool, motion_count: usize) {

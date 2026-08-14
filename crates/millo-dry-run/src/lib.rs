@@ -283,8 +283,16 @@ fn build_untransformed_program_run_plan(
     }
 
     let line_timings = line_timings(program);
+    let cutting_motion_lines = program
+        .toolpath
+        .iter()
+        .filter(|segment| segment.kind != ToolpathKind::Rapid)
+        .map(|segment| segment.source_line)
+        .collect::<BTreeSet<_>>();
     let mut program_lines = Vec::new();
     let mut selected_tool = None;
+    let mut cutting_started = false;
+    let mut startup_tool_change_consumed = false;
     for line in program
         .lines
         .iter()
@@ -306,6 +314,15 @@ fn build_untransformed_program_run_plan(
                 });
             }
         }
+        let startup_tool_change = policy == ProgramRunPolicy::Cutting
+            && kind == DryRunLineKind::ToolChange
+            && selected_tool.is_some()
+            && !cutting_started
+            && !startup_tool_change_consumed;
+        if startup_tool_change {
+            startup_tool_change_consumed = true;
+            continue;
+        }
         program_lines.push(DryRunLine {
             source_line: Some(line.source_line),
             command: line.normalized.clone(),
@@ -320,6 +337,7 @@ fn build_untransformed_program_run_plan(
         if kind == DryRunLineKind::ProgramEnd {
             break;
         }
+        cutting_started |= cutting_motion_lines.contains(&line.source_line);
     }
     if program_lines.is_empty() {
         return Err(DryRunPolicyError::EmptyProgram);
@@ -1314,7 +1332,7 @@ mod tests {
     }
 
     #[test]
-    fn cutting_policy_turns_m6_into_an_isolated_host_barrier() {
+    fn cutting_policy_absorbs_initial_m6_and_keeps_later_changes_as_host_barriers() {
         let plan = build_program_run_plan(
             &parse("G21 G90 G94\nT2 M6\nG1 X1 F50\nT7\nM6\nM30"),
             ProgramRunPolicy::Cutting,
@@ -1322,21 +1340,52 @@ mod tests {
         .unwrap();
         let lines = plan.lines();
 
-        let first_change = lines
-            .iter()
-            .position(|line| line.kind() == DryRunLineKind::ToolChange)
-            .unwrap();
-        assert_eq!(lines[first_change - 1].command(), "T2");
-        assert_eq!(lines[first_change].command(), "T2 M6");
-        assert_eq!(lines[first_change].tool_number(), Some(2));
+        assert!(lines.iter().any(|line| line.command() == "T2"));
+        assert!(!lines.iter().any(|line| line.command() == "T2 M6"));
 
         let changes = lines
             .iter()
             .filter(|line| line.kind() == DryRunLineKind::ToolChange)
             .collect::<Vec<_>>();
-        assert_eq!(changes.len(), 2);
-        assert_eq!(changes[1].command(), "M6");
-        assert_eq!(changes[1].tool_number(), Some(7));
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].command(), "M6");
+        assert_eq!(changes[0].tool_number(), Some(7));
+    }
+
+    #[test]
+    fn m6_after_cutting_motion_remains_a_host_barrier() {
+        let plan = build_program_run_plan(
+            &parse("G21 G90 G94\nG1 X1 F50\nT2 M6\nG1 X2"),
+            ProgramRunPolicy::Cutting,
+        )
+        .unwrap();
+        let changes = plan
+            .lines()
+            .iter()
+            .filter(|line| line.kind() == DryRunLineKind::ToolChange)
+            .collect::<Vec<_>>();
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].command(), "T2 M6");
+        assert_eq!(changes[0].tool_number(), Some(2));
+    }
+
+    #[test]
+    fn startup_m6_without_a_selected_tool_remains_a_host_barrier() {
+        let plan = build_program_run_plan(
+            &parse("G21 G90 G94\nM6\nG1 X1 F50"),
+            ProgramRunPolicy::Cutting,
+        )
+        .unwrap();
+        let changes = plan
+            .lines()
+            .iter()
+            .filter(|line| line.kind() == DryRunLineKind::ToolChange)
+            .collect::<Vec<_>>();
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].command(), "M6");
+        assert_eq!(changes[0].tool_number(), None);
     }
 
     #[test]
