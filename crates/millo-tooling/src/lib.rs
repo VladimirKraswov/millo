@@ -8,9 +8,12 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const SCHEMA_VERSION: u16 = 1;
-const PRESET_CATALOG_VERSION: u16 = 3;
+const PRESET_CATALOG_VERSION: u16 = 4;
 const CCT01_2F_06050_PRESET_ID: &str = "preset-inreko-cct01-2f-06050-06";
-const MEASURED_LONG_4F_PRESET_ID: &str = "preset-measured-4f-d6-5-l34-oal75";
+const CERIN_64L_060A_PRESET_ID: &str = "preset-cerin-64l-060a";
+const LEGACY_MEASURED_LONG_4F_PRESET_ID: &str = "preset-measured-4f-d6-5-l34-oal75";
+const LEGACY_MEASURED_LONG_4F_NAME: &str = "Концевая длинная 4-зубая 6,5 мм · 6,5×34×75";
+const LEGACY_MEASURED_LONG_4F_DESCRIPTION: &str = "Длинная четырёхзубая концевая фреза без читаемого артикула: диаметр и хвостовик 6,5 мм, рабочая длина около 34 мм, общая длина 75 мм. Четыре кромки дают чистую поверхность, но требуют жёсткого станка и устойчивого отвода стружки. Перед глубоким проходом измерьте рабочую длину и хвостовик конкретной фрезы штангенциркулем; стартовые режимы намеренно занижены.";
 const PHOTOGRAPHED_PRESET_IDS: &[&str] = &[
     "preset-dreanique-sp1f-d1-0-l03",
     "preset-dreanique-sp1f-d2-0-l04",
@@ -523,14 +526,14 @@ pub fn factory_presets() -> Vec<CuttingTool> {
                 url: "https://www.walmart.com/ip/3-175mm-Milling-Cutter-Left-hand-CNC-Carbide-End-Mill-Spiral-Woodworking-Tool-For-Power-Tools-Drill-Bits-Accessory/16606166421".to_owned(),
             },
         }),
-        CuttingTool {
-            id: MEASURED_LONG_4F_PRESET_ID.to_owned(),
-            name: "Концевая длинная 4-зубая 6,5 мм · 6,5×34×75".to_owned(),
-            description: "Длинная четырёхзубая концевая фреза без читаемого артикула: диаметр и хвостовик 6,5 мм, рабочая длина около 34 мм, общая длина 75 мм. Четыре кромки дают чистую поверхность, но требуют жёсткого станка и устойчивого отвода стружки. Перед глубоким проходом измерьте рабочую длину и хвостовик конкретной фрезы штангенциркулем; стартовые режимы намеренно занижены.".to_owned(),
+        factory_tool(FactoryToolSpec {
+            id: CERIN_64L_060A_PRESET_ID,
+            name: "Cerin 64L.060A · концевая 4-зубая 6 мм",
+            description: "Длинная покрытая цельнотвердосплавная четырёхзубая фреза Cerin: диаметр и хвостовик 6 мм, режущая длина 30 мм, общая длина 70 мм. Серия 64L рассчитана на стали, нержавеющие стали, чугун и металлы средней твёрдости до 55 HRC. Увеличенный сердечник повышает жёсткость, но длинный вылет по-прежнему требует надёжного крепления, устойчивого отвода стружки и аккуратного врезания. Режимы Millo являются консервативной отправной точкой, а не параметрами Cerin для конкретного материала.",
             kind: ToolKind::FlatEndMill,
-            diameter_mm: 6.5,
-            shank_diameter_mm: 6.5,
-            cutting_length_mm: 34.0,
+            diameter_mm: 6.0,
+            shank_diameter_mm: 6.0,
+            cutting_length_mm: 30.0,
             flute_count: 4,
             included_angle_degrees: None,
             feed_mm_per_min: 300.0,
@@ -538,9 +541,12 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             spindle_rpm: 12_000,
             stepdown_mm: 0.3,
             stepover_percent: 25.0,
-            factory_preset: true,
-            reference: None,
-        },
+            reference: ToolReference {
+                manufacturer: "Cerin".to_owned(),
+                product: "64L.060A".to_owned(),
+                url: "https://www.cerin.it/frese/fresatura-acciaio-e-metalli-ferrosi/fresa-standard-a-4-taglienti-lunga".to_owned(),
+            },
+        }),
         factory_tool(FactoryToolSpec {
             id: "preset-carbide3d-202",
             name: "Шаровая 6,35 мм · #202",
@@ -699,13 +705,19 @@ fn migrate_preset_catalog(document: &mut StoredToolLibrary) -> bool {
         let introduced_ids: &[&str] = match version {
             1 => &[CCT01_2F_06050_PRESET_ID],
             2 => PHOTOGRAPHED_PRESET_IDS,
-            3 => &[MEASURED_LONG_4F_PRESET_ID],
+            // Catalog v3 contained a provisional photo measurement. New
+            // installs skip it and receive the identified Cerin tool in v4.
+            3 => &[],
+            4 => &[CERIN_64L_060A_PRESET_ID],
             _ => &[],
         };
         for id in introduced_ids {
             let preset = presets
                 .get(*id)
                 .expect("introduced factory preset must exist");
+            if *id == CERIN_64L_060A_PRESET_ID && migrate_legacy_cerin_preset(document, preset) {
+                continue;
+            }
             let already_present = document
                 .tools
                 .iter()
@@ -719,6 +731,46 @@ fn migrate_preset_catalog(document: &mut StoredToolLibrary) -> bool {
     document.preset_catalog_version = PRESET_CATALOG_VERSION;
     document.revision = document.revision.saturating_add(1);
     true
+}
+
+fn migrate_legacy_cerin_preset(document: &mut StoredToolLibrary, cerin: &CuttingTool) -> bool {
+    let Some(legacy_index) = document
+        .tools
+        .iter()
+        .position(|tool| tool.id == LEGACY_MEASURED_LONG_4F_PRESET_ID)
+    else {
+        return false;
+    };
+
+    if !is_unedited_legacy_measured_preset(&document.tools[legacy_index]) {
+        return false;
+    }
+
+    if document.tools.iter().any(|tool| tool.id == cerin.id) {
+        document.tools.remove(legacy_index);
+    } else {
+        document.tools[legacy_index] = cerin.clone();
+    }
+    true
+}
+
+fn is_unedited_legacy_measured_preset(tool: &CuttingTool) -> bool {
+    tool.factory_preset
+        && tool.id == LEGACY_MEASURED_LONG_4F_PRESET_ID
+        && tool.name == LEGACY_MEASURED_LONG_4F_NAME
+        && tool.description == LEGACY_MEASURED_LONG_4F_DESCRIPTION
+        && tool.kind == ToolKind::FlatEndMill
+        && tool.diameter_mm == 6.5
+        && tool.shank_diameter_mm == 6.5
+        && tool.cutting_length_mm == 34.0
+        && tool.flute_count == 4
+        && tool.included_angle_degrees.is_none()
+        && tool.feed_mm_per_min == 300.0
+        && tool.plunge_mm_per_min == 60.0
+        && tool.spindle_rpm == 12_000
+        && tool.stepdown_mm == 0.3
+        && tool.stepover_percent == 25.0
+        && tool.reference.is_none()
 }
 
 fn refresh_unedited_preset_descriptions(document: &mut StoredToolLibrary) -> bool {
@@ -936,6 +988,16 @@ mod tests {
         assert_eq!(requested.shank_diameter_mm, 6.0);
         assert_eq!(requested.cutting_length_mm, 15.0);
         assert_eq!(requested.flute_count, 2);
+        let cerin = initial
+            .tools
+            .iter()
+            .find(|tool| tool.id == CERIN_64L_060A_PRESET_ID)
+            .unwrap();
+        assert_eq!(cerin.diameter_mm, 6.0);
+        assert_eq!(cerin.shank_diameter_mm, 6.0);
+        assert_eq!(cerin.cutting_length_mm, 30.0);
+        assert_eq!(cerin.flute_count, 4);
+        assert_eq!(cerin.reference.as_ref().unwrap().manufacturer, "Cerin");
         let tool = initial.tools.first().unwrap();
         let mut edited = CuttingToolDraft::from(tool);
         edited.feed_mm_per_min = 321.0;
@@ -1021,28 +1083,70 @@ mod tests {
     }
 
     #[test]
-    fn migrates_measured_long_end_mill_from_catalog_v2_once() {
-        let path = test_path("measured-long-preset-migration");
+    fn migrates_provisional_measurement_to_identified_cerin_preset() {
+        let path = test_path("cerin-preset-migration");
         let mut previous_catalog = StoredToolLibrary {
-            preset_catalog_version: 2,
+            preset_catalog_version: 3,
             ..StoredToolLibrary::default()
         };
         previous_catalog
             .tools
-            .retain(|tool| tool.id != MEASURED_LONG_4F_PRESET_ID);
+            .retain(|tool| tool.id != CERIN_64L_060A_PRESET_ID);
+        previous_catalog.tools.push(CuttingTool {
+            id: LEGACY_MEASURED_LONG_4F_PRESET_ID.to_owned(),
+            name: LEGACY_MEASURED_LONG_4F_NAME.to_owned(),
+            description: LEGACY_MEASURED_LONG_4F_DESCRIPTION.to_owned(),
+            kind: ToolKind::FlatEndMill,
+            diameter_mm: 6.5,
+            shank_diameter_mm: 6.5,
+            cutting_length_mm: 34.0,
+            flute_count: 4,
+            included_angle_degrees: None,
+            feed_mm_per_min: 300.0,
+            plunge_mm_per_min: 60.0,
+            spindle_rpm: 12_000,
+            stepdown_mm: 0.3,
+            stepover_percent: 25.0,
+            factory_preset: true,
+            reference: None,
+        });
         save_document(&path, &previous_catalog).unwrap();
 
         let mut store = ToolLibraryStore::load(&path).unwrap();
-        let tool = store.get(MEASURED_LONG_4F_PRESET_ID).unwrap();
-        assert_eq!(tool.diameter_mm, 6.5);
-        assert_eq!(tool.shank_diameter_mm, 6.5);
-        assert_eq!(tool.cutting_length_mm, 34.0);
+        assert!(store.get(LEGACY_MEASURED_LONG_4F_PRESET_ID).is_none());
+        let tool = store.get(CERIN_64L_060A_PRESET_ID).unwrap();
+        assert_eq!(tool.diameter_mm, 6.0);
+        assert_eq!(tool.shank_diameter_mm, 6.0);
+        assert_eq!(tool.cutting_length_mm, 30.0);
         assert_eq!(tool.flute_count, 4);
-        assert!(tool.reference.is_none());
-        store.delete(MEASURED_LONG_4F_PRESET_ID).unwrap();
+        assert_eq!(tool.reference.as_ref().unwrap().product, "64L.060A");
+        store.delete(CERIN_64L_060A_PRESET_ID).unwrap();
 
         let reloaded = ToolLibraryStore::load(&path).unwrap();
-        assert!(reloaded.get(MEASURED_LONG_4F_PRESET_ID).is_none());
+        assert!(reloaded.get(CERIN_64L_060A_PRESET_ID).is_none());
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
+    }
+
+    #[test]
+    fn preserves_edited_provisional_tool_while_adding_cerin_preset() {
+        let path = test_path("edited-provisional-cutter-migration");
+        let mut previous_catalog = StoredToolLibrary {
+            preset_catalog_version: 3,
+            ..StoredToolLibrary::default()
+        };
+        previous_catalog
+            .tools
+            .retain(|tool| tool.id != CERIN_64L_060A_PRESET_ID);
+        let mut edited = factory_presets()[0].clone();
+        edited.id = LEGACY_MEASURED_LONG_4F_PRESET_ID.to_owned();
+        edited.name = "Моя измеренная длинная фреза".to_owned();
+        previous_catalog.tools.push(edited);
+        save_document(&path, &previous_catalog).unwrap();
+
+        let store = ToolLibraryStore::load(&path).unwrap();
+        assert!(store.get(LEGACY_MEASURED_LONG_4F_PRESET_ID).is_some());
+        assert!(store.get(CERIN_64L_060A_PRESET_ID).is_some());
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(backup_path(&path));
     }
