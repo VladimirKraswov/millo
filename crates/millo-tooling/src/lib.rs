@@ -33,6 +33,7 @@ pub enum ToolKind {
     BallNose,
     VBit,
     Engraving,
+    Drill,
     Surfacing,
 }
 
@@ -393,6 +394,9 @@ pub fn default_description(kind: ToolKind) -> &'static str {
         }
         ToolKind::Engraving => {
             "Тонкий гравировальный кончик создаёт мелкие линии, маркировку и дорожки при небольшой глубине."
+        }
+        ToolKind::Drill => {
+            "Сверло выполняет осевое погружение для отверстий. Диаметр должен соответствовать Excellon и фактическому инструменту."
         }
         ToolKind::Surfacing => {
             "Широкая торцевая фреза снимает тонкий равномерный слой с жертвенного стола или деревянной панели."

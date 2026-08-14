@@ -101,6 +101,143 @@ export interface GeneratedSurfacingJob extends GeneratedJob {
   readonly summary: SurfacingJobSummary;
 }
 
+export type PcbLayerRole = "copper" | "drill" | "outline" | "marking";
+
+export interface PcbSourceFile {
+  readonly sourceName: string;
+  readonly sourceBase64: string;
+  readonly role: PcbLayerRole;
+}
+
+export interface PcbTransform {
+  readonly offsetXMm: number;
+  readonly offsetYMm: number;
+  readonly rotationQuarterTurns: number;
+  readonly mirrorX: boolean;
+}
+
+export interface PcbInspectRequest {
+  readonly files: readonly PcbSourceFile[];
+  readonly transform: PcbTransform;
+}
+
+export interface PcbPoint {
+  readonly xMm: number;
+  readonly yMm: number;
+}
+
+export interface PcbBounds {
+  readonly minXMm: number;
+  readonly minYMm: number;
+  readonly maxXMm: number;
+  readonly maxYMm: number;
+  readonly widthMm: number;
+  readonly heightMm: number;
+}
+
+export interface PcbPreviewPath {
+  readonly role: PcbLayerRole;
+  readonly closed: boolean;
+  readonly points: readonly PcbPoint[];
+}
+
+export interface PcbDrillHit {
+  readonly groupKey: string;
+  readonly point: PcbPoint;
+}
+
+export interface PcbDrillGroup {
+  readonly key: string;
+  readonly sourceName: string;
+  readonly sourceToolNumber: number;
+  readonly diameterMm: number;
+  readonly hitCount: number;
+}
+
+export interface PcbFileSummary {
+  readonly sourceName: string;
+  readonly role: PcbLayerRole;
+  readonly primitiveCount: number;
+}
+
+export interface PcbInspection {
+  readonly bounds: PcbBounds;
+  readonly paths: readonly PcbPreviewPath[];
+  readonly drillHits: readonly PcbDrillHit[];
+  readonly drillGroups: readonly PcbDrillGroup[];
+  readonly files: readonly PcbFileSummary[];
+  readonly warnings: readonly string[];
+}
+
+export interface PcbIsolationSettings {
+  readonly enabled: boolean;
+  readonly toolId: string;
+  readonly depthMm: number;
+  readonly clearanceMm: number;
+  readonly passes: number;
+}
+
+export interface PcbDrillToolMapping {
+  readonly groupKey: string;
+  readonly toolId: string;
+}
+
+export interface PcbDrillingSettings {
+  readonly enabled: boolean;
+  readonly depthMm: number;
+  readonly mappings: readonly PcbDrillToolMapping[];
+}
+
+export interface PcbOutlineSettings {
+  readonly enabled: boolean;
+  readonly toolId: string;
+  readonly depthMm: number;
+  readonly depthPerPassMm: number;
+  readonly tabCount: number;
+  readonly tabWidthMm: number;
+  readonly tabHeightMm: number;
+}
+
+export interface PcbMarkingSettings {
+  readonly enabled: boolean;
+  readonly toolId: string;
+  readonly depthMm: number;
+}
+
+export interface PcbJobSettings {
+  readonly safeZMm: number;
+  readonly surfaceZMm: number;
+  readonly isolation: PcbIsolationSettings;
+  readonly drilling: PcbDrillingSettings;
+  readonly outline: PcbOutlineSettings;
+  readonly marking: PcbMarkingSettings;
+}
+
+export interface PcbJobRequest {
+  readonly sourceName: string;
+  readonly board: PcbInspectRequest;
+  readonly settings: PcbJobSettings;
+}
+
+export interface PcbOperationSummary {
+  readonly kind: string;
+  readonly toolId: string;
+  readonly toolName: string;
+  readonly motionCount: number;
+}
+
+export interface PcbJobSummary {
+  readonly bounds: PcbBounds;
+  readonly operations: readonly PcbOperationSummary[];
+  readonly toolChangeCount: number;
+  readonly warningCount: number;
+}
+
+export interface GeneratedPcbJob extends GeneratedJob {
+  readonly inspection: PcbInspection;
+  readonly summary: PcbJobSummary;
+}
+
 export interface GeneratedGcodeSaveOutcome {
   readonly path: string;
   readonly bytesWritten: number;

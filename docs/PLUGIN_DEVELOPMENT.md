@@ -109,7 +109,8 @@ helper-функцией и не должны задаваться вручную
 - `machine.jog`: один typed jog через обычный command actor.
 - `machine.coordinates`: typed `setZero` и `returnToZero`.
 - `jobs.create`: генерация только через Millo CAM core; открыть/сохранить можно
-  только job object, ранее выданный этим core.
+  только job object, ранее выданный этим core. Включает `inspectPcb` и
+  `generatePcb`; Gerber/Excellon и выбранные `toolId` проверяются в Rust.
 - `tools.read`: frozen библиотека инструмента и tracked subscription.
 
 Capability proxy проверяет resource scope до и после `await`. Unload сначала

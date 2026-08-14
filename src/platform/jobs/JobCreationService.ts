@@ -2,8 +2,12 @@ import type {
   GeneratedJob,
   GeneratedGcodeSaveOutcome,
   GeneratedImageJob,
+  GeneratedPcbJob,
   GeneratedSurfacingJob,
   ImageJobRequest,
+  PcbInspectRequest,
+  PcbInspection,
+  PcbJobRequest,
   SurfacingJobRequest,
 } from "../../shared/jobs";
 import type { ImageJobGateway } from "./ImageJobGateway";
@@ -12,6 +16,8 @@ import { GeneratedJobStore } from "./GeneratedJobStore";
 export interface JobCreationCapability {
   generateImage(request: ImageJobRequest): Promise<GeneratedImageJob>;
   generateSurfacing(request: SurfacingJobRequest): Promise<GeneratedSurfacingJob>;
+  inspectPcb(request: PcbInspectRequest): Promise<PcbInspection>;
+  generatePcb(request: PcbJobRequest): Promise<GeneratedPcbJob>;
   open(job: GeneratedJob): void;
   save(job: GeneratedJob): Promise<GeneratedGcodeSaveOutcome | undefined>;
 }
@@ -32,6 +38,16 @@ export class JobCreationService implements JobCreationCapability {
 
   async generateSurfacing(request: SurfacingJobRequest): Promise<GeneratedSurfacingJob> {
     const result = deepFreeze(await this.gateway.generateSurfacing(request));
+    this.issuedJobs.add(result);
+    return result;
+  }
+
+  async inspectPcb(request: PcbInspectRequest): Promise<PcbInspection> {
+    return deepFreeze(await this.gateway.inspectPcb(request));
+  }
+
+  async generatePcb(request: PcbJobRequest): Promise<GeneratedPcbJob> {
+    const result = deepFreeze(await this.gateway.generatePcb(request));
     this.issuedJobs.add(result);
     return result;
   }

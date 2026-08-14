@@ -35,6 +35,10 @@ use millo_heightmap::{
     HeightmapStartRequest, SurfaceSession, SurfaceSessionStore,
 };
 use millo_journal::{RunJournal, RunJournalEntry};
+use millo_pcb::{
+    GeneratedPcbJob, PcbInspectRequest, PcbInspection, PcbJobRequest,
+    generate_pcb_job as generate_pcb_job_core, inspect_pcb as inspect_pcb_core,
+};
 use millo_profile::{
     DetectedController, IdentityConfidence, MachineConnectionPreset, MachineFingerprint,
     MachineLocalSettingsUpdate, MachineProfile, MachineProfileDraft, MachineProfileState,
@@ -2763,6 +2767,64 @@ pub async fn generate_surfacing_job(
         AuditCategory::Program,
         "program.surfacing_job_generated",
         "Surfacing job generated and reparsed",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn inspect_pcb_job(
+    request: PcbInspectRequest,
+    state: State<'_, AppState>,
+) -> Result<PcbInspection, String> {
+    let context = json!({
+        "files": request.files.iter().map(|file| json!({
+            "sourceName": &file.source_name,
+            "role": file.role,
+            "encodedBytes": file.source_base64.len(),
+        })).collect::<Vec<_>>(),
+        "transform": &request.transform,
+    });
+    let result = tokio::task::spawn_blocking(move || inspect_pcb_core(request))
+        .await
+        .map_err(|error| format!("PCB inspection task failed: {error}"))?
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Program,
+        "program.pcb_inspected",
+        "PCB sources inspected",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn generate_pcb_job(
+    request: PcbJobRequest,
+    state: State<'_, AppState>,
+) -> Result<GeneratedPcbJob, String> {
+    let tools = state.tools.lock().await.state().tools;
+    let context = json!({
+        "sourceName": &request.source_name,
+        "files": request.board.files.iter().map(|file| json!({
+            "sourceName": &file.source_name,
+            "role": file.role,
+            "encodedBytes": file.source_base64.len(),
+        })).collect::<Vec<_>>(),
+        "settings": &request.settings,
+    });
+    let result = tokio::task::spawn_blocking(move || generate_pcb_job_core(request, &tools))
+        .await
+        .map_err(|error| format!("PCB generation task failed: {error}"))?
+        .map_err(|error| error.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Program,
+        "program.pcb_job_generated",
+        "PCB G-code generated and reparsed",
         context,
         &result,
     );

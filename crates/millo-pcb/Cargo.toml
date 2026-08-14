@@ -1,0 +1,16 @@
+[package]
+name = "millo-pcb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Gerber and Excellon inspection plus deterministic PCB CAM for Millo"
+
+[dependencies]
+base64 = "0.22"
+clipper2 = "0.6"
+lib_gerber_edit = { version = "0.5.8", default-features = false }
+millo-gcode = { path = "../millo-gcode" }
+millo-tooling = { path = "../millo-tooling" }
+serde.workspace = true
+thiserror.workspace = true
+

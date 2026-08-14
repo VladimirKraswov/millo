@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type {
   GeneratedImageJob,
+  GeneratedPcbJob,
   GeneratedSurfacingJob,
   ImageJobRequest,
+  PcbInspectRequest,
+  PcbJobRequest,
   SurfacingJobRequest,
 } from "../../shared/jobs";
 import type { ImageJobGateway } from "./ImageJobGateway";
@@ -24,6 +27,13 @@ const generatedSurfacing = {
   program: { lines: [], warnings: [], features: {}, summary: {}, toolpath: [] },
   summary: {},
 } as unknown as GeneratedSurfacingJob;
+const generatedPcb = {
+  sourceName: "board.nc",
+  source: "G21\nM5\nM30\n",
+  program: { lines: [], warnings: [], features: {}, summary: {}, toolpath: [] },
+  inspection: { bounds: {}, paths: [], drillHits: [], drillGroups: [], files: [], warnings: [] },
+  summary: {},
+} as unknown as GeneratedPcbJob;
 
 describe("JobCreationService", () => {
   it("publishes only immutable jobs returned by the core gateway", async () => {
@@ -31,6 +41,8 @@ describe("JobCreationService", () => {
     const gateway: ImageJobGateway = {
       generate: vi.fn(async () => generated),
       generateSurfacing: vi.fn(),
+      inspectPcb: vi.fn(),
+      generatePcb: vi.fn(),
       save: vi.fn(),
     };
     const service = new JobCreationService(gateway, store);
@@ -47,6 +59,8 @@ describe("JobCreationService", () => {
     const gateway: ImageJobGateway = {
       generate: vi.fn(async () => generated),
       generateSurfacing: vi.fn(),
+      inspectPcb: vi.fn(),
+      generatePcb: vi.fn(),
       save: vi.fn(),
     };
     const service = new JobCreationService(gateway, new GeneratedJobStore());
@@ -62,6 +76,8 @@ describe("JobCreationService", () => {
     const gateway: ImageJobGateway = {
       generate: vi.fn(),
       generateSurfacing: vi.fn(async () => generatedSurfacing),
+      inspectPcb: vi.fn(),
+      generatePcb: vi.fn(),
       save: vi.fn(async () => undefined),
     };
     const service = new JobCreationService(gateway, store);
@@ -74,5 +90,25 @@ describe("JobCreationService", () => {
     expect(gateway.save).toHaveBeenCalledWith(job);
     expect(store.current()?.job).toBe(job);
     expect(Object.isFrozen(job)).toBe(true);
+  });
+
+  it("keeps PCB inspection read-only and issues only generated PCB jobs", async () => {
+    const inspection = { paths: [], drillHits: [] } as unknown as Awaited<ReturnType<ImageJobGateway["inspectPcb"]>>;
+    const gateway: ImageJobGateway = {
+      generate: vi.fn(),
+      generateSurfacing: vi.fn(),
+      inspectPcb: vi.fn(async () => inspection),
+      generatePcb: vi.fn(async () => generatedPcb),
+      save: vi.fn(),
+    };
+    const service = new JobCreationService(gateway, new GeneratedJobStore());
+
+    const inspected = await service.inspectPcb({} as PcbInspectRequest);
+    const job = await service.generatePcb({} as PcbJobRequest);
+
+    expect(Object.isFrozen(inspected)).toBe(true);
+    expect(Object.isFrozen(job)).toBe(true);
+    expect(() => service.open(inspected as unknown as GeneratedPcbJob)).toThrow("not issued");
+    expect(() => service.open(job)).not.toThrow();
   });
 });

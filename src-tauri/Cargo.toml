@@ -24,6 +24,7 @@ millo-grbl = { path = "../crates/millo-grbl" }
 millo-heightmap = { path = "../crates/millo-heightmap" }
 millo-journal = { path = "../crates/millo-journal" }
 millo-profile = { path = "../crates/millo-profile" }
+millo-pcb = { path = "../crates/millo-pcb" }
 millo-recovery = { path = "../crates/millo-recovery" }
 millo-restart = { path = "../crates/millo-restart" }
 millo-run = { path = "../crates/millo-run" }

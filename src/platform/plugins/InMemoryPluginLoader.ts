@@ -12,8 +12,12 @@ import type {
   GeneratedJob,
   GeneratedGcodeSaveOutcome,
   GeneratedImageJob,
+  GeneratedPcbJob,
   GeneratedSurfacingJob,
   ImageJobRequest,
+  PcbInspectRequest,
+  PcbInspection,
+  PcbJobRequest,
   SurfacingJobRequest,
 } from "../../shared/jobs";
 import type { ToolLibraryState } from "../../shared/tooling";
@@ -68,6 +72,8 @@ export interface PluginMachineCoordinatesCapability {
 export interface PluginJobsCapability {
   generateImage(request: ImageJobRequest): Promise<GeneratedImageJob>;
   generateSurfacing(request: SurfacingJobRequest): Promise<GeneratedSurfacingJob>;
+  inspectPcb(request: PcbInspectRequest): Promise<PcbInspection>;
+  generatePcb(request: PcbJobRequest): Promise<GeneratedPcbJob>;
   open(job: GeneratedJob): void;
   save(job: GeneratedJob): Promise<GeneratedGcodeSaveOutcome | undefined>;
 }
@@ -361,6 +367,18 @@ export class InMemoryPluginLoader {
             generateSurfacing: async (request: SurfacingJobRequest) => {
               resources.assertOpen();
               const job = await this.jobs!.generateSurfacing(request);
+              resources.assertOpen();
+              return job;
+            },
+            inspectPcb: async (request: PcbInspectRequest) => {
+              resources.assertOpen();
+              const inspection = await this.jobs!.inspectPcb(request);
+              resources.assertOpen();
+              return inspection;
+            },
+            generatePcb: async (request: PcbJobRequest) => {
+              resources.assertOpen();
+              const job = await this.jobs!.generatePcb(request);
               resources.assertOpen();
               return job;
             },

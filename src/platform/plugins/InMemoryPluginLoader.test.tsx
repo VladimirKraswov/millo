@@ -441,7 +441,14 @@ describe("InMemoryPluginLoader", () => {
     const generateSurfacing = vi.fn();
     const open = vi.fn();
     const save = vi.fn(async () => undefined);
-    const jobs: JobCreationCapability = { generateImage, generateSurfacing, open, save };
+    const jobs: JobCreationCapability = {
+      generateImage,
+      generateSurfacing,
+      inspectPcb: vi.fn(),
+      generatePcb: vi.fn(),
+      open,
+      save,
+    };
     const loader = new InMemoryPluginLoader({
       uiRegistry: createUiExtensionRegistry(),
       jobs,

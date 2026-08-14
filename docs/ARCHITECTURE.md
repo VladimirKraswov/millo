@@ -109,6 +109,22 @@ Surfacing CAM resolves the requested tool ID in Rust and never accepts plugin-
 supplied geometry. Generated output remains motion-free until it enters the
 ordinary Program preflight and sender gates.
 
+PCB CAM follows the same boundary with its own domain crate:
+
+```text
+Gerber/Excellon -> PCB plugin -> jobs.create -> Tauri -> millo-pcb
+                                                     | parse + boolean/offset
+Tool library ------ tools.read ----------------------+ resolve tool IDs
+                                                     + multi-tool G-code
+                                                               |
+                                                       millo-gcode reparse
+```
+
+The plugin owns file-role UX and preview controls. `millo-pcb` owns format
+limits, transforms, isolation, drilling groups, tabs, tool compatibility and
+manual `M6` barriers. See [PCB jobs](PCB_JOBS.md) and
+[ADR 0056](decisions/0056-core-pcb-cam-plugin.md).
+
 Program execution is minted only by the Rust policy:
 
 ```text
@@ -841,7 +857,7 @@ Returning to an existing zero uses a distinct boundary:
   context.
 - The current in-memory loader supports `ui.contribute`, `machine.jog`,
   `machine.read`, and `jobs.create` when their typed host services are supplied.
-  `jobs.create` exposes only generate/save/open operations for immutable jobs
+  `jobs.create` exposes only typed inspect/generate/save/open operations for immutable jobs
   returned by the host generator; fabricated objects are rejected. Unknown
   capabilities and API versions are rejected.
 - `MachineSnapshotStore` clones each controller DTO and freezes the snapshot,

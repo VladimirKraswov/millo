@@ -450,6 +450,13 @@ same preview, GRBL Check, preflight, authorization, and sender flow as files.
 See [Image jobs](docs/IMAGE_JOBS.md) and
 [ADR 0045](docs/decisions/0045-generated-jobs-capability.md).
 
+The default `PCB from Gerber` plugin accepts RS-274X copper/outline/marking and
+Excellon drill layers, provides 2D placement controls, and asks the independent
+`millo-pcb` Rust core for isolation, grouped drilling, marking and tabbed board
+outline operations. Different tools become host-managed `M6` barriers; the
+plugin cannot bypass the normal sender gates. See [PCB jobs](docs/PCB_JOBS.md)
+and [ADR 0056](docs/decisions/0056-core-pcb-cam-plugin.md).
+
 The Rust-owned cutting-tool library provides editable common flat, ball, V,
 engraving, and surfacing presets with geometry-aware schematics, Russian usage
 guidance, and official manufacturer references. It is opened from machine
@@ -491,6 +498,7 @@ successful GRBL status exchange.
 | --- | --- |
 | `millo-audit` | Bounded structured JSONL diagnostics, rotation, tail, and export |
 | `millo-cam` | Bounded SVG/PNG vectorization and validated engraving G-code generation |
+| `millo-pcb` | Bounded Gerber/Excellon inspection, PCB offsets, drilling and multi-tool G-code |
 | `millo-domain` | Stable machine and controller types |
 | `millo-gcode` | Immutable G-code program, warnings, parser, and preview geometry |
 | `millo-journal` | Bounded crash-diagnostic history with throttled atomic JSON checkpoints |

@@ -1,0 +1,552 @@
+.pcb-backdrop {
+  position: fixed;
+  z-index: 120;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgba(2, 6, 8, 0.78);
+  backdrop-filter: blur(8px);
+}
+
+.pcb-dialog {
+  display: grid;
+  width: min(1180px, calc(100vw - 44px));
+  height: min(780px, calc(100vh - 44px));
+  grid-template-rows: 68px minmax(0, 1fr) 64px;
+  overflow: hidden;
+  border: 1px solid #40505a;
+  border-radius: 7px;
+  background: #10181d;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.5);
+}
+
+.pcb-dialog > header,
+.pcb-dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 22px;
+  border-bottom: 1px solid #2a373e;
+}
+
+.pcb-dialog > header span,
+.pcb-section-heading span {
+  color: #7e8d95;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.pcb-dialog > header h2 {
+  margin: 2px 0 0;
+  color: #edf3f5;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.pcb-dialog > header button,
+.pcb-stage-toolbar button,
+.pcb-file-row > button {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #35444c;
+  border-radius: 4px;
+  color: #a9b6bc;
+  background: #121c21;
+}
+
+.pcb-body {
+  position: relative;
+  display: grid;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1.45fr) minmax(340px, 0.8fr);
+}
+
+.pcb-body.is-dragging::after {
+  position: absolute;
+  z-index: 5;
+  inset: 10px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed #70d8b4;
+  color: #dff9ef;
+  background: rgba(12, 38, 34, 0.9);
+  content: "Добавить слои платы";
+  font-size: 16px;
+  font-weight: 700;
+  pointer-events: none;
+}
+
+.pcb-stage {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+  padding: 16px;
+  border-right: 1px solid #2a373e;
+  background: #0b1216;
+}
+
+.pcb-preview-shell {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #26343b;
+  border-radius: 5px;
+  background: #081014;
+}
+
+.pcb-preview-empty {
+  display: grid;
+  height: 100%;
+  min-height: 300px;
+  place-content: center;
+  gap: 5px;
+  color: #73828a;
+  text-align: center;
+}
+
+.pcb-preview-empty span {
+  color: #b1bec4;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.pcb-preview-empty small {
+  font-size: 11px;
+}
+
+.pcb-preview-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.pcb-preview-canvas:active {
+  cursor: grabbing;
+}
+
+.pcb-preview-canvas polygon {
+  vector-effect: non-scaling-stroke;
+  stroke-width: 0.65px;
+}
+
+.pcb-preview-canvas polygon.is-copper {
+  fill: rgba(67, 182, 137, 0.16);
+  stroke: #69d7af;
+}
+
+.pcb-preview-canvas polygon.is-outline {
+  fill: none;
+  stroke: #e1e8eb;
+  stroke-width: 1.2px;
+}
+
+.pcb-preview-canvas polygon.is-marking {
+  fill: rgba(235, 177, 78, 0.08);
+  stroke: #eeb456;
+}
+
+.pcb-preview-grid path {
+  fill: none;
+  stroke: #213038;
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+
+.pcb-preview-drills circle {
+  fill: #0a1115;
+  stroke: #f4b95b;
+  stroke-width: 1.2px;
+  vector-effect: non-scaling-stroke;
+}
+
+.pcb-stage-toolbar {
+  position: absolute;
+  inset: 10px 10px auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #9babb2;
+  font: 10px "SFMono-Regular", Consolas, monospace;
+  pointer-events: none;
+}
+
+.pcb-stage-toolbar > div {
+  display: flex;
+  gap: 5px;
+  pointer-events: auto;
+}
+
+.pcb-stage-toolbar button[aria-pressed="true"] {
+  border-color: #5fcda7;
+  color: #79e2bd;
+  background: #123126;
+}
+
+.pcb-placement {
+  display: grid;
+  min-height: 54px;
+  grid-template-columns: auto minmax(0, 1fr) 110px 110px;
+  align-items: end;
+  gap: 8px;
+  padding-top: 10px;
+  color: #77868d;
+  font-size: 9px;
+}
+
+.pcb-placement > svg,
+.pcb-placement > span {
+  align-self: center;
+}
+
+.pcb-placement > svg {
+  color: #5fcda7;
+}
+
+.pcb-panel {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+  background: #111a1f;
+}
+
+.pcb-panel > section + section,
+.pcb-panel > details,
+.pcb-status {
+  margin-top: 14px;
+}
+
+.pcb-section-heading {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pcb-section-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.pcb-section-heading small {
+  color: #66767e;
+  font-size: 9px;
+}
+
+.pcb-section-heading button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid #35444c;
+  border-radius: 4px;
+  color: #bac6cb;
+  background: #152027;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pcb-drop-action {
+  display: grid;
+  width: 100%;
+  min-height: 110px;
+  place-items: center;
+  align-content: center;
+  gap: 5px;
+  border: 1px dashed #3b5059;
+  border-radius: 5px;
+  color: #91a1a9;
+  background: #0e171c;
+}
+
+.pcb-drop-action svg {
+  color: #63d1aa;
+}
+
+.pcb-drop-action strong {
+  color: #dbe4e8;
+  font-size: 11px;
+}
+
+.pcb-drop-action small {
+  font: 9px "SFMono-Regular", Consolas, monospace;
+}
+
+.pcb-file-row {
+  display: grid;
+  min-height: 42px;
+  grid-template-columns: minmax(0, 1fr) 102px 30px;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid #27343b;
+}
+
+.pcb-file-row > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.pcb-file-row strong {
+  overflow: hidden;
+  color: #cdd7db;
+  font: 9px "SFMono-Regular", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pcb-file-row small {
+  color: #65747c;
+  font-size: 8px;
+}
+
+.pcb-file-row select,
+.pcb-field select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  border: 1px solid #33424a;
+  border-radius: 4px;
+  color: #cbd5da;
+  background: #0c1418;
+  font-size: 9px;
+}
+
+.pcb-file-row > button {
+  width: 30px;
+  height: 30px;
+}
+
+.pcb-operations fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid #2a373e;
+}
+
+.pcb-operation-toggle {
+  display: grid;
+  min-height: 48px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.pcb-operation-toggle input {
+  width: 15px;
+  height: 15px;
+  accent-color: #66d5ae;
+}
+
+.pcb-operation-toggle span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pcb-operation-toggle strong {
+  color: #c8d2d6;
+  font-size: 10px;
+}
+
+.pcb-operations fieldset.is-enabled .pcb-operation-toggle strong {
+  color: #e8eff1;
+}
+
+.pcb-operation-toggle small {
+  color: #718087;
+  font: 8px "SFMono-Regular", Consolas, monospace;
+  white-space: nowrap;
+}
+
+.pcb-operation-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding: 0 0 11px 26px;
+}
+
+.pcb-operation-fields .pcb-tool-select {
+  grid-column: 1 / -1;
+}
+
+.pcb-field {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.pcb-field > span {
+  overflow: hidden;
+  color: #718087;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pcb-number > div {
+  display: grid;
+  height: 30px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #33424a;
+  border-radius: 4px;
+  background: #0c1418;
+}
+
+.pcb-number input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  color: #d6dfe2;
+  background: transparent;
+  font: 10px "SFMono-Regular", Consolas, monospace;
+}
+
+.pcb-number small {
+  padding: 0 6px;
+  color: #627179;
+  font-size: 8px;
+}
+
+.pcb-machine-settings {
+  border-bottom: 1px solid #2a373e;
+  color: #96a5ac;
+  font-size: 9px;
+}
+
+.pcb-machine-settings summary {
+  padding: 10px 0;
+  cursor: pointer;
+}
+
+.pcb-machine-settings > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  padding-bottom: 10px;
+}
+
+.pcb-status {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 9px;
+  border-left: 2px solid #475760;
+  color: #91a0a7;
+  background: #0d1519;
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.pcb-status.is-ready {
+  border-left-color: #66d5ae;
+  color: #a9e8d0;
+}
+
+.pcb-status.is-error {
+  border-left-color: #e06e71;
+  color: #ef9b9d;
+}
+
+.pcb-dialog > footer {
+  padding: 0 18px;
+  border-top: 1px solid #2a373e;
+  border-bottom: 0;
+  background: #0d1519;
+}
+
+.pcb-dialog > footer > div:last-child {
+  display: flex;
+  gap: 7px;
+}
+
+.pcb-dialog > footer button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 13px;
+  border: 1px solid #3a4b54;
+  border-radius: 4px;
+  color: #c3cdd1;
+  background: #142027;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pcb-dialog > footer button.pcb-generate {
+  border-color: #4d806e;
+  color: #bcebd9;
+  background: #173429;
+}
+
+.pcb-dialog > footer button.primary-action {
+  border-color: #62cda8;
+  color: #07130f;
+  background: #66d5ae;
+}
+
+.pcb-dialog button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.pcb-result {
+  display: grid;
+  gap: 2px;
+}
+
+.pcb-result strong {
+  color: #d7e0e3;
+  font-size: 10px;
+}
+
+.pcb-result span {
+  color: #6e7d84;
+  font-size: 8px;
+}
+
+@media (max-width: 900px) {
+  .pcb-dialog {
+    width: calc(100vw - 20px);
+    height: calc(100vh - 20px);
+  }
+
+  .pcb-body {
+    grid-template-columns: 1fr;
+    overflow: auto;
+  }
+
+  .pcb-stage {
+    min-height: 390px;
+    border-right: 0;
+    border-bottom: 1px solid #2a373e;
+  }
+
+  .pcb-panel {
+    overflow: visible;
+  }
+}
+

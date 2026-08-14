@@ -3,6 +3,7 @@ export type ToolKind =
   | "ballNose"
   | "vBit"
   | "engraving"
+  | "drill"
   | "surfacing";
 
 export interface ToolReference {
@@ -61,6 +62,7 @@ export const toolKindLabels: Readonly<Record<ToolKind, string>> = Object.freeze(
   ballNose: "Шаровая",
   vBit: "V-фреза",
   engraving: "Гравировальная",
+  drill: "Сверло",
   surfacing: "Торцевая",
 });
 
@@ -116,6 +118,18 @@ const knowledge: Readonly<Record<ToolKind, ToolKnowledge>> = Object.freeze({
       "Тонкий кончик легко повредить глубокой подачей или ударом",
       "Неровная поверхность заметно меняет ширину линии",
       "Перед запуском полезны карта высот или предварительное выравнивание",
+    ]),
+  }),
+  drill: Object.freeze({
+    bestFor: Object.freeze([
+      "Отверстия по Excellon с диаметром, совпадающим со сверлом",
+      "Монтажные и переходные отверстия печатных плат",
+      "Осевое погружение с отдельной подачей Z",
+    ]),
+    cautions: Object.freeze([
+      "Не заменяйте сверло фрезой большего диаметра, чем отверстие",
+      "Тонкие PCB-сверла чувствительны к биению и боковой нагрузке",
+      "Проверьте глубину с учётом текстолита и подложки",
     ]),
   }),
   surfacing: Object.freeze({

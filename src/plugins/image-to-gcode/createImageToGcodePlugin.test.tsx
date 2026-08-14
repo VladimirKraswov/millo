@@ -15,6 +15,8 @@ describe("Image to G-code bundled plugin", () => {
     const gateway: ImageJobGateway = {
       generate: vi.fn(),
       generateSurfacing: vi.fn(),
+      inspectPcb: vi.fn(),
+      generatePcb: vi.fn(),
       save: vi.fn(),
     };
     const loader = new InMemoryPluginLoader({

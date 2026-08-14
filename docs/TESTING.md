@@ -124,6 +124,13 @@ cross-axis coverage. Vitest covers the frozen `tools.read` capability, bundled
 plugin registration, and cleanup on unload. Use `/?fixture=tools` and
 `/?fixture=surfacing` for visual checks; neither fixture dispatches machine I/O.
 
+PCB fixtures cover Gerber dark geometry, circular flashes, outline paths,
+Excellon modal tool groups, transform normalization, isolation offsets,
+multi-tool `M6`, drilling, tabbed multi-depth outline cutting, spindle-free
+output and final `millo-gcode` parse. Vitest checks extension registration,
+role inference, nearest drill selection, immutable inspection and core-issued
+job identity. Use `/?fixture=pcb` for the modal layout fixture.
+
 Machine-state host tests prove that mutable controller DTOs are cloned and
 deeply frozen, publication stops after an idempotent unsubscribe, and a state
 source does not imply a grant. Loader tests cover current/future read access,

@@ -18,6 +18,10 @@ import {
 import { CapabilityGrantStore } from "./platform/plugins/CapabilityGrantStore";
 import { createImageToGcodePlugin, IMAGE_TO_GCODE_PLUGIN_ID } from "./plugins/image-to-gcode/createImageToGcodePlugin";
 import {
+  createPcbFabricationPlugin,
+  PCB_FABRICATION_PLUGIN_ID,
+} from "./plugins/pcb-fabrication/createPcbFabricationPlugin";
+import {
   createSpoilboardSurfacingPlugin,
   SPOILBOARD_SURFACING_PLUGIN_ID,
 } from "./plugins/spoilboard-surfacing/createSpoilboardSurfacingPlugin";
@@ -152,9 +156,14 @@ export default function App() {
             pluginId: SPOILBOARD_SURFACING_PLUGIN_ID,
             capabilities: ["ui.contribute", "jobs.create", "tools.read"],
           },
+          {
+            pluginId: PCB_FABRICATION_PLUGIN_ID,
+            capabilities: ["ui.contribute", "jobs.create", "tools.read"],
+          },
         ]),
         bundledPlugins: [
           createImageToGcodePlugin({ initialOpen: developmentFixture === "image-job" }),
+          createPcbFabricationPlugin({ initialOpen: developmentFixture === "pcb" }),
           createSpoilboardSurfacingPlugin({
             initialOpen: developmentFixture === "surfacing",
           }),
