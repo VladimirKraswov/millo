@@ -9,7 +9,7 @@ use millo_tooling::{CuttingTool, ToolKind};
 
 use crate::{
     GeneratedPcbJob, PcbError, PcbJobRequest, PcbJobSummary, PcbLayerRole, PcbOperationSummary,
-    geometry::{BoardGeometry, CamPaths},
+    geometry::{BoardGeometry, CamPaths, DrillFeature},
     inspection_from_geometry, parse_board,
 };
 
@@ -96,12 +96,12 @@ pub fn generate_pcb_job(
 
     if request.settings.drilling.enabled {
         for mapping in &request.settings.drilling.mappings {
-            let hits = geometry
+            let features = geometry
                 .drills
                 .iter()
                 .filter(|drill| drill.group_key == mapping.group_key)
                 .collect::<Vec<_>>();
-            if hits.is_empty() {
+            if features.is_empty() {
                 return Err(PcbError::UnknownDrillGroup(mapping.group_key.clone()));
             }
             let tool = resolve_tool(&tool_lookup, &mapping.tool_id)?;
@@ -110,19 +110,50 @@ pub fn generate_pcb_job(
                 "drilling",
                 &[ToolKind::Drill, ToolKind::FlatEndMill, ToolKind::Engraving],
             )?;
+            let feature_diameter = features[0].diameter_mm;
+            if tool.diameter_mm > feature_diameter + 0.01 {
+                return Err(PcbError::DrillToolTooLarge {
+                    group: mapping.group_key.clone(),
+                    tool: tool.name.clone(),
+                    tool_mm: tool.diameter_mm,
+                    feature_mm: feature_diameter,
+                });
+            }
+            let has_slots = features
+                .iter()
+                .any(|feature| matches!(feature.feature, DrillFeature::Slot { .. }));
+            if has_slots && tool.kind == ToolKind::Drill {
+                return Err(PcbError::SlotRequiresMillingTool {
+                    group: mapping.group_key.clone(),
+                    tool: tool.name.clone(),
+                });
+            }
             emitter.use_tool(
                 tool,
                 &format!(
                     "Сверление {} · Ø{} mm",
                     mapping.group_key,
-                    number(hits[0].diameter_mm)
+                    number(feature_diameter)
                 ),
             );
-            let motions = emitter.drill_hits(
-                hits.iter().map(|hit| hit.point),
+            let hit_motions = emitter.drill_hits(
+                features.iter().filter_map(|feature| match feature.feature {
+                    DrillFeature::Hit(point) => Some(point),
+                    DrillFeature::Slot { .. } => None,
+                }),
                 request.settings.drilling.depth_mm,
                 tool.plunge_mm_per_min,
             );
+            let slot_motions = emitter.mill_slots(
+                features.iter().filter_map(|feature| match feature.feature {
+                    DrillFeature::Slot { start, end } => Some((start, end)),
+                    DrillFeature::Hit(_) => None,
+                }),
+                feature_diameter,
+                request.settings.drilling.depth_mm,
+                tool,
+            );
+            let motions = hit_motions + slot_motions;
             emitter.operation("drilling", tool, motions);
         }
     }
@@ -326,6 +357,62 @@ impl Emitter<'_> {
             .unwrap();
             writeln!(self.source, "G0 Z{}", number(self.safe_z_mm)).unwrap();
             motions += 1;
+        }
+        motions
+    }
+
+    fn mill_slots(
+        &mut self,
+        slots: impl Iterator<Item = (crate::PcbPoint, crate::PcbPoint)>,
+        slot_width_mm: f64,
+        depth_mm: f64,
+        tool: &CuttingTool,
+    ) -> usize {
+        let mut motions = 0;
+        let radial_clearance = ((slot_width_mm - tool.diameter_mm) / 2.0).max(0.0);
+        let track_spacing = (tool.diameter_mm * tool.stepover_percent / 100.0).max(0.01);
+        let offsets = centered_offsets(radial_clearance, track_spacing);
+        let pass_count = (depth_mm / tool.stepdown_mm.max(0.001)).ceil().max(1.0) as usize;
+        for (start, end) in slots {
+            let dx = end.x_mm - start.x_mm;
+            let dy = end.y_mm - start.y_mm;
+            let length = dx.hypot(dy);
+            if length <= 0.000_5 {
+                motions +=
+                    self.drill_hits(std::iter::once(start), depth_mm, tool.plunge_mm_per_min);
+                continue;
+            }
+            let normal = (-dy / length, dx / length);
+            for pass in 1..=pass_count {
+                let pass_depth = (pass as f64 * tool.stepdown_mm).min(depth_mm);
+                for (index, offset) in offsets.iter().copied().enumerate() {
+                    let a = (
+                        start.x_mm + normal.0 * offset,
+                        start.y_mm + normal.1 * offset,
+                    );
+                    let b = (end.x_mm + normal.0 * offset, end.y_mm + normal.1 * offset);
+                    let (from, to) = if index % 2 == 0 { (a, b) } else { (b, a) };
+                    writeln!(self.source, "G0 Z{}", number(self.safe_z_mm)).unwrap();
+                    writeln!(self.source, "G0 X{} Y{}", number(from.0), number(from.1)).unwrap();
+                    writeln!(
+                        self.source,
+                        "G1 Z{} F{}",
+                        number(self.surface_z_mm - pass_depth),
+                        number(tool.plunge_mm_per_min)
+                    )
+                    .unwrap();
+                    writeln!(
+                        self.source,
+                        "G1 X{} Y{} F{}",
+                        number(to.0),
+                        number(to.1),
+                        number(tool.feed_mm_per_min)
+                    )
+                    .unwrap();
+                    motions += 1;
+                }
+            }
+            writeln!(self.source, "G0 Z{}", number(self.safe_z_mm)).unwrap();
         }
         motions
     }
@@ -576,6 +663,21 @@ fn in_tab(distance: f64, perimeter: f64, count: u8, width: f64) -> bool {
         let center = perimeter * (f64::from(index) + 0.5) / f64::from(count);
         (distance - center).abs() <= width / 2.0
     })
+}
+
+fn centered_offsets(radius: f64, spacing: f64) -> Vec<f64> {
+    if radius <= 0.000_5 {
+        return vec![0.0];
+    }
+    let side_steps = (radius / spacing).ceil().max(1.0) as usize;
+    let mut offsets = Vec::with_capacity(side_steps * 2 + 1);
+    offsets.push(0.0);
+    for step in 1..=side_steps {
+        let offset = radius * step as f64 / side_steps as f64;
+        offsets.push(offset);
+        offsets.push(-offset);
+    }
+    offsets
 }
 
 fn gcode_name(name: &str) -> String {

@@ -58,6 +58,12 @@ export function PcbPreview({
           <circle cx={hit.point.xMm} cy={-hit.point.yMm} key={`${hit.groupKey}-${index}`} r={0.22} />
         ))}
       </g>
+      <g className="pcb-preview-slots">
+        {inspection.drillSlots.map((slot, index) => {
+          const diameter = inspection.drillGroups.find((group) => group.key === slot.groupKey)?.diameterMm ?? 0.2;
+          return <line key={`${slot.groupKey}-slot-${index}`} strokeWidth={diameter} x1={slot.start.xMm} x2={slot.end.xMm} y1={-slot.start.yMm} y2={-slot.end.yMm} />;
+        })}
+      </g>
     </svg>
   );
 }

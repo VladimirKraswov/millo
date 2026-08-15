@@ -8,6 +8,7 @@ pub enum PcbLayerRole {
     Drill,
     Outline,
     Marking,
+    Ignore,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -81,12 +82,21 @@ pub struct PcbDrillHit {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PcbDrillSlot {
+    pub group_key: String,
+    pub start: PcbPoint,
+    pub end: PcbPoint,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PcbDrillGroup {
     pub key: String,
     pub source_name: String,
     pub source_tool_number: u32,
     pub diameter_mm: f64,
     pub hit_count: usize,
+    pub slot_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -103,6 +113,7 @@ pub struct PcbInspection {
     pub bounds: PcbBounds,
     pub paths: Vec<PcbPreviewPath>,
     pub drill_hits: Vec<PcbDrillHit>,
+    pub drill_slots: Vec<PcbDrillSlot>,
     pub drill_groups: Vec<PcbDrillGroup>,
     pub files: Vec<PcbFileSummary>,
     pub warnings: Vec<String>,

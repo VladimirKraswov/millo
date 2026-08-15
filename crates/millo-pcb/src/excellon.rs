@@ -5,7 +5,10 @@ use lib_gerber_edit::{
     gerber_types::Unit,
 };
 
-use crate::{PcbError, PcbPoint, geometry::DrillGeometry};
+use crate::{
+    PcbError, PcbPoint,
+    geometry::{DrillFeature, DrillGeometry},
+};
 
 pub(crate) fn parse_drills(
     source_name: &str,
@@ -66,14 +69,38 @@ pub(crate) fn parse_drills(
                     source_name: source_name.to_owned(),
                     source_tool_number: tool,
                     diameter_mm: to_mm(diameter, layer.unit.unit),
-                    point: current,
+                    feature: DrillFeature::Hit(current),
                 });
             }
-            Command::Slot { .. } => {
-                return Err(PcbError::UnsupportedExcellonFeature(
-                    source_name.to_owned(),
-                    "slot/G85".to_owned(),
-                ));
+            Command::Slot {
+                from_x,
+                from_y,
+                to_x,
+                to_y,
+                fmt,
+            } => {
+                let from = slot_point(current, *from_x, *from_y, fmt.unit, incremental);
+                let end_origin = if from_x.is_some() || from_y.is_some() {
+                    from
+                } else {
+                    current
+                };
+                let end = slot_point(end_origin, *to_x, *to_y, fmt.unit, incremental);
+                let tool = current_tool
+                    .ok_or_else(|| PcbError::DrillWithoutTool(source_name.to_owned()))?;
+                let diameter = layer
+                    .tools
+                    .get(&tool)
+                    .copied()
+                    .ok_or_else(|| PcbError::UnknownDrillTool(source_name.to_owned(), tool))?;
+                drills.push(DrillGeometry {
+                    group_key: format!("{}::T{}", source_name, tool),
+                    source_name: source_name.to_owned(),
+                    source_tool_number: tool,
+                    diameter_mm: to_mm(diameter, layer.unit.unit),
+                    feature: DrillFeature::Slot { start: from, end },
+                });
+                current = end;
             }
             _ => {}
         }
@@ -82,6 +109,28 @@ pub(crate) fn parse_drills(
         Err(PcbError::EmptyLayer(source_name.to_owned()))
     } else {
         Ok(drills)
+    }
+}
+
+fn slot_point(
+    current: PcbPoint,
+    x: Option<f64>,
+    y: Option<f64>,
+    unit: Unit,
+    incremental: bool,
+) -> PcbPoint {
+    let x = x.map(|value| to_mm(value, unit));
+    let y = y.map(|value| to_mm(value, unit));
+    if incremental {
+        PcbPoint {
+            x_mm: current.x_mm + x.unwrap_or(0.0),
+            y_mm: current.y_mm + y.unwrap_or(0.0),
+        }
+    } else {
+        PcbPoint {
+            x_mm: x.unwrap_or(current.x_mm),
+            y_mm: y.unwrap_or(current.y_mm),
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+mod aperture;
 mod excellon;
 mod gcode;
 mod geometry;
@@ -45,6 +46,8 @@ pub enum PcbError {
     Geometry(String),
     #[error("PCB layer has no drawable geometry: {0}")]
     EmptyLayer(String),
+    #[error("PCB job contains no usable copper, drill, outline or marking layers")]
+    NoUsableLayers,
     #[error("Excellon file {0} contains a drill hit before a tool selection")]
     DrillWithoutTool(String),
     #[error("Excellon file {0} references unknown tool T{1}")]
@@ -66,6 +69,17 @@ pub enum PcbError {
         operation: &'static str,
         tool: String,
     },
+    #[error(
+        "tool {tool} is wider than PCB drill/slot group {group}: {tool_mm:.3} mm > {feature_mm:.3} mm"
+    )]
+    DrillToolTooLarge {
+        group: String,
+        tool: String,
+        tool_mm: f64,
+        feature_mm: f64,
+    },
+    #[error("PCB slot group {group} requires a milling tool, not drill {tool}")]
+    SlotRequiresMillingTool { group: String, tool: String },
     #[error("PCB job has no enabled operations")]
     NoOperations,
     #[error("invalid PCB setting: {0}")]
@@ -96,15 +110,27 @@ pub(crate) fn parse_board(request: &PcbInspectRequest) -> Result<(BoardGeometry,
         if total_bytes > MAX_DECODED_TOTAL_BYTES {
             return Err(PcbError::SourceTooLarge(file.source_name.clone()));
         }
-        if file.role == PcbLayerRole::Drill {
-            board
-                .drills
-                .extend(excellon::parse_drills(&file.source_name, &bytes)?);
+        if file.role == PcbLayerRole::Ignore {
+            board.layers.push(geometry::LayerGeometry {
+                source_name: file.source_name.clone(),
+                role: file.role,
+                paths: geometry::CamPaths::default(),
+            });
+        } else if file.role == PcbLayerRole::Drill {
+            let drills = if gerber::looks_like_gerber(&bytes) {
+                gerber::parse_gerber_drills(&file.source_name, &bytes)?
+            } else {
+                excellon::parse_drills(&file.source_name, &bytes)?
+            };
+            board.drills.extend(drills);
         } else {
             board
                 .layers
                 .push(gerber::parse_gerber(&file.source_name, file.role, &bytes)?);
         }
+    }
+    if board.layers.iter().all(|layer| layer.paths.is_empty()) && board.drills.is_empty() {
+        return Err(PcbError::NoUsableLayers);
     }
     transform_board(&mut board, request.transform);
     let point_count = board
@@ -113,7 +139,7 @@ pub(crate) fn parse_board(request: &PcbInspectRequest) -> Result<(BoardGeometry,
         .flat_map(|layer| layer.paths.iter())
         .map(|path| path.len())
         .sum::<usize>()
-        .saturating_add(board.drills.len());
+        .saturating_add(board.drills.len().saturating_mul(2));
     if point_count > MAX_PREVIEW_POINTS {
         return Err(PcbError::PreviewTooComplex(MAX_PREVIEW_POINTS));
     }
@@ -141,24 +167,44 @@ pub(crate) fn inspection_from_geometry(board: &BoardGeometry) -> PcbInspection {
     let drill_hits = board
         .drills
         .iter()
-        .map(|drill| PcbDrillHit {
-            group_key: drill.group_key.clone(),
-            point: drill.point,
+        .filter_map(|drill| match drill.feature {
+            geometry::DrillFeature::Hit(point) => Some(PcbDrillHit {
+                group_key: drill.group_key.clone(),
+                point,
+            }),
+            geometry::DrillFeature::Slot { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    let drill_slots = board
+        .drills
+        .iter()
+        .filter_map(|drill| match drill.feature {
+            geometry::DrillFeature::Slot { start, end } => Some(PcbDrillSlot {
+                group_key: drill.group_key.clone(),
+                start,
+                end,
+            }),
+            geometry::DrillFeature::Hit(_) => None,
         })
         .collect::<Vec<_>>();
     let mut grouped = BTreeMap::<String, PcbDrillGroup>::new();
     for drill in &board.drills {
         grouped
             .entry(drill.group_key.clone())
-            .and_modify(|group| {
-                group.hit_count += 1;
+            .and_modify(|group| match drill.feature {
+                geometry::DrillFeature::Hit(_) => group.hit_count += 1,
+                geometry::DrillFeature::Slot { .. } => group.slot_count += 1,
             })
             .or_insert_with(|| PcbDrillGroup {
                 key: drill.group_key.clone(),
                 source_name: drill.source_name.clone(),
                 source_tool_number: drill.source_tool_number,
                 diameter_mm: drill.diameter_mm,
-                hit_count: 1,
+                hit_count: usize::from(matches!(drill.feature, geometry::DrillFeature::Hit(_))),
+                slot_count: usize::from(matches!(
+                    drill.feature,
+                    geometry::DrillFeature::Slot { .. }
+                )),
             });
     }
     let mut files = BTreeMap::<(String, PcbLayerRole), usize>::new();
@@ -176,6 +222,7 @@ pub(crate) fn inspection_from_geometry(board: &BoardGeometry) -> PcbInspection {
         bounds,
         paths,
         drill_hits,
+        drill_slots,
         drill_groups: grouped.into_values().collect(),
         files: files
             .into_iter()

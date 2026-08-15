@@ -101,7 +101,7 @@ export interface GeneratedSurfacingJob extends GeneratedJob {
   readonly summary: SurfacingJobSummary;
 }
 
-export type PcbLayerRole = "copper" | "drill" | "outline" | "marking";
+export type PcbLayerRole = "copper" | "drill" | "outline" | "marking" | "ignore";
 
 export interface PcbSourceFile {
   readonly sourceName: string;
@@ -146,12 +146,19 @@ export interface PcbDrillHit {
   readonly point: PcbPoint;
 }
 
+export interface PcbDrillSlot {
+  readonly groupKey: string;
+  readonly start: PcbPoint;
+  readonly end: PcbPoint;
+}
+
 export interface PcbDrillGroup {
   readonly key: string;
   readonly sourceName: string;
   readonly sourceToolNumber: number;
   readonly diameterMm: number;
   readonly hitCount: number;
+  readonly slotCount: number;
 }
 
 export interface PcbFileSummary {
@@ -164,6 +171,7 @@ export interface PcbInspection {
   readonly bounds: PcbBounds;
   readonly paths: readonly PcbPreviewPath[];
   readonly drillHits: readonly PcbDrillHit[];
+  readonly drillSlots: readonly PcbDrillSlot[];
   readonly drillGroups: readonly PcbDrillGroup[];
   readonly files: readonly PcbFileSummary[];
   readonly warnings: readonly string[];

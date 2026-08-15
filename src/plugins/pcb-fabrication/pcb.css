@@ -169,6 +169,11 @@
   vector-effect: non-scaling-stroke;
 }
 
+.pcb-preview-slots line {
+  stroke: #f4b95b;
+  stroke-linecap: round;
+}
+
 .pcb-stage-toolbar {
   position: absolute;
   inset: 10px 10px auto;
@@ -327,6 +332,14 @@
 .pcb-file-row > button {
   width: 30px;
   height: 30px;
+}
+
+.pcb-file-row.is-ignored {
+  opacity: 0.58;
+}
+
+.pcb-file-row.is-ignored strong {
+  color: #87969d;
 }
 
 .pcb-operations fieldset {
@@ -555,6 +568,27 @@
   grid-template-columns: 1fr 1fr;
   gap: 7px;
   padding-bottom: 10px;
+}
+
+.pcb-warnings {
+  border-left: 2px solid #d79a45;
+  color: #bfc9cd;
+  background: #181711;
+  font-size: 9px;
+}
+
+.pcb-warnings summary {
+  padding: 8px 9px;
+  color: #e1b66f;
+  cursor: pointer;
+}
+
+.pcb-warnings ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0 12px 10px 26px;
+  line-height: 14px;
 }
 
 .pcb-status {

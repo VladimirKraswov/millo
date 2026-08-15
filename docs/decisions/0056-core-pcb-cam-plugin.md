@@ -34,8 +34,8 @@ workflow over the same host service.
   algorithm.
 - External script packages still cannot inject Gerber parsers or native code.
 - The release has no `pcb2gcode` executable or `libgerbv` runtime dependency.
-- Full aperture-macro and Excellon-slot support require new Rust fixtures before
-  their fail-closed checks can be removed.
+- Aperture macros, step-and-repeat, Excellon `G85` and Gerber X2 drill routes
+  are enabled only behind dedicated Rust fixtures; remaining ambiguous format
+  features retain named fail-closed errors.
 - Every generated PCB still passes the normal Check, readiness, map
   compensation, authorization, tool-change and recovery workflow.
-

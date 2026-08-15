@@ -1,0 +1,10 @@
+G04 Aperture macro and step-repeat fixture*
+%FSLAX24Y24*%
+%MOMM*%
+%AMRECT*21,1,$1,$2,0,0,0*%
+%ADD10RECT,2.000X1.000*%
+%SRX2Y2I5.000J4.000*%
+D10*
+X010000Y010000D03*
+%SR*%
+M02*

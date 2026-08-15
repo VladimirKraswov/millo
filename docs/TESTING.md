@@ -124,12 +124,16 @@ cross-axis coverage. Vitest covers the frozen `tools.read` capability, bundled
 plugin registration, and cleanup on unload. Use `/?fixture=tools` and
 `/?fixture=surfacing` for visual checks; neither fixture dispatches machine I/O.
 
-PCB fixtures cover Gerber dark geometry, circular flashes, outline paths,
-Excellon modal tool groups, transform normalization, isolation offsets,
-multi-tool `M6`, drilling, tabbed multi-depth outline cutting, spindle-free
-output and final `millo-gcode` parse. Vitest checks extension registration,
-role inference, nearest drill selection, immutable inspection and core-issued
-job identity. Use `/?fixture=pcb` for the modal layout fixture.
+PCB fixtures cover Gerber dark/clear geometry, standard and macro apertures,
+step-and-repeat, outline paths, Excellon modal tool groups and `G85` slots,
+Gerber X2 drill flashes/routes, ignored production layers, transform
+normalization, isolation offsets, multi-tool `M6`, tabbed multi-depth outline
+cutting, spindle-free output and final `millo-gcode` parse. Vitest checks X2
+and legacy role inference, slot-safe tool selection, immutable inspection and
+core-issued job identity. Use `/?fixture=pcb` for the modal layout fixture.
+That browser-only route uses an isolated preview gateway, so file rows, drill
+groups, slot rendering and generated-state layout can be inspected without a
+Tauri runtime. Production builds always use the native Rust gateway.
 
 Program diagnostics tests additionally prove that a host-managed `M6` is shown
 as a localized expected tool-change event, does not mark a successfully parsed
@@ -452,9 +456,10 @@ port names remain untouched.
 - Sender JSON contract tests pin the Rust state spelling to `toolChange`, which
   is the value consumed by the TypeScript read model, while accepting legacy
   persisted `toolchange` values during deserialization.
-- PCB workflow-model tests distinguish a missing Excellon source from a missing
-  drill mapping. They prove that a valid per-diameter mapping clears validation
-  and that the UI does not ask for an instrument when no drill group exists.
+- PCB workflow-model tests distinguish a missing drill source from a missing
+  mapping. They prove that a valid per-diameter mapping clears validation,
+  mask/paste layers are ignored, and a routed slot cannot select an oversized
+  tool or a side-loaded drill.
 - TypeScript tests bind all six operator facts to the exact line/tool dialog;
   sender read models keep `toolChange` active and non-restartable.
 - Parser fixtures validate exact XOR checksums before normalization, reject

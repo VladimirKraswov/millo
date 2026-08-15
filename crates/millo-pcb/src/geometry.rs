@@ -18,7 +18,22 @@ pub(crate) struct DrillGeometry {
     pub source_name: String,
     pub source_tool_number: u32,
     pub diameter_mm: f64,
-    pub point: PcbPoint,
+    pub feature: DrillFeature,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum DrillFeature {
+    Hit(PcbPoint),
+    Slot { start: PcbPoint, end: PcbPoint },
+}
+
+impl DrillFeature {
+    pub(crate) fn points(self) -> [PcbPoint; 2] {
+        match self {
+            Self::Hit(point) => [point, point],
+            Self::Slot { start, end } => [start, end],
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -108,7 +123,12 @@ pub(crate) fn transform_board(board: &mut BoardGeometry, transform: PcbTransform
             rotated_points.extend(path.iter().map(|point| rotate(point.into())));
         }
     }
-    rotated_points.extend(board.drills.iter().map(|drill| rotate(drill.point)));
+    rotated_points.extend(
+        board
+            .drills
+            .iter()
+            .flat_map(|drill| drill.feature.points().map(rotate)),
+    );
     let rotated = bounds_for_points(rotated_points.iter().copied()).unwrap_or_default();
     let map = |point: PcbPoint| {
         let rotated_point = rotate(point);
@@ -142,7 +162,13 @@ pub(crate) fn transform_board(board: &mut BoardGeometry, transform: PcbTransform
         );
     }
     for drill in &mut board.drills {
-        drill.point = map(drill.point);
+        drill.feature = match drill.feature {
+            DrillFeature::Hit(point) => DrillFeature::Hit(map(point)),
+            DrillFeature::Slot { start, end } => DrillFeature::Slot {
+                start: map(start),
+                end: map(end),
+            },
+        };
     }
     raw_bounds(board).unwrap_or_default()
 }
@@ -154,7 +180,9 @@ pub(crate) fn raw_bounds(board: &BoardGeometry) -> Option<PcbBounds> {
             .iter()
             .flat_map(|path| path.iter().map(PcbPoint::from))
     });
-    bounds_for_points(layer_points.chain(board.drills.iter().map(|drill| drill.point)))
+    bounds_for_points(
+        layer_points.chain(board.drills.iter().flat_map(|drill| drill.feature.points())),
+    )
 }
 
 pub(crate) fn bounds_for_points(points: impl Iterator<Item = PcbPoint>) -> Option<PcbBounds> {

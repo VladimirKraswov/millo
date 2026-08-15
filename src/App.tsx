@@ -15,6 +15,7 @@ import {
   developmentProfileFixture,
   developmentSettingsFixture,
 } from "./app/developmentFixtures";
+import { previewPcbImageJobGateway } from "./app/previewPcbImageJobGateway";
 import { CapabilityGrantStore } from "./platform/plugins/CapabilityGrantStore";
 import { createImageToGcodePlugin, IMAGE_TO_GCODE_PLUGIN_ID } from "./plugins/image-to-gcode/createImageToGcodePlugin";
 import {
@@ -143,7 +144,7 @@ export default function App() {
         initialSnapshot: developmentMachineFixture ? developmentJogSnapshot : emptySnapshot,
         machineCommands: tauriMachineCommandGateway,
         workCoordinates: tauriWorkCoordinateGateway,
-        imageJobs: tauriImageJobGateway,
+        imageJobs: developmentFixture === "pcb" ? previewPcbImageJobGateway : tauriImageJobGateway,
         toolLibrary: isDesktopRuntime()
           ? tauriToolLibraryGateway
           : previewToolLibraryGateway,
