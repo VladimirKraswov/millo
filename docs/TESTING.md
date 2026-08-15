@@ -452,6 +452,9 @@ port names remain untouched.
 - Sender JSON contract tests pin the Rust state spelling to `toolChange`, which
   is the value consumed by the TypeScript read model, while accepting legacy
   persisted `toolchange` values during deserialization.
+- PCB workflow-model tests distinguish a missing Excellon source from a missing
+  drill mapping. They prove that a valid per-diameter mapping clears validation
+  and that the UI does not ask for an instrument when no drill group exists.
 - TypeScript tests bind all six operator facts to the exact line/tool dialog;
   sender read models keep `toolChange` active and non-restartable.
 - Parser fixtures validate exact XOR checksums before normalization, reject

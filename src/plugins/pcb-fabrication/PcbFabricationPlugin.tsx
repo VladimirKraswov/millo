@@ -35,9 +35,11 @@ import { PcbPreview } from "./PcbPreview";
 import {
   closestTool,
   drillMappings,
+  isPcbDrillingTool,
   pcbRoleLabels,
   readPcbFiles,
   readablePcbError,
+  validatePcbWorkflow,
   type LocalPcbFile,
 } from "./pcbModel";
 
@@ -70,6 +72,7 @@ export function PcbFabricationPlugin({
 }: PcbFabricationPluginProps) {
   const [open, setOpen] = useState(initialOpen);
   const inputRef = useRef<HTMLInputElement>(null);
+  const drillInputRef = useRef<HTMLInputElement>(null);
   const revisionRef = useRef(0);
   const toolLibrary = useSyncExternalStore(
     (notify) => tools.subscribe(() => notify()),
@@ -81,7 +84,9 @@ export function PcbFabricationPlugin({
     .filter((tool) => tool.kind === "engraving" || tool.kind === "vBit")
     .sort((left, right) => Number(right.kind === "engraving") - Number(left.kind === "engraving") || left.diameterMm - right.diameterMm), [compatible]);
   const cuttingTools = useMemo(() => compatible.filter((tool) => tool.kind === "flatEndMill").sort((left, right) => left.diameterMm - right.diameterMm), [compatible]);
-  const drillingTools = useMemo(() => [...compatible].sort((left, right) => Number(right.kind === "drill") - Number(left.kind === "drill") || left.diameterMm - right.diameterMm), [compatible]);
+  const drillingTools = useMemo(() => compatible
+    .filter(isPcbDrillingTool)
+    .sort((left, right) => Number(right.kind === "drill") - Number(left.kind === "drill") || left.diameterMm - right.diameterMm), [compatible]);
   const [files, setFiles] = useState<LocalPcbFile[]>([]);
   const [transform, setTransform] = useState<PcbTransform>(defaultTransform);
   const [settings, setSettings] = useState<PcbJobSettings>(defaultSettings);
@@ -157,6 +162,7 @@ export function PcbFabricationPlugin({
   const addFiles = async (selected: FileList | readonly File[]) => {
     try {
       const next = await readPcbFiles(selected);
+      setInspection(undefined);
       setFiles((current) => {
         const byName = new Map(current.map((file) => [file.sourceName, file]));
         next.forEach((file) => byName.set(file.sourceName, file));
@@ -175,10 +181,12 @@ export function PcbFabricationPlugin({
     }
   };
   const updateRole = (sourceName: string, role: PcbLayerRole) => {
+    setInspection(undefined);
     setFiles((current) => current.map((file) => file.sourceName === sourceName ? { ...file, role } : file));
     invalidate();
   };
   const updateTransform = (patch: Partial<PcbTransform>) => {
+    setInspection(undefined);
     setTransform((current) => ({ ...current, ...patch }));
     invalidate();
   };
@@ -186,7 +194,14 @@ export function PcbFabricationPlugin({
     setSettings(next);
     invalidate();
   };
-  const validation = validate(files, inspection, settings, compatible);
+  const validation = validatePcbWorkflow(files, inspection, settings, compatible);
+  const hasDrillSource = files.some((file) => file.role === "drill");
+  const drillGroups = inspection?.drillGroups ?? [];
+  const drillingSummary = !hasDrillSource
+    ? "Нужен Excellon"
+    : !inspection
+      ? "Чтение Excellon"
+      : `${drillGroups.length} диам. · ${inspection.drillHits.length} отв.`;
 
   const generate = async () => {
     if (validation || busy) return;
@@ -275,13 +290,14 @@ export function PcbFabricationPlugin({
                 <section className="pcb-files">
                   <div className="pcb-section-heading"><div><span>Файлы</span><small>{files.length ? `${files.length} сл.` : "Gerber + Excellon"}</small></div><button onClick={() => inputRef.current?.click()} type="button"><FilePlus2 aria-hidden="true" size={14} />Добавить</button></div>
                   <input accept=".art,.drl,.gbl,.gbo,.gbr,.gko,.gm1,.gml,.gto,.gtl,.txt,.xln" hidden multiple onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = ""; }} ref={inputRef} type="file" />
+                  <input accept=".drl,.txt,.xln" hidden onChange={(event) => { if (event.target.files) void addFiles(event.target.files); event.target.value = ""; }} ref={drillInputRef} type="file" />
                   {files.length === 0 ? (
                     <button className="pcb-drop-action" onClick={() => inputRef.current?.click()} type="button"><CircuitBoard aria-hidden="true" size={22} /><strong>Выбрать файлы платы</strong><small>.gbr · .gtl · .gko · .drl</small></button>
                   ) : files.map((file) => (
                     <div className="pcb-file-row" key={file.sourceName}>
                       <div><strong title={file.sourceName}>{file.sourceName}</strong><small>{formatBytes(file.sizeBytes)}</small></div>
                       <select aria-label={`Роль ${file.sourceName}`} onChange={(event) => updateRole(file.sourceName, event.target.value as PcbLayerRole)} value={file.role}>{Object.entries(pcbRoleLabels).map(([role, label]) => <option key={role} value={role}>{label}</option>)}</select>
-                      <button aria-label={`Удалить ${file.sourceName}`} onClick={() => { setFiles((current) => current.filter((item) => item.sourceName !== file.sourceName)); invalidate(); }} title="Удалить слой" type="button"><Trash2 aria-hidden="true" size={14} /></button>
+                      <button aria-label={`Удалить ${file.sourceName}`} onClick={() => { setInspection(undefined); setFiles((current) => current.filter((item) => item.sourceName !== file.sourceName)); invalidate(); }} title="Удалить слой" type="button"><Trash2 aria-hidden="true" size={14} /></button>
                     </div>
                   ))}
                 </section>
@@ -295,11 +311,40 @@ export function PcbFabricationPlugin({
                     <NumberField label="Проходы" max={10} min={1} onChange={(passes) => updateSettings({ ...settings, isolation: { ...settings.isolation, passes: Math.round(passes) } })} step={1} suffix="шт." value={settings.isolation.passes} />
                   </OperationRow>
 
-                  <OperationRow enabled={settings.drilling.enabled} label="Сверловка" onToggle={(enabled) => updateSettings({ ...settings, drilling: { ...settings.drilling, enabled } })} summary={`${inspection?.drillHits.length ?? 0} отв. · Z −${format(settings.drilling.depthMm)}`}>
-                    <NumberField label="Глубина" min={0.001} onChange={(depthMm) => updateSettings({ ...settings, drilling: { ...settings.drilling, depthMm } })} step={0.1} value={settings.drilling.depthMm} />
-                    {inspection?.drillGroups.map((group) => (
-                      <ToolSelect key={group.key} label={`T${group.sourceToolNumber} · Ø${format(group.diameterMm)} · ${group.hitCount} шт.`} onChange={(toolId) => updateSettings({ ...settings, drilling: { ...settings.drilling, mappings: settings.drilling.mappings.map((mapping) => mapping.groupKey === group.key ? { ...mapping, toolId } : mapping) } })} tools={drillingTools} value={settings.drilling.mappings.find((mapping) => mapping.groupKey === group.key)?.toolId ?? closestTool(drillingTools, group.diameterMm)?.id ?? ""} />
-                    ))}
+                  <OperationRow enabled={settings.drilling.enabled} label="Сверловка" onToggle={(enabled) => updateSettings({ ...settings, drilling: { ...settings.drilling, enabled } })} summary={drillingSummary}>
+                    {!hasDrillSource ? (
+                      <div className="pcb-drill-empty">
+                        <div>
+                          <strong>Добавьте файл сверловки</strong>
+                          <small>Excellon из EasyEDA или другой CAD: .drl, .xln, .txt</small>
+                        </div>
+                        <button onClick={() => drillInputRef.current?.click()} type="button"><FilePlus2 aria-hidden="true" size={14} />Выбрать Excellon</button>
+                      </div>
+                    ) : (
+                      <>
+                        <NumberField label="Глубина отверстий" min={0.001} onChange={(depthMm) => updateSettings({ ...settings, drilling: { ...settings.drilling, depthMm } })} step={0.1} value={settings.drilling.depthMm} />
+                        {drillGroups.length > 0 ? (
+                          <div className="pcb-drill-groups">
+                            <div className="pcb-drill-groups-heading"><strong>Сверла по диаметрам</strong><span>{drillGroups.length} {drillGroups.length === 1 ? "группа" : "группы"}</span></div>
+                            {drillGroups.map((group) => (
+                              <DrillGroupToolSelect
+                                group={group}
+                                key={group.key}
+                                onChange={(toolId) => updateSettings({
+                                  ...settings,
+                                  drilling: {
+                                    ...settings.drilling,
+                                    mappings: settings.drilling.mappings.map((mapping) => mapping.groupKey === group.key ? { ...mapping, toolId } : mapping),
+                                  },
+                                })}
+                                tools={drillingTools}
+                                value={settings.drilling.mappings.find((mapping) => mapping.groupKey === group.key)?.toolId ?? closestTool(drillingTools, group.diameterMm)?.id ?? ""}
+                              />
+                            ))}
+                          </div>
+                        ) : !inspection || busy === "inspect" ? <div className="pcb-drill-pending">Чтение групп отверстий…</div> : <div className="pcb-drill-pending is-error">В Excellon не найдены отверстия</div>}
+                      </>
+                    )}
                   </OperationRow>
 
                   <OperationRow enabled={settings.marking.enabled} label="Маркировка" onToggle={(enabled) => updateSettings({ ...settings, marking: { ...settings.marking, enabled } })} summary={`Z −${format(settings.marking.depthMm)}`}>
@@ -349,24 +394,33 @@ function ToolSelect({ label, onChange, tools, value }: { readonly label: string;
   return <label className="pcb-field pcb-tool-select"><span>{label}</span><select onChange={(event) => onChange(event.target.value)} value={value}><option value="">Выберите</option>{tools.map((tool) => <option key={tool.id} value={tool.id}>{tool.name} · Ø{format(tool.diameterMm)}</option>)}</select></label>;
 }
 
-function NumberField({ label, max = 100_000, min = -100_000, onChange, step, suffix = "mm", value }: { readonly label: string; readonly max?: number; readonly min?: number; readonly onChange: (value: number) => void; readonly step: number; readonly suffix?: string; readonly value: number }) {
-  return <label className="pcb-field pcb-number"><span>{label}</span><div><input max={max} min={min} onChange={(event) => { if (Number.isFinite(event.target.valueAsNumber)) onChange(event.target.valueAsNumber); }} step={step} type="number" value={value} /><small>{suffix}</small></div></label>;
+function DrillGroupToolSelect({ group, onChange, tools, value }: {
+  readonly group: PcbInspection["drillGroups"][number];
+  readonly onChange: (value: string) => void;
+  readonly tools: readonly CuttingTool[];
+  readonly value: string;
+}) {
+  const selected = tools.find((tool) => tool.id === value);
+  const diameterDifference = selected ? Math.abs(selected.diameterMm - group.diameterMm) : undefined;
+  const exactMatch = diameterDifference !== undefined && diameterDifference <= 0.01;
+  return <div className="pcb-drill-group">
+    <div className="pcb-drill-group-title">
+      <strong>Ø{format(group.diameterMm)} mm</strong>
+      <span>T{group.sourceToolNumber} · {group.hitCount} отв.</span>
+    </div>
+    <ToolSelect label="Сверло" onChange={onChange} tools={tools} value={value} />
+    <small className={exactMatch ? "is-match" : selected ? "is-warning" : ""}>
+      {exactMatch
+        ? "Диаметр совпадает"
+        : selected
+          ? `Выбрано Ø${format(selected.diameterMm)} mm · разница ${format(diameterDifference!)} mm`
+          : "Сверло не выбрано"}
+    </small>
+  </div>;
 }
 
-function validate(files: readonly LocalPcbFile[], inspection: PcbInspection | undefined, settings: PcbJobSettings, tools: readonly CuttingTool[]): string | undefined {
-  if (files.length === 0) return "Добавьте Gerber или Excellon";
-  if (!inspection) return "Дождитесь разбора слоёв";
-  if (!settings.isolation.enabled && !settings.drilling.enabled && !settings.outline.enabled && !settings.marking.enabled) return "Включите хотя бы одну операцию";
-  const ids = new Set(tools.map((tool) => tool.id));
-  if (settings.isolation.enabled && !ids.has(settings.isolation.toolId)) return "Выберите инструмент для изоляции";
-  if (settings.drilling.enabled && (
-    inspection.drillGroups.length === 0
-    || inspection.drillGroups.some((group) => !ids.has(settings.drilling.mappings.find((mapping) => mapping.groupKey === group.key)?.toolId ?? ""))
-  )) return "Выберите инструмент для каждой группы отверстий";
-  if (settings.outline.enabled && !ids.has(settings.outline.toolId)) return "Выберите инструмент для контура";
-  if (settings.marking.enabled && !ids.has(settings.marking.toolId)) return "Выберите инструмент для маркировки";
-  if (settings.safeZMm <= settings.surfaceZMm) return "Безопасный Z должен быть выше поверхности";
-  return undefined;
+function NumberField({ label, max = 100_000, min = -100_000, onChange, step, suffix = "mm", value }: { readonly label: string; readonly max?: number; readonly min?: number; readonly onChange: (value: number) => void; readonly step: number; readonly suffix?: string; readonly value: number }) {
+  return <label className="pcb-field pcb-number"><span>{label}</span><div><input max={max} min={min} onChange={(event) => { if (Number.isFinite(event.target.valueAsNumber)) onChange(event.target.valueAsNumber); }} step={step} type="number" value={value} /><small>{suffix}</small></div></label>;
 }
 
 const validTool = (id: string, tools: readonly CuttingTool[]) => tools.find((tool) => tool.id === id);

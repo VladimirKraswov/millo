@@ -386,6 +386,117 @@
   grid-column: 1 / -1;
 }
 
+.pcb-drill-empty,
+.pcb-drill-groups,
+.pcb-drill-pending {
+  grid-column: 1 / -1;
+}
+
+.pcb-drill-empty {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #3b4a51;
+  border-radius: 4px;
+  background: #0d161a;
+}
+
+.pcb-drill-empty > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.pcb-drill-empty strong {
+  color: #dce5e8;
+  font-size: 10px;
+}
+
+.pcb-drill-empty small {
+  color: #77868d;
+  font-size: 8px;
+  line-height: 12px;
+}
+
+.pcb-drill-empty button {
+  display: inline-flex;
+  min-height: 30px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid #4d806e;
+  border-radius: 4px;
+  color: #bcebd9;
+  background: #173429;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.pcb-drill-groups {
+  display: grid;
+  gap: 7px;
+}
+
+.pcb-drill-groups-heading,
+.pcb-drill-group-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pcb-drill-groups-heading strong {
+  color: #9caab0;
+  font-size: 9px;
+}
+
+.pcb-drill-groups-heading span,
+.pcb-drill-group-title span {
+  color: #708087;
+  font: 8px "SFMono-Regular", Consolas, monospace;
+}
+
+.pcb-drill-group {
+  display: grid;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid #314047;
+  border-radius: 4px;
+  background: #0c1418;
+}
+
+.pcb-drill-group-title strong {
+  color: #edf3f5;
+  font: 11px "SFMono-Regular", Consolas, monospace;
+}
+
+.pcb-drill-group > small {
+  color: #77868d;
+  font-size: 8px;
+}
+
+.pcb-drill-group > small.is-match {
+  color: #6fd5b0;
+}
+
+.pcb-drill-group > small.is-warning,
+.pcb-drill-pending.is-error {
+  color: #e8b45e;
+}
+
+.pcb-drill-pending {
+  min-height: 36px;
+  padding: 10px;
+  border-left: 2px solid #46565e;
+  color: #8c9ba2;
+  background: #0d1519;
+  font-size: 9px;
+}
+
 .pcb-field {
   display: grid;
   min-width: 0;
@@ -549,4 +660,3 @@
     overflow: visible;
   }
 }
-
