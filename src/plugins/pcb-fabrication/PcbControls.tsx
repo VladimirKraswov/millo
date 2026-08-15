@@ -40,7 +40,7 @@ export function ToolSelect({
     <span>{label}</span>
     <select onChange={(event) => onChange(event.target.value)} value={value}>
       <option value="">Выберите</option>
-      {tools.map((tool) => <option key={tool.id} value={tool.id}>{tool.name} · Ø{formatPcbNumber(tool.diameterMm)}</option>)}
+      {tools.map((tool) => <option key={tool.id} value={tool.id}>{tool.name} · {tool.tipDiameterMm !== undefined ? `кончик ${formatPcbNumber(tool.tipDiameterMm)}` : `Ø${formatPcbNumber(tool.diameterMm)}`}</option>)}
     </select>
   </label>;
 }

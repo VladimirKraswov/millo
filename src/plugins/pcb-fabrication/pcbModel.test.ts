@@ -41,7 +41,17 @@ const file = (role: LocalPcbFile["role"]): LocalPcbFile => ({
 const settings = (drillToolId = "drill-08"): PcbJobSettings => ({
   safeZMm: 3,
   surfaceZMm: 0,
-  isolation: { enabled: false, toolId: "", depthMm: 0.08, clearanceMm: 0.05, passes: 1 },
+  isolation: {
+    enabled: false,
+    toolId: "",
+    depthMm: 0.05,
+    copperThicknessMm: 0.035,
+    clearanceMm: 0.05,
+    passes: 1,
+    feedMmPerMin: 300,
+    plungeMmPerMin: 60,
+    spindleRpm: 18_000,
+  },
   drilling: { enabled: true, depthMm: 1.8, mappings: [{ groupKey: "drill::T1", toolId: drillToolId }] },
   outline: { enabled: false, toolId: "", depthMm: 1.7, depthPerPassMm: 0.4, tabCount: 4, tabWidthMm: 2, tabHeightMm: 0.4 },
   marking: { enabled: false, toolId: "", depthMm: 0.04 },
@@ -54,6 +64,7 @@ const inspection: PcbInspection = {
   drillSlots: [],
   files: [],
   paths: [],
+  copperAnalysis: { contourCount: 1, minimumIsolationGapMm: 0.2 },
   warnings: [],
 };
 

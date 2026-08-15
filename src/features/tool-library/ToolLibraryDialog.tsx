@@ -90,9 +90,13 @@ export function ToolLibraryDialog({ open, onClose, service }: ToolLibraryDialogP
   const updateKind = (kind: ToolKind) => setDraft((current) => ({
     ...current,
     kind,
+    tipDiameterMm:
+      kind === "vBit" || kind === "engraving"
+        ? (current.tipDiameterMm ?? Math.min(current.diameterMm, 0.1))
+        : undefined,
     includedAngleDegrees:
       kind === "vBit" || kind === "engraving"
-        ? (current.includedAngleDegrees ?? 60)
+        ? (current.includedAngleDegrees ?? (kind === "engraving" ? 30 : 60))
         : undefined,
   }));
   const save = async () => {
@@ -177,7 +181,7 @@ export function ToolLibraryDialog({ open, onClose, service }: ToolLibraryDialogP
                   type="button"
                 >
                   <ToolSchematic compact tool={tool} />
-                  <span><strong>{tool.name}</strong><small>{toolKindLabels[tool.kind]} · Ø {tool.diameterMm} mm</small></span>
+                  <span><strong>{tool.name}</strong><small>{toolKindLabels[tool.kind]} · {tool.tipDiameterMm !== undefined ? `кончик ${tool.tipDiameterMm} mm` : `Ø ${tool.diameterMm} mm`}</small></span>
                   {tool.factoryPreset && <em>preset</em>}
                 </button>
               ))}
@@ -195,11 +199,12 @@ export function ToolLibraryDialog({ open, onClose, service }: ToolLibraryDialogP
                 <div className="tool-form-grid">
                   <TextField label="Название" onChange={(value) => mutateDraft("name", value)} value={draft.name} wide />
                   <label className="tool-field"><span>Геометрия</span><select onChange={(event) => updateKind(event.target.value as ToolKind)} value={draft.kind}>{toolKinds.map((kind) => <option key={kind} value={kind}>{toolKindLabels[kind]}</option>)}</select></label>
-                  <NumberField label="Диаметр" max={500} min={0.01} onChange={(value) => mutateDraft("diameterMm", value)} step={0.001} suffix="mm" value={draft.diameterMm} />
+                  <NumberField label={draft.tipDiameterMm !== undefined ? "Макс. диаметр" : "Диаметр"} max={500} min={0.01} onChange={(value) => mutateDraft("diameterMm", value)} step={0.001} suffix="mm" value={draft.diameterMm} />
+                  {(draft.kind === "vBit" || draft.kind === "engraving") && <NumberField label="Диаметр кончика" max={draft.diameterMm} min={0.001} onChange={(value) => mutateDraft("tipDiameterMm", value)} step={0.01} suffix="mm" value={draft.tipDiameterMm ?? 0.1} />}
                   <NumberField label="Хвостовик" max={100} min={0.1} onChange={(value) => mutateDraft("shankDiameterMm", value)} step={0.001} suffix="mm" value={draft.shankDiameterMm} />
                   <NumberField label="Режущая длина" max={1000} min={0.1} onChange={(value) => mutateDraft("cuttingLengthMm", value)} step={0.1} suffix="mm" value={draft.cuttingLengthMm} />
                   <NumberField label="Режущие кромки" max={20} min={1} onChange={(value) => mutateDraft("fluteCount", Math.round(value))} step={1} suffix="шт" value={draft.fluteCount} />
-                  {(draft.kind === "vBit" || draft.kind === "engraving") && <NumberField label="Угол" max={179} min={1} onChange={(value) => mutateDraft("includedAngleDegrees", value)} step={1} suffix="°" value={draft.includedAngleDegrees ?? 60} />}
+                  {(draft.kind === "vBit" || draft.kind === "engraving") && <OptionalNumberField label="Угол" max={179} min={1} onChange={(value) => mutateDraft("includedAngleDegrees", value)} placeholder="Неизвестен" step={1} suffix="°" value={draft.includedAngleDegrees} />}
                 </div>
               </section>
 
@@ -243,6 +248,10 @@ function TextField({ label, value, onChange, wide = false }: { readonly label: s
 function NumberField({ label, value, min, max, step, suffix, onChange }: { readonly label: string; readonly value: number; readonly min: number; readonly max: number; readonly step: number; readonly suffix: string; readonly onChange: (value: number) => void }) {
   const change = (event: ChangeEvent<HTMLInputElement>) => onChange(Number(event.target.value));
   return <label className="tool-field"><span>{label}</span><div><input max={max} min={min} onChange={change} step={step} type="number" value={value} /><small>{suffix}</small></div></label>;
+}
+
+function OptionalNumberField({ label, value, min, max, step, suffix, placeholder, onChange }: { readonly label: string; readonly value?: number; readonly min: number; readonly max: number; readonly step: number; readonly suffix: string; readonly placeholder: string; readonly onChange: (value?: number) => void }) {
+  return <label className="tool-field"><span>{label}</span><div><input max={max} min={min} onChange={(event) => onChange(event.target.value === "" ? undefined : event.target.valueAsNumber)} placeholder={placeholder} step={step} type="number" value={value ?? ""} /><small>{suffix}</small></div></label>;
 }
 
 const readableError = (reason: unknown): string => String(reason).replace(/^Error:\s*/, "");

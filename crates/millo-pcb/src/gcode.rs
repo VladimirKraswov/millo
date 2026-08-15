@@ -73,11 +73,19 @@ pub fn generate_pcb_job(
         if copper.is_empty() {
             return Err(PcbError::MissingLayer("copper"));
         }
+        if matches!(tool.kind, ToolKind::Engraving | ToolKind::VBit)
+            && (tool.tip_diameter_mm.is_some() != tool.included_angle_degrees.is_some())
+        {
+            return Err(PcbError::IncompleteConicalTool(tool.name.clone()));
+        }
+        let cutting_diameter_mm = tool
+            .cutting_diameter_at_depth_mm(request.settings.isolation.depth_mm)
+            .ok_or_else(|| PcbError::IncompleteConicalTool(tool.name.clone()))?;
         let mut paths = CamPaths::default();
         for pass in 0..request.settings.isolation.passes {
-            let offset = tool.diameter_mm / 2.0
+            let offset = cutting_diameter_mm / 2.0
                 + request.settings.isolation.clearance_mm
-                + f64::from(pass) * tool.diameter_mm * 0.6;
+                + f64::from(pass) * cutting_diameter_mm * 0.6;
             paths.append(
                 copper
                     .inflate(offset, JoinType::Round, EndType::Polygon, 2.0)
@@ -85,11 +93,21 @@ pub fn generate_pcb_job(
             );
         }
         emitter.use_tool(tool, "Изоляция меди");
+        writeln!(
+            emitter.source,
+            "; PCB cut: effective Ø{} mm at Z-{} · F{} · plunge {} · spindle {} rpm",
+            number(cutting_diameter_mm),
+            number(request.settings.isolation.depth_mm),
+            number(request.settings.isolation.feed_mm_per_min),
+            number(request.settings.isolation.plunge_mm_per_min),
+            request.settings.isolation.spindle_rpm,
+        )
+        .unwrap();
         let motions = emitter.engrave_paths(
             &paths,
             request.settings.isolation.depth_mm,
-            tool.feed_mm_per_min,
-            tool.plunge_mm_per_min,
+            request.settings.isolation.feed_mm_per_min,
+            request.settings.isolation.plunge_mm_per_min,
         );
         emitter.operation("isolation", tool, motions);
     }
@@ -579,6 +597,27 @@ fn validate_settings(request: &PcbJobRequest) -> Result<(), PcbError> {
             0.0,
             10.0,
         )?;
+        validate_range(
+            "isolation.copperThicknessMm",
+            settings.isolation.copper_thickness_mm,
+            0.005,
+            0.5,
+        )?;
+        validate_range(
+            "isolation.feedMmPerMin",
+            settings.isolation.feed_mm_per_min,
+            1.0,
+            100_000.0,
+        )?;
+        validate_range(
+            "isolation.plungeMmPerMin",
+            settings.isolation.plunge_mm_per_min,
+            1.0,
+            50_000.0,
+        )?;
+        if !(1_000..=100_000).contains(&settings.isolation.spindle_rpm) {
+            return Err(PcbError::InvalidSetting("isolation.spindleRpm"));
+        }
         if !(1..=10).contains(&settings.isolation.passes) {
             return Err(PcbError::InvalidSetting("isolation.passes"));
         }

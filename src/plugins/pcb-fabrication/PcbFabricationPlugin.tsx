@@ -51,6 +51,12 @@ import {
   validatePcbWorkflow,
   type LocalPcbFile,
 } from "./pcbModel";
+import {
+  isolationToolGeometryWarning,
+  recommendIsolation,
+  recommendIsolationForTool,
+  type IsolationRecommendation,
+} from "./isolationRecommendation";
 
 interface PcbFabricationPluginProps {
   readonly initialOpen?: boolean;
@@ -68,7 +74,17 @@ const defaultTransform: PcbTransform = Object.freeze({
 const defaultSettings: PcbJobSettings = Object.freeze({
   safeZMm: 3,
   surfaceZMm: 0,
-  isolation: Object.freeze({ enabled: true, toolId: "", depthMm: 0.08, clearanceMm: 0.05, passes: 1 }),
+  isolation: Object.freeze({
+    enabled: true,
+    toolId: "",
+    depthMm: 0.05,
+    copperThicknessMm: 0.035,
+    clearanceMm: 0.05,
+    passes: 1,
+    feedMmPerMin: 300,
+    plungeMmPerMin: 60,
+    spindleRpm: 18_000,
+  }),
   drilling: Object.freeze({ enabled: false, depthMm: 1.8, mappings: Object.freeze([]) }),
   outline: Object.freeze({ enabled: false, toolId: "", depthMm: 1.7, depthPerPassMm: 0.4, tabCount: 4, tabWidthMm: 2, tabHeightMm: 0.4 }),
   marking: Object.freeze({ enabled: false, toolId: "", depthMm: 0.04 }),
@@ -91,7 +107,9 @@ export function PcbFabricationPlugin({
   const compatible = useMemo(() => toolLibrary.tools.filter((tool) => tool.kind !== "surfacing" && tool.kind !== "ballNose"), [toolLibrary.tools]);
   const engravingTools = useMemo(() => compatible
     .filter((tool) => tool.kind === "engraving" || tool.kind === "vBit")
-    .sort((left, right) => Number(right.kind === "engraving") - Number(left.kind === "engraving") || left.diameterMm - right.diameterMm), [compatible]);
+    .sort((left, right) => Number(right.kind === "engraving") - Number(left.kind === "engraving")
+      || (left.tipDiameterMm ?? left.diameterMm) - (right.tipDiameterMm ?? right.diameterMm)
+      || (left.includedAngleDegrees ?? 360) - (right.includedAngleDegrees ?? 360)), [compatible]);
   const cuttingTools = useMemo(() => compatible.filter((tool) => tool.kind === "flatEndMill").sort((left, right) => left.diameterMm - right.diameterMm), [compatible]);
   const drillingTools = useMemo(() => compatible
     .filter(isPcbDrillingTool)
@@ -105,6 +123,8 @@ export function PcbFabricationPlugin({
   const [dragging, setDragging] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [error, setError] = useState<string>();
+  const [automaticIsolation, setAutomaticIsolationState] = useState(true);
+  const automaticIsolationRef = useRef(true);
 
   useEffect(() => {
     if (!open || files.length === 0) {
@@ -119,7 +139,13 @@ export function PcbFabricationPlugin({
         if (!active) return;
         setInspection(result);
         setSettings((current) => ({
-          ...current,
+          ...(automaticIsolationRef.current
+            ? applyIsolationRecommendation(current, recommendIsolation(
+              engravingTools,
+              result.copperAnalysis,
+              current.isolation.copperThicknessMm,
+            ))
+            : current),
           drilling: {
             ...current.drilling,
             mappings: [...drillMappings(result.drillGroups, drillingTools, new Map(current.drilling.mappings.map((mapping) => [mapping.groupKey, mapping.toolId])))].map(([groupKey, toolId]) => ({ groupKey, toolId })),
@@ -141,7 +167,11 @@ export function PcbFabricationPlugin({
   }, [drillingTools, files, jobs, open, transform]);
 
   useEffect(() => {
-    const engraving = engravingTools[0] ?? compatible[0];
+    const engraving = recommendIsolation(
+      engravingTools,
+      { contourCount: 0 },
+      settings.isolation.copperThicknessMm,
+    )?.tool ?? engravingTools[0] ?? compatible[0];
     const outline = cuttingTools[0] ?? compatible[0];
     setSettings((current) => ({
       ...current,
@@ -151,7 +181,7 @@ export function PcbFabricationPlugin({
     }));
     revisionRef.current += 1;
     setGenerated(undefined);
-  }, [compatible, cuttingTools, engravingTools]);
+  }, [compatible, cuttingTools, engravingTools, settings.isolation.copperThicknessMm]);
 
   useEffect(() => {
     if (!open) return;
@@ -179,6 +209,8 @@ export function PcbFabricationPlugin({
       setInspection(undefined);
       setFiles([...byName.values()]);
       if (files.length === 0) {
+        automaticIsolationRef.current = true;
+        setAutomaticIsolationState(true);
         setSettings((current) => initialPcbOperations(current, next));
       }
       invalidate();
@@ -203,7 +235,62 @@ export function PcbFabricationPlugin({
     setSettings(next);
     invalidate();
   };
-  const validation = validatePcbWorkflow(files, inspection, settings, compatible);
+  const setAutomaticIsolation = (enabled: boolean) => {
+    automaticIsolationRef.current = enabled;
+    setAutomaticIsolationState(enabled);
+    if (!enabled || !inspection) return;
+    const recommendation = recommendIsolation(
+      engravingTools,
+      inspection.copperAnalysis,
+      settings.isolation.copperThicknessMm,
+    );
+    updateSettings(applyIsolationRecommendation(settings, recommendation));
+  };
+  const updateIsolation = (patch: Partial<PcbJobSettings["isolation"]>) => {
+    automaticIsolationRef.current = false;
+    setAutomaticIsolationState(false);
+    updateSettings({ ...settings, isolation: { ...settings.isolation, ...patch } });
+  };
+  const selectIsolationTool = (toolId: string) => {
+    const tool = engravingTools.find((candidate) => candidate.id === toolId);
+    const recommendation = tool && inspection
+      ? recommendIsolationForTool(tool, inspection.copperAnalysis, settings.isolation.copperThicknessMm)
+      : undefined;
+    automaticIsolationRef.current = false;
+    setAutomaticIsolationState(false);
+    const recommendedSettings = applyIsolationRecommendation(settings, recommendation);
+    updateSettings({
+      ...recommendedSettings,
+      isolation: {
+        ...recommendedSettings.isolation,
+        toolId,
+      },
+    });
+  };
+  const updateCopperThickness = (copperThicknessMm: number) => {
+    if (automaticIsolation && inspection) {
+      const current = {
+        ...settings,
+        isolation: { ...settings.isolation, copperThicknessMm },
+      };
+      updateSettings(applyIsolationRecommendation(current, recommendIsolation(
+        engravingTools,
+        inspection.copperAnalysis,
+        copperThicknessMm,
+      )));
+      return;
+    }
+    updateIsolation({ copperThicknessMm });
+  };
+  const selectedIsolationTool = engravingTools.find((tool) => tool.id === settings.isolation.toolId)
+    ?? compatible.find((tool) => tool.id === settings.isolation.toolId);
+  const isolationRecommendation = selectedIsolationTool && inspection
+    ? recommendIsolationForTool(selectedIsolationTool, inspection.copperAnalysis, settings.isolation.copperThicknessMm)
+    : undefined;
+  const validation = validatePcbWorkflow(files, inspection, settings, compatible)
+    ?? (settings.isolation.enabled && selectedIsolationTool
+      ? isolationToolGeometryWarning(selectedIsolationTool)
+      : undefined);
   const hasDrillSource = files.some((file) => file.role === "drill");
   const drillGroups = inspection?.drillGroups ?? [];
   const drillingSummary = !hasDrillSource
@@ -314,11 +401,30 @@ export function PcbFabricationPlugin({
 
                 {files.length > 0 && <section className="pcb-operations">
                   <div className="pcb-section-heading"><div><span>Операции</span><small>в порядке выполнения</small></div></div>
-                  <OperationRow enabled={settings.isolation.enabled} label="Изоляция дорожек" onToggle={(enabled) => updateSettings({ ...settings, isolation: { ...settings.isolation, enabled } })} summary={`${settings.isolation.passes} пр. · Z −${format(settings.isolation.depthMm)}`}>
-                    <ToolSelect label="Инструмент" onChange={(toolId) => updateSettings({ ...settings, isolation: { ...settings.isolation, toolId } })} tools={engravingTools.length ? engravingTools : compatible} value={settings.isolation.toolId} />
-                    <NumberField label="Глубина" min={0.001} onChange={(depthMm) => updateSettings({ ...settings, isolation: { ...settings.isolation, depthMm } })} step={0.01} value={settings.isolation.depthMm} />
-                    <NumberField label="Зазор" min={0} onChange={(clearanceMm) => updateSettings({ ...settings, isolation: { ...settings.isolation, clearanceMm } })} step={0.01} value={settings.isolation.clearanceMm} />
-                    <NumberField label="Проходы" max={10} min={1} onChange={(passes) => updateSettings({ ...settings, isolation: { ...settings.isolation, passes: Math.round(passes) } })} step={1} suffix="шт." value={settings.isolation.passes} />
+                  <OperationRow enabled={settings.isolation.enabled} label="Изоляция дорожек" onToggle={(enabled) => updateSettings({ ...settings, isolation: { ...settings.isolation, enabled } })} summary={`Z −${format(settings.isolation.depthMm)} · F${format(settings.isolation.feedMmPerMin)}`}>
+                    <div className={`pcb-isolation-assistant${isolationRecommendation?.warning ? " is-warning" : ""}`}>
+                      <label><input checked={automaticIsolation} onChange={(event) => setAutomaticIsolation(event.target.checked)} type="checkbox" /><span><strong>Автоподбор</strong><small>Фреза, глубина и режим по геометрии платы</small></span></label>
+                      <div>
+                        <strong>{selectedIsolationTool?.name ?? "Инструмент не выбран"}</strong>
+                        <small>{isolationRecommendation?.effectiveDiameterMm !== undefined
+                          ? `Канавка ≈${format(isolationRecommendation.effectiveDiameterMm)} мм${isolationRecommendation.minimumGapMm !== undefined ? ` · промежуток ${format(isolationRecommendation.minimumGapMm)} мм` : ""}`
+                          : (selectedIsolationTool ? isolationToolGeometryWarning(selectedIsolationTool) : undefined) ?? "Загрузите слой меди для анализа"}</small>
+                      </div>
+                      {isolationRecommendation?.warning && <p>{isolationRecommendation.warning}</p>}
+                    </div>
+                    <ToolSelect label="Фреза" onChange={selectIsolationTool} tools={engravingTools.length ? engravingTools : compatible} value={settings.isolation.toolId} />
+                    <NumberField label="Глубина" min={0.001} onChange={(depthMm) => updateIsolation({ depthMm })} step={0.005} value={settings.isolation.depthMm} />
+                    <details className="pcb-operation-advanced">
+                      <summary>Режим резания</summary>
+                      <div>
+                        <NumberField label="Толщина меди" max={0.5} min={0.005} onChange={updateCopperThickness} step={0.005} value={settings.isolation.copperThicknessMm} />
+                        <NumberField label="Подача XY" min={1} onChange={(feedMmPerMin) => updateIsolation({ feedMmPerMin })} step={10} suffix="mm/min" value={settings.isolation.feedMmPerMin} />
+                        <NumberField label="Подача Z" min={1} onChange={(plungeMmPerMin) => updateIsolation({ plungeMmPerMin })} step={5} suffix="mm/min" value={settings.isolation.plungeMmPerMin} />
+                        <NumberField label="Шпиндель" max={100_000} min={1_000} onChange={(spindleRpm) => updateIsolation({ spindleRpm: Math.round(spindleRpm) })} step={1_000} suffix="rpm" value={settings.isolation.spindleRpm} />
+                        <NumberField label="Зазор" min={0} onChange={(clearanceMm) => updateIsolation({ clearanceMm })} step={0.005} value={settings.isolation.clearanceMm} />
+                        <NumberField label="Проходы" max={10} min={1} onChange={(passes) => updateIsolation({ passes: Math.round(passes) })} step={1} suffix="шт." value={settings.isolation.passes} />
+                      </div>
+                    </details>
                   </OperationRow>
 
                   <OperationRow enabled={settings.drilling.enabled} label="Сверловка" onToggle={(enabled) => updateSettings({ ...settings, drilling: { ...settings.drilling, enabled } })} summary={drillingSummary}>
@@ -399,3 +505,21 @@ export function PcbFabricationPlugin({
 
 const validTool = (id: string, tools: readonly CuttingTool[]) => tools.find((tool) => tool.id === id);
 const formatBytes = (bytes: number) => bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
+
+const applyIsolationRecommendation = (
+  settings: PcbJobSettings,
+  recommendation?: IsolationRecommendation,
+): PcbJobSettings => recommendation ? {
+  ...settings,
+  isolation: {
+    ...settings.isolation,
+    toolId: recommendation.tool.id,
+    depthMm: recommendation.depthMm,
+    copperThicknessMm: recommendation.copperThicknessMm,
+    clearanceMm: recommendation.clearanceMm,
+    passes: recommendation.passes,
+    feedMmPerMin: recommendation.feedMmPerMin,
+    plungeMmPerMin: recommendation.plungeMmPerMin,
+    spindleRpm: recommendation.spindleRpm,
+  },
+} : settings;

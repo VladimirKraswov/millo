@@ -453,9 +453,12 @@ See [Image jobs](docs/IMAGE_JOBS.md) and
 The default `PCB from Gerber` plugin accepts RS-274X copper/outline/marking and
 Excellon drill layers, provides 2D placement controls, and asks the independent
 `millo-pcb` Rust core for isolation, grouped drilling, marking and tabbed board
-outline operations. Different tools become host-managed `M6` barriers; the
-plugin cannot bypass the normal sender gates. See [PCB jobs](docs/PCB_JOBS.md)
-and [ADR 0056](docs/decisions/0056-core-pcb-cam-plugin.md).
+outline operations. Its default isolation profile analyses copper gaps and
+uses explicit V-tip geometry to suggest a cutter, depth, feed, plunge and RPM;
+every value remains editable. Different tools become host-managed `M6`
+barriers; the plugin cannot bypass the normal sender gates. See
+[PCB jobs](docs/PCB_JOBS.md) and
+[ADR 0056](docs/decisions/0056-core-pcb-cam-plugin.md).
 
 The Rust-owned cutting-tool library provides editable common flat, ball, V,
 engraving, and surfacing presets with geometry-aware schematics, Russian usage

@@ -1,3 +1,4 @@
+mod analysis;
 mod aperture;
 mod excellon;
 mod gcode;
@@ -69,6 +70,8 @@ pub enum PcbError {
         operation: &'static str,
         tool: String,
     },
+    #[error("conical tool {0} requires a tip angle before PCB isolation")]
+    IncompleteConicalTool(String),
     #[error(
         "tool {tool} is wider than PCB drill/slot group {group}: {tool_mm:.3} mm > {feature_mm:.3} mm"
     )]
@@ -232,6 +235,7 @@ pub(crate) fn inspection_from_geometry(board: &BoardGeometry) -> PcbInspection {
                 primitive_count,
             })
             .collect(),
+        copper_analysis: analysis::analyze_copper(board),
         warnings: board.warnings.clone(),
     }
 }

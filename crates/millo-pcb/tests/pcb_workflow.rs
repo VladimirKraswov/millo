@@ -45,8 +45,12 @@ fn drilling_settings(group_key: &str, tool_id: &str, depth_mm: f64) -> PcbJobSet
             enabled: false,
             tool_id: String::new(),
             depth_mm: 0.08,
+            copper_thickness_mm: 0.035,
             clearance_mm: 0.05,
             passes: 1,
+            feed_mm_per_min: 300.0,
+            plunge_mm_per_min: 60.0,
+            spindle_rpm: 18_000,
         },
         drilling: PcbDrillingSettings {
             enabled: true,
@@ -139,8 +143,12 @@ fn emits_one_valid_program_with_manual_tool_change_barriers() {
                 enabled: true,
                 tool_id: isolation_tool.id.clone(),
                 depth_mm: 0.08,
+                copper_thickness_mm: 0.035,
                 clearance_mm: 0.05,
                 passes: 2,
+                feed_mm_per_min: 300.0,
+                plunge_mm_per_min: 60.0,
+                spindle_rpm: 18_000,
             },
             drilling: PcbDrillingSettings {
                 enabled: true,
@@ -187,6 +195,7 @@ fn emits_one_valid_program_with_manual_tool_change_barriers() {
     );
     assert!(job.source.contains("M30"));
     assert!(job.source.contains("Z-1.3"), "outline tabs keep 0.4 mm");
+    assert!(job.source.contains("effective Ø0.1282 mm at Z-0.08 · F300"));
     assert!(!job.program.toolpath.is_empty());
 }
 
@@ -383,8 +392,12 @@ fn rejects_an_unmapped_drill_group_before_gcode_is_emitted() {
                 enabled: false,
                 tool_id: String::new(),
                 depth_mm: 0.08,
+                copper_thickness_mm: 0.035,
                 clearance_mm: 0.0,
                 passes: 1,
+                feed_mm_per_min: 300.0,
+                plunge_mm_per_min: 60.0,
+                spindle_rpm: 18_000,
             },
             drilling: PcbDrillingSettings {
                 enabled: true,

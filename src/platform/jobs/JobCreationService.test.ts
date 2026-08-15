@@ -31,7 +31,7 @@ const generatedPcb = {
   sourceName: "board.nc",
   source: "G21\nM5\nM30\n",
   program: { lines: [], warnings: [], features: {}, summary: {}, toolpath: [] },
-  inspection: { bounds: {}, paths: [], drillHits: [], drillSlots: [], drillGroups: [], files: [], warnings: [] },
+  inspection: { bounds: {}, paths: [], drillHits: [], drillSlots: [], drillGroups: [], files: [], copperAnalysis: { contourCount: 0 }, warnings: [] },
   summary: {},
 } as unknown as GeneratedPcbJob;
 

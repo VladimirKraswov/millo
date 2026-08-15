@@ -6,7 +6,7 @@ import { toolKindLabels } from "../../shared/tooling";
 interface ToolSchematicProps {
   readonly tool: Pick<
     CuttingToolDraft,
-    "kind" | "diameterMm" | "shankDiameterMm" | "fluteCount" | "includedAngleDegrees"
+    "kind" | "diameterMm" | "tipDiameterMm" | "shankDiameterMm" | "fluteCount" | "includedAngleDegrees"
   >;
   readonly compact?: boolean;
 }
@@ -25,9 +25,12 @@ export function ToolSchematic({ tool, compact = false }: ToolSchematicProps) {
   const angle = tool.includedAngleDegrees
     ? `, угол ${tool.includedAngleDegrees}°`
     : "";
+  const tip = tool.tipDiameterMm !== undefined
+    ? `, кончик ${tool.tipDiameterMm} мм`
+    : "";
   return (
     <div
-      aria-label={`Схема: ${toolKindLabels[tool.kind]}, диаметр ${tool.diameterMm} мм${angle}`}
+      aria-label={`Схема: ${toolKindLabels[tool.kind]}, диаметр ${tool.diameterMm} мм${tip}${angle}`}
       className={`tool-schematic is-${tool.kind}${compact ? " is-compact" : ""}`}
       role="img"
       style={style}

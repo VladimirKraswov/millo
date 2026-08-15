@@ -18,6 +18,7 @@ export interface CuttingTool {
   readonly description: string;
   readonly kind: ToolKind;
   readonly diameterMm: number;
+  readonly tipDiameterMm?: number;
   readonly shankDiameterMm: number;
   readonly cuttingLengthMm: number;
   readonly fluteCount: number;
@@ -36,6 +37,7 @@ export interface CuttingToolDraft {
   readonly description: string;
   readonly kind: ToolKind;
   readonly diameterMm: number;
+  readonly tipDiameterMm?: number;
   readonly shankDiameterMm: number;
   readonly cuttingLengthMm: number;
   readonly fluteCount: number;
@@ -151,11 +153,27 @@ export const toolKnowledge = (kind: ToolKind): ToolKnowledge => knowledge[kind];
 export const supportsSurfacing = (tool: CuttingTool): boolean =>
   tool.kind === "flatEndMill" || tool.kind === "surfacing";
 
+export const effectiveCuttingDiameterMm = (
+  tool: Pick<CuttingTool, "diameterMm" | "tipDiameterMm" | "includedAngleDegrees">,
+  depthMm: number,
+): number | undefined => {
+  if (!Number.isFinite(depthMm) || depthMm < 0) return undefined;
+  if (tool.includedAngleDegrees !== undefined) {
+    const tip = tool.tipDiameterMm ?? 0;
+    return Math.min(
+      tool.diameterMm,
+      Math.max(tip, tip + 2 * depthMm * Math.tan(tool.includedAngleDegrees * Math.PI / 360)),
+    );
+  }
+  return tool.tipDiameterMm === undefined ? tool.diameterMm : undefined;
+};
+
 export const draftFromTool = (tool: CuttingTool): CuttingToolDraft => ({
   name: tool.name,
   description: tool.description,
   kind: tool.kind,
   diameterMm: tool.diameterMm,
+  tipDiameterMm: tool.tipDiameterMm,
   shankDiameterMm: tool.shankDiameterMm,
   cuttingLengthMm: tool.cuttingLengthMm,
   fluteCount: tool.fluteCount,
@@ -172,6 +190,7 @@ export const newToolDraft = (): CuttingToolDraft => ({
   description: "Пользовательский инструмент. Уточните геометрию и режимы по паспорту производителя.",
   kind: "flatEndMill",
   diameterMm: 3.175,
+  tipDiameterMm: undefined,
   shankDiameterMm: 3.175,
   cuttingLengthMm: 12,
   fluteCount: 2,

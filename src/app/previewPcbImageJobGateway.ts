@@ -73,6 +73,7 @@ const inspectFixture = (request: PcbInspectRequest): PcbInspection => {
       role: file.role,
       primitiveCount: file.role === "ignore" ? 0 : 1,
     })),
+    copperAnalysis: { contourCount: paths.length, minimumIsolationGapMm: 0.18 },
     warnings: [],
   };
 };

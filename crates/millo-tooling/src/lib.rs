@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const SCHEMA_VERSION: u16 = 1;
-const PRESET_CATALOG_VERSION: u16 = 4;
+const PRESET_CATALOG_VERSION: u16 = 5;
+const GENERIC_BLUE_ENGRAVER_PRESET_ID: &str = "preset-generic-blue-engraver-0-2";
 const CCT01_2F_06050_PRESET_ID: &str = "preset-inreko-cct01-2f-06050-06";
 const CERIN_64L_060A_PRESET_ID: &str = "preset-cerin-64l-060a";
 const LEGACY_MEASURED_LONG_4F_PRESET_ID: &str = "preset-measured-4f-d6-5-l34-oal75";
@@ -53,6 +54,8 @@ pub struct CuttingTool {
     pub description: String,
     pub kind: ToolKind,
     pub diameter_mm: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tip_diameter_mm: Option<f64>,
     pub shank_diameter_mm: f64,
     pub cutting_length_mm: f64,
     pub flute_count: u8,
@@ -72,6 +75,21 @@ impl CuttingTool {
     pub fn supports_surfacing(&self) -> bool {
         matches!(self.kind, ToolKind::FlatEndMill | ToolKind::Surfacing)
     }
+
+    pub fn cutting_diameter_at_depth_mm(&self, depth_mm: f64) -> Option<f64> {
+        if !depth_mm.is_finite() || depth_mm < 0.0 {
+            return None;
+        }
+        match self.included_angle_degrees {
+            Some(angle) => {
+                let tip = self.tip_diameter_mm.unwrap_or(0.0);
+                let diameter = tip + 2.0 * depth_mm * (angle.to_radians() / 2.0).tan();
+                Some(diameter.min(self.diameter_mm).max(tip))
+            }
+            None if self.tip_diameter_mm.is_some() => None,
+            None => Some(self.diameter_mm),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -81,6 +99,7 @@ pub struct CuttingToolDraft {
     pub description: String,
     pub kind: ToolKind,
     pub diameter_mm: f64,
+    pub tip_diameter_mm: Option<f64>,
     pub shank_diameter_mm: f64,
     pub cutting_length_mm: f64,
     pub flute_count: u8,
@@ -99,6 +118,7 @@ impl From<&CuttingTool> for CuttingToolDraft {
             description: tool.description.clone(),
             kind: tool.kind,
             diameter_mm: tool.diameter_mm,
+            tip_diameter_mm: tool.tip_diameter_mm,
             shank_diameter_mm: tool.shank_diameter_mm,
             cutting_length_mm: tool.cutting_length_mm,
             flute_count: tool.flute_count,
@@ -320,6 +340,7 @@ fn tool_from_draft(
         description: draft.description.trim().to_owned(),
         kind: draft.kind,
         diameter_mm: draft.diameter_mm,
+        tip_diameter_mm: draft.tip_diameter_mm,
         shank_diameter_mm: draft.shank_diameter_mm,
         cutting_length_mm: draft.cutting_length_mm,
         flute_count: draft.flute_count,
@@ -340,6 +361,7 @@ struct FactoryToolSpec {
     description: &'static str,
     kind: ToolKind,
     diameter_mm: f64,
+    tip_diameter_mm: Option<f64>,
     shank_diameter_mm: f64,
     cutting_length_mm: f64,
     flute_count: u8,
@@ -359,6 +381,7 @@ fn factory_tool(spec: FactoryToolSpec) -> CuttingTool {
         description: spec.description.to_owned(),
         kind: spec.kind,
         diameter_mm: spec.diameter_mm,
+        tip_diameter_mm: spec.tip_diameter_mm,
         shank_diameter_mm: spec.shank_diameter_mm,
         cutting_length_mm: spec.cutting_length_mm,
         flute_count: spec.flute_count,
@@ -412,6 +435,7 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             description: "Компактная плоская фреза общего назначения. Удобна для небольших пазов, карманов, контуров и черновой обработки, когда фреза 6,35 мм уже слишком крупная.",
             kind: ToolKind::FlatEndMill,
             diameter_mm: 3.175,
+            tip_diameter_mm: None,
             shank_diameter_mm: 3.175,
             cutting_length_mm: 19.05,
             flute_count: 2,
@@ -432,6 +456,7 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             description: "Более жёсткая плоская фреза для быстрого снятия материала, крупных пазов, карманов и раскроя. Требует достаточной мощности шпинделя и надёжного закрепления заготовки.",
             kind: ToolKind::FlatEndMill,
             diameter_mm: 6.35,
+            tip_diameter_mm: None,
             shank_diameter_mm: 6.35,
             cutting_length_mm: 19.05,
             flute_count: 3,
@@ -452,6 +477,7 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             description: "Двухзубая плоская цельнотвердосплавная фреза 6×15×50 мм для пазов, карманов, контуров и выборки материала. Две широкие канавки помогают отводить стружку. Подбирайте подачу и обороты под конкретный материал: режимы для дерева, алюминия и стали нельзя переносить без проверки.",
             kind: ToolKind::FlatEndMill,
             diameter_mm: 6.0,
+            tip_diameter_mm: None,
             shank_diameter_mm: 6.0,
             cutting_length_mm: 15.0,
             flute_count: 2,
@@ -473,6 +499,7 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             description: "Полированная твердосплавная однозаходная фреза DreaNique с удалением стружки вверх: диаметр 1 мм, рабочая длина 3 мм, хвостовик 3,175 мм. Подходит для мелких пазов и контуров в пластиках, дереве и цветных металлах. Тонкая рабочая часть чувствительна к биению, чрезмерному вылету и резкому врезанию.",
             kind: ToolKind::FlatEndMill,
             diameter_mm: 1.0,
+            tip_diameter_mm: None,
             shank_diameter_mm: 3.175,
             cutting_length_mm: 3.0,
             flute_count: 1,
@@ -494,6 +521,7 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             description: "Полированная твердосплавная однозаходная фреза DreaNique с удалением стружки вверх: диаметр 2 мм, рабочая длина 4 мм, хвостовик 3,175 мм. Удобна для небольших пазов, контуров и выборок в акриле, дереве и цветных металлах. Восходящая спираль хорошо выводит стружку, но тонкую заготовку нужно надёжно прижать.",
             kind: ToolKind::FlatEndMill,
             diameter_mm: 2.0,
+            tip_diameter_mm: None,
             shank_diameter_mm: 3.175,
             cutting_length_mm: 4.0,
             flute_count: 1,
@@ -515,6 +543,7 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             description: "Твердосплавная однозаходная фреза с удалением стружки вниз: хвостовик 3,175 мм, диаметр 2 мм, рабочая длина 17 мм. Прижимает верхний слой и уменьшает сколы на фанере, MDF и ламинированных листах. Стружка остаётся в пазу, поэтому нужны неглубокие проходы, паузы для очистки и особенно надёжное закрепление заготовки.",
             kind: ToolKind::FlatEndMill,
             diameter_mm: 2.0,
+            tip_diameter_mm: None,
             shank_diameter_mm: 3.175,
             cutting_length_mm: 17.0,
             flute_count: 1,
@@ -536,6 +565,7 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             description: "Длинная покрытая цельнотвердосплавная четырёхзубая фреза Cerin: диаметр и хвостовик 6 мм, режущая длина 30 мм, общая длина 70 мм. Серия 64L рассчитана на стали, нержавеющие стали, чугун и металлы средней твёрдости до 55 HRC. Увеличенный сердечник повышает жёсткость, но длинный вылет по-прежнему требует надёжного крепления, устойчивого отвода стружки и аккуратного врезания. Режимы Millo являются консервативной отправной точкой, а не параметрами Cerin для конкретного материала.",
             kind: ToolKind::FlatEndMill,
             diameter_mm: 6.0,
+            tip_diameter_mm: None,
             shank_diameter_mm: 6.0,
             cutting_length_mm: 30.0,
             flute_count: 4,
@@ -557,6 +587,7 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             description: "Шаровая фреза для чистовых проходов по рельефам и плавным 3D-поверхностям. Обычно применяется после черновой выборки плоской фрезой с небольшим поперечным шагом.",
             kind: ToolKind::BallNose,
             diameter_mm: 6.35,
+            tip_diameter_mm: None,
             shank_diameter_mm: 6.35,
             cutting_length_mm: 19.05,
             flute_count: 3,
@@ -577,6 +608,7 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             description: "V-фреза 60° формирует узкие линии и лучше сохраняет мелкие детали в надписях и декоративной гравировке. Итоговая ширина линии особенно чувствительна к глубине и нулю Z.",
             kind: ToolKind::VBit,
             diameter_mm: 12.7,
+            tip_diameter_mm: None,
             shank_diameter_mm: 6.35,
             cutting_length_mm: 6.35,
             flute_count: 2,
@@ -597,6 +629,7 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             description: "V-фреза 90° подходит для более широких надписей, фасок и декоративных канавок. На той же глубине оставляет линию шире, чем 60-градусная фреза.",
             kind: ToolKind::VBit,
             diameter_mm: 12.7,
+            tip_diameter_mm: None,
             shank_diameter_mm: 6.35,
             cutting_length_mm: 6.35,
             flute_count: 2,
@@ -617,6 +650,7 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             description: "Остроконечный гравёр для мелкой маркировки, тонких линий и PCB. Используйте очень небольшой съём, точный рабочий ноль Z и минимальное биение шпинделя.",
             kind: ToolKind::Engraving,
             diameter_mm: 2.54,
+            tip_diameter_mm: None,
             shank_diameter_mm: 3.175,
             cutting_length_mm: 6.35,
             flute_count: 2,
@@ -632,17 +666,40 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             ),
         }),
         factory_tool(FactoryToolSpec {
+            id: GENERIC_BLUE_ENGRAVER_PRESET_ID,
+            name: "Конический гравёр 0,2 мм · комплект CNC 3018",
+            description: "Комплектный однозаходный конический гравёр с хвостовиком 3,175 мм, плоским кончиком 0,2 мм и общей длиной 40 мм. Эти размеры не кодируют угол: наборы выпускаются с разными углами. Уточните маркировку колпачка и задайте угол перед точным PCB CAM; до этого Millo не использует инструмент для автоматического расчёта ширины реза.",
+            kind: ToolKind::Engraving,
+            diameter_mm: 3.175,
+            tip_diameter_mm: Some(0.2),
+            shank_diameter_mm: 3.175,
+            cutting_length_mm: 3.0,
+            flute_count: 1,
+            included_angle_degrees: None,
+            feed_mm_per_min: 240.0,
+            plunge_mm_per_min: 50.0,
+            spindle_rpm: 18_000,
+            stepdown_mm: 0.05,
+            stepover_percent: 10.0,
+            reference: ToolReference {
+                manufacturer: "Без маркировки производителя".to_owned(),
+                product: "Конический гравёр 3,175×0,2×40".to_owned(),
+                url: "https://www.stankoff.ru/category/1047/odnozahodnyie-konicheskie-gravery".to_owned(),
+            },
+        }),
+        factory_tool(FactoryToolSpec {
             id: "preset-xc-nlj3-2001",
             name: "Гравёр 20° × 0,1 мм · XC-NLJ3.2001",
             description: "Твердосплавный V-гравёр с кончиком 0,1 мм, углом 20°, хвостовиком 3,175 мм и общей длиной 40 мм. Подходит для тонкой маркировки, PCB, дерева, акрила и мягких цветных металлов. Режущая длина не указана на футляре, поэтому пресет консервативно ограничивает её 3 мм; перед более глубоким проходом измерьте конкретную фрезу.",
             kind: ToolKind::Engraving,
-            diameter_mm: 0.1,
+            diameter_mm: 3.175,
+            tip_diameter_mm: Some(0.1),
             shank_diameter_mm: 3.175,
             cutting_length_mm: 3.0,
             flute_count: 1,
             included_angle_degrees: Some(20.0),
-            feed_mm_per_min: 120.0,
-            plunge_mm_per_min: 40.0,
+            feed_mm_per_min: 300.0,
+            plunge_mm_per_min: 60.0,
             spindle_rpm: 18_000,
             stepdown_mm: 0.05,
             stepover_percent: 10.0,
@@ -657,7 +714,8 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             name: "V-гравёр 90° × 0,1 мм",
             description: "Твердосплавный V-гравёр с кончиком 0,1 мм, углом 90° и хвостовиком 3,175 мм. Формирует более широкую канавку при небольшой глубине и подходит для надписей, фасок и декоративной гравировки. На футляре нет артикула: перед работой проверьте фактические 2 кромки и рабочую длину 14 мм, взятые из справочного аналога.",
             kind: ToolKind::Engraving,
-            diameter_mm: 0.1,
+            diameter_mm: 3.175,
+            tip_diameter_mm: Some(0.1),
             shank_diameter_mm: 3.175,
             cutting_length_mm: 14.0,
             flute_count: 2,
@@ -679,6 +737,7 @@ pub fn factory_presets() -> Vec<CuttingTool> {
             description: "Широкая сменнопластинчатая фреза для выравнивания жертвенного стола и деревянных плит. Производитель указывает её для дерева и рекомендует неглубокий проход.",
             kind: ToolKind::Surfacing,
             diameter_mm: 25.4,
+            tip_diameter_mm: None,
             shank_diameter_mm: 6.35,
             cutting_length_mm: 10.0,
             flute_count: 4,
@@ -713,6 +772,7 @@ fn migrate_preset_catalog(document: &mut StoredToolLibrary) -> bool {
             // installs skip it and receive the identified Cerin tool in v4.
             3 => &[],
             4 => &[CERIN_64L_060A_PRESET_ID],
+            5 => &[GENERIC_BLUE_ENGRAVER_PRESET_ID],
             _ => &[],
         };
         for id in introduced_ids {
@@ -732,9 +792,33 @@ fn migrate_preset_catalog(document: &mut StoredToolLibrary) -> bool {
         }
     }
 
+    migrate_known_pcb_engraver_geometry(document);
     document.preset_catalog_version = PRESET_CATALOG_VERSION;
     document.revision = document.revision.saturating_add(1);
     true
+}
+
+fn migrate_known_pcb_engraver_geometry(document: &mut StoredToolLibrary) {
+    for tool in &mut document.tools {
+        if !tool.factory_preset || tool.tip_diameter_mm.is_some() {
+            continue;
+        }
+        match tool.id.as_str() {
+            "preset-xc-nlj3-2001" if (tool.diameter_mm - 0.1).abs() < f64::EPSILON => {
+                tool.diameter_mm = 3.175;
+                tool.tip_diameter_mm = Some(0.1);
+                if tool.feed_mm_per_min == 120.0 && tool.plunge_mm_per_min == 40.0 {
+                    tool.feed_mm_per_min = 300.0;
+                    tool.plunge_mm_per_min = 60.0;
+                }
+            }
+            "preset-v-engraver-90-0-1" if (tool.diameter_mm - 0.1).abs() < f64::EPSILON => {
+                tool.diameter_mm = 3.175;
+                tool.tip_diameter_mm = Some(0.1);
+            }
+            _ => {}
+        }
+    }
 }
 
 fn migrate_legacy_cerin_preset(document: &mut StoredToolLibrary, cerin: &CuttingTool) -> bool {
@@ -850,15 +934,21 @@ fn validate_draft(draft: &CuttingToolDraft) -> Result<(), ToolLibraryError> {
             value: f64::from(draft.flute_count),
         });
     }
-    if matches!(draft.kind, ToolKind::VBit | ToolKind::Engraving) {
+    if draft.kind == ToolKind::VBit {
         validate_range(
             "includedAngleDegrees",
             draft.included_angle_degrees.unwrap_or(f64::NAN),
             1.0,
             179.0,
         )?;
-    } else if draft.included_angle_degrees.is_some() {
+    } else if draft.kind != ToolKind::Engraving && draft.included_angle_degrees.is_some() {
         return Err(ToolLibraryError::UnexpectedAngle);
+    }
+    if let Some(tip_diameter_mm) = draft.tip_diameter_mm {
+        if !matches!(draft.kind, ToolKind::VBit | ToolKind::Engraving) {
+            return Err(ToolLibraryError::UnexpectedTipDiameter);
+        }
+        validate_range("tipDiameterMm", tip_diameter_mm, 0.001, draft.diameter_mm)?;
     }
     validate_range("feedMmPerMin", draft.feed_mm_per_min, 1.0, 100_000.0)?;
     validate_range("plungeMmPerMin", draft.plunge_mm_per_min, 1.0, 50_000.0)?;
@@ -926,6 +1016,8 @@ pub enum ToolLibraryError {
     InvalidReference,
     #[error("included angle is valid only for V-bit and engraving tools")]
     UnexpectedAngle,
+    #[error("tip diameter is valid only for V-bit and engraving tools")]
+    UnexpectedTipDiameter,
     #[error("invalid {field}: {value}")]
     InvalidValue { field: &'static str, value: f64 },
     #[error("unknown tool: {0}")]
@@ -957,6 +1049,7 @@ mod tests {
             description: default_description(ToolKind::FlatEndMill).to_owned(),
             kind: ToolKind::FlatEndMill,
             diameter_mm: 3.0,
+            tip_diameter_mm: None,
             shank_diameter_mm: 3.0,
             cutting_length_mm: 12.0,
             flute_count: 2,
@@ -981,7 +1074,7 @@ mod tests {
     fn starts_with_valid_editable_factory_presets() {
         let mut store = ToolLibraryStore::in_memory();
         let initial = store.state();
-        assert_eq!(initial.tools.len(), 14);
+        assert_eq!(initial.tools.len(), 15);
         assert!(initial.tools.iter().all(|tool| tool.factory_preset));
         let requested = initial
             .tools
@@ -1060,6 +1153,38 @@ mod tests {
     }
 
     #[test]
+    fn migrates_existing_pcb_engravers_to_explicit_tip_geometry() {
+        let path = test_path("pcb-engraver-geometry-migration");
+        let mut previous_catalog = StoredToolLibrary {
+            preset_catalog_version: 4,
+            ..StoredToolLibrary::default()
+        };
+        previous_catalog
+            .tools
+            .retain(|tool| tool.id != GENERIC_BLUE_ENGRAVER_PRESET_ID);
+        for id in ["preset-xc-nlj3-2001", "preset-v-engraver-90-0-1"] {
+            let tool = previous_catalog
+                .tools
+                .iter_mut()
+                .find(|tool| tool.id == id)
+                .unwrap();
+            tool.diameter_mm = 0.1;
+            tool.tip_diameter_mm = None;
+        }
+        save_document(&path, &previous_catalog).unwrap();
+
+        let store = ToolLibraryStore::load(&path).unwrap();
+        assert!(store.get(GENERIC_BLUE_ENGRAVER_PRESET_ID).is_some());
+        for id in ["preset-xc-nlj3-2001", "preset-v-engraver-90-0-1"] {
+            let tool = store.get(id).unwrap();
+            assert_eq!(tool.diameter_mm, 3.175);
+            assert_eq!(tool.tip_diameter_mm, Some(0.1));
+        }
+        let _ = fs::remove_file(&path);
+        let _ = fs::remove_file(backup_path(&path));
+    }
+
+    #[test]
     fn photographed_presets_keep_label_geometry() {
         let store = ToolLibraryStore::in_memory();
         let cases = [
@@ -1080,10 +1205,25 @@ mod tests {
             ("preset-v-engraver-90-0-1", 90.0),
         ] {
             let tool = store.get(id).unwrap();
-            assert_eq!(tool.diameter_mm, 0.1);
+            assert_eq!(tool.diameter_mm, 3.175);
+            assert_eq!(tool.tip_diameter_mm, Some(0.1));
             assert_eq!(tool.shank_diameter_mm, 3.175);
             assert_eq!(tool.included_angle_degrees, Some(angle));
         }
+
+        let generic = store.get(GENERIC_BLUE_ENGRAVER_PRESET_ID).unwrap();
+        assert_eq!(generic.tip_diameter_mm, Some(0.2));
+        assert_eq!(generic.included_angle_degrees, None);
+    }
+
+    #[test]
+    fn calculates_conical_cutting_diameter_at_depth() {
+        let store = ToolLibraryStore::in_memory();
+        let tool = store.get("preset-xc-nlj3-2001").unwrap();
+
+        assert!((tool.cutting_diameter_at_depth_mm(0.05).unwrap() - 0.117_633).abs() < 0.000_01);
+        assert!((tool.cutting_diameter_at_depth_mm(0.08).unwrap() - 0.128_212).abs() < 0.000_01);
+        assert!(tool.cutting_diameter_at_depth_mm(-0.01).is_none());
     }
 
     #[test]
@@ -1102,6 +1242,7 @@ mod tests {
             description: LEGACY_MEASURED_LONG_4F_DESCRIPTION.to_owned(),
             kind: ToolKind::FlatEndMill,
             diameter_mm: 6.5,
+            tip_diameter_mm: None,
             shank_diameter_mm: 6.5,
             cutting_length_mm: 34.0,
             flute_count: 4,

@@ -399,6 +399,98 @@
   grid-column: 1 / -1;
 }
 
+.pcb-isolation-assistant {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 7px;
+  padding: 9px;
+  border: 1px solid #35604f;
+  border-radius: 4px;
+  background: #10231c;
+}
+
+.pcb-isolation-assistant > label,
+.pcb-isolation-assistant > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.pcb-isolation-assistant > label {
+  cursor: pointer;
+}
+
+.pcb-isolation-assistant > label input {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+  accent-color: #66d5ae;
+}
+
+.pcb-isolation-assistant > label span {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+}
+
+.pcb-isolation-assistant strong {
+  overflow: hidden;
+  color: #dcebe5;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pcb-isolation-assistant small {
+  color: #7f9a90;
+  font-size: 8px;
+  line-height: 12px;
+}
+
+.pcb-isolation-assistant > div {
+  padding-top: 7px;
+  border-top: 1px solid #29483c;
+}
+
+.pcb-isolation-assistant > div small {
+  flex: 0 0 auto;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  text-align: right;
+}
+
+.pcb-isolation-assistant p {
+  margin: 0;
+  color: #efbd70;
+  font-size: 8px;
+  line-height: 12px;
+}
+
+.pcb-isolation-assistant.is-warning {
+  border-color: #795f34;
+  background: #211c12;
+}
+
+.pcb-operation-advanced {
+  grid-column: 1 / -1;
+  border-top: 1px solid #29363d;
+  color: #8f9da4;
+  font-size: 9px;
+}
+
+.pcb-operation-advanced > summary {
+  padding: 8px 0 2px;
+  cursor: pointer;
+}
+
+.pcb-operation-advanced > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  padding-top: 7px;
+}
+
 .pcb-drill-empty,
 .pcb-drill-groups,
 .pcb-drill-pending {

@@ -167,6 +167,11 @@ export interface PcbFileSummary {
   readonly primitiveCount: number;
 }
 
+export interface PcbCopperAnalysis {
+  readonly contourCount: number;
+  readonly minimumIsolationGapMm?: number;
+}
+
 export interface PcbInspection {
   readonly bounds: PcbBounds;
   readonly paths: readonly PcbPreviewPath[];
@@ -174,6 +179,7 @@ export interface PcbInspection {
   readonly drillSlots: readonly PcbDrillSlot[];
   readonly drillGroups: readonly PcbDrillGroup[];
   readonly files: readonly PcbFileSummary[];
+  readonly copperAnalysis: PcbCopperAnalysis;
   readonly warnings: readonly string[];
 }
 
@@ -181,8 +187,12 @@ export interface PcbIsolationSettings {
   readonly enabled: boolean;
   readonly toolId: string;
   readonly depthMm: number;
+  readonly copperThicknessMm: number;
   readonly clearanceMm: number;
   readonly passes: number;
+  readonly feedMmPerMin: number;
+  readonly plungeMmPerMin: number;
+  readonly spindleRpm: number;
 }
 
 export interface PcbDrillToolMapping {

@@ -107,6 +107,14 @@ pub struct PcbFileSummary {
     pub primitive_count: usize,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PcbCopperAnalysis {
+    pub contour_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum_isolation_gap_mm: Option<f64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PcbInspection {
@@ -116,6 +124,8 @@ pub struct PcbInspection {
     pub drill_slots: Vec<PcbDrillSlot>,
     pub drill_groups: Vec<PcbDrillGroup>,
     pub files: Vec<PcbFileSummary>,
+    #[serde(default)]
+    pub copper_analysis: PcbCopperAnalysis,
     pub warnings: Vec<String>,
 }
 
@@ -125,8 +135,32 @@ pub struct PcbIsolationSettings {
     pub enabled: bool,
     pub tool_id: String,
     pub depth_mm: f64,
+    #[serde(default = "default_copper_thickness_mm")]
+    pub copper_thickness_mm: f64,
     pub clearance_mm: f64,
     pub passes: u8,
+    #[serde(default = "default_isolation_feed_mm_per_min")]
+    pub feed_mm_per_min: f64,
+    #[serde(default = "default_isolation_plunge_mm_per_min")]
+    pub plunge_mm_per_min: f64,
+    #[serde(default = "default_isolation_spindle_rpm")]
+    pub spindle_rpm: u32,
+}
+
+const fn default_copper_thickness_mm() -> f64 {
+    0.035
+}
+
+const fn default_isolation_feed_mm_per_min() -> f64 {
+    300.0
+}
+
+const fn default_isolation_plunge_mm_per_min() -> f64 {
+    60.0
+}
+
+const fn default_isolation_spindle_rpm() -> u32 {
+    18_000
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

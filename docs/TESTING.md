@@ -131,6 +131,11 @@ normalization, isolation offsets, multi-tool `M6`, tabbed multi-depth outline
 cutting, spindle-free output and final `millo-gcode` parse. Vitest checks X2
 and legacy role inference, slot-safe tool selection, immutable inspection and
 core-issued job identity. Use `/?fixture=pcb` for the modal layout fixture.
+Dedicated recommendation tests verify the V-bit depth/diameter formula,
+selection of the 20-degree 0.1 mm tip for fine gaps, rejection of an unknown
+kit-tool angle, and the warning produced for a 90-degree cutter that cannot fit.
+Rust tests cover bounded copper-gap analysis, explicit tip-geometry migration
+and effective-diameter use in emitted isolation offsets and G-code metadata.
 That browser-only route uses an isolated preview gateway, so file rows, drill
 groups, slot rendering and generated-state layout can be inspected without a
 Tauri runtime. Production builds always use the native Rust gateway.

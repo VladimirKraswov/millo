@@ -24,6 +24,13 @@ manual `M6` barriers between different tools, and reparses output through
 core-issued immutable DTOs; it cannot access sender, serial, filesystem paths
 or arbitrary Tauri commands.
 
+The core also reports a bounded estimate of the narrowest clearance between
+independent exterior copper contours. The bundled UI combines that measurement
+with the library-owned V-tip diameter and included angle to recommend a tool,
+cut depth, XY/Z feed and spindle speed. A recommendation is advisory and every
+value remains editable; incomplete conical geometry is rejected instead of
+being guessed.
+
 Unsupported geometry fails closed with a named format feature. Native Clipper2
 offsets replace approximate canvas geometry. The UI remains a replaceable
 workflow over the same host service.
@@ -32,6 +39,8 @@ workflow over the same host service.
 
 - Other trusted plugins can reuse PCB inspection and CAM without copying the
   algorithm.
+- Hole contours are excluded from clearance estimation, so an annular ring is
+  not mistaken for spacing between independent copper islands.
 - External script packages still cannot inject Gerber parsers or native code.
 - The release has no `pcb2gcode` executable or `libgerbv` runtime dependency.
 - Aperture macros, step-and-repeat, Excellon `G85` and Gerber X2 drill routes
