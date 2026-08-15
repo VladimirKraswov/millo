@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ProgramLine } from "../../shared/program";
-import { initialProgramToolNumber } from "./programToolPlanModel";
+import {
+  initialProgramToolNumber,
+  programToolNumberAtSourceLine,
+} from "./programToolPlanModel";
 
 const program = (normalized: readonly string[]) => ({
   lines: normalized.map((source, index): ProgramLine => ({
@@ -26,5 +29,18 @@ describe("program tool plan model", () => {
 
   it("does not present a later tool as the startup tool", () => {
     expect(initialProgramToolNumber(program(["G1 X1 F100", "T2 M6"]))).toBeUndefined();
+  });
+
+  it("tracks the selected tool at an executing source line", () => {
+    const multiTool = program([
+      "T1",
+      "G1 X1 F100",
+      "T2 M6",
+      "G1 X2 F100",
+    ]);
+
+    expect(programToolNumberAtSourceLine(multiTool, 2)).toBe(1);
+    expect(programToolNumberAtSourceLine(multiTool, 3)).toBe(2);
+    expect(programToolNumberAtSourceLine(multiTool, 4)).toBe(2);
   });
 });

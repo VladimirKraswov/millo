@@ -89,6 +89,7 @@ const generatedFixture = (request: Parameters<ImageJobGateway["generatePcb"]>[0]
       bounds: inspection.bounds,
       operations: [{
         kind: "isolation",
+        toolNumber: 1,
         toolId: request.settings.isolation.toolId,
         toolName: "Preview tool",
         motionCount: previewFixtureProgram.summary.motionCount,

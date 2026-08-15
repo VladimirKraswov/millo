@@ -18,6 +18,11 @@ describe("ProgramPreviewStage", () => {
         selectedMotionCount={1}
         selectedProgramLine={selectedProgramLine}
         selectedSourceLine={selectedProgramLine?.sourceLine}
+        toolVisualization={{
+          state: "selected",
+          showCutter: true,
+          spinning: false,
+        }}
         view="iso"
       />,
     );

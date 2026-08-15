@@ -63,6 +63,7 @@ import {
   previewFixtureCompletedSender,
   previewFixtureCheckControlGateway,
   previewFixtureCheckRunningSender,
+  previewFixtureCutRunningSender,
   previewFixtureFirstCutGateway,
   previewFixtureProgramGateway,
   previewFixtureRecoveryGateway,
@@ -121,6 +122,13 @@ import type {
   ControllerSettingsState,
 } from "./shared/settings";
 import type { InstalledScriptPlugin } from "./shared/scriptPlugins";
+import { emptyToolLibrary } from "./shared/tooling";
+
+const subscribeEmptyToolLibrary = () => () => undefined;
+const readEmptyToolLibrary = () => emptyToolLibrary;
+const developmentToolAssignments = Object.freeze([
+  Object.freeze({ toolNumber: 1, toolId: "preset-xc-nlj3-2001" }),
+]);
 
 const disconnectedTransport: TransportDescriptor = {
   id: "",
@@ -231,6 +239,11 @@ export default function App() {
     pluginHost.generatedJobs.subscribe,
     pluginHost.generatedJobs.current,
     pluginHost.generatedJobs.current,
+  );
+  const toolLibrary = useSyncExternalStore(
+    pluginHost.tools?.subscribe ?? subscribeEmptyToolLibrary,
+    pluginHost.tools?.current ?? readEmptyToolLibrary,
+    pluginHost.tools?.current ?? readEmptyToolLibrary,
   );
   const pluginHostLifecycle = useMemo(
     () => new DeferredDisposal(
@@ -919,10 +932,14 @@ export default function App() {
               initialSource={
                 developmentPreviewFixture?.lines.map((line) => line.source).join("\n")
               }
+              initialToolAssignments={
+                developmentFirstCutFixture ? developmentToolAssignments : undefined
+              }
               incomingJob={generatedJob}
               initialRunIntent={
                 developmentFixture === "check-complete" ||
-                developmentFixture === "run-complete"
+                developmentFixture === "run-complete" ||
+                developmentFixture === "tool-motion"
                   ? "cutting"
                   : undefined
               }
@@ -933,6 +950,8 @@ export default function App() {
                     ? previewFixtureCompletedSender
                   : developmentFixture === "check-running"
                     ? previewFixtureCheckRunningSender
+                    : developmentFixture === "tool-motion"
+                      ? previewFixtureCutRunningSender
                   : developmentFixture === "check-complete"
                     ? previewFixtureCheckCompleteSender
                   : undefined
@@ -975,6 +994,7 @@ export default function App() {
               realRunTarget={
                 developmentPreflightFixture || desktopRuntime
               }
+              tools={toolLibrary.tools}
             />
           </div>
 

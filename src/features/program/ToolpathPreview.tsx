@@ -4,6 +4,10 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
 import type { GcodeProgram, ProgramPoint } from "../../shared/program";
+import { toolKindLabels } from "../../shared/tooling";
+import type { ProgramToolVisualization } from "./programToolVisualizationModel";
+import { toolRenderProfile } from "./toolGeometryModel";
+import { createToolMesh, disposeToolMesh } from "./toolMesh";
 import {
   buildToolpathHighlightReadModel,
   buildToolpathReadModel,
@@ -21,6 +25,7 @@ interface ToolpathPreviewProps {
   readonly selectedSourceLine?: number;
   readonly toolCoordinateSystem?: string;
   readonly toolPosition?: ProgramPoint;
+  readonly toolVisualization: ProgramToolVisualization;
   readonly view: PreviewView;
 }
 
@@ -39,6 +44,15 @@ interface PreviewRuntime {
   readonly toolMarkerTexture: THREE.CanvasTexture;
   readonly toolProjection: THREE.Points;
   readonly toolProjectionLine: THREE.Line;
+  readonly toolAssembly: THREE.Group;
+  readonly toolCurrentPosition: THREE.Vector3;
+  readonly toolTargetPosition: THREE.Vector3;
+  readonly topView: boolean;
+  toolAngularSpeed: number;
+  toolHasPosition: boolean;
+  toolRotor?: THREE.Group;
+  toolSpinning: boolean;
+  toolSweep?: THREE.Mesh;
 }
 
 const formatCoordinate = (value: number): string =>
@@ -79,6 +93,36 @@ const createToolMarkerTexture = (): THREE.CanvasTexture => {
   return texture;
 };
 
+const applyToolPosition = (
+  runtime: PreviewRuntime,
+  position: THREE.Vector3,
+): void => {
+  runtime.toolAssembly.position.copy(position);
+  runtime.toolMarker.position.set(
+    position.x,
+    position.y,
+    runtime.topView
+      ? runtime.model.gridZ + runtime.model.gridSize * 0.004
+      : position.z,
+  );
+  runtime.toolProjection.position.set(position.x, position.y, runtime.model.gridZ);
+  const lineAttribute = runtime.toolProjectionLine.geometry.getAttribute(
+    "position",
+  ) as THREE.BufferAttribute;
+  lineAttribute.setXYZ(0, position.x, position.y, position.z);
+  lineAttribute.setXYZ(1, position.x, position.y, runtime.model.gridZ);
+  lineAttribute.needsUpdate = true;
+  runtime.toolProjectionLine.computeLineDistances();
+};
+
+const toolStatusLabel = (visualization: ProgramToolVisualization): string => {
+  if (visualization.state === "spinning") return "Вращается и следует за станком";
+  if (visualization.state === "paused") return "Подача удерживается";
+  if (visualization.state === "changing") return "Ожидает установки";
+  if (visualization.state === "removed") return "Проверка без инструмента";
+  return "Выбран для задания";
+};
+
 export function ToolpathPreview({
   cuttingDepthAdjustmentMm = 0,
   onSelectSourceLine,
@@ -86,6 +130,7 @@ export function ToolpathPreview({
   selectedSourceLine,
   toolCoordinateSystem = "G54",
   toolPosition,
+  toolVisualization,
   view,
 }: ToolpathPreviewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
@@ -109,6 +154,10 @@ export function ToolpathPreview({
     const model = buildToolpathReadModel(program, cuttingDepthAdjustmentMm);
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0b1013);
+    scene.add(new THREE.HemisphereLight(0xeaf7f2, 0x182128, 1.45));
+    const toolLight = new THREE.DirectionalLight(0xffffff, 2.1);
+    toolLight.position.set(model.frameRadius, -model.frameRadius, model.frameRadius * 2);
+    scene.add(toolLight);
 
     const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 10_000);
     camera.up.set(0, 0, 1);
@@ -229,7 +278,10 @@ export function ToolpathPreview({
     toolProjectionLine.renderOrder = 21;
     const toolMarker = createToolPoint(34, 1);
     toolMarker.renderOrder = 22;
-    scene.add(toolProjection, toolProjectionLine, toolMarker);
+    const toolAssembly = new THREE.Group();
+    toolAssembly.visible = false;
+    toolAssembly.renderOrder = 18;
+    scene.add(toolAssembly, toolProjection, toolProjectionLine, toolMarker);
 
     const axes = new THREE.AxesHelper(Math.min(model.gridSize * 0.12, 8));
     scene.add(axes);
@@ -344,12 +396,31 @@ export function ToolpathPreview({
       toolMarkerTexture,
       toolProjection,
       toolProjectionLine,
+      toolAssembly,
+      toolCurrentPosition: new THREE.Vector3(),
+      toolTargetPosition: new THREE.Vector3(),
+      topView: view === "top",
+      toolAngularSpeed: 0,
+      toolHasPosition: false,
+      toolSpinning: false,
     };
     runtimeRef.current = runtime;
 
     let frame = 0;
+    const clock = new THREE.Clock();
     const animate = () => {
       frame = requestAnimationFrame(animate);
+      const deltaSeconds = Math.min(0.05, clock.getDelta());
+      if (runtime.toolHasPosition) {
+        const interpolation = 1 - Math.exp(-deltaSeconds * 14);
+        runtime.toolCurrentPosition.lerp(runtime.toolTargetPosition, interpolation);
+        applyToolPosition(runtime, runtime.toolCurrentPosition);
+      }
+      if (runtime.toolSpinning && runtime.toolRotor) {
+        runtime.toolRotor.rotation.z = (
+          runtime.toolRotor.rotation.z + runtime.toolAngularSpeed * deltaSeconds
+        ) % (Math.PI * 2);
+      }
       controls.update();
       renderer.render(scene, camera);
     };
@@ -361,20 +432,7 @@ export function ToolpathPreview({
       renderer.domElement.removeEventListener("pointerdown", onPointerDown);
       renderer.domElement.removeEventListener("pointerup", onPointerUp);
       controls.dispose();
-      scene.traverse((object) => {
-        if (
-          object instanceof THREE.Line ||
-          object instanceof THREE.LineSegments ||
-          object instanceof THREE.Points
-        ) {
-          object.geometry.dispose();
-          if (Array.isArray(object.material)) {
-            object.material.forEach((material) => material.dispose());
-          } else {
-            object.material.dispose();
-          }
-        }
-      });
+      disposeToolMesh(scene);
       renderer.dispose();
       renderer.forceContextLoss();
       toolMarkerTexture.dispose();
@@ -422,7 +480,32 @@ export function ToolpathPreview({
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
+    for (const child of [...runtime.toolAssembly.children]) {
+      runtime.toolAssembly.remove(child);
+      disposeToolMesh(child);
+    }
+    const profile = toolRenderProfile(toolVisualization.tool, runtime.model.gridSize);
+    const mesh = createToolMesh(profile);
+    runtime.toolAssembly.add(mesh.root);
+    runtime.toolRotor = mesh.rotor;
+    runtime.toolSweep = mesh.sweep;
+    runtime.toolAngularSpeed = profile.angularSpeedRadPerSecond;
+  }, [toolVisualization.tool, view]);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
+    runtime.toolSpinning = toolVisualization.spinning;
+    if (runtime.toolSweep) runtime.toolSweep.visible = toolVisualization.spinning;
+    runtime.toolAssembly.visible = runtime.toolHasPosition && toolVisualization.showCutter;
+  }, [toolVisualization.showCutter, toolVisualization.spinning, view]);
+
+  useEffect(() => {
+    const runtime = runtimeRef.current;
+    if (!runtime) return;
     if (!toolPosition) {
+      runtime.toolHasPosition = false;
+      runtime.toolAssembly.visible = false;
       runtime.toolMarker.visible = false;
       runtime.toolProjection.visible = false;
       runtime.toolProjectionLine.visible = false;
@@ -434,39 +517,17 @@ export function ToolpathPreview({
       runtime.model,
       program.summary.bounds,
     );
-    const visibleMarkerPosition = view === "top"
-      ? {
-          ...position.scenePosition,
-          z: runtime.model.gridZ + runtime.model.gridSize * 0.004,
-        }
-      : position.scenePosition;
-    runtime.toolMarker.position.set(
-      visibleMarkerPosition.x,
-      visibleMarkerPosition.y,
-      visibleMarkerPosition.z,
-    );
-    runtime.toolProjection.position.set(
-      position.gridProjection.x,
-      position.gridProjection.y,
-      position.gridProjection.z,
-    );
-    const lineAttribute = runtime.toolProjectionLine.geometry.getAttribute(
-      "position",
-    ) as THREE.BufferAttribute;
-    lineAttribute.setXYZ(
-      0,
+    runtime.toolTargetPosition.set(
       position.scenePosition.x,
       position.scenePosition.y,
       position.scenePosition.z,
     );
-    lineAttribute.setXYZ(
-      1,
-      position.gridProjection.x,
-      position.gridProjection.y,
-      position.gridProjection.z,
-    );
-    lineAttribute.needsUpdate = true;
-    runtime.toolProjectionLine.computeLineDistances();
+    if (!runtime.toolHasPosition) {
+      runtime.toolCurrentPosition.copy(runtime.toolTargetPosition);
+      applyToolPosition(runtime, runtime.toolCurrentPosition);
+    }
+    runtime.toolHasPosition = true;
+    runtime.toolAssembly.visible = toolVisualization.showCutter;
     runtime.toolMarker.visible = true;
     runtime.toolProjection.visible = view === "iso";
     runtime.toolProjectionLine.visible =
@@ -476,20 +537,38 @@ export function ToolpathPreview({
       "aria-label",
       `Предпросмотр траектории G-code${selectedSourceLine === undefined ? "" : `, выбрана строка ${selectedSourceLine}`}, фреза ${toolCoordinateSystem} X ${toolPosition.x.toFixed(3)}, Y ${toolPosition.y.toFixed(3)}, Z ${toolPosition.z.toFixed(3)}`,
     );
-  }, [program, selectedSourceLine, toolCoordinateSystem, toolPosition, view]);
+  }, [
+    program,
+    selectedSourceLine,
+    toolCoordinateSystem,
+    toolPosition,
+    toolVisualization.showCutter,
+    view,
+  ]);
 
   return (
     <div className="toolpath-preview">
       <div className="toolpath-canvas" ref={hostRef} />
       {toolPosition && (
         <aside
-          className={`tool-position-hud${toolOverProgram ? "" : " is-outside"}`}
+          className={`tool-position-hud is-${toolVisualization.state}${toolOverProgram ? "" : " is-outside"}`}
           aria-label="Текущее положение фрезы"
         >
           <Crosshair aria-hidden="true" size={18} />
           <div className="tool-position-title">
-            <strong>Фреза · {toolCoordinateSystem}</strong>
-            <small>{toolOverProgram ? "Над заданием" : "Вне границ задания"}</small>
+            <strong title={toolVisualization.tool?.name}>
+              {toolVisualization.toolNumber === undefined
+                ? "Фреза"
+                : `T${toolVisualization.toolNumber}`}
+              {toolVisualization.tool ? ` · ${toolVisualization.tool.name}` : ""}
+            </strong>
+            <small>
+              {toolStatusLabel(toolVisualization)}
+              {toolVisualization.tool
+                ? ` · ${toolKindLabels[toolVisualization.tool.kind]} Ø${toolVisualization.tool.diameterMm.toFixed(2)}`
+                : ` · ${toolCoordinateSystem}`}
+              {!toolOverProgram ? " · вне задания" : ""}
+            </small>
           </div>
           <code>
             <span>X {formatCoordinate(toolPosition.x)}</span>

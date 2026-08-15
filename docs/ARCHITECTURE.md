@@ -125,6 +125,27 @@ limits, transforms, isolation, drilling groups, tabs, tool compatibility and
 manual `M6` barriers. See [PCB jobs](PCB_JOBS.md) and
 [ADR 0056](decisions/0056-core-pcb-cam-plugin.md).
 
+Generated jobs also retain an explicit presentation-only tool assignment:
+
+```text
+millo-cam / millo-pcb -> T number + trusted tool ID -> GeneratedJob
+                                                       |
+ToolLibraryService snapshot ---------------------------+
+                                                       v
+Program sender line -> active T number -> Three.js tool mesh
+Controller work position ---------------------------> exact mesh tip XYZ
+```
+
+For PCB jobs, the Rust emitter is the authority for each operation's `T`
+number; React does not infer tool order from the library. Surfacing jobs bind
+their single selected tool to `T1`. Editing or opening an unrelated plain file
+clears this metadata instead of displaying a potentially wrong library tool.
+The mesh is observational only: it has no command gateway and cannot advance
+sender state. Its tip follows reported work XYZ, with interpolation confined to
+rendering between status samples. Rotation is enabled only for a physical
+`cutRun` in `running` or `draining`; Motion check hides the cutter body while
+keeping the coordinate marker.
+
 Program execution is minted only by the Rust policy:
 
 ```text

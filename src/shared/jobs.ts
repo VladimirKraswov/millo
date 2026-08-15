@@ -52,6 +52,12 @@ export interface GeneratedJob {
   readonly sourceName: string;
   readonly source: string;
   readonly program: GcodeProgram;
+  readonly toolAssignments?: readonly JobToolAssignment[];
+}
+
+export interface JobToolAssignment {
+  readonly toolNumber: number;
+  readonly toolId: string;
 }
 
 export interface GeneratedImageJob extends GeneratedJob {
@@ -239,6 +245,7 @@ export interface PcbJobRequest {
 
 export interface PcbOperationSummary {
   readonly kind: string;
+  readonly toolNumber: number;
   readonly toolId: string;
   readonly toolName: string;
   readonly motionCount: number;

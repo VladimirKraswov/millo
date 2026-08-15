@@ -36,8 +36,9 @@ import {
   type SenderStateGateway,
 } from "../../shared/dryRun";
 import type { GcodeProgram } from "../../shared/program";
-import type { PublishedJob } from "../../shared/jobs";
+import type { JobToolAssignment, PublishedJob } from "../../shared/jobs";
 import type { SurfaceSession } from "../../shared/heightmap";
+import type { CuttingTool } from "../../shared/tooling";
 import type {
   ProgramRecoveryCandidate,
   ProgramRecoveryPackage,
@@ -89,6 +90,7 @@ import {
 } from "./executionOptionsModel";
 import { isSenderActive } from "./senderStateModel";
 import { initialProgramToolNumber } from "./programToolPlanModel";
+import { programToolVisualization } from "./programToolVisualizationModel";
 import {
   formatProgramDiagnostics,
   hasActionableProgramWarnings,
@@ -126,6 +128,7 @@ interface ProgramWorkspaceProps {
   readonly initialRunIntent?: ProgramRunIntent;
   readonly initialSender?: SenderSnapshot;
   readonly initialSource?: string;
+  readonly initialToolAssignments?: readonly JobToolAssignment[];
   readonly incomingJob?: PublishedJob;
   readonly machineContext?: ProgramMachineContext;
   readonly onInspection?: (inspection: HardwareInspection) => void;
@@ -134,6 +137,7 @@ interface ProgramWorkspaceProps {
   readonly realRunGateway?: RealRunPreflightGateway;
   readonly realRunTarget?: boolean;
   readonly senderGateway?: SenderStateGateway;
+  readonly tools?: readonly CuttingTool[];
 }
 
 interface SafeStartContext {
@@ -149,6 +153,7 @@ export function ProgramWorkspace({
   initialRunIntent = "airRun",
   initialSender,
   initialSource = "",
+  initialToolAssignments = [],
   incomingJob,
   machineContext,
   onInspection,
@@ -157,6 +162,7 @@ export function ProgramWorkspace({
   realRunGateway,
   realRunTarget = false,
   senderGateway,
+  tools = [],
 }: ProgramWorkspaceProps) {
   const loader = useMemo(() => new ProgramLoader(gateway), [gateway]);
   const [loaded, setLoaded] = useState<LoadedProgram | undefined>(
@@ -167,6 +173,9 @@ export function ProgramWorkspace({
   }, [loaded?.program, onProgramChange]);
   const [sender, setSender] = useState<SenderSnapshot>(
     initialSender ?? idleSenderSnapshot,
+  );
+  const [toolAssignments, setToolAssignments] = useState<readonly JobToolAssignment[]>(
+    initialToolAssignments,
   );
   const [view, setView] = useState<PreviewView>("iso");
   const [loading, setLoading] = useState(false);
@@ -242,6 +251,7 @@ export function ProgramWorkspace({
       return;
     }
     setLoaded({ program: incomingJob.job.program, source: incomingJob.job.source });
+    setToolAssignments(incomingJob.job.toolAssignments ?? []);
     setProgramRunIntent("cutting");
     const activeSurfaceMap = surfaceSession?.active;
     const activeSurfaceMapId = surfaceSession?.applicationEnabled &&
@@ -385,6 +395,7 @@ export function ProgramWorkspace({
     try {
       const next = await loader.load(file);
       setLoaded(next);
+      setToolAssignments([]);
       setProgramExecutionOptions(executionOptionsForNewProgram);
       setClearedSenderRunSequence(sender.runSequence || undefined);
       setSender(idleSenderSnapshot);
@@ -424,6 +435,7 @@ export function ProgramWorkspace({
         blockDelete: prepared.executionOptions.blockDelete,
       });
       setLoaded({ program, source: prepared.request.source });
+      setToolAssignments([]);
       setProgramRunIntent(prepared.intent);
       const activeSurfaceMap = surfaceSession?.active;
       const restoredMapId = surfaceSession?.applicationEnabled &&
@@ -517,6 +529,7 @@ export function ProgramWorkspace({
 
   const applyEditedProgram = (next: LoadedProgram) => {
     setLoaded(next);
+    setToolAssignments([]);
     setClearedSenderRunSequence(sender.runSequence || undefined);
     setSender(idleSenderSnapshot);
     setSelectedSourceLine(undefined);
@@ -615,6 +628,16 @@ export function ProgramWorkspace({
     clearedSenderRunSequence,
   );
   const displayedSender = senderForProgram ? sender : idleSenderSnapshot;
+  const toolVisualization = useMemo(
+    () => programToolVisualization(
+      program ?? { lines: [] },
+      displayedSender,
+      programRunIntent,
+      toolAssignments,
+      tools,
+    ),
+    [displayedSender, program, programRunIntent, toolAssignments, tools],
+  );
   const displayedSenderFailure = senderFailureSummary(displayedSender);
   const progressPercent = Math.round(
     Math.min(1, Math.max(0, displayedSender.progress)) * 100,
@@ -1050,6 +1073,7 @@ export function ProgramWorkspace({
               disabled={senderActive}
               onClick={() => {
                 setLoaded(undefined);
+                setToolAssignments([]);
                 setClearedSenderRunSequence(sender.runSequence || undefined);
                 setSender(idleSenderSnapshot);
                 setSelectedSourceLine(undefined);
@@ -1169,6 +1193,7 @@ export function ProgramWorkspace({
             selectedSourceLine={selectedSourceLine}
             toolCoordinateSystem={machineContext?.activeCoordinateSystem}
             toolPosition={machineContext?.workPosition}
+            toolVisualization={toolVisualization}
             view={view}
           />
 

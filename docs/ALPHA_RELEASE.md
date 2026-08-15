@@ -10,6 +10,11 @@ The bundle now passes `codesign --verify --deep --strict`. It is still not
 Developer ID signed or notarized, so macOS may require one explicit approval in
 **System Settings > Privacy & Security > Open Anyway** after the first launch.
 
+The current Alpha 2 build also adds live Three.js tool visualization. PCB and
+surfacing jobs retain their exact library-tool assignments, the rendered tip
+follows reported XYZ, and active processing animates cutter rotation without
+feeding synthetic state back into the controller or sender.
+
 ## v0.1.1-alpha.1
 
 This alpha consolidates the first complete operator workflow used on real GRBL

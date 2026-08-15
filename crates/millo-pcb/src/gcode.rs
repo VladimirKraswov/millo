@@ -298,8 +298,13 @@ impl Emitter<'_> {
     }
 
     fn operation(&mut self, kind: &str, tool: &CuttingTool, motion_count: usize) {
+        let tool_number = *self
+            .tool_numbers
+            .get(&tool.id)
+            .expect("operation summary requires a previously selected tool");
         self.operations.push(PcbOperationSummary {
             kind: kind.to_owned(),
+            tool_number,
             tool_id: tool.id.clone(),
             tool_name: tool.name.clone(),
             motion_count,

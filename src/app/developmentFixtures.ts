@@ -20,6 +20,7 @@ const physicalRunFixtures = new Set([
   "recovery",
   "run-complete",
   "tool-change",
+  "tool-motion",
 ]);
 
 const firstCutFixtures = new Set([
@@ -30,6 +31,7 @@ const firstCutFixtures = new Set([
   "recovery",
   "run-complete",
   "tool-change",
+  "tool-motion",
 ]);
 
 const firstCutProgramFixtures = new Set([
@@ -39,6 +41,7 @@ const firstCutProgramFixtures = new Set([
   "recovery",
   "run-complete",
   "tool-change",
+  "tool-motion",
 ]);
 
 const jogFixtures = new Set(["alarm", "jog", "jog-active", "logs", "reset"]);

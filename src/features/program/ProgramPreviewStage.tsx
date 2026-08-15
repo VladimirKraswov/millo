@@ -4,6 +4,7 @@ import { lazy, Suspense } from "react";
 import type { Position } from "../../shared/machine";
 import type { GcodeProgram, ProgramLine } from "../../shared/program";
 import type { PreviewView } from "./ToolpathPreview";
+import type { ProgramToolVisualization } from "./programToolVisualizationModel";
 
 const ToolpathPreview = lazy(async () => {
   const module = await import("./ToolpathPreview");
@@ -22,6 +23,7 @@ interface ProgramPreviewStageProps {
   readonly selectedSourceLine?: number;
   readonly toolCoordinateSystem?: string;
   readonly toolPosition?: Position;
+  readonly toolVisualization: ProgramToolVisualization;
   readonly view: PreviewView;
 }
 
@@ -37,6 +39,7 @@ export function ProgramPreviewStage({
   selectedSourceLine,
   toolCoordinateSystem,
   toolPosition,
+  toolVisualization,
   view,
 }: ProgramPreviewStageProps) {
   const bounds = program.summary.bounds;
@@ -54,6 +57,7 @@ export function ProgramPreviewStage({
           selectedSourceLine={selectedSourceLine}
           toolCoordinateSystem={toolCoordinateSystem}
           toolPosition={toolPosition}
+          toolVisualization={toolVisualization}
           view={view}
         />
       </Suspense>

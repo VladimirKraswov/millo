@@ -426,6 +426,11 @@ export function ProgramEditor({
                   onSelectSourceLine={focusSourceLine}
                   program={preview}
                   selectedSourceLine={selectedSourceLine}
+                  toolVisualization={{
+                    state: "removed",
+                    showCutter: false,
+                    spinning: false,
+                  }}
                   view="iso"
                 />
               </Suspense>

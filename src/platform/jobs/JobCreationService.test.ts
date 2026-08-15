@@ -32,7 +32,13 @@ const generatedPcb = {
   source: "G21\nM5\nM30\n",
   program: { lines: [], warnings: [], features: {}, summary: {}, toolpath: [] },
   inspection: { bounds: {}, paths: [], drillHits: [], drillSlots: [], drillGroups: [], files: [], copperAnalysis: { contourCount: 0 }, warnings: [] },
-  summary: {},
+  summary: {
+    operations: [
+      { kind: "isolation", toolNumber: 1, toolId: "v-bit", toolName: "V-bit", motionCount: 8 },
+      { kind: "marking", toolNumber: 1, toolId: "v-bit", toolName: "V-bit", motionCount: 3 },
+      { kind: "outline", toolNumber: 2, toolId: "end-mill", toolName: "End mill", motionCount: 5 },
+    ],
+  },
 } as unknown as GeneratedPcbJob;
 
 describe("JobCreationService", () => {
@@ -72,7 +78,7 @@ describe("JobCreationService", () => {
 
   it("issues surfacing jobs through the same immutable open/save boundary", async () => {
     const store = new GeneratedJobStore();
-    const request = {} as SurfacingJobRequest;
+    const request = { toolId: "surfacing-22mm" } as SurfacingJobRequest;
     const gateway: ImageJobGateway = {
       generate: vi.fn(),
       generateSurfacing: vi.fn(async () => generatedSurfacing),
@@ -89,7 +95,11 @@ describe("JobCreationService", () => {
     expect(gateway.generateSurfacing).toHaveBeenCalledWith(request);
     expect(gateway.save).toHaveBeenCalledWith(job);
     expect(store.current()?.job).toBe(job);
+    expect(job.toolAssignments).toEqual([
+      { toolNumber: 1, toolId: "surfacing-22mm" },
+    ]);
     expect(Object.isFrozen(job)).toBe(true);
+    expect(Object.isFrozen(job.toolAssignments)).toBe(true);
   });
 
   it("keeps PCB inspection read-only and issues only generated PCB jobs", async () => {
@@ -108,6 +118,10 @@ describe("JobCreationService", () => {
 
     expect(Object.isFrozen(inspected)).toBe(true);
     expect(Object.isFrozen(job)).toBe(true);
+    expect(job.toolAssignments).toEqual([
+      { toolNumber: 1, toolId: "v-bit" },
+      { toolNumber: 2, toolId: "end-mill" },
+    ]);
     expect(() => service.open(inspected as unknown as GeneratedPcbJob)).toThrow("not issued");
     expect(() => service.open(job)).not.toThrow();
   });

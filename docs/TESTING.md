@@ -93,6 +93,15 @@ mapping, grid projection, and inside/outside job classification independently
 from WebGL. Program-line window tests prove that a large source mounts only a small
 overscanned slice and that source-line lookup remains stable.
 
+Live-tool tests bind generated-job `T` numbers to exact library IDs, switch to
+the requested tool at an `M6` barrier, hide the cutter during Motion check, and
+allow rotation only in active physical sender states. Geometry tests cover all
+six tool kinds, preserve V-bit included-angle/tip geometry, and keep the neck of
+a surfacing cutter connected to its shank. The `/?fixture=tool-motion` browser
+route renders a selected 20-degree engraver at reported XYZ. Desktop and narrow
+viewport checks require a nonblank canvas, no HUD overflow, and changed frame
+checksums while the tool is rotating; the fixture cannot dispatch machine I/O.
+
 Extension-registry tests cover deterministic slot ordering, duplicate and
 self-replacement rejection, add/replace/dispose behavior, one-revision owner
 unload, and restoration of `core.jog-pad` after a plugin replacement unloads.

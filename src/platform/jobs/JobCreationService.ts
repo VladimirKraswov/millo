@@ -37,7 +37,11 @@ export class JobCreationService implements JobCreationCapability {
   }
 
   async generateSurfacing(request: SurfacingJobRequest): Promise<GeneratedSurfacingJob> {
-    const result = deepFreeze(await this.gateway.generateSurfacing(request));
+    const generated = await this.gateway.generateSurfacing(request);
+    const result = deepFreeze({
+      ...generated,
+      toolAssignments: [{ toolNumber: 1, toolId: request.toolId }],
+    });
     this.issuedJobs.add(result);
     return result;
   }
@@ -47,7 +51,18 @@ export class JobCreationService implements JobCreationCapability {
   }
 
   async generatePcb(request: PcbJobRequest): Promise<GeneratedPcbJob> {
-    const result = deepFreeze(await this.gateway.generatePcb(request));
+    const generated = await this.gateway.generatePcb(request);
+    const assignments = new Map<number, string>();
+    for (const operation of generated.summary.operations) {
+      assignments.set(operation.toolNumber, operation.toolId);
+    }
+    const result = deepFreeze({
+      ...generated,
+      toolAssignments: [...assignments].map(([toolNumber, toolId]) => ({
+        toolNumber,
+        toolId,
+      })),
+    });
     this.issuedJobs.add(result);
     return result;
   }

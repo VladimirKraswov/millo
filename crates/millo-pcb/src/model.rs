@@ -221,6 +221,7 @@ pub struct PcbJobRequest {
 #[serde(rename_all = "camelCase")]
 pub struct PcbOperationSummary {
     pub kind: String,
+    pub tool_number: usize,
     pub tool_id: String,
     pub tool_name: String,
     pub motion_count: usize,

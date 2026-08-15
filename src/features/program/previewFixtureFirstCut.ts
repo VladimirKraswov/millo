@@ -111,6 +111,14 @@ export const previewFixtureCheckRunningSender: SenderSnapshot = {
   timeEstimateComplete: false,
 };
 
+export const previewFixtureCutRunningSender: SenderSnapshot = {
+  ...previewFixtureCheckRunningSender,
+  runSequence: 44,
+  mode: "cutRun",
+  executingSourceLine: 4,
+  lastAcknowledgedSourceLine: 3,
+};
+
 export const previewFixtureCheckControlGateway: SenderStateGateway = {
   snapshot: async () => previewFixtureCheckRunningSender,
   subscribe: async () => () => undefined,
