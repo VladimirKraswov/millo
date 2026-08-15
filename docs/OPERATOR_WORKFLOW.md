@@ -87,6 +87,15 @@ Without a map: parse -> GRBL Check -> final physical confirmation -> nominal run
 With a map: establish Z0 -> measure -> enable current map -> Check compensated
 plan -> confirm stock/tool, removed probe wires and running manual spindle -> run.
 
+For a cutting run, the final confirmation always shows the current workpiece
+map when one exists. A usable but disabled map is a red warning with its measured
+Z range and an explicit **Compensate using heightmap** switch. The operator can
+still deliberately start without compensation, but the primary action says
+**Start processing without map** instead of silently behaving like a nominal
+run. Enabling or disabling the map from this dialog never starts motion: Millo
+invalidates the previous certificate, repeats GRBL Check with the exact new
+execution options, and only then reopens final confirmation.
+
 The final modal always offers **Start** and **Cancel** and contains only facts
 that software cannot observe.
 

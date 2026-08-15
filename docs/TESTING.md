@@ -918,6 +918,14 @@ selection are rejected with `heightmap-compensation` blockers. The same map ID
 is serialized in execution options so the preflight report and GRBL Check
 certificate become stale when application changes.
 
+The final-confirmation fixture also renders both execution choices. A complete,
+usable but disabled map must produce a red warning with its measured Z range
+and the explicit **Start processing without map** label. An enabled map must
+render the positive state and require probe-wire removal. Changing that switch
+is wired to a new Check run with the returned execution options; the processing
+authorization path cannot reuse the report or certificate from the previous
+map selection.
+
 Vitest covers auto-perimeter margins, density independent from display
 interpolation, readable serpentine matrix ordering, machine-travel validation,
 real coordinate headers, explicit empty cells, and a stable low-to-high color

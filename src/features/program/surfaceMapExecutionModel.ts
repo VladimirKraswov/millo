@@ -6,6 +6,7 @@ export interface SurfaceMapExecutionView {
   readonly enabled: boolean;
   readonly usable: boolean;
   readonly coversProgram: boolean;
+  readonly zRangeMm: number;
   readonly detail: string;
 }
 
@@ -48,6 +49,7 @@ export function surfaceMapExecutionView(
     enabled: session?.applicationEnabled === true,
     usable,
     coversProgram,
+    zRangeMm: zRange,
     detail,
   };
 }

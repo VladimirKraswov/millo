@@ -70,4 +70,26 @@ describe("surfaceMapExecutionView", () => {
     expect(stale?.usable).toBe(false);
     expect(stale?.detail).toContain("снимите новую карту");
   });
+
+  it("exposes the measured Z range for the final run warning", () => {
+    const measured: SurfaceSession = {
+      ...session,
+      active: session.active && {
+        ...session.active,
+        map: {
+          ...session.active.map,
+          samples: [
+            { point: { sequence: 0, row: 0, column: 0, xMm: 0, yMm: 0 }, zMm: 0.021, triggered: true },
+            { point: { sequence: 1, row: 0, column: 1, xMm: 100, yMm: 0 }, zMm: 0.388, triggered: true },
+            null,
+          ],
+        },
+      },
+    };
+
+    const view = surfaceMapExecutionView(measured, "machine-0001", undefined);
+
+    expect(view?.zRangeMm).toBeCloseTo(0.367);
+    expect(view?.detail).toContain("перепад 0.367 mm");
+  });
 });

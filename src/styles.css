@@ -6493,6 +6493,95 @@ textarea:focus-visible {
   font-size: 11px;
 }
 
+.first-cut-surface-map {
+  display: grid;
+  min-height: 78px;
+  grid-template-columns: 24px minmax(0, 1fr) 86px;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #63383d;
+  color: #ee8389;
+  background: #241517;
+}
+
+.first-cut-surface-map > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.first-cut-surface-map strong {
+  color: #f2b1b4;
+  font-size: 11px;
+}
+
+.first-cut-surface-map small,
+.first-cut-surface-map em {
+  color: #9c8588;
+  font-size: 8px;
+  font-style: normal;
+  line-height: 12px;
+}
+
+.first-cut-surface-map em {
+  color: #ec9297;
+}
+
+.first-cut-surface-map > label {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  color: #9c8588;
+  cursor: pointer;
+}
+
+.first-cut-surface-map input {
+  width: 34px;
+  height: 19px;
+  margin: 0;
+  accent-color: #69cfaa;
+  cursor: pointer;
+}
+
+.first-cut-surface-map > label:has(input:disabled) {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.first-cut-surface-map.is-enabled {
+  border-color: #315a4b;
+  color: #69cfaa;
+  background: #122019;
+}
+
+.first-cut-surface-map.is-enabled strong {
+  color: #bde7d7;
+}
+
+.first-cut-surface-map.is-enabled small,
+.first-cut-surface-map.is-enabled em {
+  color: #79978c;
+}
+
+.first-cut-surface-map.is-pending {
+  border-color: #5f4a25;
+  color: #dda74f;
+  background: #211b12;
+}
+
+.first-cut-surface-map.is-pending strong,
+.first-cut-surface-map.is-pending em {
+  color: #eac174;
+}
+
+.first-cut-surface-map.is-unavailable {
+  border-color: #4a3538;
+  color: #b5787c;
+  background: #1b1517;
+}
+
 .first-cut-checklist {
   min-height: 0;
   overflow: auto;

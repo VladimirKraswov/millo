@@ -2,6 +2,8 @@ import {
   Check,
   CircleAlert,
   Power,
+  RefreshCw,
+  Waves,
   X,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -29,6 +31,16 @@ interface FirstCutAuthorizationDialogProps {
   };
   readonly report?: RunPreflightReport;
   readonly startingToolNumber?: number;
+  readonly surfaceMap?: {
+    readonly mapId: number;
+    readonly enabled: boolean;
+    readonly usable: boolean;
+    readonly coversProgram: boolean;
+    readonly zRangeMm: number;
+    readonly detail: string;
+    readonly busy: boolean;
+    readonly onApply: (enabled: boolean) => Promise<void>;
+  };
   readonly onAuthorize: (
     confirmation: FirstCutConfirmation,
   ) => Promise<FirstCutPreparation>;
@@ -45,6 +57,7 @@ export function FirstCutAuthorizationDialog({
   depthCorrection,
   report,
   startingToolNumber,
+  surfaceMap,
   onAuthorize,
   onAuthorized,
   onStart,
@@ -56,20 +69,42 @@ export function FirstCutAuthorizationDialog({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [surfaceMapSelected, setSurfaceMapSelected] = useState(
+    surfaceMap?.enabled ?? false,
+  );
 
   useEffect(() => {
     if (!open) return;
     setConfirmation({ ...emptyFirstCutConfirmation, intent, executionOptions });
+    setSurfaceMapSelected(surfaceMap?.enabled ?? false);
     setBusy(false);
     setError(undefined);
-  }, [executionOptions, open, intent, report?.programFingerprint]);
+  }, [open, intent, report?.programFingerprint]);
 
   if (!open) return null;
 
+  const operationBusy = busy || surfaceMap?.busy === true;
   const controls: FirstCutAuthorizationControls = firstCutAuthorizationControls(
     confirmation,
-    { report, gatewayAvailable: true, busy },
+    { report, gatewayAvailable: true, busy: operationBusy },
   );
+  const surfaceMapCanChange = surfaceMap?.usable === true && surfaceMap.coversProgram;
+  const surfaceMapSelectionChanged = intent === "cutting" &&
+    surfaceMap !== undefined &&
+    surfaceMapSelected !== surfaceMap.enabled;
+  const primaryLabel = operationBusy
+    ? surfaceMapSelectionChanged
+      ? "Применяем и проверяем..."
+      : "Проверка и запуск..."
+    : surfaceMapSelectionChanged
+      ? surfaceMapSelected
+        ? "Включить карту и перепроверить"
+        : "Отключить карту и перепроверить"
+      : intent === "airRun"
+        ? "Начать проверку движения"
+        : surfaceMap && !surfaceMapSelected && surfaceMapCanChange
+          ? "Начать обработку без карты"
+          : "Начать обработку";
 
   const authorizeAndStart = async () => {
     if (!controls.canAuthorize) return;
@@ -80,6 +115,19 @@ export function FirstCutAuthorizationDialog({
       onAuthorized(next);
       onStarted(await onStart(next));
       onClose();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applySurfaceMapSelection = async () => {
+    if (!surfaceMap || !surfaceMapCanChange || !surfaceMapSelectionChanged) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await surfaceMap.onApply(surfaceMapSelected);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -121,7 +169,7 @@ export function FirstCutAuthorizationDialog({
           </div>
           <button
             aria-label="Закрыть"
-            disabled={busy}
+            disabled={operationBusy}
             onClick={onClose}
             title="Закрыть"
             type="button"
@@ -154,11 +202,43 @@ export function FirstCutAuthorizationDialog({
             <strong>T{startingToolNumber}</strong>
           </div>
         )}
+        {intent === "cutting" && surfaceMap && (
+          <div className={`first-cut-surface-map ${surfaceMapStatusClass(
+            surfaceMap,
+            surfaceMapSelected,
+          )}`}>
+            <Waves aria-hidden="true" size={18} />
+            <span>
+              <strong>{surfaceMapStatusTitle(surfaceMap, surfaceMapSelected)}</strong>
+              <small>{surfaceMap.detail}</small>
+              {!surfaceMapSelected && surfaceMapCanChange && (
+                <em>
+                  Без компенсации перепад поверхности до {surfaceMap.zRangeMm.toFixed(3)} мм
+                  может изменить фактическую глубину обработки.
+                </em>
+              )}
+              {surfaceMapSelectionChanged && (
+                <em>После изменения Millo повторит GRBL Check без движения.</em>
+              )}
+            </span>
+            <label>
+              <input
+                aria-label="Компенсировать траекторию по карте высот"
+                checked={surfaceMapSelected}
+                disabled={operationBusy || !surfaceMapCanChange}
+                onChange={(event) => setSurfaceMapSelected(event.target.checked)}
+                role="switch"
+                type="checkbox"
+              />
+              <small>Компенсация</small>
+            </label>
+          </div>
+        )}
         <div className="first-cut-checklist">
           <label>
             <input
               checked={setupReady}
-              disabled={busy}
+              disabled={operationBusy}
               onChange={(event) => setSetupReady(event.target.checked)}
               type="checkbox"
             />
@@ -182,7 +262,7 @@ export function FirstCutAuthorizationDialog({
             <label>
               <input
                 checked={confirmation.probeRemoved}
-                disabled={busy}
+                disabled={operationBusy}
                 onChange={(event) => setConfirmation((current) => ({
                   ...current,
                   probeRemoved: event.target.checked,
@@ -201,7 +281,7 @@ export function FirstCutAuthorizationDialog({
               checked={intent === "airRun"
                 ? confirmation.manualSpindleOff
                 : confirmation.manualSpindleRunning}
-              disabled={busy}
+              disabled={operationBusy}
               onChange={(event) => setConfirmation((current) => ({
                 ...current,
                 manualSpindleOff: current.intent === "airRun" && event.target.checked,
@@ -225,24 +305,51 @@ export function FirstCutAuthorizationDialog({
           {error ?? "Нет ошибок"}
         </p>
         <footer>
-          <button disabled={busy} onClick={onClose} type="button">Отмена</button>
+          <button disabled={operationBusy} onClick={onClose} type="button">Отмена</button>
           <button
             className="first-cut-authorize"
-            disabled={!controls.canAuthorize}
-            onClick={() => void authorizeAndStart()}
+            disabled={surfaceMapSelectionChanged
+              ? operationBusy || !surfaceMapCanChange
+              : !controls.canAuthorize}
+            onClick={() => void (surfaceMapSelectionChanged
+              ? applySurfaceMapSelection()
+              : authorizeAndStart())}
             type="button"
           >
-            <Power aria-hidden="true" size={15} />
-            {busy
-              ? "Проверка и запуск..."
-              : intent === "airRun"
-                ? "Начать проверку движения"
-                : "Начать обработку"}
+            {surfaceMapSelectionChanged
+              ? <RefreshCw aria-hidden="true" size={15} />
+              : <Power aria-hidden="true" size={15} />}
+            {primaryLabel}
           </button>
         </footer>
       </section>
     </div>
   );
+}
+
+function surfaceMapStatusClass(
+  surfaceMap: NonNullable<FirstCutAuthorizationDialogProps["surfaceMap"]>,
+  selected: boolean,
+): string {
+  if (!surfaceMap.usable || !surfaceMap.coversProgram) return "is-unavailable";
+  if (selected !== surfaceMap.enabled) return "is-pending";
+  return selected ? "is-enabled" : "is-warning";
+}
+
+function surfaceMapStatusTitle(
+  surfaceMap: NonNullable<FirstCutAuthorizationDialogProps["surfaceMap"]>,
+  selected: boolean,
+): string {
+  if (!surfaceMap.usable) return `Карта #${surfaceMap.mapId} устарела`;
+  if (!surfaceMap.coversProgram) return `Карта #${surfaceMap.mapId} не покрывает задание`;
+  if (selected !== surfaceMap.enabled) {
+    return selected
+      ? `Карта #${surfaceMap.mapId} будет включена`
+      : `Карта #${surfaceMap.mapId} будет отключена`;
+  }
+  return selected
+    ? `Карта #${surfaceMap.mapId} применяется`
+    : `Карта #${surfaceMap.mapId} найдена, но не применяется`;
 }
 
 function formatSignedOffset(value: number): string {

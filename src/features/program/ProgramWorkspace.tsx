@@ -14,6 +14,8 @@ import {
   X,
 } from "lucide-react";
 import {
+  lazy,
+  Suspense,
   useEffect,
   useMemo,
   useRef,
@@ -52,7 +54,6 @@ import type {
   SafeStartPackage,
   ToolChangeConfirmation,
 } from "../../shared/realRun";
-import { FirstCutAuthorizationDialog } from "./FirstCutAuthorizationDialog";
 import { JobReadinessPanel } from "./JobReadinessPanel";
 import { ProgramFilePicker } from "./ProgramFilePicker";
 import { ProgramEditor } from "./ProgramEditor";
@@ -94,6 +95,11 @@ import {
   programCanEnterPreflight,
   programDiagnosticsSummary,
 } from "./programDiagnosticsModel";
+
+const FirstCutAuthorizationDialog = lazy(async () => {
+  const module = await import("./FirstCutAuthorizationDialog");
+  return { default: module.FirstCutAuthorizationDialog };
+});
 
 export interface ProgramMachineContext {
   readonly activeCoordinateSystem: string;
@@ -191,6 +197,7 @@ export function ProgramWorkspace({
   const [surfaceMapBusy, setSurfaceMapBusy] = useState(false);
   const [error, setError] = useState<string>();
   const handledIncomingJob = useRef(0);
+  const reopenFirstCutAfterCheck = useRef(false);
   const program = loaded?.program;
   const senderActive = isSenderActive(sender.state);
 
@@ -681,28 +688,44 @@ export function ProgramWorkspace({
     ),
     [machineContext?.machineProfileId, program?.summary.bounds, surfaceSession],
   );
-  const setSurfaceMapApplication = async (enabled: boolean) => {
-    if (!heightmapGateway || !surfaceMap || surfaceMapBusy || senderActive) return;
+  const setSurfaceMapApplication = async (
+    enabled: boolean,
+  ): Promise<ProgramExecutionOptions> => {
+    const reject = (message: string): never => {
+      setError(message);
+      throw new Error(message);
+    };
+    if (!heightmapGateway || !surfaceMap) {
+      return reject("Карта высот недоступна для текущего задания");
+    }
+    if (surfaceMapBusy || senderActive) {
+      reject("Нельзя изменить карту высот во время другого действия");
+    }
     if (enabled && !surfaceMap.coversProgram) {
-      setError("Карта высот не покрывает траекторию задания. Снимите карту по периметру файла.");
-      return;
+      reject("Карта высот не покрывает траекторию задания. Снимите карту по периметру файла.");
     }
     if (enabled && !surfaceMap.usable) {
-      setError("Рабочий ноль изменился после измерения карты. Сначала снимите новую карту высот.");
-      return;
+      reject("Рабочий ноль изменился после измерения карты. Сначала снимите новую карту высот.");
     }
     setSurfaceMapBusy(true);
     setError(undefined);
     setRealRunReport(undefined);
     try {
       const session = await heightmapGateway.setApplication(enabled, enabled);
+      const surfaceMapId = enabled ? session.active?.mapId : undefined;
+      if (enabled && surfaceMapId === undefined) {
+        throw new Error("Контроллер не подтвердил активную карту высот");
+      }
+      const executionOptions = {
+        ...programExecutionOptions,
+        surfaceMapId,
+      };
       setSurfaceSession(session);
-      setProgramExecutionOptions((current) => ({
-        ...current,
-        surfaceMapId: enabled ? session.active?.mapId : undefined,
-      }));
+      setProgramExecutionOptions(executionOptions);
+      return executionOptions;
     } catch (reason) {
       setError(String(reason));
+      throw reason;
     } finally {
       setSurfaceMapBusy(false);
     }
@@ -774,7 +797,7 @@ export function ProgramWorkspace({
             : preflightControls.status === "checking"
               ? "Читаем состояние GRBL"
               : "Еще не выполнялась";
-  const runRealPreflight = async () => {
+  const runRealPreflight = async (): Promise<RunPreflightReport | undefined> => {
     if (!loaded || !realRunGateway || !preflightControls.canCheck) return;
     setPreflightLoading(true);
     setError(undefined);
@@ -792,8 +815,10 @@ export function ProgramWorkspace({
       onInspection?.(report.hardware);
       setDiagnosticView("preflight");
       setDiagnosticsOpen(!report.ready);
+      return report;
     } catch (reason) {
       setError(String(reason));
+      return undefined;
     } finally {
       setPreflightLoading(false);
     }
@@ -854,6 +879,34 @@ export function ProgramWorkspace({
         programExecutionOptions,
       ),
     );
+  };
+  const applySurfaceMapFromFirstCut = async (enabled: boolean): Promise<void> => {
+    if (!loaded || !realRunGateway) {
+      throw new Error("GRBL Check недоступен для текущего задания");
+    }
+    const executionOptions = await setSurfaceMapApplication(enabled);
+    setSenderCommandBusy(true);
+    setError(undefined);
+    reopenFirstCutAfterCheck.current = true;
+    try {
+      const checkSnapshot = await realRunGateway.startCheck(
+        {
+          sourceName: loaded.program.sourceName,
+          source: loaded.source,
+        },
+        executionOptions,
+      );
+      setClearedSenderRunSequence(undefined);
+      setSender(checkSnapshot);
+      setDiagnosticsOpen(false);
+      setFirstCutOpen(false);
+    } catch (reason) {
+      reopenFirstCutAfterCheck.current = false;
+      setError(String(reason));
+      throw reason;
+    } finally {
+      setSenderCommandBusy(false);
+    }
   };
   const runReadinessAction = (action: JobReadinessAction) => {
     if (action === "connect") void machineContext?.onConnect();
@@ -923,10 +976,19 @@ export function ProgramWorkspace({
   }, [checkRunVisible, programRunVisible, sender.currentSourceLine]);
 
   useEffect(() => {
-    if (!checkRunVisible || sender.state !== "completed" || !realRunAvailable) return;
+    if (!checkRunVisible) return;
+    if (sender.state === "failed" || sender.state === "cancelled") {
+      reopenFirstCutAfterCheck.current = false;
+      return;
+    }
+    if (sender.state !== "completed" || !realRunAvailable) return;
     setClearedSenderRunSequence(sender.runSequence);
     setRealRunReport(undefined);
-    void runRealPreflight();
+    void runRealPreflight().then((report) => {
+      if (!reopenFirstCutAfterCheck.current) return;
+      reopenFirstCutAfterCheck.current = false;
+      if (report?.ready) setFirstCutOpen(true);
+    });
   }, [checkRunVisible, realRunAvailable, sender.runSequence, sender.state]);
 
   useEffect(() => {
@@ -1191,7 +1253,7 @@ export function ProgramWorkspace({
                   onDepthCorrectionEnabled={setDepthCorrectionEnabled}
                   onDepthAdjustment={setDepthAdjustment}
                   onPrimary={runReadinessAction}
-                  onSurfaceMap={(enabled) => void setSurfaceMapApplication(enabled)}
+                  onSurfaceMap={(enabled) => void setSurfaceMapApplication(enabled).catch(() => undefined)}
                   surfaceMap={surfaceMap ? {
                     checked: surfaceMap.enabled &&
                       programExecutionOptions.surfaceMapId === surfaceMap.map.mapId,
@@ -1319,31 +1381,46 @@ export function ProgramWorkspace({
         />
       )}
 
-      <FirstCutAuthorizationDialog
-        depthCorrection={
-          depthCorrection.enabled
-            ? { adjustmentMm: depthCorrection.adjustmentMm }
-            : undefined
-        }
-        executionOptions={programExecutionOptions}
-        intent={programRunIntent}
-        onAuthorize={authorizeFirstCut}
-        onAuthorized={(preparation) => {
-          setRealRunReport(preparation.report);
-          onInspection?.(preparation.report.hardware);
-        }}
-        onClose={() => setFirstCutOpen(false)}
-        onStart={startProgramRun}
-        onStarted={(snapshot) => {
-          setClearedSenderRunSequence(undefined);
-          setSender(snapshot);
-          setDiagnosticsOpen(false);
-          setRecoveryCandidate(undefined);
-        }}
-        open={firstCutOpen}
-        report={reportForProgram}
-        startingToolNumber={program ? initialProgramToolNumber(program) : undefined}
-      />
+      {firstCutOpen && (
+        <Suspense fallback={null}>
+          <FirstCutAuthorizationDialog
+            depthCorrection={
+              depthCorrection.enabled
+                ? { adjustmentMm: depthCorrection.adjustmentMm }
+                : undefined
+            }
+            executionOptions={programExecutionOptions}
+            intent={programRunIntent}
+            onAuthorize={authorizeFirstCut}
+            onAuthorized={(preparation) => {
+              setRealRunReport(preparation.report);
+              onInspection?.(preparation.report.hardware);
+            }}
+            onClose={() => setFirstCutOpen(false)}
+            onStart={startProgramRun}
+            onStarted={(snapshot) => {
+              setClearedSenderRunSequence(undefined);
+              setSender(snapshot);
+              setDiagnosticsOpen(false);
+              setRecoveryCandidate(undefined);
+            }}
+            open
+            report={reportForProgram}
+            startingToolNumber={program ? initialProgramToolNumber(program) : undefined}
+            surfaceMap={surfaceMap ? {
+              mapId: surfaceMap.map.mapId,
+              enabled: surfaceMap.enabled &&
+                programExecutionOptions.surfaceMapId === surfaceMap.map.mapId,
+              usable: surfaceMap.usable,
+              coversProgram: surfaceMap.coversProgram,
+              zRangeMm: surfaceMap.zRangeMm,
+              detail: surfaceMap.detail,
+              busy: surfaceMapBusy || senderCommandBusy,
+              onApply: applySurfaceMapFromFirstCut,
+            } : undefined}
+          />
+        </Suspense>
+      )}
 
       {displayedSender.state === "toolChange" &&
         displayedSender.currentSourceLine !== undefined &&
