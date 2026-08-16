@@ -6630,6 +6630,24 @@ textarea:focus-visible {
   color: #eac174;
 }
 
+.first-cut-surface-map.is-suspicious,
+.first-cut-checklist label.is-surface-warning {
+  border-color: #7b5526;
+  color: #e5b466;
+  background: #241c12;
+}
+
+.first-cut-surface-map.is-suspicious strong,
+.first-cut-checklist label.is-surface-warning strong {
+  color: #f0c77f;
+}
+
+.first-cut-surface-map.is-suspicious small,
+.first-cut-surface-map.is-suspicious em,
+.first-cut-checklist label.is-surface-warning small {
+  color: #b89a6b;
+}
+
 .first-cut-surface-map.is-unavailable {
   border-color: #4a3538;
   color: #b5787c;

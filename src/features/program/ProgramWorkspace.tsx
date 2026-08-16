@@ -1284,7 +1284,7 @@ export function ProgramWorkspace({
                       programExecutionOptions.surfaceMapId === surfaceMap.map.mapId,
                     detail: surfaceMap.detail,
                     disabled: surfaceMapBusy || senderActive || !surfaceMap.coversProgram || !surfaceMap.usable,
-                    warning: !surfaceMap.coversProgram || !surfaceMap.usable,
+                    warning: !surfaceMap.coversProgram || !surfaceMap.usable || surfaceMap.suspiciousNeighborJump,
                   } : undefined}
                   view={readiness}
                 />
@@ -1439,6 +1439,8 @@ export function ProgramWorkspace({
               usable: surfaceMap.usable,
               coversProgram: surfaceMap.coversProgram,
               zRangeMm: surfaceMap.zRangeMm,
+              suspiciousNeighborJump: surfaceMap.suspiciousNeighborJump,
+              maximumNeighborDeltaMm: surfaceMap.maximumNeighborDeltaMm,
               detail: surfaceMap.detail,
               busy: surfaceMapBusy || senderCommandBusy,
               onApply: applySurfaceMapFromFirstCut,

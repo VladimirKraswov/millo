@@ -407,10 +407,11 @@ export function ToolpathPreview({
     runtimeRef.current = runtime;
 
     let frame = 0;
-    const clock = new THREE.Clock();
-    const animate = () => {
+    let previousFrameTime = performance.now();
+    const animate = (frameTime: number) => {
       frame = requestAnimationFrame(animate);
-      const deltaSeconds = Math.min(0.05, clock.getDelta());
+      const deltaSeconds = Math.min(0.05, Math.max(0, frameTime - previousFrameTime) / 1_000);
+      previousFrameTime = frameTime;
       if (runtime.toolHasPosition) {
         const interpolation = 1 - Math.exp(-deltaSeconds * 14);
         runtime.toolCurrentPosition.lerp(runtime.toolTargetPosition, interpolation);
@@ -424,7 +425,7 @@ export function ToolpathPreview({
       controls.update();
       renderer.render(scene, camera);
     };
-    animate();
+    frame = requestAnimationFrame(animate);
 
     return () => {
       cancelAnimationFrame(frame);

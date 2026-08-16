@@ -93,9 +93,10 @@ Returning to work zero moves to the stored Z0 and never creates a new one.
 | Complete, enabled | Map ID is part of Check and run authorization |
 | Stale | Display only; a new measurement is required |
 
-The first successful point is the reference (`delta Z = 0`). Every other point
-uses `measured Z - reference Z`. Changing G54-G59 or WCO makes the map stale.
-Backend checks live WCS/WCO before Check and start, so UI state cannot bypass it.
+The probe-established work Z0 is the reference. Every grid sample keeps its
+absolute active-WCS surface Z, and the sender uses `nominal Z + surface Z`.
+Changing G54-G59 or WCO makes the map stale. Backend checks live WCS/WCO before
+Check and start, so UI state cannot bypass it.
 
 ## Run Variants
 
@@ -103,6 +104,12 @@ Without a map: parse -> GRBL Check -> final physical confirmation -> nominal run
 
 With a map: establish Z0 -> measure -> enable current map -> Check compensated
 plan -> confirm stock/tool, removed probe wires and running manual spindle -> run.
+
+Keep the same cutter and stick-out between probing and processing. A physical
+tool-length change does not alter GRBL WCO and therefore cannot be detected from
+`$#`. If Millo reports a sharp neighboring jump, inspect the numeric or 3D map
+and verify that every point was over the workpiece with reliable electrical
+contact. Only a suspicious map adds this extra confirmation at final start.
 
 For a cutting run, the final confirmation always shows the current workpiece
 map when one exists. A usable but disabled map is a red warning with its measured

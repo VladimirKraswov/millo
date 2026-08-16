@@ -16,11 +16,11 @@ import {
   useMemo,
   useRef,
   useState,
-  useSyncExternalStore,
 } from "react";
 import { createPortal } from "react-dom";
 
 import "./pcb.css";
+import { usePluginToolLibrary } from "../usePluginToolLibrary";
 
 import type { PluginJobsCapability, PluginToolsCapability } from "../../plugin-sdk";
 import type {
@@ -99,11 +99,7 @@ export function PcbFabricationPlugin({
   const inputRef = useRef<HTMLInputElement>(null);
   const drillInputRef = useRef<HTMLInputElement>(null);
   const revisionRef = useRef(0);
-  const toolLibrary = useSyncExternalStore(
-    (notify) => tools.subscribe(() => notify()),
-    tools.current,
-    tools.current,
-  );
+  const toolLibrary = usePluginToolLibrary(tools);
   const compatible = useMemo(() => toolLibrary.tools.filter((tool) => tool.kind !== "surfacing" && tool.kind !== "ballNose"), [toolLibrary.tools]);
   const engravingTools = useMemo(() => compatible
     .filter((tool) => tool.kind === "engraving" || tool.kind === "vBit")

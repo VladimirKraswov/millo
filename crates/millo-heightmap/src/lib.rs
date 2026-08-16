@@ -155,6 +155,14 @@ pub struct HeightmapCoordinateBinding {
     pub work_coordinate_offset: Position,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HeightmapSurfaceQuality {
+    pub z_range_mm: f64,
+    pub median_neighbor_delta_mm: f64,
+    pub maximum_neighbor_delta_mm: f64,
+    pub suspicious_neighbor_jump: bool,
+}
+
 impl Heightmap {
     pub fn reference_z(&self) -> Result<f64, HeightmapError> {
         self.samples
@@ -167,6 +175,78 @@ impl Heightmap {
 
     pub fn interpolate_delta_z(&self, x_mm: f64, y_mm: f64) -> Result<f64, HeightmapError> {
         Ok(self.interpolate_z(x_mm, y_mm)? - self.reference_z()?)
+    }
+
+    pub fn surface_quality(&self) -> Result<HeightmapSurfaceQuality, HeightmapError> {
+        let columns = self.plan.request.columns;
+        let rows = self.plan.request.rows;
+        let mut grid = vec![None; columns.saturating_mul(rows)];
+        if grid.is_empty() {
+            return Err(HeightmapError::Incomplete);
+        }
+        let mut minimum = f64::INFINITY;
+        let mut maximum = f64::NEG_INFINITY;
+
+        for sample in self
+            .samples
+            .iter()
+            .flatten()
+            .filter(|sample| sample.triggered)
+        {
+            let index = sample
+                .point
+                .row
+                .checked_mul(columns)
+                .and_then(|row| row.checked_add(sample.point.column))
+                .filter(|index| *index < grid.len())
+                .ok_or(HeightmapError::Incomplete)?;
+            grid[index] = Some(sample.z_mm);
+            minimum = minimum.min(sample.z_mm);
+            maximum = maximum.max(sample.z_mm);
+        }
+        if grid.iter().any(Option::is_none) {
+            return Err(HeightmapError::Incomplete);
+        }
+
+        let mut neighbor_deltas = Vec::with_capacity(
+            rows.saturating_mul(columns.saturating_sub(1))
+                + columns.saturating_mul(rows.saturating_sub(1)),
+        );
+        for row in 0..rows {
+            for column in 0..columns {
+                let current = grid[row * columns + column].ok_or(HeightmapError::Incomplete)?;
+                if column + 1 < columns {
+                    let right =
+                        grid[row * columns + column + 1].ok_or(HeightmapError::Incomplete)?;
+                    neighbor_deltas.push((current - right).abs());
+                }
+                if row + 1 < rows {
+                    let below =
+                        grid[(row + 1) * columns + column].ok_or(HeightmapError::Incomplete)?;
+                    neighbor_deltas.push((current - below).abs());
+                }
+            }
+        }
+        neighbor_deltas.sort_by(f64::total_cmp);
+        let median_neighbor_delta_mm = median(&neighbor_deltas);
+        let maximum_neighbor_delta_mm = neighbor_deltas.last().copied().unwrap_or(0.0);
+        let suspicious_neighbor_jump = maximum_neighbor_delta_mm >= 0.5
+            && maximum_neighbor_delta_mm >= median_neighbor_delta_mm.max(0.01) * 8.0;
+
+        Ok(HeightmapSurfaceQuality {
+            z_range_mm: maximum - minimum,
+            median_neighbor_delta_mm,
+            maximum_neighbor_delta_mm,
+            suspicious_neighbor_jump,
+        })
+    }
+}
+
+fn median(sorted: &[f64]) -> f64 {
+    match sorted.len() {
+        0 => 0.0,
+        length if length % 2 == 1 => sorted[length / 2],
+        length => (sorted[length / 2 - 1] + sorted[length / 2]) / 2.0,
     }
 }
 
@@ -1020,6 +1100,40 @@ mod tests {
 
         assert!(map.interpolate_delta_z(0.0, 0.0).unwrap().abs() < 1e-9);
         assert!((map.interpolate_delta_z(20.0, 0.0).unwrap() + 2.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn surface_quality_flags_an_isolated_neighbor_cliff() {
+        let mut map = Heightmap::new(plan(3, 3));
+        for point in map.plan.points.clone() {
+            let z = if point.row >= 1 {
+                -2.0
+            } else {
+                point.x_mm * 0.001
+            };
+            map.record_sample(point.sequence, z, true).unwrap();
+        }
+
+        let quality = map.surface_quality().unwrap();
+
+        assert!(quality.suspicious_neighbor_jump);
+        assert!(quality.maximum_neighbor_delta_mm > 1.9);
+        assert!(quality.median_neighbor_delta_mm < 0.1);
+        assert!(quality.z_range_mm > 2.0);
+    }
+
+    #[test]
+    fn surface_quality_accepts_a_consistent_slope() {
+        let mut map = Heightmap::new(plan(3, 3));
+        for point in map.plan.points.clone() {
+            map.record_sample(point.sequence, -point.y_mm * 0.1, true)
+                .unwrap();
+        }
+
+        let quality = map.surface_quality().unwrap();
+
+        assert!(!quality.suspicious_neighbor_jump);
+        assert!(quality.maximum_neighbor_delta_mm > 0.4);
     }
 
     #[test]

@@ -719,24 +719,14 @@ fn append_compensated_segment(
             }
             let mix = part as f64 / parts as f64;
             let point = lerp_point(start, end, mix);
-            let nominal_z =
-                adjusted_cutting_z(point.z, segment.kind, depth_adjustment_mm.unwrap_or(0.0));
-            let weight = heightmap
-                .map(|_| compensation_weight(nominal_z, clearance_z))
-                .unwrap_or(0.0);
-            let surface_z = if let Some(heightmap) = heightmap.filter(|_| weight > 0.0) {
-                heightmap
-                    .interpolate_delta_z(point.x, point.y)
-                    .map_err(|_| {
-                        heightmap_rejection(
-                            Some(segment.source_line),
-                            "program motion leaves the measured heightmap perimeter",
-                        )
-                    })?
-            } else {
-                0.0
-            };
-            let corrected_z = nominal_z + surface_z * weight;
+            let corrected_z = compensated_point_z(
+                point,
+                segment.kind,
+                depth_adjustment_mm.unwrap_or(0.0),
+                heightmap,
+                clearance_z,
+                segment.source_line,
+            )?;
             let mut command = format!("G90 G21 G94 {}", if rapid { "G0" } else { "G1" });
             if known_x {
                 command.push_str(&format!(" X{:.4}", point.x));
@@ -748,34 +738,23 @@ fn append_compensated_segment(
             if !rapid && let Some(feed) = segment.feed_rate_mm_per_min {
                 command.push_str(&format!(" F{feed:.3}"));
             }
-            let duration = if rapid {
-                None
+            let duration = if !rapid && let Some(feed) = segment.feed_rate_mm_per_min {
+                let previous_mix = (part - 1) as f64 / parts as f64;
+                let previous = lerp_point(start, end, previous_mix);
+                let previous_z = compensated_point_z(
+                    previous,
+                    segment.kind,
+                    depth_adjustment_mm.unwrap_or(0.0),
+                    heightmap,
+                    clearance_z,
+                    segment.source_line,
+                )?;
+                let distance = (point.x - previous.x)
+                    .hypot(point.y - previous.y)
+                    .hypot(corrected_z - previous_z);
+                Some(seconds_to_millis(distance / feed * 60.0))
             } else {
-                segment.feed_rate_mm_per_min.map(|feed| {
-                    let previous_mix = (part - 1) as f64 / parts as f64;
-                    let previous = lerp_point(start, end, previous_mix);
-                    let previous_nominal_z = adjusted_cutting_z(
-                        previous.z,
-                        segment.kind,
-                        depth_adjustment_mm.unwrap_or(0.0),
-                    );
-                    let previous_weight = heightmap
-                        .map(|_| compensation_weight(previous_nominal_z, clearance_z))
-                        .unwrap_or(0.0);
-                    let previous_surface =
-                        if let Some(heightmap) = heightmap.filter(|_| previous_weight > 0.0) {
-                            heightmap
-                                .interpolate_delta_z(previous.x, previous.y)
-                                .unwrap_or(0.0)
-                        } else {
-                            0.0
-                        };
-                    let previous_z = previous_nominal_z + previous_surface * previous_weight;
-                    let distance = (point.x - previous.x)
-                        .hypot(point.y - previous.y)
-                        .hypot(corrected_z - previous_z);
-                    seconds_to_millis(distance / feed * 60.0)
-                })
+                None
             };
             push_compensated_line(
                 output,
@@ -787,6 +766,31 @@ fn append_compensated_segment(
         }
     }
     Ok(())
+}
+
+fn compensated_point_z(
+    point: ProgramPoint,
+    kind: ToolpathKind,
+    depth_adjustment_mm: f64,
+    heightmap: Option<&Heightmap>,
+    clearance_z: f64,
+    source_line: usize,
+) -> Result<f64, DryRunPolicyError> {
+    let nominal_z = adjusted_cutting_z(point.z, kind, depth_adjustment_mm);
+    let weight = heightmap
+        .map(|_| compensation_weight(nominal_z, clearance_z))
+        .unwrap_or(0.0);
+    let surface_z = if let Some(heightmap) = heightmap.filter(|_| weight > 0.0) {
+        heightmap.interpolate_z(point.x, point.y).map_err(|_| {
+            heightmap_rejection(
+                Some(source_line),
+                "program motion leaves the measured heightmap perimeter",
+            )
+        })?
+    } else {
+        0.0
+    };
+    Ok(nominal_z + surface_z * weight)
 }
 
 fn adjusted_cutting_z(z: f64, kind: ToolpathKind, adjustment_mm: f64) -> f64 {
@@ -1652,6 +1656,30 @@ mod tests {
         );
         assert!(commands.contains(&"G0 Z2"));
         assert_eq!(plan.execution_options().surface_map_id, Some(7));
+    }
+
+    #[test]
+    fn heightmap_compensation_remains_bound_to_the_established_work_z_zero() {
+        let options = ProgramExecutionOptions {
+            surface_map_id: Some(7),
+            ..ProgramExecutionOptions::default()
+        };
+        let mut map = completed_heightmap();
+        for sample in map.samples.iter_mut().flatten() {
+            sample.z_mm += 0.75;
+        }
+
+        let plan = build_program_run_plan_with_heightmap(
+            &parse("G21 G90 G94 G17\nG0 Z2\nG0 X0 Y0\nG1 Z-0.2 F30\nG1 X10 Y0 F100"),
+            ProgramRunPolicy::Cutting,
+            options,
+            Some(&map),
+        )
+        .unwrap();
+
+        assert!(plan.lines().iter().any(|line| {
+            line.command().contains("X10.0000") && line.command().contains("Z-0.4500")
+        }));
     }
 
     #[test]

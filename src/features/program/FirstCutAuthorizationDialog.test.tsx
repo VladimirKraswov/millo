@@ -80,6 +80,8 @@ describe("FirstCutAuthorizationDialog", () => {
           usable: true,
           coversProgram: true,
           zRangeMm: 0.367,
+          suspiciousNeighborJump: false,
+          maximumNeighborDeltaMm: 0.12,
           detail: "Карта #5 · 5×5 · 60.0×50.0 mm · перепад 0.367 mm",
           busy: false,
           onApply: async () => undefined,
@@ -115,6 +117,8 @@ describe("FirstCutAuthorizationDialog", () => {
           usable: true,
           coversProgram: true,
           zRangeMm: 0.367,
+          suspiciousNeighborJump: false,
+          maximumNeighborDeltaMm: 0.12,
           detail: "Карта #5 · 5×5 · 60.0×50.0 mm · перепад 0.367 mm",
           busy: false,
           onApply: async () => undefined,
@@ -127,5 +131,38 @@ describe("FirstCutAuthorizationDialog", () => {
     expect(markup).toContain("Щуп и провода убраны");
     expect(markup).toContain("Начать обработку");
     expect(markup).not.toContain("Начать обработку без карты");
+  });
+
+  it("requires an explicit review when neighboring map points contain a cliff", () => {
+    const markup = renderToStaticMarkup(
+      <FirstCutAuthorizationDialog
+        executionOptions={{ blockDelete: false, optionalStop: false, surfaceMapId: 8 }}
+        intent="cutting"
+        onAuthorize={async () => { throw new Error("not called while rendering"); }}
+        onAuthorized={() => undefined}
+        onClose={() => undefined}
+        onStart={async () => { throw new Error("not called while rendering"); }}
+        onStarted={() => undefined}
+        open
+        surfaceMap={{
+          mapId: 8,
+          enabled: true,
+          usable: true,
+          coversProgram: true,
+          zRangeMm: 2.205,
+          suspiciousNeighborJump: true,
+          maximumNeighborDeltaMm: 2.046,
+          detail: "Карта #8 · резкий скачок 2.046 mm",
+          busy: false,
+          onApply: async () => undefined,
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Резкий перепад карты проверен");
+    expect(markup).toContain("2.046 мм");
+    expect(markup).toContain("фреза и её вылет после измерения не менялись");
+    expect(markup).toContain("Карта #8 требует проверки");
+    expect(markup).toContain("first-cut-surface-map is-suspicious");
   });
 });

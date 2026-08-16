@@ -7,12 +7,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import {
-  useEffect,
-  useMemo,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
 import type {
@@ -29,6 +24,7 @@ import {
 } from "../../shared/tooling";
 import { ToolKnowledgePanel } from "../../features/tool-library/ToolKnowledgePanel";
 import { ToolSchematic } from "../../features/tool-library/ToolSchematic";
+import { usePluginToolLibrary } from "../usePluginToolLibrary";
 
 interface SpoilboardSurfacingPluginProps {
   readonly initialOpen?: boolean;
@@ -60,11 +56,7 @@ export function SpoilboardSurfacingPlugin({
   tools,
 }: SpoilboardSurfacingPluginProps) {
   const [open, setOpen] = useState(initialOpen);
-  const toolLibrary = useSyncExternalStore(
-    (notify) => tools.subscribe(() => notify()),
-    tools.current,
-    tools.current,
-  );
+  const toolLibrary = usePluginToolLibrary(tools);
   const compatibleTools = useMemo(
     () => [...toolLibrary.tools]
       .filter(supportsSurfacing)

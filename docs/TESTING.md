@@ -130,8 +130,11 @@ presets without overwriting edits. Surfacing CAM fixtures reject incompatible
 tools and oversized edge overrun, exercise multi-depth X/Y rasters and line
 limits, require spindle-free parser-clean output, and verify complete final
 cross-axis coverage. Vitest covers the frozen `tools.read` capability, bundled
-plugin registration, and cleanup on unload. Use `/?fixture=tools` and
-`/?fixture=surfacing` for visual checks; neither fixture dispatches machine I/O.
+plugin registration, and cleanup on unload. Every tool-consuming plugin uses the
+same stable React subscription adapter; browser checks for `/?fixture=pcb` and
+`/?fixture=surfacing` must remain free of React console errors. Use
+`/?fixture=tools` and `/?fixture=surfacing` for visual checks; neither fixture
+dispatches machine I/O.
 
 PCB fixtures cover Gerber dark/clear geometry, standard and macro apertures,
 step-and-repeat, outline paths, Excellon modal tool groups and `G85` slots,
@@ -952,6 +955,11 @@ the active point. Partial adjacent cells render incrementally during probing.
 The scene-model camera-scope fixture proves that another sample in the same
 perimeter preserves the current 3D camera, while changing the perimeter or
 Top/3D mode deliberately requests a fresh frame.
+Heightmap transformation fixtures also use a non-zero first grid sample and
+assert that compensation remains relative to the established work Z0 instead of
+renormalizing to that first sample. Surface-quality fixtures cover a smooth
+slope and a 2 mm local cliff; the final-start fixture exposes the cliff and its
+physical review requirement.
 Program UI tests keep the map switch in the primary readiness card, verify its
 map identity and coverage warning, and keep optional-stop/block-delete controls
 in the advanced drawer. One-point Z probing disarms map application without

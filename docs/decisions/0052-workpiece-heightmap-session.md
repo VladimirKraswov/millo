@@ -116,12 +116,23 @@ motion outside the map fails closed before sender start.
 The transformer requires metric absolute G94 motion in the XY plane. It
 linearizes previewed arcs and subdivides long moves to at most half the physical
 probe spacing, bounded to 0.25..1 mm, then bilinearly interpolates measured
-surface Z. Nominal cutting Z at or below zero receives the full correction.
+surface Z. Every sample is already expressed in the active work coordinate
+system after the probe-established Z0, so compensation adds the interpolated
+absolute surface Z. It does not subtract the first grid sample: the calibrated
+highest point and the first serpentine point can be in different places.
+Nominal cutting Z at or below zero receives the full correction.
 Between Z0 and the configured clearance the correction fades linearly to avoid
 an abrupt Z step; at and above clearance it is zero. Safe rapid motion may be
 outside the map, but every point that receives non-zero compensation must be
 inside it. The transformed stream is bounded to 200,000 lines and retains the
 original source-line identity for diagnostics and recovery.
+
+Completed maps are checked for neighboring discontinuities. Millo compares the
+largest horizontal or vertical neighbor delta with the median and marks a jump
+of at least 0.5 mm and eight times the median as suspicious. The data is never
+silently smoothed because a real stepped surface is possible. Preflight emits a
+caution, and the final start dialog requires confirmation that probe contact was
+valid and that neither the cutter nor its stick-out changed after probing.
 
 ## Consequences
 

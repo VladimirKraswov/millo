@@ -411,6 +411,13 @@ does not schedule or execute controller I/O.
   Idle, A5 input, WCS, unchanged grid and contiguous samples before creating a
   new operation sequence at the first empty point. Transport, position and
   controller-state failures still use Feed Hold plus Soft Reset quarantine.
+- Heightmap samples are absolute active-WCS surface coordinates relative to the
+  verified probe-established Z0. Sender compensation uses `nominal Z + surface
+  Z`; the first grid sample is not a second datum.
+- `Heightmap::surface_quality` compares physical horizontal and vertical
+  neighbors. Suspicious local cliffs remain valid data, but propagate as a
+  preflight caution and explicit final-start review instead of being hidden by
+  interpolation.
 - Heightmap rendering has no machine capability. A pure model derives the
   auto-perimeter, physical spacing, matrix, and color scale; Three.js consumes
   immutable map/program DTOs for one perimeter, probe points, outside-path
@@ -915,6 +922,10 @@ Returning to an existing zero uses a distinct boundary:
 - Plugin UI contributions render behind per-contribution React error boundaries.
   A throwing plugin panel is removed from that render subtree instead of
   unmounting the CNC App Shell or safety controls.
+- React adapters for observable plugin capabilities keep a stable subscription
+  function for the capability lifetime and require `current()` to return a
+  cached immutable snapshot. This is the `useSyncExternalStore` contract and
+  prevents a parent render from creating a resubscribe/update loop.
 - An external command returns exactly one typed action. `createProgram` is
   reparsed by `millo-gcode` and published as an ordinary Program job. `jog`,
   `setZero`, and `returnZero` require a fresh operator confirmation and then

@@ -2262,17 +2262,34 @@ fn apply_heightmap_preflight(
         ProgramRunIntent::Cutting => ProgramRunPolicy::Cutting,
     };
     match build_program_run_plan_with_heightmap(program, policy, execution_options, heightmap) {
-        Ok(plan) => report.checks.push(RunPreflightCheck {
-            id: "heightmap-compensation".to_owned(),
-            level: RunPreflightLevel::Pass,
-            title: "Heightmap compensation".to_owned(),
-            detail: format!(
-                "Map #{} covers the program; {} compensated sender block(s) prepared",
-                execution_options.surface_map_id.unwrap_or_default(),
-                plan.lines().len()
-            ),
-            source_line: None,
-        }),
+        Ok(plan) => {
+            report.checks.push(RunPreflightCheck {
+                id: "heightmap-compensation".to_owned(),
+                level: RunPreflightLevel::Pass,
+                title: "Heightmap compensation".to_owned(),
+                detail: format!(
+                    "Map #{} covers the program; {} compensated sender block(s) prepared",
+                    execution_options.surface_map_id.unwrap_or_default(),
+                    plan.lines().len()
+                ),
+                source_line: None,
+            });
+            if let Some(quality) = heightmap.and_then(|map| map.surface_quality().ok())
+                && quality.suspicious_neighbor_jump
+            {
+                report.checks.push(RunPreflightCheck {
+                    id: "heightmap-surface-quality".to_owned(),
+                    level: RunPreflightLevel::Caution,
+                    title: "Heightmap contains a sharp neighboring jump".to_owned(),
+                    detail: format!(
+                        "Largest neighboring change is {:.3} mm while the median is {:.3} mm; verify probe contact, workpiece coverage and unchanged cutter stick-out",
+                        quality.maximum_neighbor_delta_mm,
+                        quality.median_neighbor_delta_mm,
+                    ),
+                    source_line: None,
+                });
+            }
+        }
         Err(error) => {
             report.ready = false;
             report.blocker_count = report.blocker_count.saturating_add(1);

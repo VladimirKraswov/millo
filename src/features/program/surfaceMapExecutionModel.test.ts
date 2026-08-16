@@ -92,4 +92,36 @@ describe("surfaceMapExecutionView", () => {
     expect(view?.zRangeMm).toBeCloseTo(0.367);
     expect(view?.detail).toContain("перепад 0.367 mm");
   });
+
+  it("flags a sharp local cliff that is unlike the rest of the map", () => {
+    const points = [
+      [0, 0, 0.02], [0, 1, 0.05], [0, 2, 0.08],
+      [1, 0, -1.98], [1, 1, -1.95], [1, 2, -1.92],
+      [2, 0, -1.96], [2, 1, -1.94], [2, 2, -1.91],
+    ] as const;
+    const measured: SurfaceSession = {
+      ...session,
+      active: session.active && {
+        ...session.active,
+        map: {
+          ...session.active.map,
+          plan: {
+            ...session.active.map.plan,
+            request: { ...session.active.map.plan.request, columns: 3, rows: 3 },
+          },
+          samples: points.map(([row, column, zMm], sequence) => ({
+            point: { sequence, row, column, xMm: column * 10, yMm: row * 10 },
+            zMm,
+            triggered: true,
+          })),
+        },
+      },
+    };
+
+    const view = surfaceMapExecutionView(measured, "machine-0001", undefined);
+
+    expect(view?.suspiciousNeighborJump).toBe(true);
+    expect(view?.maximumNeighborDeltaMm).toBeGreaterThan(1.9);
+    expect(view?.detail).toContain("резкий скачок");
+  });
 });

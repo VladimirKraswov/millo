@@ -37,6 +37,8 @@ interface FirstCutAuthorizationDialogProps {
     readonly usable: boolean;
     readonly coversProgram: boolean;
     readonly zRangeMm: number;
+    readonly suspiciousNeighborJump: boolean;
+    readonly maximumNeighborDeltaMm: number;
     readonly detail: string;
     readonly busy: boolean;
     readonly onApply: (enabled: boolean) => Promise<void>;
@@ -72,11 +74,13 @@ export function FirstCutAuthorizationDialog({
   const [surfaceMapSelected, setSurfaceMapSelected] = useState(
     surfaceMap?.enabled ?? false,
   );
+  const [surfaceQualityConfirmed, setSurfaceQualityConfirmed] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setConfirmation({ ...emptyFirstCutConfirmation, intent, executionOptions });
     setSurfaceMapSelected(surfaceMap?.enabled ?? false);
+    setSurfaceQualityConfirmed(false);
     setBusy(false);
     setError(undefined);
   }, [open, intent, report?.programFingerprint]);
@@ -153,6 +157,11 @@ export function FirstCutAuthorizationDialog({
     toolRemoved: current.intent === "airRun" && ready,
   }));
   const hasSurfaceMap = executionOptions.surfaceMapId !== undefined;
+  const suspiciousSurfaceMapSelected = intent === "cutting" &&
+    hasSurfaceMap &&
+    surfaceMap?.suspiciousNeighborJump === true;
+  const canAuthorize = controls.canAuthorize &&
+    (!suspiciousSurfaceMapSelected || surfaceQualityConfirmed);
 
   return (
     <div className="machine-dialog-backdrop first-cut-backdrop" role="presentation">
@@ -276,6 +285,24 @@ export function FirstCutAuthorizationDialog({
               </span>
             </label>
           )}
+          {suspiciousSurfaceMapSelected && surfaceMap && (
+            <label className="is-surface-warning">
+              <input
+                checked={surfaceQualityConfirmed}
+                disabled={operationBusy}
+                onChange={(event) => setSurfaceQualityConfirmed(event.target.checked)}
+                type="checkbox"
+              />
+              <span aria-hidden="true" className="first-cut-checkmark"><Check size={13} /></span>
+              <span>
+                <strong>Резкий перепад карты проверен</strong>
+                <small>
+                  Между соседними точками до {surfaceMap.maximumNeighborDeltaMm.toFixed(3)} мм.
+                  Контакт щупа был надёжным, фреза и её вылет после измерения не менялись.
+                </small>
+              </span>
+            </label>
+          )}
           <label>
             <input
               checked={intent === "airRun"
@@ -310,7 +337,7 @@ export function FirstCutAuthorizationDialog({
             className="first-cut-authorize"
             disabled={surfaceMapSelectionChanged
               ? operationBusy || !surfaceMapCanChange
-              : !controls.canAuthorize}
+              : !canAuthorize}
             onClick={() => void (surfaceMapSelectionChanged
               ? applySurfaceMapSelection()
               : authorizeAndStart())}
@@ -333,6 +360,7 @@ function surfaceMapStatusClass(
 ): string {
   if (!surfaceMap.usable || !surfaceMap.coversProgram) return "is-unavailable";
   if (selected !== surfaceMap.enabled) return "is-pending";
+  if (selected && surfaceMap.suspiciousNeighborJump) return "is-suspicious";
   return selected ? "is-enabled" : "is-warning";
 }
 
@@ -348,7 +376,9 @@ function surfaceMapStatusTitle(
       : `Карта #${surfaceMap.mapId} будет отключена`;
   }
   return selected
-    ? `Карта #${surfaceMap.mapId} применяется`
+    ? surfaceMap.suspiciousNeighborJump
+      ? `Карта #${surfaceMap.mapId} требует проверки`
+      : `Карта #${surfaceMap.mapId} применяется`
     : `Карта #${surfaceMap.mapId} найдена, но не применяется`;
 }
 
