@@ -1,6 +1,6 @@
 # Code audit
 
-Audit date: 2026-08-14.
+Audit date: 2026-08-20.
 
 ## Scope
 
@@ -9,6 +9,16 @@ transport, local persistence, React state/effects, plugin host, Three.js preview
 tests, configuration, and direct/transitive dependency reports.
 
 ## Closed findings
+
+- Homing and continuous jog no longer depend on a UI wait loop. The command
+  actor owns `$H` correlation, timeout, settle-to-Idle, session invalidation,
+  machine-envelope capture, bounded `$J=` lifetime, and one-shot `0x85`
+  watchdog cancellation. React owns gestures only and cancels on pointer/key
+  release, focus loss, visibility loss, unmount, disable, and disconnect.
+- Optional A-axis limits are expressed in degrees and cannot be narrowed by a
+  linear millimetre profile value. G54-G59 and machine outputs are typed,
+  Idle-only and modal-verified. Undeclared flood/mist outputs fail before serial
+  I/O, while legacy profiles deserialize with both capabilities disabled.
 
 - The React composition root no longer embeds development fixture construction,
   controller Inspector rendering, coordinate readouts, or the complete transport

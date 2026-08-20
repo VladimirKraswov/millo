@@ -2,10 +2,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import type {
+  ContinuousJogReceipt,
+  ContinuousJogRequest,
   ControllerSnapshot,
   HardwareInspection,
+  HomingRequest,
+  HomingStartOutcome,
   JogPadStepOutcome,
   JogPadStepRequest,
+  MachineOutputOutcome,
+  MachineOutputRequest,
   OperatorConfirmation,
   OverrideAdjustment,
   RapidOverrideTarget,
@@ -18,6 +24,8 @@ import type {
   StepJogRequest,
   TestJogPreparation,
   TransportDescriptor,
+  WorkCoordinateSelectionOutcome,
+  WorkCoordinateSystem,
   WorkZeroOutcome,
   WorkZeroRequest,
   ZProbeOutcome,
@@ -122,6 +130,26 @@ export const jogPadStep = (
   request: JogPadStepRequest,
 ): Promise<JogPadStepOutcome> =>
   invoke<JogPadStepOutcome>("jog_pad_step", { request });
+
+export const startHoming = (request: HomingRequest): Promise<HomingStartOutcome> =>
+  invoke<HomingStartOutcome>("start_homing", { request });
+
+export const startContinuousJog = (
+  request: ContinuousJogRequest,
+): Promise<ContinuousJogReceipt> =>
+  invoke<ContinuousJogReceipt>("start_continuous_jog", { request });
+
+export const selectWorkCoordinateSystem = (
+  coordinateSystem: WorkCoordinateSystem,
+): Promise<WorkCoordinateSelectionOutcome> =>
+  invoke<WorkCoordinateSelectionOutcome>("select_work_coordinate_system", {
+    coordinateSystem,
+  });
+
+export const setMachineOutput = (
+  request: MachineOutputRequest,
+): Promise<MachineOutputOutcome> =>
+  invoke<MachineOutputOutcome>("set_machine_output", { request });
 
 export const setWorkZero = (
   request: WorkZeroRequest,

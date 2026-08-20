@@ -44,7 +44,14 @@ const firstCutProgramFixtures = new Set([
   "tool-motion",
 ]);
 
-const jogFixtures = new Set(["alarm", "jog", "jog-active", "logs", "reset"]);
+const jogFixtures = new Set([
+  "alarm",
+  "jog",
+  "jog-active",
+  "logs",
+  "machine-control",
+  "reset",
+]);
 
 export const developmentPreflightFixture = physicalRunFixtures.has(developmentFixture ?? "");
 export const developmentFirstCutFixture = firstCutFixtures.has(developmentFixture ?? "");
@@ -83,9 +90,9 @@ export const developmentJogSnapshot: ControllerSnapshot = {
         : developmentMachineMode === "alarm"
           ? "Alarm"
           : "Idle",
-    machinePosition: { x: 152.4, y: 91.2, z: -4.75 },
-    workPosition: { x: 12.4, y: 8.2, z: 5.25 },
-    workCoordinateOffset: { x: 140, y: 83, z: -10 },
+    machinePosition: { x: 152.4, y: 91.2, z: -4.75, a: 45 },
+    workPosition: { x: 12.4, y: 8.2, z: 5.25, a: 45 },
+    workCoordinateOffset: { x: 140, y: 83, z: -10, a: 0 },
     feedRate: 0,
     spindleSpeed: 0,
     pins: developmentProbeFixture
@@ -105,6 +112,10 @@ export const developmentJogSnapshot: ControllerSnapshot = {
         }
       : undefined,
   },
+  homing:
+    developmentFixture === "machine-control"
+      ? { state: "homed", sequence: 2, detail: "Machine referenced in this connection session" }
+      : emptySnapshot.homing,
   pollSequence: 42,
   pollIntervalMs: 250,
   statusTimeoutMs: 500,
@@ -125,10 +136,16 @@ export const developmentProfileFixture: MachineProfileState = {
       id: "machine-0001",
       name: "LUNYEE CNC",
       travelMm: { x: 500, y: 500, z: 200 },
+      rotaryAxis:
+        developmentFixture === "machine-control"
+          ? { travelDegrees: 360, maxJogDegrees: 30, maxFeedDegreesPerMin: 720 }
+          : undefined,
       maxJogDistanceMm: 50,
-      spindleControl: "manual",
-      homingInstalled: false,
-      limitSwitchesInstalled: false,
+      spindleControl: developmentFixture === "machine-control" ? "controller" : "manual",
+      floodCoolantControl: developmentFixture === "machine-control",
+      mistCoolantControl: developmentFixture === "machine-control",
+      homingInstalled: developmentFixture === "machine-control",
+      limitSwitchesInstalled: developmentFixture === "machine-control",
       probeInstalled: developmentProbeFixture,
       probeSettings: {
         mode: developmentFixture === "heightmap" ? "heightmap" : "workZero",

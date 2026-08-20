@@ -50,12 +50,12 @@ pub struct ScriptPluginExecutionRequest {
 )]
 pub enum ScriptPluginExecutionOutcome {
     Job {
-        job: ScriptGeneratedJob,
+        job: Box<ScriptGeneratedJob>,
     },
     Machine {
         action: String,
         message: String,
-        snapshot: ControllerSnapshot,
+        snapshot: Box<ControllerSnapshot>,
     },
     Notice {
         title: String,

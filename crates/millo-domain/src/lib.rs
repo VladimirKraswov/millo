@@ -126,6 +126,28 @@ pub struct MachineState {
     pub line_number: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HomingState {
+    #[default]
+    Unreferenced,
+    Homing,
+    Homed,
+    Invalidated,
+    Failed,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomingStatus {
+    pub state: HomingState,
+    pub sequence: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResetNotice {
@@ -148,6 +170,7 @@ pub struct AlarmState {
 pub struct ControllerSnapshot {
     pub connection: ConnectionState,
     pub machine: MachineState,
+    pub homing: HomingStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reset_notice: Option<ResetNotice>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -234,6 +257,14 @@ pub struct MachineTravel {
     pub z: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RotaryAxisProfile {
+    pub travel_degrees: f64,
+    pub max_jog_degrees: f64,
+    pub max_feed_degrees_per_min: f64,
+}
+
 pub const DEFAULT_MAX_JOG_DISTANCE_MM: f64 = 50.0;
 
 pub const fn default_max_jog_distance_mm() -> f64 {
@@ -247,9 +278,15 @@ pub struct HardwareProfile {
     pub axes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub travel_mm: Option<MachineTravel>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotary_axis: Option<RotaryAxisProfile>,
     #[serde(default = "default_max_jog_distance_mm")]
     pub max_jog_distance_mm: f64,
     pub spindle_control: SpindleControl,
+    #[serde(default)]
+    pub flood_coolant_control: bool,
+    #[serde(default)]
+    pub mist_coolant_control: bool,
     pub homing_installed: bool,
     pub limit_switches_installed: bool,
     pub probe_installed: bool,
@@ -264,8 +301,11 @@ impl HardwareProfile {
             name: "First XYZ router".to_owned(),
             axes: vec!["X".to_owned(), "Y".to_owned(), "Z".to_owned()],
             travel_mm: None,
+            rotary_axis: None,
             max_jog_distance_mm: DEFAULT_MAX_JOG_DISTANCE_MM,
             spindle_control: SpindleControl::Manual,
+            flood_coolant_control: false,
+            mist_coolant_control: false,
             homing_installed: false,
             limit_switches_installed: false,
             probe_installed: false,
@@ -354,6 +394,7 @@ pub enum JogAxis {
     X,
     Y,
     Z,
+    A,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -391,6 +432,47 @@ pub struct JogPadStepOutcome {
     pub receipt: Option<StepJogReceipt>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinuousJogRequest {
+    pub confirmation: OperatorConfirmation,
+    pub axis: JogAxis,
+    pub direction: i8,
+    pub feed_mm_per_min: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum JogBoundarySource {
+    MachineCoordinates,
+    ProfileDistance,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContinuousJogReceipt {
+    pub command: String,
+    pub axis: JogAxis,
+    pub direction: i8,
+    pub bounded_distance: f64,
+    pub feed_mm_per_min: f64,
+    pub boundary_source: JogBoundarySource,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomingRequest {
+    pub operator_confirmed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomingStartOutcome {
+    pub command: String,
+    pub timeout_ms: u64,
+    pub snapshot: ControllerSnapshot,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum WorkAxis {
@@ -408,6 +490,41 @@ pub enum WorkCoordinateSystem {
     G57,
     G58,
     G59,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkCoordinateSelectionOutcome {
+    pub coordinate_system: WorkCoordinateSystem,
+    pub command: String,
+    pub snapshot: ControllerSnapshot,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpindleDirection {
+    Clockwise,
+    Counterclockwise,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MachineOutputRequest {
+    SpindleOn {
+        direction: SpindleDirection,
+        speed_rpm: f64,
+    },
+    SpindleOff,
+    FloodCoolant(bool),
+    MistCoolant(bool),
+    AllOff,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MachineOutputOutcome {
+    pub commands: Vec<String>,
+    pub snapshot: ControllerSnapshot,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

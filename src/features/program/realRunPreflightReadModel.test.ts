@@ -24,6 +24,8 @@ const report = (ready: boolean): RunPreflightReport => ({
           name: "fixture",
           axes: ["X", "Y", "Z"],
           spindleControl: "manual",
+          floodCoolantControl: false,
+          mistCoolantControl: false,
           homingInstalled: false,
           limitSwitchesInstalled: false,
         probeInstalled: false,

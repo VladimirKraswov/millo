@@ -16,11 +16,13 @@ use millo_cam::{
 use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
-    ControllerSnapshot, DeviceInspection, HardwareInspection, HardwareProfile, JogPadStepOutcome,
-    JogPadStepRequest, OperatorConfirmation, OverrideAdjustment, RapidOverrideTarget,
-    ResetChallenge, ReturnToWorkOriginOutcome, ReturnToWorkOriginRequest, ReturnToWorkZeroOutcome,
-    ReturnToWorkZeroRequest, StepJogReceipt, StepJogRequest, TestJogPreparation, WorkZeroOutcome,
-    WorkZeroRequest, ZProbeOutcome, ZProbeRequest,
+    ContinuousJogReceipt, ContinuousJogRequest, ControllerSnapshot, DeviceInspection,
+    HardwareInspection, HardwareProfile, HomingRequest, HomingStartOutcome, JogPadStepOutcome,
+    JogPadStepRequest, MachineOutputOutcome, MachineOutputRequest, OperatorConfirmation,
+    OverrideAdjustment, RapidOverrideTarget, ResetChallenge, ReturnToWorkOriginOutcome,
+    ReturnToWorkOriginRequest, ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest, StepJogReceipt,
+    StepJogRequest, TestJogPreparation, WorkCoordinateSelectionOutcome, WorkCoordinateSystem,
+    WorkZeroOutcome, WorkZeroRequest, ZProbeOutcome, ZProbeRequest,
 };
 use millo_dry_run::{
     ProgramExecutionOptions, ProgramRunPolicy, build_program_run_plan_with_options,
@@ -1934,6 +1936,97 @@ pub async fn jog_pad_step(
 }
 
 #[tauri::command]
+pub async fn start_homing(
+    request: HomingRequest,
+    state: State<'_, AppState>,
+) -> Result<HomingStartOutcome, String> {
+    let context = serde_json::to_value(request).unwrap_or(Value::Null);
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        state
+            .arbiter
+            .start_homing(request)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Safety,
+        "controller.homing.start",
+        "GRBL homing lifecycle started",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn start_continuous_jog(
+    request: ContinuousJogRequest,
+    state: State<'_, AppState>,
+) -> Result<ContinuousJogReceipt, String> {
+    let context = serde_json::to_value(request).unwrap_or(Value::Null);
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        state
+            .arbiter
+            .start_continuous_jog(request)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Controller,
+        "controller.jog.continuous.start",
+        "Bounded continuous jog started",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
+pub async fn select_work_coordinate_system(
+    coordinate_system: WorkCoordinateSystem,
+    state: State<'_, AppState>,
+) -> Result<WorkCoordinateSelectionOutcome, String> {
+    ensure_machine_bound(&state).await?;
+    state
+        .arbiter
+        .select_work_coordinate_system(coordinate_system)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_machine_output(
+    request: MachineOutputRequest,
+    state: State<'_, AppState>,
+) -> Result<MachineOutputOutcome, String> {
+    let context = serde_json::to_value(request).unwrap_or(Value::Null);
+    let result = async {
+        ensure_machine_bound(&state).await?;
+        state
+            .arbiter
+            .set_machine_output(request)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    .await;
+    audit_operation(
+        &state.audit,
+        AuditCategory::Controller,
+        "controller.output.set",
+        "Machine output command verified",
+        context,
+        &result,
+    );
+    result
+}
+
+#[tauri::command]
 pub async fn set_work_zero(
     request: WorkZeroRequest,
     app: AppHandle,
@@ -2637,7 +2730,7 @@ pub async fn execute_script_plugin(
                 .await
                 .map_err(|error| format!("script G-code parser task failed: {error}"))?
                 .map_err(|error| error.to_string())?;
-            Ok(ScriptPluginExecutionOutcome::Job { job })
+            Ok(ScriptPluginExecutionOutcome::Job { job: Box::new(job) })
         }
         ScriptAction::Notice {
             title,
@@ -2672,7 +2765,7 @@ pub async fn execute_script_plugin(
             Ok(ScriptPluginExecutionOutcome::Machine {
                 action: "jog".to_owned(),
                 message: format!("{:?} moved {distance_mm:.3} mm", axis),
-                snapshot: state.arbiter.snapshot(),
+                snapshot: Box::new(state.arbiter.snapshot()),
             })
         }
         ScriptAction::SetZero { axis } => {
@@ -2689,7 +2782,7 @@ pub async fn execute_script_plugin(
             Ok(ScriptPluginExecutionOutcome::Machine {
                 action: "setZero".to_owned(),
                 message: format!("{:?} work zero set and verified", axis),
-                snapshot: outcome.snapshot,
+                snapshot: Box::new(outcome.snapshot),
             })
         }
         ScriptAction::ReturnZero {
@@ -2709,7 +2802,7 @@ pub async fn execute_script_plugin(
             Ok(ScriptPluginExecutionOutcome::Machine {
                 action: "returnZero".to_owned(),
                 message: format!("{:?} returned to work zero", axis),
-                snapshot: outcome.snapshot,
+                snapshot: Box::new(outcome.snapshot),
             })
         }
     }
@@ -4029,8 +4122,11 @@ mod tests {
                 y: 200.0,
                 z: 80.0,
             },
+            rotary_axis: None,
             max_jog_distance_mm: 50.0,
             spindle_control: millo_domain::SpindleControl::Manual,
+            flood_coolant_control: false,
+            mist_coolant_control: false,
             homing_installed: false,
             limit_switches_installed: false,
             probe_installed: false,

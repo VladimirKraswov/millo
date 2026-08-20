@@ -26,9 +26,11 @@ const inspection: HardwareInspection = {
       homingInstalled: false,
       limitSwitchesInstalled: false,
       name: "Fixture",
-    probeInstalled: false,
-    probeMode: "off",
+      probeInstalled: false,
+      probeMode: "off",
       spindleControl: "manual",
+      floodCoolantControl: false,
+      mistCoolantControl: false,
     },
   },
 };

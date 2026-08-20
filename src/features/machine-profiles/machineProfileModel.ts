@@ -6,6 +6,8 @@ export const emptyMachineProfileDraft = (): MachineProfileDraft => ({
   travelMm: { x: 0, y: 0, z: 0 },
   maxJogDistanceMm: 50,
   spindleControl: "manual",
+  floodCoolantControl: false,
+  mistCoolantControl: false,
   homingInstalled: false,
   limitSwitchesInstalled: false,
   probeInstalled: false,
@@ -30,6 +32,16 @@ export const validateMachineProfileDraft = (
     draft.maxJogDistanceMm > maximumTravel
   ) {
     return "Максимальный jog должен быть от 0.01 mm до наибольшего хода оси";
+  }
+  if (draft.rotaryAxis) {
+    const { travelDegrees, maxJogDegrees, maxFeedDegreesPerMin } = draft.rotaryAxis;
+    if (!Number.isFinite(travelDegrees) || travelDegrees < 1) return "Укажите ход оси A";
+    if (!Number.isFinite(maxJogDegrees) || maxJogDegrees < 0.01 || maxJogDegrees > travelDegrees) {
+      return "Максимальный jog A должен быть в пределах её хода";
+    }
+    if (!Number.isFinite(maxFeedDegreesPerMin) || maxFeedDegreesPerMin < 1) {
+      return "Укажите максимальную скорость оси A";
+    }
   }
   return undefined;
 };

@@ -27,6 +27,7 @@ export function registerCoreUiExtensions(registry: UiExtensionRegistry): void {
         maxDistanceMm={context.maxJogDistanceMm}
         maxFeedMmPerMin={context.maxJogFeedMmPerMin}
         snapshot={context.snapshot}
+        rotaryAxis={context.rotaryAxis}
       />,
     },
   });

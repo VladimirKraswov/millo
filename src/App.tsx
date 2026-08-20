@@ -1,4 +1,12 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import {
+  lazy,
+  Suspense,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { KeyRound, Puzzle } from "lucide-react";
 
 import { bootstrapPluginHost } from "./app/bootstrapPluginHost";
@@ -71,17 +79,12 @@ import {
 } from "./features/program/previewFixtureFirstCut";
 import { ProgramWorkspace } from "./features/program/ProgramWorkspace";
 import { MachineProfiles } from "./features/machine-profiles/MachineProfiles";
-import { MachineSettingsDialog } from "./features/machine-settings/MachineSettingsDialog";
-import { DiagnosticLogViewer } from "./features/diagnostics/DiagnosticLogViewer";
 import { ProbeIndicator } from "./features/probe/ProbeIndicator";
-import { ZProbeDialog } from "./features/probe/ZProbeDialog";
 import { previewHeightmapGateway } from "./features/heightmap/previewHeightmapGateway";
 import { heightmapHasCurrentZDatum } from "./features/heightmap/heightmapModel";
 import { WorkZeroDialog } from "./features/work-zero/WorkZeroDialog";
-import { ToolLibraryDialog } from "./features/tool-library/ToolLibraryDialog";
 import { WorkspaceToolsMenu } from "./components/WorkspaceToolsMenu";
 import { ScriptPluginContributions } from "./features/script-plugins/ScriptPluginContributions";
-import { ScriptPluginManager } from "./features/script-plugins/ScriptPluginManager";
 import { previewFixtureScriptPlugins } from "./features/script-plugins/previewFixtureScriptPlugins";
 import { previewToolLibraryGateway } from "./features/tool-library/previewToolLibraryGateway";
 import { resolveWorkPosition } from "./features/work-zero/workPositionModel";
@@ -123,6 +126,26 @@ import type {
 } from "./shared/settings";
 import type { InstalledScriptPlugin } from "./shared/scriptPlugins";
 import { emptyToolLibrary } from "./shared/tooling";
+
+const MachineSettingsDialog = lazy(async () => ({
+  default: (await import("./features/machine-settings/MachineSettingsDialog"))
+    .MachineSettingsDialog,
+}));
+const DiagnosticLogViewer = lazy(async () => ({
+  default: (await import("./features/diagnostics/DiagnosticLogViewer"))
+    .DiagnosticLogViewer,
+}));
+const ZProbeDialog = lazy(async () => ({
+  default: (await import("./features/probe/ZProbeDialog")).ZProbeDialog,
+}));
+const ToolLibraryDialog = lazy(async () => ({
+  default: (await import("./features/tool-library/ToolLibraryDialog"))
+    .ToolLibraryDialog,
+}));
+const ScriptPluginManager = lazy(async () => ({
+  default: (await import("./features/script-plugins/ScriptPluginManager"))
+    .ScriptPluginManager,
+}));
 
 const subscribeEmptyToolLibrary = () => () => undefined;
 const readEmptyToolLibrary = () => emptyToolLibrary;
@@ -690,7 +713,10 @@ export default function App() {
     const next = await updateMachineLocalSettings(profile.id, {
       name: profile.name,
       maxJogDistanceMm: profile.maxJogDistanceMm,
+      rotaryAxis: profile.rotaryAxis,
       spindleControl: profile.spindleControl,
+      floodCoolantControl: profile.floodCoolantControl,
+      mistCoolantControl: profile.mistCoolantControl,
       homingInstalled: profile.homingInstalled,
       limitSwitchesInstalled: profile.limitSwitchesInstalled,
       probeInstalled: profile.probeInstalled,
@@ -729,6 +755,8 @@ export default function App() {
           travelMm: { ...fixture.travelMm },
           maxJogDistanceMm: fixture.maxJogDistanceMm,
           spindleControl: fixture.spindleControl,
+          floodCoolantControl: fixture.floodCoolantControl,
+          mistCoolantControl: fixture.mistCoolantControl,
           homingInstalled: fixture.homingInstalled,
           limitSwitchesInstalled: fixture.limitSwitchesInstalled,
           probeInstalled: fixture.probeInstalled,
@@ -1041,7 +1069,7 @@ export default function App() {
           }}
           controls={
             <SafetyControls
-              desktopRuntime={desktopRuntime}
+              desktopRuntime={desktopRuntime || developmentFixture === "machine-control"}
               extensionRegistry={pluginHost.uiRegistry}
               machineGateway={tauriMachineCommandGateway}
               workCoordinateGateway={tauriWorkCoordinateGateway}
@@ -1057,6 +1085,12 @@ export default function App() {
               maxJogDistanceMm={maxJogDistanceMm}
               maxJogFeedMmPerMin={maxJogFeedMmPerMin}
               useProbeForZ={probeEstablishedZDatum !== undefined}
+              homingInstalled={selectedMachine?.homingInstalled ?? false}
+              spindleControl={selectedMachine?.spindleControl ?? "manual"}
+              floodCoolantControl={selectedMachine?.floodCoolantControl ?? false}
+              mistCoolantControl={selectedMachine?.mistCoolantControl ?? false}
+              activeCoordinateSystem={workPositionView.coordinateSystem.toLowerCase() as WorkCoordinateSystem}
+              rotaryAxis={selectedMachine?.rotaryAxis}
             />
           }
           view={{
@@ -1079,28 +1113,34 @@ export default function App() {
         />
       </main>
 
-      <MachineSettingsDialog
-        initialQuery={settingsFocus === "motion" ? "acceleration" : ""}
-        initialView={settingsFocus === "motion" ? "controller" : "local"}
-        onClose={() => setSettingsOpen(false)}
-        onLocalUpdate={updateLocalMachine}
-        onOpenToolLibrary={() => {
-          setSettingsOpen(false);
-          setToolLibraryOpen(true);
-        }}
-        onRollback={rollbackSetting}
-        onWrite={writeControllerSetting}
-        open={settingsOpen}
-        profile={selectedMachine}
-        settings={controllerSettings}
-      />
-      <DiagnosticLogViewer
-        desktopRuntime={desktopRuntime || developmentFixture === "heightmap"}
-        initialSnapshot={developmentFixture === "logs" ? developmentAuditFixture : undefined}
-        onClose={() => setLogOpen(false)}
-        onError={setUiError}
-        open={logOpen}
-      />
+      <Suspense fallback={null}>
+        {settingsOpen && (
+          <MachineSettingsDialog
+            initialQuery={settingsFocus === "motion" ? "acceleration" : ""}
+            initialView={settingsFocus === "motion" ? "controller" : "local"}
+            onClose={() => setSettingsOpen(false)}
+            onLocalUpdate={updateLocalMachine}
+            onOpenToolLibrary={() => {
+              setSettingsOpen(false);
+              setToolLibraryOpen(true);
+            }}
+            onRollback={rollbackSetting}
+            onWrite={writeControllerSetting}
+            open
+            profile={selectedMachine}
+            settings={controllerSettings}
+          />
+        )}
+        {logOpen && (
+          <DiagnosticLogViewer
+            desktopRuntime={desktopRuntime || developmentFixture === "heightmap"}
+            initialSnapshot={developmentFixture === "logs" ? developmentAuditFixture : undefined}
+            onClose={() => setLogOpen(false)}
+            onError={setUiError}
+            open
+          />
+        )}
+      </Suspense>
 
       <WorkZeroDialog
         activeCoordinateSystem={workPositionView.coordinateSystem}
@@ -1115,54 +1155,58 @@ export default function App() {
         snapshot={snapshot}
         useProbeForZ={probeEstablishedZDatum !== undefined}
       />
-      <ZProbeDialog
-        activeCoordinateSystem={workPositionView.coordinateSystem.toLowerCase() as WorkCoordinateSystem}
-        desktopRuntime={desktopRuntime || developmentFixture === "heightmap"}
-        disabled={controlsBusy}
-        gateway={tauriZProbeGateway}
-        heightmapGateway={developmentFixture === "heightmap" ? previewHeightmapGateway : tauriHeightmapGateway}
-        machineTravel={selectedMachine?.travelMm}
-        onAbort={async () => {
-          await feedHold();
-          const challenge = await requestSoftReset();
-          return confirmSoftReset(challenge.id);
-        }}
-        onClose={() => setZProbeOpen(false)}
-        onError={setUiError}
-        onSaveSettings={async (settings) => {
-          if (!selectedMachine) throw new Error("Сначала выберите профиль станка");
-          if (developmentFixture === "heightmap" && !desktopRuntime) {
-            setMachineProfiles((current) => ({
-              ...current,
-              profiles: current.profiles.map((profile) => profile.id === selectedMachine.id
-                ? { ...profile, probeInstalled: true, probeSettings: settings }
-                : profile),
-            }));
-            return;
-          }
-          await updateLocalMachine({
-            ...selectedMachine,
-            probeInstalled: true,
-            probeSettings: settings,
-          });
-        }}
-        onSnapshot={pluginHost.machineState.publish}
-        onZeroEstablished={rememberProbeEstablishedZDatum}
-        onUnlock={unlockAlarm}
-        open={zProbeOpen}
-        profileId={selectedMachine?.id}
-        program={activeProgram}
-        probeInstalled={selectedMachine?.probeInstalled ?? false}
-        settings={selectedMachine?.probeSettings}
-        snapshot={snapshot}
-      />
-      {pluginHost.tools && (
-        <ToolLibraryDialog
-          onClose={() => setToolLibraryOpen(false)}
-          open={toolLibraryOpen}
-          service={pluginHost.tools}
-        />
-      )}
+      <Suspense fallback={null}>
+        {zProbeOpen && (
+          <ZProbeDialog
+            activeCoordinateSystem={workPositionView.coordinateSystem.toLowerCase() as WorkCoordinateSystem}
+            desktopRuntime={desktopRuntime || developmentFixture === "heightmap"}
+            disabled={controlsBusy}
+            gateway={tauriZProbeGateway}
+            heightmapGateway={developmentFixture === "heightmap" ? previewHeightmapGateway : tauriHeightmapGateway}
+            machineTravel={selectedMachine?.travelMm}
+            onAbort={async () => {
+              await feedHold();
+              const challenge = await requestSoftReset();
+              return confirmSoftReset(challenge.id);
+            }}
+            onClose={() => setZProbeOpen(false)}
+            onError={setUiError}
+            onSaveSettings={async (settings) => {
+              if (!selectedMachine) throw new Error("Сначала выберите профиль станка");
+              if (developmentFixture === "heightmap" && !desktopRuntime) {
+                setMachineProfiles((current) => ({
+                  ...current,
+                  profiles: current.profiles.map((profile) => profile.id === selectedMachine.id
+                    ? { ...profile, probeInstalled: true, probeSettings: settings }
+                    : profile),
+                }));
+                return;
+              }
+              await updateLocalMachine({
+                ...selectedMachine,
+                probeInstalled: true,
+                probeSettings: settings,
+              });
+            }}
+            onSnapshot={pluginHost.machineState.publish}
+            onZeroEstablished={rememberProbeEstablishedZDatum}
+            onUnlock={unlockAlarm}
+            open
+            profileId={selectedMachine?.id}
+            program={activeProgram}
+            probeInstalled={selectedMachine?.probeInstalled ?? false}
+            settings={selectedMachine?.probeSettings}
+            snapshot={snapshot}
+          />
+        )}
+        {pluginHost.tools && toolLibraryOpen && (
+          <ToolLibraryDialog
+            onClose={() => setToolLibraryOpen(false)}
+            open
+            service={pluginHost.tools}
+          />
+        )}
+      </Suspense>
       <ScriptPluginContributions
         gateway={tauriScriptPluginGateway}
         jobs={pluginHost.generatedJobs}
@@ -1171,14 +1215,18 @@ export default function App() {
         plugins={scriptPlugins}
         registry={pluginHost.uiRegistry}
       />
-      <ScriptPluginManager
-        gateway={tauriScriptPluginGateway}
-        onChange={setScriptPlugins}
-        onClose={() => setScriptManagerOpen(false)}
-        onError={setUiError}
-        open={scriptManagerOpen}
-        plugins={scriptPlugins}
-      />
+      <Suspense fallback={null}>
+        {scriptManagerOpen && (
+          <ScriptPluginManager
+            gateway={tauriScriptPluginGateway}
+            onChange={setScriptPlugins}
+            onClose={() => setScriptManagerOpen(false)}
+            onError={setUiError}
+            open
+            plugins={scriptPlugins}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

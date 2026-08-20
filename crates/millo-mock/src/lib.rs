@@ -48,6 +48,8 @@ struct MockState {
     overrides: [u16; 3],
     virtual_motion_enabled: bool,
     virtual_grbl: VirtualGrbl,
+    rotary_position_degrees: f64,
+    rotary_report_enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -270,6 +272,8 @@ impl MockTransport {
                     overrides: [100, 100, 100],
                     virtual_motion_enabled: true,
                     virtual_grbl: VirtualGrbl::new(position),
+                    rotary_position_degrees: 0.0,
+                    rotary_report_enabled: false,
                 })),
             },
         }
@@ -408,6 +412,46 @@ impl Transport for MockTransport {
                     .active_reads
                     .push_back(MockRead::Line("error:8".to_owned()));
             }
+        } else if data == b"$H\n" {
+            let homing_enabled = state.settings.get(&22).is_some_and(|value| value == "1");
+            if !homing_enabled {
+                state
+                    .active_reads
+                    .push_back(MockRead::Line("error:5".to_owned()));
+            } else {
+                let pull_off = state
+                    .settings
+                    .get(&27)
+                    .and_then(|value| value.parse::<f64>().ok())
+                    .unwrap_or(1.0);
+                let direction_mask = state
+                    .settings
+                    .get(&23)
+                    .and_then(|value| value.parse::<u8>().ok())
+                    .unwrap_or(0);
+                let mut position = [0.0; 3];
+                for (axis, travel_setting) in [130_u16, 131, 132].into_iter().enumerate() {
+                    let travel = state
+                        .settings
+                        .get(&travel_setting)
+                        .and_then(|value| value.parse::<f64>().ok())
+                        .unwrap_or(100.0);
+                    position[axis] = if direction_mask & (1 << axis) == 0 {
+                        -pull_off
+                    } else {
+                        -travel + pull_off
+                    };
+                }
+                let work_position =
+                    subtract_position(position, state.work_offsets[state.active_wcs]);
+                let home_status = format_status("Home", position, work_position, 0.0);
+                state.status_line = format_status("Idle", position, work_position, 0.0);
+                state.virtual_grbl.sync_external_position(position);
+                state.active_reads.extend(VecDeque::from([
+                    MockRead::Line(home_status),
+                    MockRead::Line("ok".to_owned()),
+                ]));
+            }
         } else if let Some(probe) = parse_z_probe(data) {
             let trigger = state.probe_trigger_distance_mm;
             if trigger.is_none_or(|distance| distance > probe.max_travel_mm) {
@@ -520,6 +564,27 @@ impl Transport for MockTransport {
                     .push_back(MockRead::Line("ok".to_owned()));
             }
         } else if let Some(jog) = parse_jog(data) {
+            if jog.axis == 3 {
+                state.rotary_report_enabled = true;
+                let distance = if jog.absolute {
+                    jog.distance_mm - state.rotary_position_degrees
+                } else {
+                    jog.distance_mm
+                } * state.jog_distance_scale;
+                state.rotary_position_degrees += distance;
+                state.status_line = status_with_rotary_position(
+                    &status_with_mode(&state.status_line, "Jog", jog.feed_mm_per_min),
+                    state.rotary_position_degrees,
+                );
+                state.jog_polls_remaining = mock_jog_status_polls(MockJog {
+                    distance_mm: distance,
+                    ..jog
+                });
+                state
+                    .active_reads
+                    .push_back(MockRead::Line("ok".to_owned()));
+                return Ok(());
+            }
             let mut position = status_position(&state.status_line).unwrap_or([0.0; 3]);
             let intended_distance_mm = if jog.absolute {
                 let target = state.work_offsets[state.active_wcs][jog.axis] + jog.distance_mm;
@@ -750,6 +815,7 @@ fn parse_jog(data: &[u8]) -> Option<MockJog> {
         b'X' => 0,
         b'Y' => 1,
         b'Z' => 2,
+        b'A' => 3,
         _ => return None,
     };
     let distance_mm = words[0].get(1..)?.parse().ok()?;
@@ -833,7 +899,11 @@ fn refresh_virtual_status(state: &mut MockState) {
     let work_offset = state.work_offsets[state.active_wcs];
     let overrides = state.overrides;
     if let Some(status) = state.virtual_grbl.status_line(work_offset, overrides) {
-        state.status_line = status;
+        state.status_line = if state.rotary_report_enabled {
+            status_with_rotary_position(&status, state.rotary_position_degrees)
+        } else {
+            status
+        };
     }
 }
 
@@ -907,6 +977,31 @@ fn status_with_overrides(status: &str, overrides: [u16; 3]) -> String {
     format!("<{}>", fields.join("|"))
 }
 
+fn status_with_rotary_position(status: &str, a_degrees: f64) -> String {
+    let mut fields = status
+        .trim_start_matches('<')
+        .trim_end_matches('>')
+        .split('|')
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    for field in &mut fields {
+        if field.starts_with("MPos:") || field.starts_with("WPos:") {
+            let original = field.clone();
+            let Some((name, coordinates)) = original.split_once(':') else {
+                continue;
+            };
+            let values = coordinates.split(',').take(3).collect::<Vec<_>>();
+            if values.len() == 3 {
+                *field = format!(
+                    "{name}:{},{},{},{a_degrees:.3}",
+                    values[0], values[1], values[2]
+                );
+            }
+        }
+    }
+    format!("<{}>", fields.join("|"))
+}
+
 fn subtract_position(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
     [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
 }
@@ -939,6 +1034,10 @@ fn default_settings() -> BTreeMap<u16, String> {
         (20, "0"),
         (21, "0"),
         (22, "0"),
+        (23, "0"),
+        (24, "25.000"),
+        (25, "500.000"),
+        (27, "1.000"),
         (30, "12000"),
         (31, "0"),
         (32, "0"),
@@ -1247,6 +1346,21 @@ mod tests {
         let completed = transport.read_line().await.unwrap();
         assert!(completed.starts_with("<Idle|"), "{completed}");
         assert_eq!(status_position(&completed), Some([0.0, -0.1, 0.0]));
+    }
+
+    #[tokio::test]
+    async fn optional_rotary_jog_reports_a_position() {
+        let mut transport = MockTransport::default();
+        transport.connect().await.unwrap();
+        transport
+            .write(b"$J=G91 G21 A5.000 F360.000\n")
+            .await
+            .unwrap();
+        assert_eq!(transport.read_line().await.unwrap(), "ok");
+
+        transport.write(b"?").await.unwrap();
+        let status = transport.read_line().await.unwrap();
+        assert!(status.contains("MPos:0.000,0.000,0.000,5.000"));
     }
 
     #[tokio::test]

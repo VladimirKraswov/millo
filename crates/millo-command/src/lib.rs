@@ -8,13 +8,15 @@ use millo_controller::{
     UnhomedSetting,
 };
 use millo_domain::{
-    CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot, DeviceInspection,
-    HardwareInspection, HardwareProfile, JogPadStepOutcome, JogPadStepRequest, MachineMode,
+    CommandCompletion, CommandResponse, ConnectionState, ContinuousJogReceipt,
+    ContinuousJogRequest, ControllerSnapshot, DeviceInspection, HardwareInspection,
+    HardwareProfile, HomingRequest, HomingStartOutcome, HomingState, JogBoundarySource,
+    JogPadStepOutcome, JogPadStepRequest, MachineMode, MachineOutputOutcome, MachineOutputRequest,
     OperatorConfirmation, OverrideAdjustment, Position, ProbeWorkflowMode, RapidOverrideTarget,
     ResetChallenge, ReturnToWorkOriginOutcome, ReturnToWorkOriginRequest, ReturnToWorkZeroOutcome,
-    ReturnToWorkZeroRequest, StepJogReceipt, StepJogRequest, TestJogPreparation, WorkAxis,
-    WorkCoordinateSystem, WorkZeroOutcome, WorkZeroRequest, ZProbeOutcome, ZProbeRequest,
-    ZProbeSettings,
+    ReturnToWorkZeroRequest, SpindleControl, StepJogReceipt, StepJogRequest, TestJogPreparation,
+    WorkAxis, WorkCoordinateSelectionOutcome, WorkCoordinateSystem, WorkZeroOutcome,
+    WorkZeroRequest, ZProbeOutcome, ZProbeRequest, ZProbeSettings,
 };
 use millo_dry_run::{
     DryRunLineKind, DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy,
@@ -64,6 +66,11 @@ const PROBE_START_SETTLE_TIMEOUT: Duration = Duration::from_secs(3);
 const MOTION_SETTLE_MARGIN: Duration = Duration::from_secs(3);
 const MACHINE_OPERATION_STEP_INTERVAL: Duration = Duration::from_millis(100);
 const HEIGHTMAP_POSITION_TOLERANCE_MM: f64 = 0.05;
+const HOMING_MIN_TIMEOUT: Duration = Duration::from_secs(30);
+const HOMING_MAX_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const HOMING_SETTLE_TIMEOUT: Duration = Duration::from_secs(5);
+const CONTINUOUS_JOG_WATCHDOG_MARGIN: Duration = Duration::from_secs(5);
+const MACHINE_BOUNDARY_MARGIN_MM: f64 = 0.05;
 
 #[derive(Debug, Error)]
 pub enum ArbiterError {
@@ -95,6 +102,39 @@ pub enum ArbiterError {
         requested: f64,
         maximum: f64,
     },
+    #[error("continuous jog direction must be -1 or 1")]
+    ContinuousJogDirectionInvalid,
+    #[error("continuous jog is already active")]
+    ContinuousJogActive,
+    #[error("axis {0:?} is not enabled by the selected machine profile")]
+    JogAxisUnavailable(millo_domain::JogAxis),
+    #[error("no safe continuous-jog distance remains before the {axis:?} boundary")]
+    ContinuousJogBoundaryReached { axis: millo_domain::JogAxis },
+    #[error("homing requires explicit operator confirmation")]
+    HomingConfirmationRequired,
+    #[error("homing is not enabled in the selected machine profile")]
+    HomingNotInstalled,
+    #[error("GRBL homing is disabled ($22 must be 1)")]
+    HomingDisabled,
+    #[error("homing can start only from Idle or Alarm, current mode is {0:?}")]
+    HomingUnavailable(MachineMode),
+    #[error("homing did not settle to Idle within {0} ms")]
+    HomingSettleTimeout(u64),
+    #[error("work coordinate system verification failed: expected {expected:?}, read {actual:?}")]
+    WorkCoordinateSelectionVerification {
+        expected: WorkCoordinateSystem,
+        actual: Option<WorkCoordinateSystem>,
+    },
+    #[error("controller-managed spindle output is disabled in the selected machine profile")]
+    ControllerSpindleDisabled,
+    #[error("{0} coolant output is disabled in the selected machine profile")]
+    CoolantOutputDisabled(&'static str),
+    #[error(
+        "spindle speed must be finite and within controller range {minimum:.0}..{maximum:.0} rpm"
+    )]
+    SpindleSpeedOutOfRange { minimum: f64, maximum: f64 },
+    #[error("machine output verification failed: {0}")]
+    MachineOutputVerification(String),
     #[error("work zero requires explicit operator position confirmation")]
     WorkZeroConfirmationRequired,
     #[error("active work coordinate system is not one of G54-G59")]
@@ -301,6 +341,10 @@ impl CommandArbiter {
             program_check: ProgramCheckGate::default(),
             pending_program_check: None,
             verified_z_datum: None,
+            active_homing: None,
+            homing_sequence: 0,
+            machine_envelope: None,
+            active_continuous_jog: None,
             active_z_probe: None,
             prepared_heightmap: None,
             active_heightmap: None,
@@ -695,8 +739,43 @@ impl CommandArbiter {
             .await
     }
 
+    pub async fn start_homing(
+        &self,
+        request: HomingRequest,
+    ) -> Result<HomingStartOutcome, ArbiterError> {
+        self.call(|response| Request::StartHoming { request, response })
+            .await
+    }
+
+    pub async fn start_continuous_jog(
+        &self,
+        request: ContinuousJogRequest,
+    ) -> Result<ContinuousJogReceipt, ArbiterError> {
+        self.call(|response| Request::StartContinuousJog { request, response })
+            .await
+    }
+
     pub async fn cancel_jog(&self) -> Result<ControllerSnapshot, ArbiterError> {
         self.call(|response| Request::CancelJog { response }).await
+    }
+
+    pub async fn select_work_coordinate_system(
+        &self,
+        coordinate_system: WorkCoordinateSystem,
+    ) -> Result<WorkCoordinateSelectionOutcome, ArbiterError> {
+        self.call(|response| Request::SelectWorkCoordinateSystem {
+            coordinate_system,
+            response,
+        })
+        .await
+    }
+
+    pub async fn set_machine_output(
+        &self,
+        request: MachineOutputRequest,
+    ) -> Result<MachineOutputOutcome, ArbiterError> {
+        self.call(|response| Request::SetMachineOutput { request, response })
+            .await
     }
 
     pub async fn configure_unhomed_operation(&self) -> Result<UnhomedConfiguration, ArbiterError> {
@@ -1060,8 +1139,24 @@ enum Request {
         request: JogPadStepRequest,
         response: oneshot::Sender<Result<JogPadStepOutcome, ArbiterError>>,
     },
+    StartHoming {
+        request: HomingRequest,
+        response: oneshot::Sender<Result<HomingStartOutcome, ArbiterError>>,
+    },
+    StartContinuousJog {
+        request: ContinuousJogRequest,
+        response: oneshot::Sender<Result<ContinuousJogReceipt, ArbiterError>>,
+    },
     CancelJog {
         response: oneshot::Sender<Result<ControllerSnapshot, ArbiterError>>,
+    },
+    SelectWorkCoordinateSystem {
+        coordinate_system: WorkCoordinateSystem,
+        response: oneshot::Sender<Result<WorkCoordinateSelectionOutcome, ArbiterError>>,
+    },
+    SetMachineOutput {
+        request: MachineOutputRequest,
+        response: oneshot::Sender<Result<MachineOutputOutcome, ArbiterError>>,
     },
     ConfigureUnhomedOperation {
         response: oneshot::Sender<Result<UnhomedConfiguration, ArbiterError>>,
@@ -1143,6 +1238,10 @@ struct ActorState {
     program_check: ProgramCheckGate,
     pending_program_check: Option<ProgramCheckBinding>,
     verified_z_datum: Option<VerifiedZDatum>,
+    active_homing: Option<ActiveHoming>,
+    homing_sequence: u64,
+    machine_envelope: Option<MachineEnvelope>,
+    active_continuous_jog: Option<ActiveContinuousJog>,
     active_z_probe: Option<ActiveZProbe>,
     prepared_heightmap: Option<ActiveHeightmap>,
     active_heightmap: Option<ActiveHeightmap>,
@@ -1157,6 +1256,25 @@ struct VerifiedZDatum {
     binding: HeightmapCoordinateBinding,
     reset_count: u64,
     reconnect_count: u32,
+}
+
+struct ActiveHoming {
+    started: Instant,
+    timeout: Duration,
+    settling_since: Option<Instant>,
+    travel_mm: [f64; 3],
+    direction_mask: u8,
+    pull_off_mm: f64,
+}
+
+#[derive(Clone, Copy)]
+struct MachineEnvelope {
+    ranges: [(f64, f64); 3],
+}
+
+struct ActiveContinuousJog {
+    deadline: Instant,
+    cancel_requested: bool,
 }
 
 struct ActiveZProbe {
@@ -1233,7 +1351,9 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
                 let Some(request) = request else {
                     break;
                 };
-                if machine_operation_active(&actor) && !request_allowed_during_probe(&request) {
+                if machine_operation_active(&actor)
+                    && !request_allowed_during_machine_operation(&actor, &request)
+                {
                     reject_request_during_machine_operation(request);
                 } else {
                     handle_request(request, &mut actor).await;
@@ -1309,6 +1429,12 @@ async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receiver<Request>)
             _ = tokio::time::sleep(MACHINE_OPERATION_STEP_INTERVAL), if actor.active_z_probe.is_some() => {
                 poll_active_z_probe(&mut actor).await;
             }
+            _ = tokio::time::sleep(MACHINE_OPERATION_STEP_INTERVAL), if actor.active_homing.is_some() => {
+                poll_active_homing(&mut actor).await;
+            }
+            _ = tokio::time::sleep(MACHINE_OPERATION_STEP_INTERVAL), if actor.active_continuous_jog.is_some() => {
+                poll_active_continuous_jog(&mut actor).await;
+            }
             _ = tokio::time::sleep(MACHINE_OPERATION_STEP_INTERVAL), if actor.active_heightmap.is_some() => {
                 poll_active_heightmap(&mut actor).await;
             }
@@ -1329,6 +1455,10 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
         program_check,
         pending_program_check,
         verified_z_datum,
+        active_homing,
+        homing_sequence,
+        machine_envelope,
+        active_continuous_jog,
         active_z_probe,
         prepared_heightmap,
         active_heightmap,
@@ -1362,6 +1492,9 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             program_check.invalidate();
             *pending_program_check = None;
             *verified_z_datum = None;
+            *active_homing = None;
+            *machine_envelope = None;
+            *active_continuous_jog = None;
             cancel_active_sender(sender, sender_snapshots);
             *sender_dispatch_enabled = true;
             *controller = Controller::with_config(transport, *config);
@@ -1376,6 +1509,9 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 program_check.invalidate();
                 *pending_program_check = None;
                 *verified_z_datum = None;
+                *active_homing = None;
+                *machine_envelope = None;
+                *active_continuous_jog = None;
                 cancel_active_sender(sender, sender_snapshots);
                 *sender_dispatch_enabled = true;
                 controller.connect().await.map_err(ArbiterError::from)
@@ -1390,6 +1526,8 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let result = if connection == ConnectionState::Disconnected {
                 invalidate_authorizations(safety, first_cut);
                 *verified_z_datum = None;
+                *machine_envelope = None;
+                controller.invalidate_machine_reference("Machine profile changed");
                 *hardware_profile = profile;
                 Ok(hardware_profile.clone())
             } else {
@@ -1401,6 +1539,8 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             let result = ensure_profile_binding_available(&controller.snapshot()).map(|()| {
                 invalidate_authorizations(safety, first_cut);
                 *verified_z_datum = None;
+                *machine_envelope = None;
+                controller.invalidate_machine_reference("Machine profile changed");
                 *hardware_profile = profile;
                 hardware_profile.clone()
             });
@@ -1410,6 +1550,10 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             invalidate_authorizations(safety, first_cut);
             program_check.invalidate();
             let result = execute_controller_setting_update(controller, request).await;
+            if result.is_ok() {
+                *machine_envelope = None;
+                controller.invalidate_machine_reference("Controller settings changed");
+            }
             publish(snapshots, controller);
             let _ = response.send(result);
         }
@@ -1426,6 +1570,12 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             program_check.invalidate();
             *pending_program_check = None;
             *verified_z_datum = None;
+            *active_homing = None;
+            *machine_envelope = None;
+            if active_continuous_jog.is_some() {
+                let _ = controller.send_realtime(RealtimeCommand::JogCancel).await;
+                *active_continuous_jog = None;
+            }
             cancel_active_sender(sender, sender_snapshots);
             *sender_dispatch_enabled = true;
             let result = controller.disconnect().await.map_err(ArbiterError::from);
@@ -1669,10 +1819,15 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                 program_check.invalidate();
                 *pending_program_check = None;
                 *verified_z_datum = None;
+                *active_homing = None;
+                *machine_envelope = None;
+                *active_continuous_jog = None;
             }
             let controller_result = if command == RealtimeCommand::Status
                 && (sender.has_in_flight()
                     || active_z_probe.is_some()
+                    || active_homing.is_some()
+                    || active_continuous_jog.is_some()
                     || prepared_heightmap.is_some()
                     || active_heightmap.is_some())
             {
@@ -1741,6 +1896,9 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                     program_check.invalidate();
                     *pending_program_check = None;
                     *verified_z_datum = None;
+                    *active_homing = None;
+                    *machine_envelope = None;
+                    *active_continuous_jog = None;
                     let controller_result =
                         controller.send_realtime(RealtimeCommand::SoftReset).await;
                     match &controller_result {
@@ -1806,16 +1964,95 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             publish(snapshots, controller);
             let _ = response.send(result);
         }
+        Request::StartHoming { request, response } => {
+            invalidate_authorizations(safety, first_cut);
+            program_check.invalidate();
+            *pending_program_check = None;
+            *verified_z_datum = None;
+            let result = if sender_is_active(&sender.snapshot()) {
+                Err(ArbiterError::MachineOperationBusy)
+            } else {
+                *homing_sequence = homing_sequence.saturating_add(1);
+                begin_homing(controller, hardware_profile, request, *homing_sequence).await
+            };
+            match result {
+                Ok((outcome, active)) => {
+                    *active_homing = Some(active);
+                    publish(snapshots, controller);
+                    let _ = response.send(Ok(outcome));
+                }
+                Err(error) => {
+                    publish(snapshots, controller);
+                    let _ = response.send(Err(error));
+                }
+            }
+        }
+        Request::StartContinuousJog { request, response } => {
+            first_cut.invalidate();
+            let result = if sender_is_active(&sender.snapshot()) || active_continuous_jog.is_some()
+            {
+                Err(ArbiterError::ContinuousJogActive)
+            } else {
+                begin_continuous_jog(
+                    controller,
+                    hardware_profile,
+                    safety,
+                    machine_envelope.as_ref(),
+                    request,
+                )
+                .await
+            };
+            match result {
+                Ok((receipt, active)) => {
+                    *active_continuous_jog = Some(active);
+                    publish(snapshots, controller);
+                    let _ = response.send(Ok(receipt));
+                }
+                Err(error) => {
+                    publish(snapshots, controller);
+                    let _ = response.send(Err(error));
+                }
+            }
+        }
         Request::CancelJog { response } => {
             invalidate_authorizations(safety, first_cut);
             let mode = controller.snapshot().machine.mode;
-            let result = if mode == MachineMode::Jog {
+            let result = if mode == MachineMode::Jog || active_continuous_jog.is_some() {
                 controller
                     .send_realtime(RealtimeCommand::JogCancel)
                     .await
                     .map_err(ArbiterError::from)
             } else {
                 Err(ArbiterError::JogCancelUnavailable(mode))
+            };
+            if result.is_ok()
+                && let Some(active) = active_continuous_jog.as_mut()
+            {
+                active.cancel_requested = true;
+            }
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::SelectWorkCoordinateSystem {
+            coordinate_system,
+            response,
+        } => {
+            invalidate_authorizations(safety, first_cut);
+            *verified_z_datum = None;
+            let result = if sender_is_active(&sender.snapshot()) {
+                Err(ArbiterError::MachineOperationBusy)
+            } else {
+                execute_select_work_coordinate_system(controller, coordinate_system).await
+            };
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::SetMachineOutput { request, response } => {
+            invalidate_authorizations(safety, first_cut);
+            let result = if sender_is_active(&sender.snapshot()) {
+                Err(ArbiterError::MachineOperationBusy)
+            } else {
+                execute_machine_output(controller, hardware_profile, request).await
             };
             publish(snapshots, controller);
             let _ = response.send(result);
@@ -4128,8 +4365,8 @@ async fn wait_for_probe_motion_idle(
     }
 }
 
-fn request_allowed_during_probe(request: &Request) -> bool {
-    matches!(
+fn request_allowed_during_machine_operation(actor: &ActorState, request: &Request) -> bool {
+    let common = matches!(
         request,
         Request::Realtime {
             command: RealtimeCommand::Status
@@ -4143,7 +4380,15 @@ fn request_allowed_during_probe(request: &Request) -> bool {
             | Request::PauseHeightmap { .. }
             | Request::ResumeHeightmap { .. }
             | Request::CancelHeightmap { .. }
-    )
+    );
+    common
+        || ((actor.active_homing.is_some() || actor.active_continuous_jog.is_some())
+            && matches!(request, Request::Disconnect { .. }))
+        || (actor.active_continuous_jog.is_some()
+            && matches!(
+                request,
+                Request::CancelJog { .. } | Request::RefreshStatus { .. }
+            ))
 }
 
 fn reject_request_during_machine_operation(request: Request) {
@@ -4181,7 +4426,13 @@ fn reject_request_during_machine_operation(request: Request) {
         Request::PrepareTestJog { response, .. } => send_machine_operation_busy(response),
         Request::StepJog { response, .. } => send_machine_operation_busy(response),
         Request::JogPadStep { response, .. } => send_machine_operation_busy(response),
+        Request::StartHoming { response, .. } => send_machine_operation_busy(response),
+        Request::StartContinuousJog { response, .. } => send_machine_operation_busy(response),
         Request::ConfigureUnhomedOperation { response } => send_machine_operation_busy(response),
+        Request::SelectWorkCoordinateSystem { response, .. } => {
+            send_machine_operation_busy(response)
+        }
+        Request::SetMachineOutput { response, .. } => send_machine_operation_busy(response),
         Request::SetWorkZero { response, .. } => send_machine_operation_busy(response),
         Request::ReturnToWorkZero { response, .. } => send_machine_operation_busy(response),
         Request::ReturnToWorkOrigin { response, .. } => send_machine_operation_busy(response),
@@ -4201,7 +4452,9 @@ fn send_machine_operation_busy<T>(response: oneshot::Sender<Result<T, ArbiterErr
 }
 
 fn machine_operation_active(actor: &ActorState) -> bool {
-    actor.active_z_probe.is_some()
+    actor.active_homing.is_some()
+        || actor.active_continuous_jog.is_some()
+        || actor.active_z_probe.is_some()
         || actor.prepared_heightmap.is_some()
         || actor.active_heightmap.is_some()
 }
@@ -4213,6 +4466,149 @@ fn finish_active_z_probe(
     if let Some(active) = active.take() {
         let _ = active.response.send(result);
     }
+}
+
+async fn poll_active_homing(actor: &mut ActorState) {
+    let Some(active) = actor.active_homing.as_ref() else {
+        return;
+    };
+    if active.started.elapsed() > active.timeout + HOMING_SETTLE_TIMEOUT {
+        let _ = actor
+            .controller
+            .send_realtime(RealtimeCommand::FeedHold)
+            .await;
+        actor
+            .controller
+            .mark_homing_failed("Homing watchdog expired; Feed Hold was sent");
+        actor.active_homing = None;
+        actor.machine_envelope = None;
+        publish(&actor.snapshots, &actor.controller);
+        return;
+    }
+
+    if let Some(settling_since) = active.settling_since {
+        match actor.controller.refresh_status().await {
+            Ok(snapshot) if snapshot.machine.mode == MachineMode::Idle => {
+                let position = match snapshot.machine.machine_position {
+                    Some(position) => position,
+                    None => {
+                        actor.controller.mark_homing_failed(
+                            "Homing completed without a machine-coordinate position",
+                        );
+                        actor.active_homing = None;
+                        actor.machine_envelope = None;
+                        publish(&actor.snapshots, &actor.controller);
+                        return;
+                    }
+                };
+                let active = actor
+                    .active_homing
+                    .take()
+                    .expect("homing state disappeared");
+                actor.machine_envelope = Some(machine_envelope_after_homing(position, &active));
+                actor.controller.mark_homing_completed();
+            }
+            Ok(snapshot) if settling_since.elapsed() < HOMING_SETTLE_TIMEOUT => {
+                if matches!(
+                    snapshot.machine.mode,
+                    MachineMode::Alarm | MachineMode::Door
+                ) {
+                    actor
+                        .controller
+                        .mark_homing_failed(format!("Homing ended in {:?}", snapshot.machine.mode));
+                    actor.active_homing = None;
+                    actor.machine_envelope = None;
+                }
+            }
+            Ok(_) => {
+                actor.controller.mark_homing_failed(format!(
+                    "Homing did not settle to Idle within {} ms",
+                    HOMING_SETTLE_TIMEOUT.as_millis()
+                ));
+                actor.active_homing = None;
+                actor.machine_envelope = None;
+            }
+            Err(error) => {
+                actor.controller.mark_homing_failed(error.to_string());
+                actor.active_homing = None;
+                actor.machine_envelope = None;
+            }
+        }
+        publish(&actor.snapshots, &actor.controller);
+        return;
+    }
+
+    match actor.controller.poll_homing(SENDER_RESPONSE_SLICE).await {
+        Ok(ProgramResponsePoll::Pending) => {}
+        Ok(ProgramResponsePoll::StatusObserved) => {
+            publish(&actor.snapshots, &actor.controller);
+        }
+        Ok(ProgramResponsePoll::Terminal(_)) => {
+            if let Some(active) = actor.active_homing.as_mut() {
+                active.settling_since = Some(Instant::now());
+            }
+            publish(&actor.snapshots, &actor.controller);
+        }
+        Err(error) => {
+            let _ = actor
+                .controller
+                .send_realtime(RealtimeCommand::FeedHold)
+                .await;
+            actor.controller.mark_homing_failed(error.to_string());
+            actor.active_homing = None;
+            actor.machine_envelope = None;
+            publish(&actor.snapshots, &actor.controller);
+        }
+    }
+}
+
+fn machine_envelope_after_homing(position: Position, active: &ActiveHoming) -> MachineEnvelope {
+    let positions = [position.x, position.y, position.z];
+    let ranges = std::array::from_fn(|axis| {
+        let usable = (active.travel_mm[axis] - 2.0 * active.pull_off_mm).max(0.0);
+        if active.direction_mask & (1 << axis) == 0 {
+            (positions[axis] - usable, positions[axis])
+        } else {
+            (positions[axis], positions[axis] + usable)
+        }
+    });
+    MachineEnvelope { ranges }
+}
+
+async fn poll_active_continuous_jog(actor: &mut ActorState) {
+    let deadline_reached = actor
+        .active_continuous_jog
+        .as_ref()
+        .is_some_and(|active| !active.cancel_requested && Instant::now() >= active.deadline);
+    if deadline_reached {
+        let _ = actor
+            .controller
+            .send_realtime(RealtimeCommand::JogCancel)
+            .await;
+        if let Some(active) = actor.active_continuous_jog.as_mut() {
+            active.cancel_requested = true;
+        }
+    }
+
+    match actor.controller.refresh_status().await {
+        Ok(snapshot) if snapshot.machine.mode == MachineMode::Idle => {
+            actor.active_continuous_jog = None;
+        }
+        Ok(snapshot)
+            if matches!(
+                snapshot.machine.mode,
+                MachineMode::Alarm | MachineMode::Door
+            ) =>
+        {
+            actor.active_continuous_jog = None;
+        }
+        Ok(_) => {}
+        Err(_) if actor.controller.snapshot().connection != ConnectionState::Connected => {
+            actor.active_continuous_jog = None;
+        }
+        Err(_) => {}
+    }
+    publish(&actor.snapshots, &actor.controller);
 }
 
 async fn poll_active_z_probe(actor: &mut ActorState) {
@@ -4301,6 +4697,120 @@ async fn query_parameters(
         .query_device(millo_controller::DeviceQuery::Parameters)
         .await?;
     Ok(build_device_inspection(vec![response]))
+}
+
+async fn execute_select_work_coordinate_system(
+    controller: &mut Controller<BoxedTransport>,
+    coordinate_system: WorkCoordinateSystem,
+) -> Result<WorkCoordinateSelectionOutcome, ArbiterError> {
+    ensure_stable_idle(&controller.refresh_status().await?)?;
+    let response = controller
+        .select_work_coordinate_system(coordinate_system)
+        .await?;
+    let modal = controller
+        .query_device(millo_controller::DeviceQuery::ModalState)
+        .await?;
+    let inspection = build_device_inspection(vec![modal]);
+    let actual = active_work_coordinate_system(&inspection.modal_state);
+    if actual != Some(coordinate_system) {
+        return Err(ArbiterError::WorkCoordinateSelectionVerification {
+            expected: coordinate_system,
+            actual,
+        });
+    }
+    let snapshot = controller.refresh_status().await?;
+    ensure_stable_idle(&snapshot)?;
+    Ok(WorkCoordinateSelectionOutcome {
+        coordinate_system,
+        command: response.command,
+        snapshot,
+    })
+}
+
+async fn execute_machine_output(
+    controller: &mut Controller<BoxedTransport>,
+    profile: &HardwareProfile,
+    request: MachineOutputRequest,
+) -> Result<MachineOutputOutcome, ArbiterError> {
+    ensure_stable_idle(&controller.refresh_status().await?)?;
+    let before = controller.inspect_device().await?;
+    validate_machine_output_request(profile, &before, request)?;
+    let responses = controller.set_machine_outputs(request).await?;
+    let modal = controller
+        .query_device(millo_controller::DeviceQuery::ModalState)
+        .await?;
+    let inspection = build_device_inspection(vec![modal]);
+    verify_machine_output(request, &inspection.modal_state)?;
+    let snapshot = controller.refresh_status().await?;
+    Ok(MachineOutputOutcome {
+        commands: responses
+            .into_iter()
+            .map(|response| response.command)
+            .collect(),
+        snapshot,
+    })
+}
+
+fn validate_machine_output_request(
+    profile: &HardwareProfile,
+    inspection: &DeviceInspection,
+    request: MachineOutputRequest,
+) -> Result<(), ArbiterError> {
+    match request {
+        MachineOutputRequest::SpindleOn { speed_rpm, .. } => {
+            if profile.spindle_control != SpindleControl::Controller {
+                return Err(ArbiterError::ControllerSpindleDisabled);
+            }
+            let minimum = inspection
+                .settings
+                .get("$31")
+                .and_then(|value| value.parse::<f64>().ok())
+                .unwrap_or(0.0);
+            let maximum = positive_device_setting(inspection, "$30")?;
+            if !speed_rpm.is_finite() || !(minimum..=maximum).contains(&speed_rpm) {
+                return Err(ArbiterError::SpindleSpeedOutOfRange { minimum, maximum });
+            }
+        }
+        MachineOutputRequest::FloodCoolant(_) if !profile.flood_coolant_control => {
+            return Err(ArbiterError::CoolantOutputDisabled("flood"));
+        }
+        MachineOutputRequest::MistCoolant(_) if !profile.mist_coolant_control => {
+            return Err(ArbiterError::CoolantOutputDisabled("mist"));
+        }
+        MachineOutputRequest::SpindleOff
+        | MachineOutputRequest::AllOff
+        | MachineOutputRequest::FloodCoolant(_)
+        | MachineOutputRequest::MistCoolant(_) => {}
+    }
+    Ok(())
+}
+
+fn verify_machine_output(
+    request: MachineOutputRequest,
+    modal_state: &[String],
+) -> Result<(), ArbiterError> {
+    let has = |word: &str| modal_state.iter().any(|current| current == word);
+    let valid = match request {
+        MachineOutputRequest::SpindleOn { direction, .. } => match direction {
+            millo_domain::SpindleDirection::Clockwise => has("M3"),
+            millo_domain::SpindleDirection::Counterclockwise => has("M4"),
+        },
+        MachineOutputRequest::SpindleOff => has("M5"),
+        MachineOutputRequest::FloodCoolant(true) => has("M8"),
+        MachineOutputRequest::MistCoolant(true) => has("M7"),
+        MachineOutputRequest::FloodCoolant(false) | MachineOutputRequest::MistCoolant(false) => {
+            has("M9")
+        }
+        MachineOutputRequest::AllOff => has("M5") && has("M9"),
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(ArbiterError::MachineOutputVerification(format!(
+            "modal state does not reflect {request:?}: {}",
+            modal_state.join(" ")
+        )))
+    }
 }
 
 fn parse_probe_position(parameters: &DeviceInspection) -> Result<Position, ArbiterError> {
@@ -4786,9 +5296,9 @@ async fn execute_jog_pad_step(
     safety: &mut SafetyManager,
     request: JogPadStepRequest,
 ) -> Result<JogPadStepOutcome, ArbiterError> {
+    ensure_jog_axis_available(hardware_profile, request.axis)?;
     validate_jog_pad_motion(request.distance_mm, request.feed_mm_per_min)?;
-    let distance_limit =
-        axis_travel_limit(hardware_profile, request.axis).min(hardware_profile.max_jog_distance_mm);
+    let distance_limit = axis_jog_distance_limit(hardware_profile, request.axis);
     if request.distance_mm.abs() > distance_limit {
         return Err(ArbiterError::JogPadDistanceExceedsProfile {
             axis: request.axis,
@@ -4805,8 +5315,11 @@ async fn execute_jog_pad_step(
             receipt: None,
         });
     };
-    if let Some(maximum) = axis_max_rate(&preparation.inspection.device, request.axis)
-        && request.feed_mm_per_min > maximum
+    if let Some(maximum) = effective_axis_max_rate(
+        &preparation.inspection.device,
+        hardware_profile,
+        request.axis,
+    ) && request.feed_mm_per_min > maximum
     {
         return Err(ArbiterError::JogPadFeedExceedsAxisRate {
             axis: request.axis,
@@ -4833,6 +5346,224 @@ async fn execute_jog_pad_step(
     })
 }
 
+async fn begin_homing(
+    controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
+    request: HomingRequest,
+    sequence: u64,
+) -> Result<(HomingStartOutcome, ActiveHoming), ArbiterError> {
+    if !request.operator_confirmed {
+        return Err(ArbiterError::HomingConfirmationRequired);
+    }
+    if !hardware_profile.homing_installed {
+        return Err(ArbiterError::HomingNotInstalled);
+    }
+
+    let snapshot = controller.refresh_status().await?;
+    if snapshot.reset_notice.is_some()
+        || snapshot.alarm.is_some() && snapshot.machine.mode != MachineMode::Alarm
+        || !matches!(
+            snapshot.machine.mode,
+            MachineMode::Idle | MachineMode::Alarm
+        )
+    {
+        return Err(ArbiterError::HomingUnavailable(snapshot.machine.mode));
+    }
+    let inspection = controller.inspect_device().await?;
+    if setting_flag(&inspection, "$22") != Some(true) {
+        return Err(ArbiterError::HomingDisabled);
+    }
+    let travel_mm = [
+        positive_device_setting(&inspection, "$130")?,
+        positive_device_setting(&inspection, "$131")?,
+        positive_device_setting(&inspection, "$132")?,
+    ];
+    let direction_mask = inspection
+        .settings
+        .get("$23")
+        .and_then(|value| value.parse::<u8>().ok())
+        .unwrap_or(0);
+    let pull_off_mm = positive_device_setting(&inspection, "$27").unwrap_or(1.0);
+    let timeout = homing_timeout(&inspection, travel_mm);
+
+    controller.begin_homing(timeout).await?;
+    controller.mark_homing_started(sequence, timeout);
+    let outcome = HomingStartOutcome {
+        command: "$H".to_owned(),
+        timeout_ms: timeout.as_millis().try_into().unwrap_or(u64::MAX),
+        snapshot: controller.snapshot(),
+    };
+    Ok((
+        outcome,
+        ActiveHoming {
+            started: Instant::now(),
+            timeout,
+            settling_since: None,
+            travel_mm,
+            direction_mask,
+            pull_off_mm,
+        },
+    ))
+}
+
+async fn begin_continuous_jog(
+    controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
+    safety: &mut SafetyManager,
+    machine_envelope: Option<&MachineEnvelope>,
+    request: ContinuousJogRequest,
+) -> Result<(ContinuousJogReceipt, ActiveContinuousJog), ArbiterError> {
+    ensure_jog_axis_available(hardware_profile, request.axis)?;
+    if !matches!(request.direction, -1 | 1) {
+        return Err(ArbiterError::ContinuousJogDirectionInvalid);
+    }
+    validate_jog_pad_motion(MIN_STEP_JOG_DISTANCE_MM, request.feed_mm_per_min)?;
+
+    let preparation =
+        prepare_test_jog(controller, hardware_profile, safety, request.confirmation).await?;
+    let Some(authorization) = preparation.authorization else {
+        return Err(SafetyError::ReadinessBlocked {
+            blockers: preparation.inspection.readiness.blocker_count,
+        }
+        .into());
+    };
+    if let Some(maximum) = effective_axis_max_rate(
+        &preparation.inspection.device,
+        hardware_profile,
+        request.axis,
+    ) && request.feed_mm_per_min > maximum
+    {
+        return Err(ArbiterError::JogPadFeedExceedsAxisRate {
+            axis: request.axis,
+            requested: request.feed_mm_per_min,
+            maximum,
+        });
+    }
+
+    let snapshot = controller.snapshot();
+    let (bounded_distance, boundary_source) = if snapshot.homing.state == HomingState::Homed
+        && request.axis != millo_domain::JogAxis::A
+    {
+        let envelope = machine_envelope
+            .ok_or(ArbiterError::ContinuousJogBoundaryReached { axis: request.axis })?;
+        let axis_index = cartesian_axis_index(request.axis)
+            .ok_or(ArbiterError::JogAxisUnavailable(request.axis))?;
+        let position = snapshot
+            .machine
+            .machine_position
+            .ok_or(ArbiterError::WorkPositionUnavailable)?;
+        let coordinate = jog_axis_position(position, request.axis)?;
+        let (lower, upper) = envelope.ranges[axis_index];
+        let available = if request.direction > 0 {
+            upper - coordinate
+        } else {
+            coordinate - lower
+        } - MACHINE_BOUNDARY_MARGIN_MM;
+        if available < MIN_STEP_JOG_DISTANCE_MM {
+            return Err(ArbiterError::ContinuousJogBoundaryReached { axis: request.axis });
+        }
+        (
+            available.min(MAX_STEP_JOG_DISTANCE_MM),
+            JogBoundarySource::MachineCoordinates,
+        )
+    } else {
+        (
+            axis_jog_distance_limit(hardware_profile, request.axis).min(MAX_STEP_JOG_DISTANCE_MM),
+            JogBoundarySource::ProfileDistance,
+        )
+    };
+
+    safety.consume_test_jog(authorization.id, &snapshot, Instant::now())?;
+    let signed_distance = f64::from(request.direction) * bounded_distance;
+    let step = StepJogRequest {
+        authorization_id: authorization.id,
+        axis: request.axis,
+        distance_mm: signed_distance,
+        feed_mm_per_min: request.feed_mm_per_min,
+    };
+    let receipt = controller.step_jog(step).await?;
+    let duration = Duration::from_secs_f64(bounded_distance / request.feed_mm_per_min * 60.0)
+        + CONTINUOUS_JOG_WATCHDOG_MARGIN;
+    Ok((
+        ContinuousJogReceipt {
+            command: receipt.command,
+            axis: request.axis,
+            direction: request.direction,
+            bounded_distance,
+            feed_mm_per_min: request.feed_mm_per_min,
+            boundary_source,
+        },
+        ActiveContinuousJog {
+            deadline: Instant::now() + duration,
+            cancel_requested: false,
+        },
+    ))
+}
+
+fn ensure_jog_axis_available(
+    profile: &HardwareProfile,
+    axis: millo_domain::JogAxis,
+) -> Result<(), ArbiterError> {
+    let label = match axis {
+        millo_domain::JogAxis::X => "X",
+        millo_domain::JogAxis::Y => "Y",
+        millo_domain::JogAxis::Z => "Z",
+        millo_domain::JogAxis::A => "A",
+    };
+    profile
+        .axes
+        .iter()
+        .any(|configured| configured.eq_ignore_ascii_case(label))
+        .then_some(())
+        .ok_or(ArbiterError::JogAxisUnavailable(axis))
+}
+
+fn cartesian_axis_index(axis: millo_domain::JogAxis) -> Option<usize> {
+    match axis {
+        millo_domain::JogAxis::X => Some(0),
+        millo_domain::JogAxis::Y => Some(1),
+        millo_domain::JogAxis::Z => Some(2),
+        millo_domain::JogAxis::A => None,
+    }
+}
+
+fn jog_axis_position(position: Position, axis: millo_domain::JogAxis) -> Result<f64, ArbiterError> {
+    match axis {
+        millo_domain::JogAxis::X => Ok(position.x),
+        millo_domain::JogAxis::Y => Ok(position.y),
+        millo_domain::JogAxis::Z => Ok(position.z),
+        millo_domain::JogAxis::A => position.a.ok_or(ArbiterError::JogAxisUnavailable(axis)),
+    }
+}
+
+fn setting_flag(inspection: &DeviceInspection, key: &str) -> Option<bool> {
+    match inspection.settings.get(key).map(String::as_str) {
+        Some("0") => Some(false),
+        Some("1") => Some(true),
+        _ => None,
+    }
+}
+
+fn positive_device_setting(
+    inspection: &DeviceInspection,
+    key: &'static str,
+) -> Result<f64, ArbiterError> {
+    inspection
+        .settings
+        .get(key)
+        .and_then(|value| value.parse::<f64>().ok())
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .ok_or_else(|| ArbiterError::ConfigurationVerification(format!("missing {key}")))
+}
+
+fn homing_timeout(inspection: &DeviceInspection, travel_mm: [f64; 3]) -> Duration {
+    let seek = positive_device_setting(inspection, "$25").unwrap_or(500.0);
+    let locate = positive_device_setting(inspection, "$24").unwrap_or(25.0);
+    let travel = travel_mm.into_iter().sum::<f64>();
+    let seconds = travel / seek * 60.0 + travel.min(30.0) / locate * 60.0 + 15.0;
+    Duration::from_secs_f64(seconds).clamp(HOMING_MIN_TIMEOUT, HOMING_MAX_TIMEOUT)
+}
+
 fn validate_jog_pad_motion(distance_mm: f64, feed_mm_per_min: f64) -> Result<(), ArbiterError> {
     if !distance_mm.is_finite()
         || !(MIN_STEP_JOG_DISTANCE_MM..=MAX_STEP_JOG_DISTANCE_MM).contains(&distance_mm.abs())
@@ -4852,6 +5583,7 @@ fn axis_max_rate(device: &DeviceInspection, axis: millo_domain::JogAxis) -> Opti
         millo_domain::JogAxis::X => "$110",
         millo_domain::JogAxis::Y => "$111",
         millo_domain::JogAxis::Z => "$112",
+        millo_domain::JogAxis::A => "$113",
     };
     device
         .settings
@@ -4860,7 +5592,29 @@ fn axis_max_rate(device: &DeviceInspection, axis: millo_domain::JogAxis) -> Opti
         .filter(|value| value.is_finite() && *value > 0.0)
 }
 
+fn effective_axis_max_rate(
+    device: &DeviceInspection,
+    profile: &HardwareProfile,
+    axis: millo_domain::JogAxis,
+) -> Option<f64> {
+    axis_max_rate(device, axis).or_else(|| {
+        (axis == millo_domain::JogAxis::A)
+            .then(|| {
+                profile
+                    .rotary_axis
+                    .map(|rotary| rotary.max_feed_degrees_per_min)
+            })
+            .flatten()
+    })
+}
+
 fn axis_travel_limit(profile: &HardwareProfile, axis: millo_domain::JogAxis) -> f64 {
+    if axis == millo_domain::JogAxis::A {
+        return profile
+            .rotary_axis
+            .map(|rotary| rotary.max_jog_degrees)
+            .unwrap_or(0.0);
+    }
     let Some(travel) = profile.travel_mm else {
         return profile.max_jog_distance_mm;
     };
@@ -4868,6 +5622,15 @@ fn axis_travel_limit(profile: &HardwareProfile, axis: millo_domain::JogAxis) -> 
         millo_domain::JogAxis::X => travel.x,
         millo_domain::JogAxis::Y => travel.y,
         millo_domain::JogAxis::Z => travel.z,
+        millo_domain::JogAxis::A => unreachable!("A axis handled before Cartesian travel"),
+    }
+}
+
+fn axis_jog_distance_limit(profile: &HardwareProfile, axis: millo_domain::JogAxis) -> f64 {
+    if axis == millo_domain::JogAxis::A {
+        axis_travel_limit(profile, axis)
+    } else {
+        axis_travel_limit(profile, axis).min(profile.max_jog_distance_mm)
     }
 }
 
@@ -5207,6 +5970,24 @@ mod tests {
         })
         .await
         .expect("virtual motion did not settle to Idle")
+    }
+
+    async fn wait_for_homing_state(
+        arbiter: &CommandArbiter,
+        expected: HomingState,
+    ) -> ControllerSnapshot {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let snapshot = arbiter.snapshot();
+            if snapshot.homing.state == expected {
+                return snapshot;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "homing state did not reach {expected:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     async fn wait_for_heightmap(
@@ -5741,6 +6522,213 @@ mod tests {
         assert_eq!(
             wait_for_controller_idle(&arbiter).await.machine.mode,
             MachineMode::Idle
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn homing_is_actor_owned_and_reset_invalidates_the_reference() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let mut profile = HardwareProfile::first_machine();
+        profile.homing_installed = true;
+        control.set_setting(22, "1");
+        let task = tokio::spawn(worker);
+        arbiter.set_hardware_profile(profile).await.unwrap();
+        arbiter.connect().await.unwrap();
+
+        let started = arbiter
+            .start_homing(HomingRequest {
+                operator_confirmed: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(started.command, "$H");
+        assert_eq!(started.snapshot.homing.state, HomingState::Homing);
+
+        let homed = wait_for_homing_state(&arbiter, HomingState::Homed).await;
+        assert_eq!(homed.machine.mode, MachineMode::Idle);
+        assert!(control.writes().iter().any(|write| write == b"$H\n"));
+
+        let challenge = arbiter.request_soft_reset().await.unwrap();
+        let reset = arbiter.confirm_soft_reset(challenge.id).await.unwrap();
+        assert_eq!(reset.homing.state, HomingState::Invalidated);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn continuous_jog_is_bounded_and_cancelled_by_realtime_byte() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let receipt = arbiter
+            .start_continuous_jog(ContinuousJogRequest {
+                confirmation: operator_confirmation(),
+                axis: millo_domain::JogAxis::X,
+                direction: 1,
+                feed_mm_per_min: 300.0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(receipt.boundary_source, JogBoundarySource::ProfileDistance);
+        assert_eq!(receipt.bounded_distance, 50.0);
+        assert_eq!(receipt.command, "$J=G91 G21 X50.000 F300.000");
+
+        arbiter.cancel_jog().await.unwrap();
+        assert_eq!(control.writes().last(), Some(&vec![0x85]));
+        assert_eq!(
+            wait_for_controller_idle(&arbiter).await.machine.mode,
+            MachineMode::Idle
+        );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn homed_continuous_jog_uses_the_machine_coordinate_envelope() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let mut profile = HardwareProfile::first_machine();
+        profile.homing_installed = true;
+        control.set_setting(22, "1");
+        let task = tokio::spawn(worker);
+        arbiter.set_hardware_profile(profile).await.unwrap();
+        arbiter.connect().await.unwrap();
+        arbiter
+            .start_homing(HomingRequest {
+                operator_confirmed: true,
+            })
+            .await
+            .unwrap();
+        wait_for_homing_state(&arbiter, HomingState::Homed).await;
+
+        let receipt = arbiter
+            .start_continuous_jog(ContinuousJogRequest {
+                confirmation: operator_confirmation(),
+                axis: millo_domain::JogAxis::X,
+                direction: -1,
+                feed_mm_per_min: 300.0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            receipt.boundary_source,
+            JogBoundarySource::MachineCoordinates
+        );
+        assert!(receipt.bounded_distance > 297.0 && receipt.bounded_distance < 299.0);
+        arbiter.cancel_jog().await.unwrap();
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn selects_and_verifies_each_supported_work_coordinate_system() {
+        let (arbiter, _, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        for coordinate_system in [
+            WorkCoordinateSystem::G54,
+            WorkCoordinateSystem::G55,
+            WorkCoordinateSystem::G56,
+            WorkCoordinateSystem::G57,
+            WorkCoordinateSystem::G58,
+            WorkCoordinateSystem::G59,
+        ] {
+            let outcome = arbiter
+                .select_work_coordinate_system(coordinate_system)
+                .await
+                .unwrap();
+            assert_eq!(outcome.coordinate_system, coordinate_system);
+            assert_eq!(
+                outcome.command,
+                work_coordinate_parameter(coordinate_system)
+            );
+        }
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn controller_managed_spindle_and_coolant_are_modal_verified() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let mut profile = HardwareProfile::first_machine();
+        profile.spindle_control = SpindleControl::Controller;
+        profile.flood_coolant_control = true;
+        let task = tokio::spawn(worker);
+        arbiter.set_hardware_profile(profile).await.unwrap();
+        arbiter.connect().await.unwrap();
+
+        let spindle = arbiter
+            .set_machine_output(MachineOutputRequest::SpindleOn {
+                direction: millo_domain::SpindleDirection::Clockwise,
+                speed_rpm: 1_000.0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(spindle.commands, ["S1000", "M3"]);
+        let coolant = arbiter
+            .set_machine_output(MachineOutputRequest::FloodCoolant(true))
+            .await
+            .unwrap();
+        assert_eq!(coolant.commands, ["M8"]);
+        let stopped = arbiter
+            .set_machine_output(MachineOutputRequest::AllOff)
+            .await
+            .unwrap();
+        assert_eq!(stopped.commands, ["M5", "M9"]);
+        assert!(control.writes().iter().any(|write| write == b"M3\n"));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn undeclared_coolant_output_is_rejected_before_transport_io() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let error = arbiter
+            .set_machine_output(MachineOutputRequest::FloodCoolant(true))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            error,
+            ArbiterError::CoolantOutputDisabled("flood")
+        ));
+        assert!(!control.writes().iter().any(|write| write == b"M8\n"));
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn optional_a_axis_uses_its_own_profile_limits() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let mut profile = HardwareProfile::first_machine();
+        profile.axes.push("A".to_owned());
+        profile.rotary_axis = Some(millo_domain::RotaryAxisProfile {
+            travel_degrees: 360.0,
+            max_jog_degrees: 30.0,
+            max_feed_degrees_per_min: 720.0,
+        });
+        profile.max_jog_distance_mm = 1.0;
+        let task = tokio::spawn(worker);
+        arbiter.set_hardware_profile(profile).await.unwrap();
+        arbiter.connect().await.unwrap();
+
+        let outcome = arbiter
+            .jog_pad_step(JogPadStepRequest {
+                confirmation: operator_confirmation(),
+                axis: millo_domain::JogAxis::A,
+                distance_mm: 5.0,
+                feed_mm_per_min: 360.0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome.receipt.unwrap().command,
+            "$J=G91 G21 A5.000 F360.000"
+        );
+        assert!(
+            control
+                .writes()
+                .iter()
+                .any(|write| write == b"$J=G91 G21 A5.000 F360.000\n")
         );
         task.abort();
     }

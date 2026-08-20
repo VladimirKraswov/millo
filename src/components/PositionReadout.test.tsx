@@ -15,6 +15,7 @@ describe("PositionReadout", () => {
     expect(xyz).toContain("-0.125");
     expect(xyz).not.toContain(">A<");
     expect(xyza).toContain(">A<");
+    expect(xyza).toMatch(/>A<\/span><strong>4\.000<\/strong><small>°<\/small>/);
     expect(formatCoordinate(undefined)).toBe("--");
   });
 });

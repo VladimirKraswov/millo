@@ -787,13 +787,15 @@ Returning to an existing zero uses a distinct boundary:
 - The typed step-jog endpoint consumes the lease inside the actor before the
   controller validates and writes the command. Validation or transport failure
   does not restore the lease.
-- The GRBL encoder always emits `$J=G91 G21` with exactly one of X/Y/Z. Its
+- The GRBL encoder always emits `$J=G91 G21` with exactly one enabled axis.
+  X/Y/Z use millimetres; an explicitly configured A axis uses degrees. Its
   finite technical envelope is `0.01..100000 mm` and `10..100000 mm/min`; this
   prevents malformed or unbounded IPC values but is not operational permission.
-- The command actor independently limits distance to the smaller of the
-  selected machine's `maxJogDistanceMm` and selected-axis travel. It limits feed
-  to that axis' inspected `$110/$111/$112` value. UI values cannot widen either
-  backend boundary.
+- The command actor independently limits linear distance to the smaller of the
+  selected machine's `maxJogDistanceMm` and selected-axis travel. A uses its own
+  `maxJogDegrees`, never the linear value. Feed is limited by inspected
+  `$110/$111/$112/$113`, with the explicit A profile rate as fallback when the
+  firmware does not publish `$113`. UI values cannot widen any backend boundary.
 - A successful `ok` means GRBL accepted the jog for execution; periodic status
   remains authoritative for `Jog` and final position. The jog pad never receives
   or stores its actor-local lease.
@@ -803,8 +805,23 @@ Returning to an existing zero uses a distinct boundary:
   provides three scale-aware presets and explicit distance/feed controls. The
   per-machine distance limit defaults to `50 mm` and may be configured from
   `0.01 mm` through the machine's largest axis.
-- Jog Cancel is the named `0x85` realtime operation and is accepted by the actor
-  only while its current snapshot reports `Jog`.
+- Jog Cancel is the named `0x85` realtime operation and is accepted while GRBL
+  reports `Jog` or the actor owns a just-started continuous jog. This closes the
+  release-before-first-status race without exposing a raw realtime byte.
+- Homing is an actor-owned extended `$H` response, not a blocking UI loop. The
+  actor derives its watchdog from `$24/$25` and `$130-$132`, waits for fresh
+  `Idle`, captures an MPos envelope using `$23/$27`, and publishes a
+  session-scoped Homed state. Ctrl-X, reset banner, recovery reconnect, profile
+  change, or relevant setting change invalidates both state and envelope.
+- Continuous jog consumes the ordinary fresh readiness lease and starts one
+  long but bounded `$J=`. Pointer/key release, focus loss, panel unmount,
+  disconnect, and an actor deadline all converge on idempotent `0x85`
+  cancellation. After homing XYZ uses the captured envelope; before homing it
+  remains profile-bounded.
+- G54-G59 and controller outputs are typed Idle-only transitions followed by a
+  `$G` verification. Spindle start requires controller-managed profile mode and
+  an RPM within fresh `$31..$30`; M7/M8 require separate declared profile
+  capabilities and fail before serial I/O otherwise.
 - First-machine setup exposes no general `$n=value` endpoint. A narrow
   actor-only operation may disable `$21` hard limits and `$22` homing while
   stable `Idle`; it reads settings before and after, skips values already zero,

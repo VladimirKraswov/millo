@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted on 2026-08-11.
+Accepted on 2026-08-11. The initial deferral of continuous jog, keyboard jog,
+A-axis, and spindle commands is superseded by ADR 0057; the step-jog lease and
+encoder rules remain active.
 
 ## Context
 

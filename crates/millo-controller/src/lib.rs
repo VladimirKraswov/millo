@@ -2,16 +2,17 @@ use std::time::{Duration, Instant};
 
 use millo_domain::{
     AlarmState, CommandCompletion, CommandResponse, ConnectionState, ControllerSnapshot,
-    DeviceInspection, MachineMode, MachineState, OverrideAdjustment, Position, RapidOverrideTarget,
-    ResetNotice, ReturnToWorkZeroRequest, StepJogReceipt, StepJogRequest, WorkAxis,
-    WorkCoordinateSystem,
+    DeviceInspection, HomingState, MachineMode, MachineOutputRequest, MachineState,
+    OverrideAdjustment, Position, RapidOverrideTarget, ResetNotice, ReturnToWorkZeroRequest,
+    StepJogReceipt, StepJogRequest, WorkAxis, WorkCoordinateSystem,
 };
 use millo_dry_run::DryRunLine;
 use millo_grbl::{
     IncomingLine, JogValidationError, StatusParseError, build_device_inspection,
     encode_absolute_work_jog, encode_heightmap_xy_jog, encode_heightmap_z_jog,
-    encode_return_to_work_zero, encode_set_work_value, encode_set_work_zero, encode_step_jog,
-    encode_z_probe, encode_z_retract, parse_incoming_line,
+    encode_machine_output, encode_return_to_work_zero, encode_select_work_coordinate_system,
+    encode_set_work_value, encode_set_work_zero, encode_step_jog, encode_z_probe, encode_z_retract,
+    parse_incoming_line,
 };
 use millo_settings::ValidatedSettingWrite;
 use millo_transport::{Transport, TransportError};
@@ -226,6 +227,7 @@ impl<T: Transport> Controller<T> {
         self.snapshot.poll_sequence = 0;
         self.snapshot.reset_count = 0;
         self.snapshot.machine = MachineState::default();
+        self.snapshot.homing = Default::default();
         self.snapshot.reset_notice = None;
         self.snapshot.alarm = None;
 
@@ -249,6 +251,7 @@ impl<T: Transport> Controller<T> {
 
         self.snapshot.connection = ConnectionState::Disconnected;
         self.snapshot.machine = MachineState::default();
+        self.snapshot.homing = Default::default();
         self.snapshot.reset_notice = None;
         self.snapshot.alarm = None;
         self.snapshot.consecutive_failures = 0;
@@ -339,6 +342,74 @@ impl<T: Transport> Controller<T> {
             distance_mm: request.distance_mm,
             feed_mm_per_min: request.feed_mm_per_min,
         })
+    }
+
+    pub async fn begin_homing(&mut self, timeout: Duration) -> Result<(), ControllerError> {
+        self.begin_extended_command("$H", timeout).await
+    }
+
+    pub async fn poll_homing(
+        &mut self,
+        wait: Duration,
+    ) -> Result<ProgramResponsePoll, ControllerError> {
+        self.poll_pending_response("$H", wait).await
+    }
+
+    pub fn mark_homing_started(&mut self, sequence: u64, timeout: Duration) {
+        self.snapshot.homing.state = HomingState::Homing;
+        self.snapshot.homing.sequence = sequence;
+        self.snapshot.homing.timeout_ms = Some(duration_ms(timeout));
+        self.snapshot.homing.detail = None;
+    }
+
+    pub fn mark_homing_completed(&mut self) {
+        self.snapshot.homing.state = HomingState::Homed;
+        self.snapshot.homing.timeout_ms = None;
+        self.snapshot.homing.detail =
+            Some("Machine referenced in this connection session".to_owned());
+    }
+
+    pub fn mark_homing_failed(&mut self, detail: impl Into<String>) {
+        self.snapshot.homing.state = HomingState::Failed;
+        self.snapshot.homing.timeout_ms = None;
+        self.snapshot.homing.detail = Some(detail.into());
+    }
+
+    pub fn invalidate_machine_reference(&mut self, detail: impl Into<String>) {
+        let had_reference = matches!(
+            self.snapshot.homing.state,
+            HomingState::Homing
+                | HomingState::Homed
+                | HomingState::Invalidated
+                | HomingState::Failed
+        );
+        self.snapshot.homing.state = if had_reference {
+            HomingState::Invalidated
+        } else {
+            HomingState::Unreferenced
+        };
+        self.snapshot.homing.timeout_ms = None;
+        self.snapshot.homing.detail = had_reference.then(|| detail.into());
+    }
+
+    pub async fn select_work_coordinate_system(
+        &mut self,
+        coordinate_system: WorkCoordinateSystem,
+    ) -> Result<CommandResponse, ControllerError> {
+        self.execute_acknowledged_line(encode_select_work_coordinate_system(coordinate_system))
+            .await
+    }
+
+    pub async fn set_machine_outputs(
+        &mut self,
+        request: MachineOutputRequest,
+    ) -> Result<Vec<CommandResponse>, ControllerError> {
+        let commands = encode_machine_output(request);
+        let mut responses = Vec::with_capacity(commands.len());
+        for command in commands {
+            responses.push(self.execute_acknowledged_line(&command).await?);
+        }
+        Ok(responses)
     }
 
     pub async fn disable_unhomed_setting(
@@ -719,6 +790,7 @@ impl<T: Transport> Controller<T> {
         self.transport.write(&[command.byte()]).await?;
         if command == RealtimeCommand::SoftReset {
             self.pending_program_response = None;
+            self.invalidate_machine_reference("Coordinates invalidated by soft reset");
         }
         Ok(self.snapshot())
     }
@@ -812,6 +884,7 @@ impl<T: Transport> Controller<T> {
 
     async fn recover(&mut self) -> Result<ControllerSnapshot, ControllerError> {
         self.snapshot.connection = ConnectionState::Recovering;
+        self.invalidate_machine_reference("Coordinates invalidated after transport reconnect");
         let _ = self.transport.disconnect().await;
 
         if let Err(error) = self.transport.connect().await {
@@ -979,6 +1052,7 @@ impl<T: Transport> Controller<T> {
     }
 
     fn apply_reset_banner(&mut self, banner: String, version: Option<String>) {
+        self.invalidate_machine_reference("Coordinates invalidated by controller reset");
         self.snapshot.reset_count = self.snapshot.reset_count.saturating_add(1);
         self.snapshot.machine = MachineState::default();
         self.snapshot.alarm = None;
@@ -1198,6 +1272,8 @@ mod tests {
         let (mut controller, control) = test_controller();
         controller.connect().await.unwrap();
         controller.refresh_status().await.unwrap();
+        controller.mark_homing_started(1, Duration::from_secs(30));
+        controller.mark_homing_completed();
         control.queue_reset("1.1h");
 
         let snapshot = controller.lifecycle_tick().await.unwrap();
@@ -1206,6 +1282,7 @@ mod tests {
         assert_eq!(notice.version.as_deref(), Some("1.1h"));
         assert_eq!(notice.sequence, 1);
         assert_eq!(snapshot.machine.mode, MachineMode::Idle);
+        assert_eq!(snapshot.homing.state, HomingState::Invalidated);
 
         controller.acknowledge_reset();
         control.queue_reset("1.1h");
@@ -1309,6 +1386,8 @@ mod tests {
         let (mut controller, control) = test_controller();
         controller.connect().await.unwrap();
         controller.refresh_status().await.unwrap();
+        controller.mark_homing_started(1, Duration::from_secs(30));
+        controller.mark_homing_completed();
         control.queue_stall();
         control.queue_stall();
 
@@ -1333,6 +1412,7 @@ mod tests {
         assert_eq!(recovered.consecutive_failures, 0);
         assert_eq!(recovered.reconnect_count, 1);
         assert!(recovered.last_error.is_none());
+        assert_eq!(recovered.homing.state, HomingState::Invalidated);
     }
 
     #[tokio::test]

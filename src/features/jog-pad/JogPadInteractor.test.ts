@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { MachineCommandGateway } from "../../platform/machine/MachineCommandGateway";
 import type {
+  ContinuousJogReceipt,
   JogPadStepOutcome,
   OperatorConfirmation,
 } from "../../shared/machine";
+import { emptySnapshot } from "../../shared/machine";
 import {
   JogPadInteractor,
   MAX_JOG_DISTANCE_MM,
@@ -32,6 +34,8 @@ const outcome: JogPadStepOutcome = {
         name: "Test",
         axes: ["X", "Y", "Z"],
         spindleControl: "manual",
+        floodCoolantControl: false,
+        mistCoolantControl: false,
         homingInstalled: false,
         limitSwitchesInstalled: false,
       probeInstalled: false,
@@ -47,6 +51,21 @@ const outcome: JogPadStepOutcome = {
   },
 };
 
+const machineGateway = (
+  jogPadStep = vi.fn(async () => outcome),
+): MachineCommandGateway => ({
+  jogPadStep,
+  startContinuousJog: vi.fn(async () => ({
+    command: "$J=G91 G21 X50.000 F300.000",
+    axis: "x",
+    direction: 1,
+    boundedDistance: 50,
+    feedMmPerMin: 300,
+    boundarySource: "profileDistance",
+  } satisfies ContinuousJogReceipt)),
+  cancelJog: vi.fn(async () => emptySnapshot),
+});
+
 describe("JogPadInteractor", () => {
   it("expands the single operator arm into the typed backend facts", () => {
     expect(jogOperatorConfirmation(true)).toEqual(confirmation);
@@ -59,7 +78,7 @@ describe("JogPadInteractor", () => {
 
   it("turns one press into one signed bounded gateway call", async () => {
     const jogPadStep = vi.fn(async () => outcome);
-    const interactor = new JogPadInteractor({ jogPadStep });
+    const interactor = new JogPadInteractor(machineGateway(jogPadStep));
 
     await interactor.move(confirmation, "y", -1, 10, 800);
 
@@ -88,7 +107,7 @@ describe("JogPadInteractor", () => {
 
   it("rejects values outside the technical envelope before the gateway", async () => {
     const jogPadStep = vi.fn(async () => outcome);
-    const interactor = new JogPadInteractor({ jogPadStep });
+    const interactor = new JogPadInteractor(machineGateway(jogPadStep));
 
     await expect(
       interactor.move(confirmation, "x", 1, MAX_JOG_DISTANCE_MM + 0.01, 300),
@@ -108,6 +127,8 @@ describe("JogPadInteractor", () => {
             resolveFirst = resolve;
           }),
       ),
+      startContinuousJog: vi.fn(),
+      cancelJog: vi.fn(),
     };
     const interactor = new JogPadInteractor(gateway);
     const first = interactor.move(confirmation, "z", 1, 1, 300);
@@ -119,5 +140,44 @@ describe("JogPadInteractor", () => {
 
     resolveFirst?.(outcome);
     await first;
+  });
+
+  it("cancels an accepted continuous jog when release wins the start race", async () => {
+    let resolveStart: ((value: ContinuousJogReceipt) => void) | undefined;
+    const gateway = machineGateway();
+    gateway.startContinuousJog = vi.fn(
+      () =>
+        new Promise<ContinuousJogReceipt>((resolve) => {
+          resolveStart = resolve;
+        }),
+    );
+    const interactor = new JogPadInteractor(gateway);
+    const start = interactor.startContinuous(confirmation, "x", 1, 300);
+
+    await interactor.stopContinuous();
+    resolveStart?.({
+      command: "$J=G91 G21 X50.000 F300.000",
+      axis: "x",
+      direction: 1,
+      boundedDistance: 50,
+      feedMmPerMin: 300,
+      boundarySource: "profileDistance",
+    });
+    await start;
+
+    expect(gateway.cancelJog).toHaveBeenCalledOnce();
+    expect(interactor.isContinuousBusy()).toBe(false);
+  });
+
+  it("cancels an active continuous jog once even when stop repeats", async () => {
+    const gateway = machineGateway();
+    const interactor = new JogPadInteractor(gateway);
+
+    await interactor.startContinuous(confirmation, "z", -1, 100);
+    await interactor.stopContinuous();
+    await interactor.stopContinuous();
+
+    expect(gateway.cancelJog).toHaveBeenCalledOnce();
+    expect(interactor.isContinuousBusy()).toBe(false);
   });
 });

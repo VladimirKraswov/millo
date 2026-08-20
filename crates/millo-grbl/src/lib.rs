@@ -1,7 +1,8 @@
 use millo_domain::{
     CommandResponse, ControllerAccessories, ControllerBufferState, ControllerCapabilities,
-    ControllerOverrides, ControllerPins, DeviceInspection, JogAxis, MachineMode, MachineState,
-    Position, ReturnToWorkZeroRequest, StepJogRequest, WorkAxis, WorkCoordinateSystem,
+    ControllerOverrides, ControllerPins, DeviceInspection, JogAxis, MachineMode,
+    MachineOutputRequest, MachineState, Position, ReturnToWorkZeroRequest, SpindleDirection,
+    StepJogRequest, WorkAxis, WorkCoordinateSystem,
 };
 use thiserror::Error;
 
@@ -84,6 +85,7 @@ pub fn encode_step_jog(request: StepJogRequest) -> Result<String, JogValidationE
         JogAxis::X => 'X',
         JogAxis::Y => 'Y',
         JogAxis::Z => 'Z',
+        JogAxis::A => 'A',
     };
     Ok(format!(
         "$J=G91 G21 {axis}{:.3} F{:.3}",
@@ -257,6 +259,35 @@ pub const fn work_coordinate_parameter(coordinate_system: WorkCoordinateSystem) 
         WorkCoordinateSystem::G57 => "G57",
         WorkCoordinateSystem::G58 => "G58",
         WorkCoordinateSystem::G59 => "G59",
+    }
+}
+
+pub const fn encode_select_work_coordinate_system(
+    coordinate_system: WorkCoordinateSystem,
+) -> &'static str {
+    work_coordinate_parameter(coordinate_system)
+}
+
+pub fn encode_machine_output(request: MachineOutputRequest) -> Vec<String> {
+    match request {
+        MachineOutputRequest::SpindleOn {
+            direction,
+            speed_rpm,
+        } => vec![
+            format!("S{speed_rpm:.0}"),
+            match direction {
+                SpindleDirection::Clockwise => "M3".to_owned(),
+                SpindleDirection::Counterclockwise => "M4".to_owned(),
+            },
+        ],
+        MachineOutputRequest::SpindleOff => vec!["M5".to_owned()],
+        MachineOutputRequest::FloodCoolant(enabled) => {
+            vec![if enabled { "M8" } else { "M9" }.to_owned()]
+        }
+        MachineOutputRequest::MistCoolant(enabled) => {
+            vec![if enabled { "M7" } else { "M9" }.to_owned()]
+        }
+        MachineOutputRequest::AllOff => vec!["M5".to_owned(), "M9".to_owned()],
     }
 }
 
@@ -742,6 +773,19 @@ mod tests {
         assert_eq!(command, "$J=G91 G21 Y-0.100 F50.000");
         assert!(!command.contains('X'));
         assert!(!command.contains('Z'));
+    }
+
+    #[test]
+    fn encodes_rotary_a_jog_in_controller_axis_units() {
+        let command = encode_step_jog(StepJogRequest {
+            authorization_id: 1,
+            axis: JogAxis::A,
+            distance_mm: -5.0,
+            feed_mm_per_min: 360.0,
+        })
+        .unwrap();
+
+        assert_eq!(command, "$J=G91 G21 A-5.000 F360.000");
     }
 
     #[test]

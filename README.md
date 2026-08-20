@@ -42,8 +42,9 @@ to its persistent machine profile by a stored fingerprint. An unknown serial
 controller opens onboarding with firmware-backed travel already filled from
 `$130/$131/$132`; motion remains blocked until that binding is complete.
 `millo-profile` owns local facts that firmware cannot prove: the machine name,
-spindle workflow, and declared homing, limits, probe, and emergency-stop
-hardware. It never infers a physical probe or emergency stop from firmware.
+spindle workflow, optional rotary axis, declared coolant outputs, and declared
+homing, limits, probe, and emergency-stop hardware. It never infers physical
+sensors or output wiring from firmware.
 
 The controller is the source of truth for every value reported by `$$`.
 `millo-settings` catalogs known GRBL 1.1 settings, retains unknown firmware
@@ -80,7 +81,11 @@ largest configured axis, and can represent desktop and multi-meter routers. The
 actor clamps each request again to the selected axis travel and to that axis'
 live GRBL `$110/$111/$112` maximum rate. Every attempt consumes its lease before
 writing; another step requires another full preflight. GRBL Jog Cancel (`0x85`)
-is a separate named safety action.
+is a separate named safety action. Typed homing and continuous jog extend this
+boundary without moving it into React: `$H` and bounded press-and-hold `$J=`
+remain actor-owned, while Hold, Reset, Status, Jog Cancel, and Disconnect stay
+responsive. Homing validity is explicit in every snapshot and is discarded
+after reset or recovery reconnect.
 Physical smoke tests have now disabled profile-inconsistent `$21/$22`, verified
 the persisted values, and completed separate X, Y, and Z `+0.100 mm` steps at
 `10 mm/min`. Every run returned to `Idle`, and only its selected coordinate
@@ -92,6 +97,15 @@ distance and feed controls. Every press executes a new status, Inspector,
 readiness, and one-use authorization cycle inside the Rust actor. React reaches
 it through a platform-neutral `MachineCommandGateway`, establishing the same
 capability boundary planned for plugins.
+
+Keyboard jog is separately enabled and ignores editable controls. Pointer/key
+release, focus loss, panel teardown, and disconnect all cancel press-and-hold
+motion. Homed XYZ movement uses a captured machine-coordinate envelope;
+unhomed movement remains profile-bounded. Optional A-axis motion has independent
+degree and rate limits. G54-G59, controller spindle, and declared M7/M8 outputs
+are typed Idle-only operations and are reread from GRBL modal state after each
+write. See [Machine control lifecycle](docs/MACHINE_CONTROL.md) and
+[ADR 0057](docs/decisions/0057-actor-owned-homing-and-continuous-jog.md).
 
 Manual work-zero controls are another narrow typed use case. Zero X, Y, and Z
 are available only for a connected, stable `Idle` controller after an explicit
@@ -520,12 +534,12 @@ successful GRBL status exchange.
 | `millo-command` | Single-owner command actor, polling, and response arbitration |
 | `millo-readiness` | Hardware-profile policy and guarded test-jog readiness |
 | `millo-run` | Intent-aware preflight, operator checklist, and one-use program-run lease |
-
-The current cross-layer review, closed findings, dependency evidence, and
-remaining release boundaries are recorded in [`docs/CODE_AUDIT.md`](docs/CODE_AUDIT.md).
 | `millo-safety` | Reset challenges and short-lived test-jog authorization |
 | `millo-sender` | Bounded GRBL RX/FIFO sender with Check, verification, and machining modes |
 | `millo-desktop` | Thin Tauri command/event adapter |
+
+The current cross-layer review, closed findings, dependency evidence, and
+remaining release boundaries are recorded in [`docs/CODE_AUDIT.md`](docs/CODE_AUDIT.md).
 
 See [Architecture](docs/ARCHITECTURE.md), the decisions for the
 [modular core](docs/decisions/0001-modular-core.md) and
@@ -536,6 +550,7 @@ See [Architecture](docs/ARCHITECTURE.md), the decisions for the
 [hardware readiness](docs/decisions/0006-hardware-readiness.md) and
 [realtime safety controls](docs/decisions/0007-realtime-safety-controls.md), then
 the [guarded step jog](docs/decisions/0008-guarded-step-jog.md),
+[actor-owned homing and continuous jog](docs/decisions/0057-actor-owned-homing-and-continuous-jog.md),
 [machine-scaled Motion Deck](docs/decisions/0040-machine-scaled-motion-deck.md), and
 [verified unhomed configuration](docs/decisions/0009-unhomed-controller-configuration.md),
 then the [extension host boundary](docs/decisions/0010-extension-host-boundaries.md)

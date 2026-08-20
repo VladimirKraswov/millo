@@ -47,7 +47,14 @@ The maintainability contract is tested at the same boundaries as behavior:
 `npm run test:ui` runs Vitest policy tests for TypeScript feature modules. The
 jog-pad suite verifies one signed bounded gateway call per press, rejects values
 outside the technical envelope before IPC, scales presets to the machine, and
-rejects a concurrent press while the first call is unresolved.
+rejects a concurrent press while the first call is unresolved. Continuous-jog
+tests cover release after acceptance, release-before-start, repeated idempotent
+stop, actor watchdog cancellation, and machine-coordinate versus profile
+boundaries. Homing tests require fresh Idle after `$H`, invalidate reference on
+Ctrl-X and automatic transport recovery, and keep Hold/Reset available while
+the lifecycle owns the port. Optional A tests prove that degree limits are not
+clamped by linear `maxJogDistanceMm`. Output tests reject undeclared M7/M8 before
+transport I/O and verify accepted spindle/coolant state through `$G`.
 
 Operator-layout tests keep transient controller state from moving primary
 controls. Safety controls render fixed Hold, Reset, and Cancel slots in both
@@ -56,6 +63,11 @@ slot. Browser fixtures compare element bounding boxes across Idle, Jog, Alarm,
 and reset; the accepted delta for the controller heading, coordinate readout,
 workbench tabs, safety actions, jog pad, and coordinate disclosure is exactly
 zero pixels.
+
+`/?fixture=machine-control` renders a connected, homed profile with optional A,
+controller spindle, and declared flood/mist outputs. Use it for desktop and
+narrow-viewport screenshots of the complete Motion Deck and WCS/output
+disclosure without requiring CNC hardware.
 
 Program file-picker tests require a visible `Open G-code` primary action in the
 empty workspace, the complete supported extension allowlist, and a stable

@@ -3,12 +3,20 @@ import type { Position } from "../shared/machine";
 export const formatCoordinate = (value: number | undefined): string =>
   value === undefined ? "--" : value.toFixed(3);
 
-function AxisReadout({ axis, value }: { readonly axis: string; readonly value?: number }) {
+function AxisReadout({
+  axis,
+  unit = "mm",
+  value,
+}: {
+  readonly axis: string;
+  readonly unit?: string;
+  readonly value?: number;
+}) {
   return (
     <div className="axis-readout">
       <span>{axis}</span>
       <strong>{formatCoordinate(value)}</strong>
-      <small>mm</small>
+      <small>{unit}</small>
     </div>
   );
 }
@@ -19,7 +27,7 @@ export function PositionReadout({ position }: { readonly position?: Position }) 
       <AxisReadout axis="X" value={position?.x} />
       <AxisReadout axis="Y" value={position?.y} />
       <AxisReadout axis="Z" value={position?.z} />
-      {position?.a !== undefined && <AxisReadout axis="A" value={position.a} />}
+      {position?.a !== undefined && <AxisReadout axis="A" unit="°" value={position.a} />}
     </div>
   );
 }

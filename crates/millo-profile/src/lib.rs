@@ -4,8 +4,8 @@ use std::{
 };
 
 use millo_domain::{
-    DEFAULT_MAX_JOG_DISTANCE_MM, DeviceInspection, HardwareProfile, MachineTravel, SpindleControl,
-    ZProbeSettings, default_max_jog_distance_mm,
+    DEFAULT_MAX_JOG_DISTANCE_MM, DeviceInspection, HardwareProfile, MachineTravel,
+    RotaryAxisProfile, SpindleControl, ZProbeSettings, default_max_jog_distance_mm,
 };
 use millo_storage::{backup_path, write_atomically};
 use serde::{Deserialize, Serialize};
@@ -56,9 +56,15 @@ pub struct MachineProfile {
     pub id: String,
     pub name: String,
     pub travel_mm: MachineTravel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotary_axis: Option<RotaryAxisProfile>,
     #[serde(default = "default_max_jog_distance_mm")]
     pub max_jog_distance_mm: f64,
     pub spindle_control: SpindleControl,
+    #[serde(default)]
+    pub flood_coolant_control: bool,
+    #[serde(default)]
+    pub mist_coolant_control: bool,
     pub homing_installed: bool,
     pub limit_switches_installed: bool,
     pub probe_installed: bool,
@@ -73,12 +79,19 @@ pub struct MachineProfile {
 
 impl MachineProfile {
     pub fn hardware_profile(&self) -> HardwareProfile {
+        let mut axes = vec!["X".to_owned(), "Y".to_owned(), "Z".to_owned()];
+        if self.rotary_axis.is_some() {
+            axes.push("A".to_owned());
+        }
         HardwareProfile {
             name: self.name.clone(),
-            axes: vec!["X".to_owned(), "Y".to_owned(), "Z".to_owned()],
+            axes,
             travel_mm: Some(self.travel_mm),
+            rotary_axis: self.rotary_axis,
             max_jog_distance_mm: self.max_jog_distance_mm,
             spindle_control: self.spindle_control,
+            flood_coolant_control: self.flood_coolant_control,
+            mist_coolant_control: self.mist_coolant_control,
             homing_installed: self.homing_installed,
             limit_switches_installed: self.limit_switches_installed,
             probe_installed: self.probe_installed,
@@ -93,10 +106,16 @@ impl MachineProfile {
 pub struct MachineProfileDraft {
     pub name: String,
     pub travel_mm: MachineTravel,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotary_axis: Option<RotaryAxisProfile>,
     #[serde(default = "default_max_jog_distance_mm")]
     pub max_jog_distance_mm: f64,
     #[serde(default)]
     pub spindle_control: SpindleControl,
+    #[serde(default)]
+    pub flood_coolant_control: bool,
+    #[serde(default)]
+    pub mist_coolant_control: bool,
     #[serde(default)]
     pub homing_installed: bool,
     #[serde(default)]
@@ -118,7 +137,13 @@ pub struct MachineProfileDraft {
 pub struct MachineLocalSettingsUpdate {
     pub name: String,
     pub max_jog_distance_mm: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotary_axis: Option<RotaryAxisProfile>,
     pub spindle_control: SpindleControl,
+    #[serde(default)]
+    pub flood_coolant_control: bool,
+    #[serde(default)]
+    pub mist_coolant_control: bool,
     pub homing_installed: bool,
     pub limit_switches_installed: bool,
     pub probe_installed: bool,
@@ -141,8 +166,11 @@ impl MachineProfileDraft {
         Ok(Self {
             name: suggested_name.into(),
             travel_mm,
+            rotary_axis: None,
             max_jog_distance_mm: DEFAULT_MAX_JOG_DISTANCE_MM.min(max_travel(travel_mm)),
             spindle_control: SpindleControl::Manual,
+            flood_coolant_control: false,
+            mist_coolant_control: false,
             homing_installed: false,
             limit_switches_installed: false,
             probe_installed: false,
@@ -272,8 +300,11 @@ impl MachineProfileStore {
             id: format!("machine-{:04}", next.next_id),
             name: draft.name.trim().to_owned(),
             travel_mm: draft.travel_mm,
+            rotary_axis: draft.rotary_axis,
             max_jog_distance_mm: draft.max_jog_distance_mm,
             spindle_control: draft.spindle_control,
+            flood_coolant_control: draft.flood_coolant_control,
+            mist_coolant_control: draft.mist_coolant_control,
             homing_installed: draft.homing_installed,
             limit_switches_installed: draft.limit_switches_installed,
             probe_installed: draft.probe_installed,
@@ -326,9 +357,13 @@ impl MachineProfileStore {
             .ok_or_else(|| ProfileError::UnknownProfile(profile_id.to_owned()))?;
         profile.name = update.name.trim().to_owned();
         validate_max_jog_distance(profile.travel_mm, update.max_jog_distance_mm)?;
+        validate_rotary_axis(update.rotary_axis)?;
         validate_probe_settings(update.probe_settings)?;
         profile.max_jog_distance_mm = update.max_jog_distance_mm;
+        profile.rotary_axis = update.rotary_axis;
         profile.spindle_control = update.spindle_control;
+        profile.flood_coolant_control = update.flood_coolant_control;
+        profile.mist_coolant_control = update.mist_coolant_control;
         profile.homing_installed = update.homing_installed;
         profile.limit_switches_installed = update.limit_switches_installed;
         profile.probe_installed = update.probe_installed;
@@ -383,6 +418,8 @@ pub enum ProfileError {
     InvalidMaxJogDistance,
     #[error("probe settings contain a value outside the supported range")]
     InvalidProbeSettings,
+    #[error("A-axis settings contain a value outside the supported range")]
+    InvalidRotaryAxis,
     #[error("machine profile already exists: {0}")]
     DuplicateName(String),
     #[error("machine profile limit reached: {0}")]
@@ -419,8 +456,11 @@ fn validate_document(document: &StoredProfiles) -> Result<(), ProfileError> {
         validate_draft(&MachineProfileDraft {
             name: profile.name.clone(),
             travel_mm: profile.travel_mm,
+            rotary_axis: profile.rotary_axis,
             max_jog_distance_mm: profile.max_jog_distance_mm,
             spindle_control: profile.spindle_control,
+            flood_coolant_control: profile.flood_coolant_control,
+            mist_coolant_control: profile.mist_coolant_control,
             homing_installed: profile.homing_installed,
             limit_switches_installed: profile.limit_switches_installed,
             probe_installed: profile.probe_installed,
@@ -447,7 +487,25 @@ fn validate_draft(draft: &MachineProfileDraft) -> Result<(), ProfileError> {
     validate_travel("Y", draft.travel_mm.y)?;
     validate_travel("Z", draft.travel_mm.z)?;
     validate_max_jog_distance(draft.travel_mm, draft.max_jog_distance_mm)?;
+    validate_rotary_axis(draft.rotary_axis)?;
     validate_probe_settings(draft.probe_settings)
+}
+
+fn validate_rotary_axis(profile: Option<RotaryAxisProfile>) -> Result<(), ProfileError> {
+    let Some(profile) = profile else {
+        return Ok(());
+    };
+    let valid = profile.travel_degrees.is_finite()
+        && (1.0..=1_000_000.0).contains(&profile.travel_degrees)
+        && profile.max_jog_degrees.is_finite()
+        && (0.01..=profile.travel_degrees).contains(&profile.max_jog_degrees)
+        && profile.max_feed_degrees_per_min.is_finite()
+        && (1.0..=1_000_000.0).contains(&profile.max_feed_degrees_per_min);
+    if valid {
+        Ok(())
+    } else {
+        Err(ProfileError::InvalidRotaryAxis)
+    }
 }
 
 fn validate_probe_settings(settings: ZProbeSettings) -> Result<(), ProfileError> {
@@ -556,8 +614,11 @@ mod tests {
                 y: 180.0,
                 z: 80.0,
             },
+            rotary_axis: None,
             max_jog_distance_mm: 50.0,
             spindle_control: SpindleControl::Manual,
+            flood_coolant_control: false,
+            mist_coolant_control: false,
             homing_installed: false,
             limit_switches_installed: false,
             probe_installed: false,
@@ -724,7 +785,10 @@ mod tests {
                 MachineLocalSettingsUpdate {
                     name: "Workshop router".to_owned(),
                     max_jog_distance_mm: 75.0,
+                    rotary_axis: None,
                     spindle_control: SpindleControl::Controller,
+                    flood_coolant_control: true,
+                    mist_coolant_control: false,
                     homing_installed: false,
                     limit_switches_installed: false,
                     probe_installed: true,
@@ -740,6 +804,8 @@ mod tests {
 
         let profile = next.selected().unwrap();
         assert_eq!(profile.name, "Workshop router");
+        assert!(profile.flood_coolant_control);
+        assert!(!profile.mist_coolant_control);
         assert!(profile.probe_installed);
         assert_eq!(profile.travel_mm.x, 300.0);
         assert_eq!(profile.max_jog_distance_mm, 75.0);

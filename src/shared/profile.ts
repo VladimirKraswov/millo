@@ -1,4 +1,4 @@
-import type { MachineTravel, SpindleControl, ZProbeSettings } from "./machine";
+import type { MachineTravel, RotaryAxisProfile, SpindleControl, ZProbeSettings } from "./machine";
 
 export const defaultZProbeSettings = (): ZProbeSettings => ({
   mode: "off",
@@ -31,8 +31,11 @@ export interface DetectedController {
 export interface MachineProfileDraft {
   name: string;
   travelMm: MachineTravel;
+  rotaryAxis?: RotaryAxisProfile;
   maxJogDistanceMm: number;
   spindleControl: SpindleControl;
+  floodCoolantControl: boolean;
+  mistCoolantControl: boolean;
   homingInstalled: boolean;
   limitSwitchesInstalled: boolean;
   probeInstalled: boolean;
@@ -54,7 +57,10 @@ export interface MachineProfileState {
 export interface MachineLocalSettingsUpdate {
   name: string;
   maxJogDistanceMm: number;
+  rotaryAxis?: RotaryAxisProfile;
   spindleControl: SpindleControl;
+  floodCoolantControl: boolean;
+  mistCoolantControl: boolean;
   homingInstalled: boolean;
   limitSwitchesInstalled: boolean;
   probeInstalled: boolean;

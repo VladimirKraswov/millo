@@ -19,6 +19,8 @@ const hardware: HardwareInspection = {
       name: "First XYZ router",
       axes: ["X", "Y", "Z"],
       spindleControl: "manual",
+      floodCoolantControl: false,
+      mistCoolantControl: false,
       homingInstalled: false,
       limitSwitchesInstalled: false,
     probeInstalled: false,

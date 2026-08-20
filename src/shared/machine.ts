@@ -83,6 +83,20 @@ export interface MachineState {
   lineNumber?: number;
 }
 
+export type HomingState =
+  | "unreferenced"
+  | "homing"
+  | "homed"
+  | "invalidated"
+  | "failed";
+
+export interface HomingStatus {
+  state: HomingState;
+  sequence: number;
+  timeoutMs?: number;
+  detail?: string;
+}
+
 export interface ResetNotice {
   banner: string;
   version?: string;
@@ -97,6 +111,7 @@ export interface AlarmState {
 export interface ControllerSnapshot {
   connection: ConnectionState;
   machine: MachineState;
+  homing: HomingStatus;
   resetNotice?: ResetNotice;
   alarm?: AlarmState;
   consecutiveFailures: number;
@@ -160,11 +175,20 @@ export interface MachineTravel {
   z: number;
 }
 
+export interface RotaryAxisProfile {
+  travelDegrees: number;
+  maxJogDegrees: number;
+  maxFeedDegreesPerMin: number;
+}
+
 export interface HardwareProfile {
   name: string;
   axes: string[];
   travelMm?: MachineTravel;
+  rotaryAxis?: RotaryAxisProfile;
   spindleControl: SpindleControl;
+  floodCoolantControl: boolean;
+  mistCoolantControl: boolean;
   homingInstalled: boolean;
   limitSwitchesInstalled: boolean;
   probeInstalled: boolean;
@@ -217,7 +241,7 @@ export interface TestJogPreparation {
   authorization?: TestJogAuthorization;
 }
 
-export type JogAxis = "x" | "y" | "z";
+export type JogAxis = "x" | "y" | "z" | "a";
 
 export interface StepJogRequest {
   authorizationId: number;
@@ -245,8 +269,56 @@ export interface JogPadStepOutcome {
   receipt?: StepJogReceipt;
 }
 
+export interface ContinuousJogRequest {
+  confirmation: OperatorConfirmation;
+  axis: JogAxis;
+  direction: -1 | 1;
+  feedMmPerMin: number;
+}
+
+export type JogBoundarySource = "machineCoordinates" | "profileDistance";
+
+export interface ContinuousJogReceipt {
+  command: string;
+  axis: JogAxis;
+  direction: -1 | 1;
+  boundedDistance: number;
+  feedMmPerMin: number;
+  boundarySource: JogBoundarySource;
+}
+
+export interface HomingRequest {
+  operatorConfirmed: boolean;
+}
+
+export interface HomingStartOutcome {
+  command: string;
+  timeoutMs: number;
+  snapshot: ControllerSnapshot;
+}
+
 export type WorkAxis = "x" | "y" | "z";
 export type WorkCoordinateSystem = "g54" | "g55" | "g56" | "g57" | "g58" | "g59";
+
+export interface WorkCoordinateSelectionOutcome {
+  coordinateSystem: WorkCoordinateSystem;
+  command: string;
+  snapshot: ControllerSnapshot;
+}
+
+export type SpindleDirection = "clockwise" | "counterclockwise";
+
+export type MachineOutputRequest =
+  | { spindleOn: { direction: SpindleDirection; speedRpm: number } }
+  | "spindleOff"
+  | { floodCoolant: boolean }
+  | { mistCoolant: boolean }
+  | "allOff";
+
+export interface MachineOutputOutcome {
+  commands: string[];
+  snapshot: ControllerSnapshot;
+}
 
 export interface WorkZeroRequest {
   axis: WorkAxis;
@@ -317,6 +389,10 @@ export const emptySnapshot: ControllerSnapshot = {
     reportedMode: "Unknown",
     feedRate: 0,
     spindleSpeed: 0,
+  },
+  homing: {
+    state: "unreferenced",
+    sequence: 0,
   },
   consecutiveFailures: 0,
   reconnectCount: 0,

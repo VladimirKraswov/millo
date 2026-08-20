@@ -5,6 +5,7 @@ import type { WorkCoordinateGateway } from "../machine/WorkCoordinateGateway";
 import type {
   ControllerSnapshot,
   HardwareInspection,
+  RotaryAxisProfile,
 } from "../../shared/machine";
 import { ExtensionRegistry } from "./ExtensionRegistry";
 
@@ -29,6 +30,7 @@ export interface UiHostContext {
   readonly maxJogDistanceMm: number;
   readonly maxJogFeedMmPerMin: number;
   readonly useProbeForZ: boolean;
+  readonly rotaryAxis?: RotaryAxisProfile;
 }
 
 export type UiExtension =

@@ -12,12 +12,17 @@ import {
   type UiExtensionRegistry,
 } from "../platform/extensions/UiExtensionRegistry";
 import { UiExtensionSlot } from "../platform/extensions/UiExtensionSlot";
+import { MachineReferencePanel } from "../features/machine-control/MachineReferencePanel";
+import { MachineSetupPanel } from "../features/machine-control/MachineSetupPanel";
 import type { MachineCommandGateway } from "../platform/machine/MachineCommandGateway";
 import type { WorkCoordinateGateway } from "../platform/machine/WorkCoordinateGateway";
 import type {
   ControllerSnapshot,
   HardwareInspection,
   ResetChallenge,
+  SpindleControl,
+  RotaryAxisProfile,
+  WorkCoordinateSystem,
 } from "../shared/machine";
 import {
   isControllerConnected,
@@ -38,6 +43,12 @@ interface SafetyControlsProps {
   maxJogDistanceMm: number;
   maxJogFeedMmPerMin: number;
   useProbeForZ: boolean;
+  homingInstalled: boolean;
+  spindleControl: SpindleControl;
+  floodCoolantControl: boolean;
+  mistCoolantControl: boolean;
+  activeCoordinateSystem: WorkCoordinateSystem;
+  rotaryAxis?: RotaryAxisProfile;
 }
 
 const secondsRemaining = (deadline: number | undefined, now: number): number =>
@@ -57,6 +68,12 @@ export function SafetyControls({
   maxJogDistanceMm,
   maxJogFeedMmPerMin,
   useProbeForZ,
+  homingInstalled,
+  spindleControl,
+  floodCoolantControl,
+  mistCoolantControl,
+  activeCoordinateSystem,
+  rotaryAxis,
 }: SafetyControlsProps) {
   const [busy, setBusy] = useState(false);
   const [holdPending, setHoldPending] = useState(false);
@@ -183,6 +200,15 @@ export function SafetyControls({
         </button>
       </div>
 
+      <MachineReferencePanel
+        desktopRuntime={desktopRuntime}
+        disabled={busy || holdPending || !machineBound}
+        homingInstalled={homingInstalled}
+        onError={onError}
+        onSnapshot={onSnapshot}
+        snapshot={snapshot}
+      />
+
       <UiExtensionSlot
         context={{
           snapshot,
@@ -197,6 +223,7 @@ export function SafetyControls({
           maxJogDistanceMm,
           maxJogFeedMmPerMin,
           useProbeForZ,
+          rotaryAxis,
         }}
         onExtensionError={(contributionId, error) =>
           onError(`Plugin UI ${contributionId}: ${String(error)}`)
@@ -223,12 +250,29 @@ export function SafetyControls({
             maxJogDistanceMm,
             maxJogFeedMmPerMin,
             useProbeForZ,
+            rotaryAxis,
           }}
           onExtensionError={(contributionId, error) =>
             onError(`Plugin UI ${contributionId}: ${String(error)}`)
           }
           registry={extensionRegistry}
           slot={uiSlots.controlCoordinates}
+        />
+      </details>
+      <details className="control-disclosure machine-setup-disclosure">
+        <summary>
+          <span>G54–G59 и выходы</span>
+          <ChevronDown aria-hidden="true" size={14} />
+        </summary>
+        <MachineSetupPanel
+          activeCoordinateSystem={activeCoordinateSystem}
+          disabled={busy || holdPending || !machineBound}
+          onError={onError}
+          onSnapshot={onSnapshot}
+          snapshot={snapshot}
+          spindleControl={spindleControl}
+          floodCoolantControl={floodCoolantControl}
+          mistCoolantControl={mistCoolantControl}
         />
       </details>
     </section>

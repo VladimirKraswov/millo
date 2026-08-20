@@ -15,6 +15,8 @@ import { bootstrapPluginHost } from "./bootstrapPluginHost";
 
 const machineCommands: MachineCommandGateway = {
   jogPadStep: vi.fn(),
+  startContinuousJog: vi.fn(),
+  cancelJog: vi.fn(),
 };
 
 function snapshot(pollSequence: number): ControllerSnapshot {

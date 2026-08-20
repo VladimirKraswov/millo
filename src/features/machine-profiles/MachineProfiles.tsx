@@ -29,6 +29,7 @@ interface MachineProfilesProps {
 const copyDraft = (draft: MachineProfileDraft): MachineProfileDraft => ({
   ...draft,
   travelMm: { ...draft.travelMm },
+  rotaryAxis: draft.rotaryAxis ? { ...draft.rotaryAxis } : undefined,
   probeSettings: { ...draft.probeSettings },
   connection: draft.connection
     ? {
@@ -82,6 +83,8 @@ export function MachineProfiles({
       | "homingInstalled"
       | "limitSwitchesInstalled"
       | "probeInstalled"
+      | "floodCoolantControl"
+      | "mistCoolantControl"
       | "emergencyStopInstalled",
     value: boolean,
   ) => setDraft((current) => ({ ...current, [key]: value }));
@@ -321,6 +324,8 @@ export function MachineProfiles({
                   ["limitSwitchesInstalled", "Концевики"],
                   ["homingInstalled", "Homing"],
                   ["probeInstalled", "Датчик касания"],
+                  ["floodCoolantControl", "Flood coolant (M8)"],
+                  ["mistCoolantControl", "Mist coolant (M7)"],
                   ["emergencyStopInstalled", "Аварийная кнопка"],
                 ].map(([key, label]) => (
                   <label key={key}>
@@ -332,6 +337,8 @@ export function MachineProfiles({
                             | "homingInstalled"
                             | "limitSwitchesInstalled"
                             | "probeInstalled"
+                            | "floodCoolantControl"
+                            | "mistCoolantControl"
                             | "emergencyStopInstalled",
                           event.target.checked,
                         )
@@ -341,6 +348,51 @@ export function MachineProfiles({
                     {label}
                   </label>
                 ))}
+              </fieldset>
+
+              <fieldset className="rotary-axis-fields">
+                <legend>Поворотная ось A</legend>
+                <label className="rotary-axis-toggle">
+                  <input
+                    checked={draft.rotaryAxis !== undefined}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        rotaryAxis: event.target.checked
+                          ? { travelDegrees: 360, maxJogDegrees: 30, maxFeedDegreesPerMin: 720 }
+                          : undefined,
+                      }))
+                    }
+                    type="checkbox"
+                  />
+                  Установлена
+                </label>
+                {draft.rotaryAxis && (
+                  <div>
+                    {([
+                      ["travelDegrees", "Ход", "°"],
+                      ["maxJogDegrees", "Jog", "°"],
+                      ["maxFeedDegreesPerMin", "Скорость", "°/min"],
+                    ] as const).map(([key, label, unit]) => (
+                      <label key={key}>
+                        <span>{label}</span>
+                        <input
+                          min="0.01"
+                          onChange={(event) => setDraft((current) => ({
+                            ...current,
+                            rotaryAxis: current.rotaryAxis
+                              ? { ...current.rotaryAxis, [key]: Number(event.target.value) }
+                              : undefined,
+                          }))}
+                          step="0.01"
+                          type="number"
+                          value={draft.rotaryAxis?.[key] ?? ""}
+                        />
+                        <code>{unit}</code>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </fieldset>
 
               {draft.detectedController && (

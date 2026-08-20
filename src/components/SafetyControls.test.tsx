@@ -22,10 +22,15 @@ const renderControls = (mode: "idle" | "jog"): string =>
       desktopRuntime
       extensionRegistry={createUiExtensionRegistry()}
       machineBound
-      machineGateway={{ jogPadStep: vi.fn() }}
+      machineGateway={{ jogPadStep: vi.fn(), startContinuousJog: vi.fn(), cancelJog: vi.fn() }}
       maxJogDistanceMm={50}
       maxJogFeedMmPerMin={1_000}
       useProbeForZ={false}
+    homingInstalled={false}
+    spindleControl="manual"
+    floodCoolantControl={false}
+    mistCoolantControl={false}
+      activeCoordinateSystem="g54"
       onError={vi.fn()}
       onInspection={vi.fn()}
       onOpenMotionSettings={vi.fn()}

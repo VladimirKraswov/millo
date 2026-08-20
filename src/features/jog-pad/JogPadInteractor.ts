@@ -1,5 +1,6 @@
 import type { MachineCommandGateway } from "../../platform/machine/MachineCommandGateway";
 import type {
+  ContinuousJogReceipt,
   JogAxis,
   JogPadStepOutcome,
   OperatorConfirmation,
@@ -58,6 +59,9 @@ export const jogOperatorConfirmation = (
 
 export class JogPadInteractor {
   private inFlight = false;
+  private continuousSequence = 0;
+  private continuousStarting = false;
+  private continuousActive = false;
 
   constructor(private readonly gateway: MachineCommandGateway) {}
 
@@ -98,6 +102,67 @@ export class JogPadInteractor {
       });
     } finally {
       this.inFlight = false;
+    }
+  }
+
+  async startContinuous(
+    confirmation: OperatorConfirmation,
+    axis: JogAxis,
+    direction: JogDirection,
+    feedMmPerMin: number,
+  ): Promise<ContinuousJogReceipt> {
+    if (this.inFlight || this.continuousStarting || this.continuousActive) {
+      throw new Error("jog command is already in progress");
+    }
+    if (
+      !Number.isFinite(feedMmPerMin) ||
+      feedMmPerMin < MIN_JOG_FEED_MM_PER_MIN ||
+      feedMmPerMin > MAX_JOG_FEED_MM_PER_MIN
+    ) {
+      throw new Error(
+        `jog feed must be ${MIN_JOG_FEED_MM_PER_MIN}..${MAX_JOG_FEED_MM_PER_MIN} mm/min`,
+      );
+    }
+
+    const sequence = ++this.continuousSequence;
+    this.continuousStarting = true;
+    try {
+      const receipt = await this.gateway.startContinuousJog({
+        confirmation,
+        axis,
+        direction,
+        feedMmPerMin,
+      });
+      if (sequence !== this.continuousSequence) {
+        await this.cancelAcceptedContinuousJog();
+      } else {
+        this.continuousActive = true;
+      }
+      return receipt;
+    } finally {
+      this.continuousStarting = false;
+    }
+  }
+
+  async stopContinuous(): Promise<void> {
+    ++this.continuousSequence;
+    if (this.continuousStarting || !this.continuousActive) return;
+    await this.cancelAcceptedContinuousJog();
+  }
+
+  isContinuousBusy(): boolean {
+    return this.continuousStarting || this.continuousActive;
+  }
+
+  private async cancelAcceptedContinuousJog(): Promise<void> {
+    this.continuousActive = false;
+    try {
+      await this.gateway.cancelJog();
+    } catch (error) {
+      const message = String(error).toLowerCase();
+      if (!message.includes("jog cancel requires") && !message.includes("current mode is idle")) {
+        throw error;
+      }
     }
   }
 }

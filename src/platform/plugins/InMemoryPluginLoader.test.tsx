@@ -45,6 +45,8 @@ import {
 
 const machineCommands: MachineCommandGateway = {
   jogPadStep: vi.fn(),
+  startContinuousJog: vi.fn(),
+  cancelJog: vi.fn(),
 };
 
 function controllerSnapshot(pollSequence: number): ControllerSnapshot {
@@ -144,7 +146,11 @@ describe("InMemoryPluginLoader", () => {
     };
     const outcome = {} as JogPadStepOutcome;
     const jogPadStep = vi.fn(async () => outcome);
-    const gateway: MachineCommandGateway = { jogPadStep };
+    const gateway: MachineCommandGateway = {
+      jogPadStep,
+      startContinuousJog: vi.fn(),
+      cancelJog: vi.fn(),
+    };
     const loader = new InMemoryPluginLoader({
       uiRegistry: createUiExtensionRegistry(),
       machineCommands: gateway,

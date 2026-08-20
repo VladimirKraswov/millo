@@ -19,6 +19,8 @@ const inspection: HardwareInspection = {
       name: "Fixture",
       axes: ["x", "y", "z"],
       spindleControl: "manual",
+      floodCoolantControl: false,
+      mistCoolantControl: false,
       homingInstalled: false,
       limitSwitchesInstalled: false,
       probeInstalled: false,

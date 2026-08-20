@@ -149,6 +149,9 @@ async fn run_smoke(
         JogAxis::X => 0,
         JogAxis::Y => 1,
         JogAxis::Z => 2,
+        JogAxis::A => {
+            return Err(input_error("A axis is not supported by this XYZ hardware smoke").into());
+        }
     };
     let positions_match = deltas.iter().enumerate().all(|(index, delta)| {
         let expected = if index == selected_index { 0.1 } else { 0.0 };
@@ -191,6 +194,7 @@ fn axis_name(axis: JogAxis) -> &'static str {
         JogAxis::X => "X",
         JogAxis::Y => "Y",
         JogAxis::Z => "Z",
+        JogAxis::A => "A",
     }
 }
 

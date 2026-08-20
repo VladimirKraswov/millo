@@ -73,6 +73,11 @@ until they are read from the controller or measured before cutting.
   probe dialog. A heightmap survives application restart, but this unhomed
   machine cannot prove that stock or XY/Z work zero remained fixed; recovered
   maps therefore stay disarmed until the operator confirms the setup.
+- The core now supports typed actor-owned homing and continuous jog, but this
+  physical profile keeps machine-coordinate envelope use disabled until homing
+  switches are installed and `$22` is deliberately enabled. Continuous jog on
+  this machine therefore remains bounded only by the local profile and requires
+  the operator to know the remaining physical clearance.
 
 ## Values to collect before motion
 
