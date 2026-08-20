@@ -703,6 +703,12 @@ does not schedule or execute controller I/O.
 - Realtime bytes and newline-terminated commands are distinct request types.
 - Status `?` consumes its matching status frame before another request runs.
 - Device Inspector permits only `$I`, `$$`, `$G`, and `$#`.
+- Operator Console accepts only `?`, `$I`, `$$`, `$G`, and `$#`. Its free-form
+  WebView input is classified again inside the Rust command actor; rejected
+  input causes no transport write. Line queries require Idle or Alarm and are
+  blocked while sender or another correlated machine operation is active.
+- Console `?` returns a diagnostic line rendered from the parsed controller
+  snapshot. The WebView never receives ownership of raw status parsing.
 - Inspector retains raw `[OPT]` text and separately parses option flags, planner
   block count, and RX byte capacity. A first-cut lease carries the observed RX
   capacity to Start, which configures the sender to `RX - 1`; invalid, missing,
@@ -714,7 +720,8 @@ does not schedule or execute controller I/O.
   desktop process.
 - Rust parses firmware, settings, modal state, and coordinate parameters. The UI
   never receives a responsibility to interpret wire lines.
-- Tauri exposes no raw command, general G-code, or spindle-control endpoint. Its
+- Tauri exposes no raw command, general G-code, or arbitrary spindle-control
+  endpoint. The console endpoint is an actor-enforced read-only allowlist; all
   machine-changing calls are named, typed use cases described below.
 
 ### Work-coordinate boundary

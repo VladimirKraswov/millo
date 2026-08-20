@@ -107,6 +107,14 @@ are typed Idle-only operations and are reread from GRBL modal state after each
 write. See [Machine control lifecycle](docs/MACHINE_CONTROL.md) and
 [ADR 0057](docs/decisions/0057-actor-owned-homing-and-continuous-jog.md).
 
+The operator console provides a bounded diagnostic transcript without exposing
+raw serial access. Rust accepts only `?`, `$I`, `$$`, `$G`, and `$#`; line
+queries run through the same actor only in Idle or Alarm and are blocked during
+sender, homing, jog, probe, or heightmap activity. Motion, settings writes,
+unlock, reset, spindle, and coolant remain typed workflows. See
+[Operator console](docs/OPERATOR_CONSOLE.md) and
+[ADR 0058](docs/decisions/0058-read-only-operator-console.md).
+
 Manual work-zero controls are another narrow typed use case. Zero X, Y, and Z
 are available only for a connected, stable `Idle` controller after an explicit
 operator confirmation. The actor reads a fresh status and `$G`, maps the active

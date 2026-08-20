@@ -3,6 +3,7 @@ import {
   PlugZap,
   RefreshCw,
   ScrollText,
+  SquareTerminal,
   Unplug,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -44,6 +45,7 @@ export interface ConnectionPanelActions {
   readonly onDismissError: () => void;
   readonly onLikelyGrblOnly: (enabled: boolean) => void;
   readonly onOpenLog: () => void;
+  readonly onOpenConsole: () => void;
   readonly onRefreshStatus: () => void;
   readonly onRefreshTransports: () => void;
   readonly onTransport: (transportId: string) => void;
@@ -120,13 +122,22 @@ export function ConnectionPanel({ actions, controls, view }: ConnectionPanelProp
         )}
       </div>
 
-      <button className="log-open-action" onClick={actions.onOpenLog} type="button">
-        <ScrollText aria-hidden="true" size={14} />
-        <span>
-          <strong>Журнал событий</strong>
-          <small>Подключение · GRBL · Выполнение</small>
-        </span>
-      </button>
+      <div className="connection-utility-actions">
+        <button className="log-open-action" onClick={actions.onOpenLog} type="button">
+          <ScrollText aria-hidden="true" size={14} />
+          <span>
+            <strong>Журнал</strong>
+            <small>События и ошибки</small>
+          </span>
+        </button>
+        <button className="console-open-action" onClick={actions.onOpenConsole} type="button">
+          <SquareTerminal aria-hidden="true" size={14} />
+          <span>
+            <strong>Консоль</strong>
+            <small>Безопасные запросы</small>
+          </span>
+        </button>
+      </div>
 
       {hasConnection && controls}
 

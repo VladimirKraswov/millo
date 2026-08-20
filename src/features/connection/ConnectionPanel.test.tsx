@@ -22,6 +22,7 @@ const actions: Props["actions"] = {
   onDismissError: () => undefined,
   onLikelyGrblOnly: () => undefined,
   onOpenLog: () => undefined,
+  onOpenConsole: () => undefined,
   onRefreshStatus: () => undefined,
   onRefreshTransports: () => undefined,
   onTransport: () => undefined,

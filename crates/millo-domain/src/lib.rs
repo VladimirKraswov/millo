@@ -214,6 +214,28 @@ pub struct CommandResponse {
     pub code: Option<u16>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OperatorConsoleCommandKind {
+    Status,
+    BuildInfo,
+    Settings,
+    ModalState,
+    Parameters,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorConsoleExchange {
+    pub command: String,
+    pub kind: OperatorConsoleCommandKind,
+    pub completion: CommandCompletion,
+    pub lines: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<u16>,
+    pub snapshot: ControllerSnapshot,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeviceInspection {

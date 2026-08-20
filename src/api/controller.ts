@@ -13,6 +13,7 @@ import type {
   MachineOutputOutcome,
   MachineOutputRequest,
   OperatorConfirmation,
+  OperatorConsoleExchange,
   OverrideAdjustment,
   RapidOverrideTarget,
   ReturnToWorkOriginOutcome,
@@ -82,6 +83,11 @@ export const refreshStatus = (): Promise<ControllerSnapshot> =>
 
 export const inspectDevice = (): Promise<HardwareInspection> =>
   invoke<HardwareInspection>("inspect_device");
+
+export const executeOperatorConsole = (
+  command: string,
+): Promise<OperatorConsoleExchange> =>
+  invoke<OperatorConsoleExchange>("execute_operator_console", { command });
 
 export const disconnect = (): Promise<ControllerSnapshot> =>
   invoke<ControllerSnapshot>("disconnect");

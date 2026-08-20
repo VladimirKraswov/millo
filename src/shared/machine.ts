@@ -150,6 +150,22 @@ export interface CommandResponse {
   code?: number;
 }
 
+export type OperatorConsoleCommandKind =
+  | "status"
+  | "buildInfo"
+  | "settings"
+  | "modalState"
+  | "parameters";
+
+export interface OperatorConsoleExchange {
+  command: string;
+  kind: OperatorConsoleCommandKind;
+  completion: CommandCompletion;
+  lines: string[];
+  code?: number;
+  snapshot: ControllerSnapshot;
+}
+
 export interface DeviceInspection {
   firmwareVersion?: string;
   firmwareBuildInfo?: string;

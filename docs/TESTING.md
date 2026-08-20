@@ -69,6 +69,13 @@ controller spindle, and declared flood/mist outputs. Use it for desktop and
 narrow-viewport screenshots of the complete Motion Deck and WCS/output
 disclosure without requiring CNC hardware.
 
+`/?fixture=console` opens the read-only operator console against deterministic
+status, firmware, settings, modal, and coordinate responses. Browser checks
+require a stable modal rectangle, independent transcript scrolling, no page or
+dialog horizontal overflow, a successful `$I`, a visible blocked `G0 X1`, and
+no React console errors. Rust tests additionally prove rejected commands write
+zero bytes and line queries fail while the controller reports Run.
+
 Program file-picker tests require a visible `Open G-code` primary action in the
 empty workspace, the complete supported extension allowlist, and a stable
 `Replace file` toolbar action after loading.

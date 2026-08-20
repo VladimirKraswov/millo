@@ -74,6 +74,9 @@ tests, configuration, and direct/transitive dependency reports.
   leaf names are bounded. Command declarations must match returned action
   capabilities, and a backend execution fence closes configure/delete/run
   TOCTOU races.
+- The operator console is not a raw transport exception. Its Rust classifier
+  admits five exact read-only requests, the actor fences correlated operations,
+  and the WebView cannot expand the allowlist or grant it to plugins.
 - Plugin render failures are isolated per contribution. Heightmap checkpoint,
   lock and Tauri event-emission failures now produce structured audit records
   instead of being silently dropped.

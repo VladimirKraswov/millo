@@ -86,6 +86,7 @@ import { WorkZeroDialog } from "./features/work-zero/WorkZeroDialog";
 import { WorkspaceToolsMenu } from "./components/WorkspaceToolsMenu";
 import { ScriptPluginContributions } from "./features/script-plugins/ScriptPluginContributions";
 import { previewFixtureScriptPlugins } from "./features/script-plugins/previewFixtureScriptPlugins";
+import { previewOperatorConsole } from "./features/operator-console/previewOperatorConsole";
 import { previewToolLibraryGateway } from "./features/tool-library/previewToolLibraryGateway";
 import { resolveWorkPosition } from "./features/work-zero/workPositionModel";
 import { bindMachineStateStream } from "./platform/machine/MachineStateEventStream";
@@ -134,6 +135,10 @@ const MachineSettingsDialog = lazy(async () => ({
 const DiagnosticLogViewer = lazy(async () => ({
   default: (await import("./features/diagnostics/DiagnosticLogViewer"))
     .DiagnosticLogViewer,
+}));
+const OperatorConsole = lazy(async () => ({
+  default: (await import("./features/operator-console/OperatorConsole"))
+    .OperatorConsole,
 }));
 const ZProbeDialog = lazy(async () => ({
   default: (await import("./features/probe/ZProbeDialog")).ZProbeDialog,
@@ -240,6 +245,7 @@ export default function App() {
   const [discovering, setDiscovering] = useState(false);
   const [uiError, setUiError] = useState<string>();
   const [logOpen, setLogOpen] = useState(developmentFixture === "logs");
+  const [consoleOpen, setConsoleOpen] = useState(developmentFixture === "console");
   const [workZeroOpen, setWorkZeroOpen] = useState(false);
   const [zProbeOpen, setZProbeOpen] = useState(developmentProbeFixture);
   const [probeEstablishedZDatum, setProbeEstablishedZDatum] =
@@ -1063,6 +1069,7 @@ export default function App() {
             onDismissError: () => setUiError(undefined),
             onLikelyGrblOnly: setLikelyGrblOnly,
             onOpenLog: () => setLogOpen(true),
+            onOpenConsole: () => setConsoleOpen(true),
             onRefreshStatus: () => void runAction(refreshStatus),
             onRefreshTransports: () => void discoverTransports(),
             onTransport: setSelectedTransportId,
@@ -1138,6 +1145,20 @@ export default function App() {
             onClose={() => setLogOpen(false)}
             onError={setUiError}
             open
+          />
+        )}
+        {consoleOpen && (
+          <OperatorConsole
+            desktopRuntime={desktopRuntime || developmentFixture === "console"}
+            execute={
+              developmentFixture === "console"
+                ? (command) => previewOperatorConsole(command, snapshot)
+                : undefined
+            }
+            onClose={() => setConsoleOpen(false)}
+            onSnapshot={pluginHost.machineState.publish}
+            open
+            snapshot={snapshot}
           />
         )}
       </Suspense>

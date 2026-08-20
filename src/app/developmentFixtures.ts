@@ -50,6 +50,7 @@ const jogFixtures = new Set([
   "jog-active",
   "logs",
   "machine-control",
+  "console",
   "reset",
 ]);
 

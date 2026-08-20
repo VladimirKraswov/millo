@@ -16,13 +16,14 @@ use millo_cam::{
 use millo_command::{CommandArbiter, ExecutionTarget};
 use millo_controller::ControllerConfig;
 use millo_domain::{
-    ContinuousJogReceipt, ContinuousJogRequest, ControllerSnapshot, DeviceInspection,
-    HardwareInspection, HardwareProfile, HomingRequest, HomingStartOutcome, JogPadStepOutcome,
-    JogPadStepRequest, MachineOutputOutcome, MachineOutputRequest, OperatorConfirmation,
-    OverrideAdjustment, RapidOverrideTarget, ResetChallenge, ReturnToWorkOriginOutcome,
-    ReturnToWorkOriginRequest, ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest, StepJogReceipt,
-    StepJogRequest, TestJogPreparation, WorkCoordinateSelectionOutcome, WorkCoordinateSystem,
-    WorkZeroOutcome, WorkZeroRequest, ZProbeOutcome, ZProbeRequest,
+    CommandCompletion, ContinuousJogReceipt, ContinuousJogRequest, ControllerSnapshot,
+    DeviceInspection, HardwareInspection, HardwareProfile, HomingRequest, HomingStartOutcome,
+    JogPadStepOutcome, JogPadStepRequest, MachineOutputOutcome, MachineOutputRequest,
+    OperatorConfirmation, OperatorConsoleExchange, OverrideAdjustment, RapidOverrideTarget,
+    ResetChallenge, ReturnToWorkOriginOutcome, ReturnToWorkOriginRequest, ReturnToWorkZeroOutcome,
+    ReturnToWorkZeroRequest, StepJogReceipt, StepJogRequest, TestJogPreparation,
+    WorkCoordinateSelectionOutcome, WorkCoordinateSystem, WorkZeroOutcome, WorkZeroRequest,
+    ZProbeOutcome, ZProbeRequest,
 };
 use millo_dry_run::{
     ProgramExecutionOptions, ProgramRunPolicy, build_program_run_plan_with_options,
@@ -1674,6 +1675,47 @@ pub async fn inspect_device(state: State<'_, AppState>) -> Result<HardwareInspec
         serde_json::to_value(&inspection).unwrap_or(Value::Null),
     );
     Ok(inspection)
+}
+
+#[tauri::command]
+pub async fn execute_operator_console(
+    command: String,
+    state: State<'_, AppState>,
+) -> Result<OperatorConsoleExchange, String> {
+    let context = json!({ "command": command.trim() });
+    let result = state
+        .arbiter
+        .execute_operator_console(command)
+        .await
+        .map_err(|error| error.to_string());
+    match &result {
+        Ok(exchange) if exchange.completion == CommandCompletion::Ok => state.audit.record(
+            AuditLevel::Info,
+            AuditCategory::Controller,
+            "controller.operator_console.completed",
+            "Read-only operator console query completed",
+            context,
+        ),
+        Ok(exchange) => state.audit.record(
+            AuditLevel::Warning,
+            AuditCategory::Controller,
+            "controller.operator_console.rejected",
+            "GRBL rejected a read-only operator console query",
+            json!({
+                "context": context,
+                "completion": exchange.completion,
+                "code": exchange.code,
+            }),
+        ),
+        Err(error) => state.audit.record(
+            AuditLevel::Warning,
+            AuditCategory::Controller,
+            "controller.operator_console.blocked",
+            error,
+            json!({ "context": context }),
+        ),
+    };
+    result
 }
 
 #[tauri::command]

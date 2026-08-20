@@ -12,11 +12,12 @@ use millo_domain::{
     ContinuousJogRequest, ControllerSnapshot, DeviceInspection, HardwareInspection,
     HardwareProfile, HomingRequest, HomingStartOutcome, HomingState, JogBoundarySource,
     JogPadStepOutcome, JogPadStepRequest, MachineMode, MachineOutputOutcome, MachineOutputRequest,
-    OperatorConfirmation, OverrideAdjustment, Position, ProbeWorkflowMode, RapidOverrideTarget,
-    ResetChallenge, ReturnToWorkOriginOutcome, ReturnToWorkOriginRequest, ReturnToWorkZeroOutcome,
-    ReturnToWorkZeroRequest, SpindleControl, StepJogReceipt, StepJogRequest, TestJogPreparation,
-    WorkAxis, WorkCoordinateSelectionOutcome, WorkCoordinateSystem, WorkZeroOutcome,
-    WorkZeroRequest, ZProbeOutcome, ZProbeRequest, ZProbeSettings,
+    OperatorConfirmation, OperatorConsoleExchange, OverrideAdjustment, Position, ProbeWorkflowMode,
+    RapidOverrideTarget, ResetChallenge, ReturnToWorkOriginOutcome, ReturnToWorkOriginRequest,
+    ReturnToWorkZeroOutcome, ReturnToWorkZeroRequest, SpindleControl, StepJogReceipt,
+    StepJogRequest, TestJogPreparation, WorkAxis, WorkCoordinateSelectionOutcome,
+    WorkCoordinateSystem, WorkZeroOutcome, WorkZeroRequest, ZProbeOutcome, ZProbeRequest,
+    ZProbeSettings,
 };
 use millo_dry_run::{
     DryRunLineKind, DryRunPlan, DryRunPolicyError, ProgramExecutionOptions, ProgramRunPolicy,
@@ -58,6 +59,8 @@ use tokio::{
     sync::{mpsc, oneshot, watch},
     time::{MissedTickBehavior, interval},
 };
+
+mod operator_console;
 
 const REQUEST_CAPACITY: usize = 32;
 const WORK_ZERO_TOLERANCE_MM: f64 = 0.002;
@@ -194,6 +197,10 @@ pub enum ArbiterError {
     HeightmapContactUnavailable,
     #[error("another machine operation is active")]
     MachineOperationBusy,
+    #[error("safe console accepts only ?, $I, $$, $G, and $# read-only queries")]
+    OperatorConsoleCommandRejected,
+    #[error("controller query is unavailable in {0:?}; wait for Idle or use ? for status")]
+    OperatorConsoleQueryUnavailable(MachineMode),
     #[error("heightmap operation is not running")]
     HeightmapOperationUnavailable,
     #[error("prepared heightmap operation is unavailable")]
@@ -466,6 +473,14 @@ impl CommandArbiter {
 
     pub async fn inspect_device(&self) -> Result<HardwareInspection, ArbiterError> {
         self.call(|response| Request::InspectDevice { response })
+            .await
+    }
+
+    pub async fn execute_operator_console(
+        &self,
+        command: String,
+    ) -> Result<OperatorConsoleExchange, ArbiterError> {
+        self.call(|response| Request::ExecuteOperatorConsole { command, response })
             .await
     }
 
@@ -1076,6 +1091,10 @@ enum Request {
     InspectDevice {
         response: oneshot::Sender<Result<HardwareInspection, ArbiterError>>,
     },
+    ExecuteOperatorConsole {
+        command: String,
+        response: oneshot::Sender<Result<OperatorConsoleExchange, ArbiterError>>,
+    },
     PreflightRealRun {
         program: GcodeProgram,
         intent: ProgramRunIntent,
@@ -1644,6 +1663,26 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
                     HardwareInspection { device, readiness }
                 })
                 .map_err(ArbiterError::from);
+            publish(snapshots, controller);
+            let _ = response.send(result);
+        }
+        Request::ExecuteOperatorConsole { command, response } => {
+            let reset_count = controller.snapshot().reset_count;
+            let result = if sender_is_active(&sender.snapshot()) {
+                Err(ArbiterError::MachineOperationBusy)
+            } else {
+                execute_operator_console(controller, &command).await
+            };
+            if controller.snapshot().reset_count != reset_count {
+                invalidate_authorizations(safety, first_cut);
+                program_check.invalidate();
+                *pending_program_check = None;
+                *verified_z_datum = None;
+                *machine_envelope = None;
+            }
+            safety.observe(&controller.snapshot(), Instant::now());
+            first_cut.observe(&controller.snapshot(), Instant::now());
+            program_check.observe(&controller.snapshot(), Instant::now());
             publish(snapshots, controller);
             let _ = response.send(result);
         }
@@ -4406,6 +4445,7 @@ fn reject_request_during_machine_operation(request: Request) {
         | Request::BindHardwareProfile { response, .. } => send_machine_operation_busy(response),
         Request::UpdateControllerSetting { response, .. } => send_machine_operation_busy(response),
         Request::InspectDevice { response } => send_machine_operation_busy(response),
+        Request::ExecuteOperatorConsole { response, .. } => send_machine_operation_busy(response),
         Request::PreflightRealRun { response, .. } => send_machine_operation_busy(response),
         Request::AuthorizeFirstCut { response, .. } => send_machine_operation_busy(response),
         Request::StartProgramRun { response, .. }
@@ -4931,6 +4971,30 @@ fn sender_is_active(snapshot: &SenderSnapshot) -> bool {
             | SenderState::ToolChange
             | SenderState::Draining
     )
+}
+
+async fn execute_operator_console(
+    controller: &mut Controller<BoxedTransport>,
+    input: &str,
+) -> Result<OperatorConsoleExchange, ArbiterError> {
+    match operator_console::SafeConsoleCommand::parse(input)? {
+        operator_console::SafeConsoleCommand::Status => {
+            let snapshot = controller.refresh_status().await?;
+            Ok(operator_console::status_exchange(snapshot))
+        }
+        operator_console::SafeConsoleCommand::Query { query, kind } => {
+            let mode = controller.snapshot().machine.mode;
+            if !matches!(mode, MachineMode::Idle | MachineMode::Alarm) {
+                return Err(ArbiterError::OperatorConsoleQueryUnavailable(mode));
+            }
+            let response = controller.query_device(query).await?;
+            Ok(operator_console::query_exchange(
+                kind,
+                response,
+                controller.snapshot(),
+            ))
+        }
+    }
 }
 
 fn bounded_motion_timeout(distance_mm: f64, feed_mm_per_min: f64) -> Duration {
@@ -6029,6 +6093,58 @@ mod tests {
                 b"$#\n".to_vec(),
             ]
         );
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn safe_operator_console_serializes_only_the_read_only_allowlist() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let status = arbiter
+            .execute_operator_console("?".to_owned())
+            .await
+            .unwrap();
+        assert_eq!(status.command, "?");
+        assert!(status.lines[0].starts_with("<Idle|"));
+
+        for command in ["$I", "$$", "$G", "$#"] {
+            let exchange = arbiter
+                .execute_operator_console(command.to_owned())
+                .await
+                .unwrap();
+            assert_eq!(exchange.command, command);
+            assert_eq!(exchange.completion, CommandCompletion::Ok);
+        }
+
+        let writes_before_rejection = control.writes();
+        for rejected in ["G0 X10", "$100=1", "$X", "$H", "M3 S1000", "!"] {
+            assert!(matches!(
+                arbiter.execute_operator_console(rejected.to_owned()).await,
+                Err(ArbiterError::OperatorConsoleCommandRejected)
+            ));
+        }
+        assert_eq!(control.writes(), writes_before_rejection);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn safe_operator_console_blocks_line_queries_while_machine_is_running() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        control.set_status("<Run|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:100,0>");
+        arbiter.refresh_status().await.unwrap();
+        let writes_before_query = control.writes();
+
+        assert!(matches!(
+            arbiter.execute_operator_console("$I".to_owned()).await,
+            Err(ArbiterError::OperatorConsoleQueryUnavailable(
+                MachineMode::Run
+            ))
+        ));
+        assert_eq!(control.writes(), writes_before_query);
         task.abort();
     }
 
