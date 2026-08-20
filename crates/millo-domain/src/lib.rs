@@ -222,6 +222,7 @@ pub enum OperatorConsoleCommandKind {
     Settings,
     ModalState,
     Parameters,
+    Raw,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -12,6 +12,7 @@ members = [
   "crates/millo-heightmap",
   "crates/millo-mock",
   "crates/millo-pcb",
+  "crates/millo-preferences",
   "crates/millo-journal",
   "crates/millo-profile",
   "crates/millo-readiness",

@@ -330,6 +330,13 @@ impl<T: Transport> Controller<T> {
         }
     }
 
+    pub async fn execute_console_line(
+        &mut self,
+        command: &str,
+    ) -> Result<CommandResponse, ControllerError> {
+        self.execute_acknowledged_line(command).await
+    }
+
     pub async fn step_jog(
         &mut self,
         request: StepJogRequest,

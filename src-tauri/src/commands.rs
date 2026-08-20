@@ -13,7 +13,7 @@ use millo_cam::{
     generate_image_job as generate_image_job_core,
     generate_surfacing_job as generate_surfacing_job_core,
 };
-use millo_command::{CommandArbiter, ExecutionTarget};
+use millo_command::{CommandArbiter, ExecutionTarget, OperatorConsolePolicy};
 use millo_controller::ControllerConfig;
 use millo_domain::{
     CommandCompletion, ContinuousJogReceipt, ContinuousJogRequest, ControllerSnapshot,
@@ -41,6 +41,9 @@ use millo_journal::{RunJournal, RunJournalEntry};
 use millo_pcb::{
     GeneratedPcbJob, PcbInspectRequest, PcbInspection, PcbJobRequest,
     generate_pcb_job as generate_pcb_job_core, inspect_pcb as inspect_pcb_core,
+};
+use millo_preferences::{
+    ApplicationPreferences, ApplicationPreferencesStore, ApplicationPreferencesUpdate,
 };
 use millo_profile::{
     DetectedController, IdentityConfidence, MachineConnectionPreset, MachineFingerprint,
@@ -227,6 +230,7 @@ pub struct AppState {
     script_plugins: Mutex<ScriptPluginStore>,
     script_execution: Mutex<()>,
     surface_session: Arc<StdMutex<SurfaceSessionStore>>,
+    preferences: Mutex<ApplicationPreferencesStore>,
 }
 
 struct PersistentStores {
@@ -236,6 +240,7 @@ struct PersistentStores {
     program_recovery: ProgramRecoveryStore,
     script_plugins: ScriptPluginStore,
     surface_session: SurfaceSessionStore,
+    preferences: ApplicationPreferencesStore,
 }
 
 impl AppState {
@@ -257,6 +262,9 @@ impl AppState {
         let surface_session_path = profile_path
             .parent()
             .map(|parent| parent.join("surface-session.json"));
+        let preferences_path = profile_path
+            .parent()
+            .map(|parent| parent.join("application-preferences.json"));
         let audit = match profile_path
             .parent()
             .map(|parent| AuditLog::persistent(parent.join("logs")))
@@ -311,6 +319,26 @@ impl AppState {
             .transpose()
             .map_err(|error| error.to_string())?
             .unwrap_or_else(SurfaceSessionStore::in_memory);
+        let preferences = match preferences_path
+            .map(ApplicationPreferencesStore::load)
+            .transpose()
+        {
+            Ok(Some(store)) => store,
+            Ok(None) => ApplicationPreferencesStore::in_memory(),
+            Err(error) => {
+                audit.record(
+                    AuditLevel::Critical,
+                    AuditCategory::Storage,
+                    "storage.application_preferences_initialization_failed",
+                    error.to_string(),
+                    json!({
+                        "fallback": "safeDefaultsInMemory",
+                        "safeCommandMode": true,
+                    }),
+                );
+                ApplicationPreferencesStore::in_memory()
+            }
+        };
         let state = Self::from_stores(
             PersistentStores {
                 profiles,
@@ -319,6 +347,7 @@ impl AppState {
                 program_recovery: recovery,
                 script_plugins,
                 surface_session,
+                preferences,
             },
             settings_root,
             audit,
@@ -368,6 +397,7 @@ impl AppState {
             script_plugins: Mutex::new(stores.script_plugins),
             script_execution: Mutex::new(()),
             surface_session: Arc::new(StdMutex::new(stores.surface_session)),
+            preferences: Mutex::new(stores.preferences),
         }
     }
 
@@ -1682,10 +1712,22 @@ pub async fn execute_operator_console(
     command: String,
     state: State<'_, AppState>,
 ) -> Result<OperatorConsoleExchange, String> {
+    let _transition = state.transition_lock.lock().await;
     let context = json!({ "command": command.trim() });
+    let policy = if state
+        .preferences
+        .lock()
+        .await
+        .preferences()
+        .safe_command_mode
+    {
+        OperatorConsolePolicy::SafeOnly
+    } else {
+        OperatorConsolePolicy::Expert
+    };
     let result = state
         .arbiter
-        .execute_operator_console(command)
+        .execute_operator_console(command, policy)
         .await
         .map_err(|error| error.to_string());
     match &result {
@@ -1693,14 +1735,22 @@ pub async fn execute_operator_console(
             AuditLevel::Info,
             AuditCategory::Controller,
             "controller.operator_console.completed",
-            "Read-only operator console query completed",
+            if exchange.kind == millo_domain::OperatorConsoleCommandKind::Raw {
+                "Expert operator console command completed"
+            } else {
+                "Read-only operator console query completed"
+            },
             context,
         ),
         Ok(exchange) => state.audit.record(
             AuditLevel::Warning,
             AuditCategory::Controller,
             "controller.operator_console.rejected",
-            "GRBL rejected a read-only operator console query",
+            if exchange.kind == millo_domain::OperatorConsoleCommandKind::Raw {
+                "GRBL rejected an expert operator console command"
+            } else {
+                "GRBL rejected a read-only operator console query"
+            },
             json!({
                 "context": context,
                 "completion": exchange.completion,
@@ -1716,6 +1766,43 @@ pub async fn execute_operator_console(
         ),
     };
     result
+}
+
+#[tauri::command]
+pub async fn application_preferences(
+    state: State<'_, AppState>,
+) -> Result<ApplicationPreferences, String> {
+    Ok(state.preferences.lock().await.preferences())
+}
+
+#[tauri::command]
+pub async fn update_application_preferences(
+    update: ApplicationPreferencesUpdate,
+    state: State<'_, AppState>,
+) -> Result<ApplicationPreferences, String> {
+    let _transition = state.transition_lock.lock().await;
+    let preferences = state
+        .preferences
+        .lock()
+        .await
+        .update(update)
+        .map_err(|error| error.to_string())?;
+    state.audit.record(
+        if preferences.safe_command_mode {
+            AuditLevel::Info
+        } else {
+            AuditLevel::Warning
+        },
+        AuditCategory::Application,
+        "application.safe_command_mode_changed",
+        if preferences.safe_command_mode {
+            "Safe command mode enabled"
+        } else {
+            "Safe command mode disabled; expert console and granted plugin commands are available"
+        },
+        json!({ "safeCommandMode": preferences.safe_command_mode }),
+    );
+    Ok(preferences)
 }
 
 #[tauri::command]
@@ -2751,6 +2838,7 @@ pub async fn execute_script_plugin(
         ScriptAction::Jog { .. } => "jog",
         ScriptAction::SetZero { .. } => "setZero",
         ScriptAction::ReturnZero { .. } => "returnZero",
+        ScriptAction::RawCommand { .. } => "rawCommand",
         ScriptAction::Notice { .. } => "notice",
     };
     state.audit.record(
@@ -2845,6 +2933,55 @@ pub async fn execute_script_plugin(
                 action: "returnZero".to_owned(),
                 message: format!("{:?} returned to work zero", axis),
                 snapshot: Box::new(outcome.snapshot),
+            })
+        }
+        ScriptAction::RawCommand { command } => {
+            ensure_script_motion_confirmed(request.operator_confirmed)?;
+            ensure_machine_bound(&state).await?;
+            let _transition = state.transition_lock.lock().await;
+            if state
+                .preferences
+                .lock()
+                .await
+                .preferences()
+                .safe_command_mode
+            {
+                return Err(
+                    "safe command mode is enabled; disable it in application settings before running a plugin raw command"
+                        .to_owned(),
+                );
+            }
+            let exchange = state
+                .arbiter
+                .execute_operator_console(command.clone(), OperatorConsolePolicy::Expert)
+                .await
+                .map_err(|error| error.to_string())?;
+            state.audit.record(
+                AuditLevel::Warning,
+                AuditCategory::Controller,
+                "plugin.raw_command.completed",
+                "Plugin executed an expert GRBL command through the controller actor",
+                json!({
+                    "pluginId": request.plugin_id,
+                    "commandId": request.command_id,
+                    "command": command,
+                    "completion": exchange.completion,
+                    "code": exchange.code,
+                }),
+            );
+            Ok(ScriptPluginExecutionOutcome::Machine {
+                action: "rawCommand".to_owned(),
+                message: if exchange.lines.is_empty() {
+                    format!("{} · {:?}", exchange.command, exchange.completion)
+                } else {
+                    format!(
+                        "{} · {:?} · {}",
+                        exchange.command,
+                        exchange.completion,
+                        exchange.lines.join(" · ")
+                    )
+                },
+                snapshot: Box::new(exchange.snapshot),
             })
         }
     }

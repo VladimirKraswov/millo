@@ -6,6 +6,7 @@ export const scriptCapabilityCatalog = [
   "machine.read",
   "machine.jog",
   "machine.coordinates",
+  "machine.commands",
   "jobs.create",
 ] as const;
 
@@ -91,6 +92,7 @@ export const capabilityLabels: Readonly<Record<ScriptCapability, string>> = {
   "machine.read": "Читать состояние станка",
   "machine.jog": "Запрашивать jog-движение",
   "machine.coordinates": "Работать с рабочим нулём",
+  "machine.commands": "Отправлять экспертные GRBL-команды",
   "jobs.create": "Создавать G-code задания",
 };
 
@@ -99,5 +101,7 @@ export const commandNeedsMachineConfirmation = (
 ): boolean =>
   command.requiredCapabilities.some(
     (capability) =>
-      capability === "machine.jog" || capability === "machine.coordinates",
+      capability === "machine.jog" ||
+      capability === "machine.coordinates" ||
+      capability === "machine.commands",
   );

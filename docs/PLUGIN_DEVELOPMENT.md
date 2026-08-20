@@ -162,6 +162,10 @@ Capability proxy проверяет resource scope до и после `await`. U
 
 ### Действия v1
 
+Внешняя capability `machine.commands` разрешает действие `rawCommand`. Она не
+входит автоматически в trusted TypeScript SDK: first-party React plugin должен
+использовать узкий typed gateway либо отдельно спроектированный host proxy.
+
 ```rhai
 // Создать программу; она будет повторно разобрана millo-gcode.
 #{ kind: "createProgram", sourceName: "frame.nc", source: "G21\nM5\nM9\nM30" }
@@ -173,6 +177,10 @@ Capability proxy проверяет resource scope до и после `await`. U
 #{ kind: "setZero", axis: "z" }
 #{ kind: "returnZero", axis: "z", feedMmPerMin: 100.0 }
 
+// Экспертная строка. Требует machine.commands, подтверждение оператора и
+// выключенный глобальный безопасный режим.
+#{ kind: "rawCommand", command: "$SD/Job.nc" }
+
 // Сообщение без machine capability.
 #{ kind: "notice", title: "Готово", message: "Операция завершена", tone: "success" }
 ```
@@ -181,7 +189,9 @@ Capability proxy проверяет resource scope до и после `await`. U
 именем файла без каталога. Machine action требует capability, подтверждение
 оператора, привязанный профиль и проверки существующего actor use case. Сам
 Rhai runtime не получает serial, sender, filesystem, network, Tauri, DOM,
-`import` или `eval`.
+`import` или `eval`. `rawCommand` не меняет эту границу: runtime возвращает
+данные, host повторно валидирует строку и передаёт её actor. Разрешена одна
+печатная ASCII-строка до 255 байт; `!`, `~`, Ctrl-X и multiline запрещены.
 
 ### Установка и обновление
 

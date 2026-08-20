@@ -32,6 +32,8 @@ pub enum ScriptCapability {
     MachineJog,
     #[serde(rename = "machine.coordinates")]
     MachineCoordinates,
+    #[serde(rename = "machine.commands")]
+    MachineCommands,
     #[serde(rename = "jobs.create")]
     JobsCreate,
 }
@@ -152,6 +154,9 @@ pub enum ScriptAction {
     ReturnZero {
         axis: ScriptAxis,
         feed_mm_per_min: f64,
+    },
+    RawCommand {
+        command: String,
     },
     Notice {
         title: String,
@@ -443,6 +448,7 @@ pub fn action_capability(action: &ScriptAction) -> Option<ScriptCapability> {
         ScriptAction::SetZero { .. } | ScriptAction::ReturnZero { .. } => {
             Some(ScriptCapability::MachineCoordinates)
         }
+        ScriptAction::RawCommand { .. } => Some(ScriptCapability::MachineCommands),
         ScriptAction::Notice { .. } => None,
     }
 }
@@ -807,6 +813,20 @@ fn validate_action(action: &ScriptAction) -> Result<(), ScriptPluginError> {
             feed_mm_per_min, ..
         } => validate_feed(*feed_mm_per_min)?,
         ScriptAction::SetZero { .. } => {}
+        ScriptAction::RawCommand { command } => {
+            let command = command.trim();
+            if command.is_empty()
+                || command.len() > 255
+                || !command.is_ascii()
+                || command.chars().any(char::is_control)
+                || matches!(command, "!" | "~")
+            {
+                return Err(ScriptPluginError::InvalidAction(
+                    "raw command must be one printable ASCII GRBL line up to 255 bytes; use typed realtime controls for Hold and Resume"
+                        .to_owned(),
+                ));
+            }
+        }
         ScriptAction::Notice { title, message, .. } => {
             validate_action_text("notice title", title, 100)?;
             validate_action_text("notice message", message, 1_000)?;
@@ -1208,6 +1228,50 @@ mod tests {
 
         assert!(matches!(error, ScriptPluginError::InvalidAction(_)));
         assert!(error.to_string().contains("MachineJog"));
+    }
+
+    #[test]
+    fn raw_commands_require_the_explicit_capability_and_one_printable_line() {
+        let mut package = default_macro_package().unwrap();
+        package
+            .manifest
+            .capabilities
+            .optional
+            .push(ScriptCapability::MachineCommands);
+        package.commands[0].fields.clear();
+        package.commands[0].required_capabilities = vec![ScriptCapability::MachineCommands];
+        package.source = r#"fn run(command, input, machine) {
+            #{ kind: "rawCommand", command: "$SD/Job.nc" }
+        }"#
+        .to_owned();
+
+        validate_package(&package).unwrap();
+        let action = ScriptRuntime::execute(
+            &package,
+            &package.commands[0].id,
+            serde_json::json!({}),
+            Value::Null,
+        )
+        .unwrap();
+        assert_eq!(
+            action,
+            ScriptAction::RawCommand {
+                command: "$SD/Job.nc".to_owned(),
+            }
+        );
+        assert_eq!(
+            action_capability(&action),
+            Some(ScriptCapability::MachineCommands)
+        );
+
+        for command in ["!", "~", "G0 X1\nG0 X2", "\u{18}"] {
+            assert!(matches!(
+                validate_action(&ScriptAction::RawCommand {
+                    command: command.to_owned(),
+                }),
+                Err(ScriptPluginError::InvalidAction(_))
+            ));
+        }
     }
 
     #[test]

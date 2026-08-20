@@ -44,12 +44,15 @@ One invocation returns exactly one action:
 - `jog { axis, distanceMm, feedMmPerMin }`
 - `setZero { axis }`
 - `returnZero { axis, feedMmPerMin }`
+- `rawCommand { command }`
 - `notice { title, message, tone }`
 
 `createProgram` is parsed by `millo-gcode` and enters the normal Program flow.
 It is not sent to GRBL. Machine actions require their capability, a fresh UI
 confirmation, a connected profile, and all checks already enforced by the Rust
-command actor. A script never receives a raw command or realtime-byte API.
+command actor. `rawCommand` additionally requires the explicitly reviewed
+`machine.commands` grant and globally disabled safe command mode. A script never
+receives a serial handle, response reader, sender handle, or realtime-byte API.
 
 The runtime bounds operations, call depth, expression depth, strings, arrays,
 maps, source size, commands, fields, and generated G-code. No filesystem,
@@ -70,7 +73,15 @@ Capabilities:
 - `machine.read`
 - `machine.jog`
 - `machine.coordinates`
+- `machine.commands`
 - `jobs.create`
+
+`machine.commands` is the expert escape hatch, not ordinary plugin authority.
+It accepts one printable ASCII line up to 255 bytes, rejects multiline input and
+typed realtime commands, runs only through the single actor in Idle/Alarm, and
+invalidates stale Check, authorization, Z-datum, homing and envelope evidence.
+It remains blocked while `Настройки -> Приложение -> Безопасный режим команд`
+is enabled, which is the default.
 
 The manager's `Новый макрос` template exposes optional machine/job capabilities
 but grants none of them until selected and enabled. Parameterized commands or

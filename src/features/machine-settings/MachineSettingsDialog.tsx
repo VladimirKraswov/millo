@@ -7,12 +7,17 @@ import {
   Search,
   Settings2,
   ShieldAlert,
+  ShieldCheck,
   Wrench,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { MachineProfile, MachineProfileState } from "../../shared/profile";
+import type {
+  ApplicationPreferences,
+  ApplicationPreferencesUpdate,
+} from "../../shared/preferences";
 import type {
   ControllerSettingEditRequest,
   ControllerSettingsState,
@@ -30,7 +35,7 @@ import {
 } from "./machineSettingsModel";
 
 type WriteStatus = "idle" | "pending" | "saving" | "saved" | "error";
-type SettingsView = "local" | "controller" | "history";
+type SettingsView = "application" | "local" | "controller" | "history";
 
 interface PendingWrite {
   readonly timer: number;
@@ -38,10 +43,14 @@ interface PendingWrite {
 }
 
 interface MachineSettingsDialogProps {
+  applicationPreferences: ApplicationPreferences;
   open: boolean;
   profile?: MachineProfile;
   settings?: ControllerSettingsState;
   onClose: () => void;
+  onApplicationPreferencesUpdate: (
+    update: ApplicationPreferencesUpdate,
+  ) => Promise<ApplicationPreferences>;
   onLocalUpdate: (profile: MachineProfile) => Promise<MachineProfileState>;
   onOpenToolLibrary: () => void;
   onRollback: (key: string, revision: number) => Promise<ControllerSettingsState>;
@@ -62,10 +71,12 @@ const writeIsPending = (status?: WriteStatus): boolean =>
   status === "pending" || status === "saving";
 
 export function MachineSettingsDialog({
+  applicationPreferences,
   open,
   profile,
   settings,
   onClose,
+  onApplicationPreferencesUpdate,
   onLocalUpdate,
   onOpenToolLibrary,
   onRollback,
@@ -73,7 +84,7 @@ export function MachineSettingsDialog({
   initialView = "local",
   initialQuery = "",
 }: MachineSettingsDialogProps) {
-  const [view, setView] = useState<SettingsView>("local");
+  const [view, setView] = useState<SettingsView>(initialView);
   const [query, setQuery] = useState("");
   const [controllerEditing, setControllerEditing] = useState(false);
   const [draftValues, setDraftValues] = useState<Record<string, string>>({});
@@ -81,6 +92,11 @@ export function MachineSettingsDialog({
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [localDraft, setLocalDraft] = useState<MachineProfile>();
   const [localStatus, setLocalStatus] = useState<WriteStatus>("idle");
+  const [safeCommandMode, setSafeCommandMode] = useState(
+    applicationPreferences.safeCommandMode,
+  );
+  const [preferenceStatus, setPreferenceStatus] = useState<WriteStatus>("idle");
+  const [preferenceError, setPreferenceError] = useState("");
   const openRef = useRef(open);
   openRef.current = open;
   const profileIdRef = useRef(profile?.id);
@@ -115,6 +131,10 @@ export function MachineSettingsDialog({
   useEffect(() => setLocalDraft(profile ? { ...profile } : undefined), [profile]);
 
   useEffect(() => {
+    setSafeCommandMode(applicationPreferences.safeCommandMode);
+  }, [applicationPreferences.safeCommandMode]);
+
+  useEffect(() => {
     lifecycle.current += 1;
     for (const pending of timers.current.values()) {
       window.clearTimeout(pending.timer);
@@ -125,6 +145,8 @@ export function MachineSettingsDialog({
     setStatuses({});
     setErrors({});
     setLocalStatus("idle");
+    setPreferenceStatus("idle");
+    setPreferenceError("");
     return () => {
       lifecycle.current += 1;
       for (const pending of timers.current.values()) {
@@ -267,6 +289,24 @@ export function MachineSettingsDialog({
     }, 500);
   };
 
+  const updateSafeCommandMode = async (enabled: boolean) => {
+    const previous = safeCommandMode;
+    setSafeCommandMode(enabled);
+    setPreferenceStatus("saving");
+    setPreferenceError("");
+    try {
+      const saved = await onApplicationPreferencesUpdate({
+        safeCommandMode: enabled,
+      });
+      setSafeCommandMode(saved.safeCommandMode);
+      setPreferenceStatus("saved");
+    } catch (error) {
+      setSafeCommandMode(previous);
+      setPreferenceStatus("error");
+      setPreferenceError(String(error));
+    }
+  };
+
   const statusIcon = (status: WriteStatus | undefined) => {
     if (status === "pending") return <Clock3 aria-label="Ожидает записи" size={14} />;
     if (status === "saving") return <Settings2 aria-label="Запись и проверка" size={14} />;
@@ -294,7 +334,7 @@ export function MachineSettingsDialog({
         </header>
 
         <nav className="settings-tabs" aria-label="Раздел настроек">
-          {(["local", "controller", "history"] as const).map((tab) => (
+          {(["application", "local", "controller", "history"] as const).map((tab) => (
             <button
               aria-selected={view === tab}
               key={tab}
@@ -302,12 +342,84 @@ export function MachineSettingsDialog({
               role="tab"
               type="button"
             >
-              {tab === "local" ? "Основное" : tab === "controller" ? "Контроллер" : "Ревизии"}
+              {tab === "application"
+                ? "Приложение"
+                : tab === "local"
+                  ? "Станок"
+                  : tab === "controller"
+                    ? "Контроллер"
+                    : "Ревизии"}
             </button>
           ))}
         </nav>
 
         <div className="machine-dialog-body settings-dialog-body">
+          {view === "application" && (
+            <section className="application-settings">
+              <div className="application-settings-heading">
+                <div>
+                  <span>Команды и расширения</span>
+                  <h3>Доступ к контроллеру</h3>
+                </div>
+                <span className={`autosave-state is-${preferenceStatus}`}>
+                  <span className="autosave-icon-slot">
+                    {statusIcon(preferenceStatus)}
+                  </span>
+                  {preferenceStatus === "saving"
+                    ? "Сохранение"
+                    : preferenceStatus === "saved"
+                      ? "Сохранено"
+                      : preferenceStatus === "error"
+                        ? "Не сохранено"
+                        : "Сохраняется автоматически"}
+                </span>
+              </div>
+
+              <label
+                className={`safe-command-setting${safeCommandMode ? "" : " is-expert"}`}
+              >
+                <span className="safe-command-setting-icon">
+                  {safeCommandMode ? (
+                    <ShieldCheck aria-hidden="true" size={19} />
+                  ) : (
+                    <ShieldAlert aria-hidden="true" size={19} />
+                  )}
+                </span>
+                <span>
+                  <strong>Безопасный режим команд</strong>
+                  <small>
+                    Консоль принимает только ?, $I, $$, $G и $#. Плагины не могут
+                    использовать capability machine.commands.
+                  </small>
+                </span>
+                <input
+                  aria-label="Безопасный режим команд"
+                  checked={safeCommandMode}
+                  disabled={preferenceStatus === "saving"}
+                  onChange={(event) => void updateSafeCommandMode(event.target.checked)}
+                  type="checkbox"
+                />
+              </label>
+
+              {!safeCommandMode && (
+                <div className="expert-command-warning">
+                  <ShieldAlert aria-hidden="true" size={18} />
+                  <span>
+                    <strong>Экспертный режим включён</strong>
+                    <small>
+                      Консоль и явно разрешённые плагины смогут отправлять произвольные
+                      GRBL-строки. Они могут запустить движение, шпиндель или изменить
+                      настройки контроллера.
+                    </small>
+                  </span>
+                </div>
+              )}
+              <p className="application-setting-error" role="alert">
+                {preferenceError}
+              </p>
+            </section>
+          )}
+
           {view === "local" && localDraft && (
             <section className="local-machine-settings">
               <div className={`autosave-state is-${localStatus}`}>

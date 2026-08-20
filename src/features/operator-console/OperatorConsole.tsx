@@ -1,6 +1,7 @@
 import {
   LoaderCircle,
   Send,
+  ShieldAlert,
   ShieldCheck,
   SquareTerminal,
   Trash2,
@@ -15,9 +16,9 @@ import type {
   OperatorConsoleExchange,
 } from "../../shared/machine";
 import {
+  consoleCommandAllowed,
   consolePolicyMessage,
-  normalizeConsoleCommand,
-  safeConsoleCommand,
+  normalizeSubmittedConsoleCommand,
   safeConsoleCommands,
 } from "./operatorConsoleModel";
 
@@ -39,6 +40,7 @@ export interface OperatorConsoleProps {
   readonly onClose: () => void;
   readonly onSnapshot: (snapshot: ControllerSnapshot) => void;
   readonly open: boolean;
+  readonly safeCommandMode: boolean;
   readonly snapshot: ControllerSnapshot;
 }
 
@@ -51,6 +53,7 @@ export function OperatorConsole({
   onClose,
   onSnapshot,
   open,
+  safeCommandMode,
   snapshot,
 }: OperatorConsoleProps) {
   const [input, setInput] = useState("");
@@ -60,7 +63,7 @@ export function OperatorConsole({
   const nextId = useRef(1);
   const streamRef = useRef<HTMLDivElement>(null);
   const connected = snapshot.connection === "connected";
-  const validCommand = safeConsoleCommand(input);
+  const validCommand = consoleCommandAllowed(input, safeCommandMode);
   const pending = entries.some((entry) => entry.state === "pending");
 
   useEffect(() => {
@@ -83,18 +86,17 @@ export function OperatorConsole({
     );
 
   const submit = async (requested: string) => {
-    const command = normalizeConsoleCommand(requested);
-    const descriptor = safeConsoleCommand(command);
+    const command = normalizeSubmittedConsoleCommand(requested, safeCommandMode);
     const id = nextId.current++;
     const timestampMs = Date.now();
 
-    if (!descriptor) {
+    if (!consoleCommandAllowed(command, safeCommandMode)) {
       append({
         id,
         command: command || "(пусто)",
         timestampMs,
         state: "rejected",
-        lines: [consolePolicyMessage(command)],
+        lines: [consolePolicyMessage(command, safeCommandMode)],
       });
       return;
     }
@@ -157,9 +159,13 @@ export function OperatorConsole({
             </div>
           </div>
           <div className="operator-console-header-actions">
-            <span className="operator-console-policy">
-              <ShieldCheck aria-hidden="true" size={13} />
-              Только чтение
+            <span className={`operator-console-policy${safeCommandMode ? "" : " is-expert"}`}>
+              {safeCommandMode ? (
+                <ShieldCheck aria-hidden="true" size={13} />
+              ) : (
+                <ShieldAlert aria-hidden="true" size={13} />
+              )}
+              {safeCommandMode ? "Безопасный режим" : "Экспертный режим"}
             </span>
             <button
               aria-label="Очистить консоль"
@@ -237,7 +243,7 @@ export function OperatorConsole({
               autoCapitalize="characters"
               autoComplete="off"
               disabled={pending}
-              maxLength={64}
+              maxLength={safeCommandMode ? 64 : 255}
               onChange={(event) => {
                 setInput(event.target.value);
                 setHistoryCursor(undefined);
@@ -251,7 +257,7 @@ export function OperatorConsole({
                   recallHistory(1);
                 }
               }}
-              placeholder="$I"
+              placeholder={safeCommandMode ? "$I" : "G0 X10"}
               spellCheck={false}
               value={input}
             />
@@ -266,9 +272,13 @@ export function OperatorConsole({
             <Send aria-hidden="true" size={16} />
           </button>
         </form>
-        <footer className={validCommand ? "is-safe" : undefined}>
+        <footer className={validCommand ? (safeCommandMode ? "is-safe" : "is-expert") : undefined}>
           <i aria-hidden="true" />
-          <span>{connected ? consolePolicyMessage(input) : "Контроллер не подключён"}</span>
+          <span>
+            {connected
+              ? consolePolicyMessage(input, safeCommandMode)
+              : "Контроллер не подключён"}
+          </span>
         </footer>
       </section>
     </div>

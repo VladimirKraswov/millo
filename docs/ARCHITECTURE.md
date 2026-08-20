@@ -720,9 +720,11 @@ does not schedule or execute controller I/O.
   desktop process.
 - Rust parses firmware, settings, modal state, and coordinate parameters. The UI
   never receives a responsibility to interpret wire lines.
-- Tauri exposes no raw command, general G-code, or arbitrary spindle-control
-  endpoint. The console endpoint is an actor-enforced read-only allowlist; all
-  machine-changing calls are named, typed use cases described below.
+- Tauri exposes no serial handle, arbitrary-byte endpoint, or independent
+  response reader. The console endpoint is actor-owned: a persisted safe policy
+  defaults to the five read-only queries, while explicit expert mode accepts one
+  bounded line only in fresh Idle/Alarm and invalidates stale execution evidence.
+  Realtime controls and ordinary machine actions remain named typed use cases.
 
 ### Work-coordinate boundary
 

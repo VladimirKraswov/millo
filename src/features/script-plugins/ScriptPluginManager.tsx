@@ -314,6 +314,7 @@ function newMacroTemplate(suffix: string): ScriptPluginPackage {
           "machine.read",
           "machine.jog",
           "machine.coordinates",
+          "machine.commands",
           "jobs.create",
         ],
       },

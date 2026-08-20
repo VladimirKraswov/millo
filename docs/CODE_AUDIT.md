@@ -74,9 +74,11 @@ tests, configuration, and direct/transitive dependency reports.
   leaf names are bounded. Command declarations must match returned action
   capabilities, and a backend execution fence closes configure/delete/run
   TOCTOU races.
-- The operator console is not a raw transport exception. Its Rust classifier
-  admits five exact read-only requests, the actor fences correlated operations,
-  and the WebView cannot expand the allowlist or grant it to plugins.
+- The operator console is not a raw transport exception. Safe mode defaults to
+  five exact read-only requests. Persisted expert mode admits one bounded line,
+  but the actor still fences operations, correlates the response, and
+  invalidates stale execution evidence. Plugins additionally need the
+  digest-bound `machine.commands` grant and operator confirmation.
 - Plugin render failures are isolated per contribution. Heightmap checkpoint,
   lock and Tauri event-emission failures now produce structured audit records
   instead of being silently dropped.

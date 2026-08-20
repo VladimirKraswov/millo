@@ -197,7 +197,7 @@ pub enum ArbiterError {
     HeightmapContactUnavailable,
     #[error("another machine operation is active")]
     MachineOperationBusy,
-    #[error("safe console accepts only ?, $I, $$, $G, and $# read-only queries")]
+    #[error("operator console command was rejected by the active command policy")]
     OperatorConsoleCommandRejected,
     #[error("controller query is unavailable in {0:?}; wait for Idle or use ? for status")]
     OperatorConsoleQueryUnavailable(MachineMode),
@@ -277,6 +277,12 @@ pub enum ArbiterError {
     },
     #[error("validated controller setting {0} disappeared from the inspection snapshot")]
     SettingSourceMissing(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorConsolePolicy {
+    SafeOnly,
+    Expert,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -479,9 +485,14 @@ impl CommandArbiter {
     pub async fn execute_operator_console(
         &self,
         command: String,
+        policy: OperatorConsolePolicy,
     ) -> Result<OperatorConsoleExchange, ArbiterError> {
-        self.call(|response| Request::ExecuteOperatorConsole { command, response })
-            .await
+        self.call(|response| Request::ExecuteOperatorConsole {
+            command,
+            policy,
+            response,
+        })
+        .await
     }
 
     pub async fn preflight_real_run(
@@ -1093,6 +1104,7 @@ enum Request {
     },
     ExecuteOperatorConsole {
         command: String,
+        policy: OperatorConsolePolicy,
         response: oneshot::Sender<Result<OperatorConsoleExchange, ArbiterError>>,
     },
     PreflightRealRun {
@@ -1666,12 +1678,37 @@ async fn handle_request(request: Request, actor: &mut ActorState) {
             publish(snapshots, controller);
             let _ = response.send(result);
         }
-        Request::ExecuteOperatorConsole { command, response } => {
+        Request::ExecuteOperatorConsole {
+            command,
+            policy,
+            response,
+        } => {
             let reset_count = controller.snapshot().reset_count;
+            let expert_command = policy == OperatorConsolePolicy::Expert
+                && matches!(
+                    operator_console::ConsoleCommand::parse(&command, true),
+                    Ok(operator_console::ConsoleCommand::Raw(_))
+                );
             let result = if sender_is_active(&sender.snapshot()) {
                 Err(ArbiterError::MachineOperationBusy)
             } else {
-                execute_operator_console(controller, &command).await
+                if expert_command {
+                    invalidate_authorizations(safety, first_cut);
+                    program_check.invalidate();
+                    *pending_program_check = None;
+                    *verified_z_datum = None;
+                    *active_homing = None;
+                    *machine_envelope = None;
+                }
+                let mut result = execute_operator_console(controller, &command, policy).await;
+                if expert_command {
+                    controller.invalidate_machine_reference("Expert console command executed");
+                    let invalidated_snapshot = controller.snapshot();
+                    if let Ok(exchange) = &mut result {
+                        exchange.snapshot = invalidated_snapshot;
+                    }
+                }
+                result
             };
             if controller.snapshot().reset_count != reset_count {
                 invalidate_authorizations(safety, first_cut);
@@ -4976,13 +5013,14 @@ fn sender_is_active(snapshot: &SenderSnapshot) -> bool {
 async fn execute_operator_console(
     controller: &mut Controller<BoxedTransport>,
     input: &str,
+    policy: OperatorConsolePolicy,
 ) -> Result<OperatorConsoleExchange, ArbiterError> {
-    match operator_console::SafeConsoleCommand::parse(input)? {
-        operator_console::SafeConsoleCommand::Status => {
+    match operator_console::ConsoleCommand::parse(input, policy == OperatorConsolePolicy::Expert)? {
+        operator_console::ConsoleCommand::Status => {
             let snapshot = controller.refresh_status().await?;
             Ok(operator_console::status_exchange(snapshot))
         }
-        operator_console::SafeConsoleCommand::Query { query, kind } => {
+        operator_console::ConsoleCommand::Query { query, kind } => {
             let mode = controller.snapshot().machine.mode;
             if !matches!(mode, MachineMode::Idle | MachineMode::Alarm) {
                 return Err(ArbiterError::OperatorConsoleQueryUnavailable(mode));
@@ -4993,6 +5031,15 @@ async fn execute_operator_console(
                 response,
                 controller.snapshot(),
             ))
+        }
+        operator_console::ConsoleCommand::Raw(command) => {
+            let mode = controller.refresh_status().await?.machine.mode;
+            if !matches!(mode, MachineMode::Idle | MachineMode::Alarm) {
+                return Err(ArbiterError::OperatorConsoleQueryUnavailable(mode));
+            }
+            let response = controller.execute_console_line(&command).await?;
+            let snapshot = controller.refresh_status().await?;
+            Ok(operator_console::raw_exchange(response, snapshot))
         }
     }
 }
@@ -6103,7 +6150,7 @@ mod tests {
         arbiter.connect().await.unwrap();
 
         let status = arbiter
-            .execute_operator_console("?".to_owned())
+            .execute_operator_console("?".to_owned(), OperatorConsolePolicy::SafeOnly)
             .await
             .unwrap();
         assert_eq!(status.command, "?");
@@ -6111,7 +6158,7 @@ mod tests {
 
         for command in ["$I", "$$", "$G", "$#"] {
             let exchange = arbiter
-                .execute_operator_console(command.to_owned())
+                .execute_operator_console(command.to_owned(), OperatorConsolePolicy::SafeOnly)
                 .await
                 .unwrap();
             assert_eq!(exchange.command, command);
@@ -6121,7 +6168,9 @@ mod tests {
         let writes_before_rejection = control.writes();
         for rejected in ["G0 X10", "$100=1", "$X", "$H", "M3 S1000", "!"] {
             assert!(matches!(
-                arbiter.execute_operator_console(rejected.to_owned()).await,
+                arbiter
+                    .execute_operator_console(rejected.to_owned(), OperatorConsolePolicy::SafeOnly)
+                    .await,
                 Err(ArbiterError::OperatorConsoleCommandRejected)
             ));
         }
@@ -6139,12 +6188,32 @@ mod tests {
         let writes_before_query = control.writes();
 
         assert!(matches!(
-            arbiter.execute_operator_console("$I".to_owned()).await,
+            arbiter
+                .execute_operator_console("$I".to_owned(), OperatorConsolePolicy::SafeOnly)
+                .await,
             Err(ArbiterError::OperatorConsoleQueryUnavailable(
                 MachineMode::Run
             ))
         ));
         assert_eq!(control.writes(), writes_before_query);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn expert_operator_console_serializes_one_arbitrary_line_through_the_actor() {
+        let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+
+        let exchange = arbiter
+            .execute_operator_console("G0 X1.25".to_owned(), OperatorConsolePolicy::Expert)
+            .await
+            .unwrap();
+
+        assert_eq!(exchange.kind, millo_domain::OperatorConsoleCommandKind::Raw);
+        assert_eq!(exchange.command, "G0 X1.25");
+        assert_eq!(exchange.completion, CommandCompletion::Ok);
+        assert!(control.writes().contains(&b"G0 X1.25\n".to_vec()));
         task.abort();
     }
 

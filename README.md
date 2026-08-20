@@ -107,11 +107,14 @@ are typed Idle-only operations and are reread from GRBL modal state after each
 write. See [Machine control lifecycle](docs/MACHINE_CONTROL.md) and
 [ADR 0057](docs/decisions/0057-actor-owned-homing-and-continuous-jog.md).
 
-The operator console provides a bounded diagnostic transcript without exposing
-raw serial access. Rust accepts only `?`, `$I`, `$$`, `$G`, and `$#`; line
-queries run through the same actor only in Idle or Alarm and are blocked during
-sender, homing, jog, probe, or heightmap activity. Motion, settings writes,
-unlock, reset, spindle, and coolant remain typed workflows. See
+The operator console provides a bounded transcript without exposing raw serial
+access. Safe command mode is persisted and enabled by default; Rust then accepts
+only `?`, `$I`, `$$`, `$G`, and `$#`. Experts may disable it in application
+settings to send one bounded GRBL line through the same actor. The actor requires
+fresh Idle/Alarm, blocks sender and other machine operations, correlates the
+response, and invalidates stale run/coordinate evidence. Realtime controls remain
+typed workflows. External scripts need a digest-bound `machine.commands` grant,
+operator confirmation, and the same global opt-in. See
 [Operator console](docs/OPERATOR_CONSOLE.md) and
 [ADR 0058](docs/decisions/0058-read-only-operator-console.md).
 

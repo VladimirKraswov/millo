@@ -1,35 +1,52 @@
-# ADR 0058: Read-only operator console
+# ADR 0058: Configurable actor-owned operator console
 
 ## Status
 
-Accepted on 2026-08-20.
+Accepted on 2026-08-20. Extended on 2026-08-20 with an opt-in expert policy.
 
 ## Context
 
 Operators need firmware, settings, modal, coordinate, and status diagnostics in
-one transcript. A conventional raw GRBL terminal would duplicate serial
-ownership and bypass typed work-zero, homing, probing, sender, output, and reset
-policies. A UI-only denylist would also be bypassable through Tauri IPC.
+one transcript. Experts and some community extensions also need firmware-specific
+commands that do not yet justify a dedicated Millo use case. A conventional raw
+serial terminal would duplicate transport ownership and could steal `ok`,
+`error`, or `ALARM` responses from sender, probing, homing, or heightmap work.
 
 ## Decision
 
-Millo exposes one actor-owned operator-console request. Rust normalizes and
-classifies input against the exact read-only allowlist `?`, `$I`, `$$`, `$G`,
-and `$#`. No arbitrary line or byte reaches the controller. Line queries are
-available only in Idle or Alarm and never while a sender or another machine
-operation owns a response lifecycle.
+Millo exposes one operator-console request owned by the existing Rust command
+actor. Application preferences persist `safeCommandMode`, defaulting to `true`.
 
-The status response is rendered from the parsed controller snapshot. Query
-responses retain GRBL lines and terminal completion. Tauri records every result
-in the persistent controller audit category. The frontend keeps only a bounded
-session transcript and repeats the policy for immediate feedback; Rust remains
-authoritative.
+In safe mode Rust accepts only `?`, `$I`, `$$`, `$G`, and `$#`. In expert mode it
+also accepts one printable ASCII GRBL line up to 255 bytes. Expert lines are
+available only in `Idle` or `Alarm` and only while no sender or actor-owned
+machine operation is active. The actor performs a fresh status read before an
+expert line and correlates its terminal response before polling status again.
+
+Realtime `!`, `~`, Ctrl-X, overrides, and Jog Cancel remain named typed actions;
+they are never accepted as line input. The setting does not expose a transport,
+serial handle, arbitrary bytes, or a second response reader to the WebView.
+
+An expert line invalidates first-cut authorization, GRBL Check evidence, verified
+Z datum, homing envelope, and machine-reference evidence. Every result and every
+policy change is written to the persistent audit log.
+
+External Rhai packages can return `rawCommand` only when all of these are true:
+
+1. the package and command declare `machine.commands`;
+2. that capability is granted to the exact reviewed package digest;
+3. the operator confirms the machine action;
+4. global safe command mode is disabled;
+5. the same actor lifecycle accepts the command.
 
 ## Consequences
 
-- Diagnostics become accessible without introducing a raw serial endpoint.
-- Sender acknowledgements and long-running operation responses cannot be stolen.
-- Adding another console command requires an explicit core review and Rust enum
-  change, not a UI configuration update.
-- Plugins receive no implicit console or transport capability.
-- Machine-changing commands continue through named, typed, verifiable use cases.
+- The default remains a diagnostic-only console suitable for normal operation.
+- Experts can use controller-specific commands without bypassing serial
+  serialization or response correlation.
+- Sender and long-running operations cannot lose acknowledgements to the console
+  or a plugin.
+- Expert flexibility deliberately discards stale run and coordinate evidence;
+  the next machining workflow must inspect and authorize the machine again.
+- Useful expert operations should still graduate into typed, documented use
+  cases when their hardware policy becomes known.

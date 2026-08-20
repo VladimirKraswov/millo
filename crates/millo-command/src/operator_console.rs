@@ -6,28 +6,29 @@ use millo_domain::{
 
 use crate::ArbiterError;
 
-const MAX_COMMAND_BYTES: usize = 8;
+const MAX_EXPERT_COMMAND_BYTES: usize = 255;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SafeConsoleCommand {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConsoleCommand {
     Status,
     Query {
         query: DeviceQuery,
         kind: OperatorConsoleCommandKind,
     },
+    Raw(String),
 }
 
-impl SafeConsoleCommand {
-    pub(crate) fn parse(input: &str) -> Result<Self, ArbiterError> {
+impl ConsoleCommand {
+    pub(crate) fn parse(input: &str, expert_mode: bool) -> Result<Self, ArbiterError> {
         let command = input.trim();
-        if command.is_empty() || command.len() > MAX_COMMAND_BYTES || !command.is_ascii() {
+        if command.is_empty() || !command.is_ascii() {
             return Err(ArbiterError::OperatorConsoleCommandRejected);
         }
         if command.bytes().any(|byte| byte.is_ascii_control()) {
             return Err(ArbiterError::OperatorConsoleCommandRejected);
         }
 
-        match command.to_ascii_uppercase().as_str() {
+        let safe = match command.to_ascii_uppercase().as_str() {
             "?" => Ok(Self::Status),
             "$I" => Ok(Self::Query {
                 query: DeviceQuery::BuildInfo,
@@ -46,20 +47,29 @@ impl SafeConsoleCommand {
                 kind: OperatorConsoleCommandKind::Parameters,
             }),
             _ => Err(ArbiterError::OperatorConsoleCommandRejected),
+        };
+        if safe.is_ok() {
+            return safe;
         }
+        if !expert_mode || command.len() > MAX_EXPERT_COMMAND_BYTES || matches!(command, "!" | "~")
+        {
+            return Err(ArbiterError::OperatorConsoleCommandRejected);
+        }
+        Ok(Self::Raw(command.to_owned()))
     }
 
-    pub(crate) const fn normalized(self) -> &'static str {
+    pub(crate) fn normalized(&self) -> &str {
         match self {
             Self::Status => "?",
             Self::Query { query, .. } => query.command(),
+            Self::Raw(command) => command,
         }
     }
 }
 
 pub(crate) fn status_exchange(snapshot: ControllerSnapshot) -> OperatorConsoleExchange {
     OperatorConsoleExchange {
-        command: SafeConsoleCommand::Status.normalized().to_owned(),
+        command: ConsoleCommand::Status.normalized().to_owned(),
         kind: OperatorConsoleCommandKind::Status,
         completion: CommandCompletion::Ok,
         lines: vec![format_status(&snapshot)],
@@ -81,6 +91,13 @@ pub(crate) fn query_exchange(
         code: response.code,
         snapshot,
     }
+}
+
+pub(crate) fn raw_exchange(
+    response: CommandResponse,
+    snapshot: ControllerSnapshot,
+) -> OperatorConsoleExchange {
+    query_exchange(OperatorConsoleCommandKind::Raw, response, snapshot)
 }
 
 fn format_status(snapshot: &ControllerSnapshot) -> String {
@@ -122,22 +139,59 @@ mod tests {
 
     #[test]
     fn accepts_only_the_read_only_operator_allowlist() {
-        assert_eq!(SafeConsoleCommand::parse(" ? ").unwrap().normalized(), "?");
-        assert_eq!(SafeConsoleCommand::parse("$i").unwrap().normalized(), "$I");
-        assert_eq!(SafeConsoleCommand::parse("$$").unwrap().normalized(), "$$");
-        assert_eq!(SafeConsoleCommand::parse("$g").unwrap().normalized(), "$G");
-        assert_eq!(SafeConsoleCommand::parse("$#").unwrap().normalized(), "$#");
+        assert_eq!(
+            ConsoleCommand::parse(" ? ", false).unwrap().normalized(),
+            "?"
+        );
+        assert_eq!(
+            ConsoleCommand::parse("$i", false).unwrap().normalized(),
+            "$I"
+        );
+        assert_eq!(
+            ConsoleCommand::parse("$$", false).unwrap().normalized(),
+            "$$"
+        );
+        assert_eq!(
+            ConsoleCommand::parse("$g", false).unwrap().normalized(),
+            "$G"
+        );
+        assert_eq!(
+            ConsoleCommand::parse("$#", false).unwrap().normalized(),
+            "$#"
+        );
 
         for rejected in [
             "", "G0 X1", "$100=1", "$X", "$H", "!", "~", "\u{18}", "$I\n$$",
         ] {
             assert!(
                 matches!(
-                    SafeConsoleCommand::parse(rejected),
+                    ConsoleCommand::parse(rejected, false),
                     Err(ArbiterError::OperatorConsoleCommandRejected)
                 ),
                 "{rejected:?} must not cross the safe-console policy"
             );
+        }
+    }
+
+    #[test]
+    fn expert_mode_accepts_one_bounded_line_but_keeps_realtime_controls_typed() {
+        assert_eq!(
+            ConsoleCommand::parse(" G0 X1.25 ", true)
+                .unwrap()
+                .normalized(),
+            "G0 X1.25"
+        );
+        assert_eq!(
+            ConsoleCommand::parse("$100=1600", true)
+                .unwrap()
+                .normalized(),
+            "$100=1600"
+        );
+        for rejected in ["!", "~", "$I\n$$", "\u{18}"] {
+            assert!(matches!(
+                ConsoleCommand::parse(rejected, true),
+                Err(ArbiterError::OperatorConsoleCommandRejected)
+            ));
         }
     }
 

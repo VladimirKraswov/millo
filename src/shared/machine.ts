@@ -155,7 +155,8 @@ export type OperatorConsoleCommandKind =
   | "buildInfo"
   | "settings"
   | "modalState"
-  | "parameters";
+  | "parameters"
+  | "raw";
 
 export interface OperatorConsoleExchange {
   command: string;

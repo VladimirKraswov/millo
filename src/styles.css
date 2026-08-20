@@ -2592,10 +2592,139 @@ textarea:focus-visible {
 }
 
 .local-machine-settings,
+.application-settings,
 .controller-settings,
 .settings-history {
   min-height: 100%;
   padding: 18px;
+}
+
+.application-settings {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.application-settings-heading {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid #29343b;
+}
+
+.application-settings-heading > div {
+  display: grid;
+  gap: 2px;
+}
+
+.application-settings-heading h3,
+.application-settings-heading span {
+  margin: 0;
+}
+
+.application-settings-heading > div > span {
+  color: #718089;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.application-settings-heading h3 {
+  color: #dbe4e8;
+  font-size: 14px;
+}
+
+.safe-command-setting {
+  display: grid;
+  min-height: 76px;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #365649;
+  border-radius: 5px;
+  color: #cfd9dd;
+  background: #12201a;
+  cursor: pointer;
+}
+
+.safe-command-setting.is-expert {
+  border-color: #825f37;
+  background: #241c13;
+}
+
+.safe-command-setting-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid #3e6b58;
+  border-radius: 4px;
+  color: #79d4b2;
+  background: #152a21;
+}
+
+.safe-command-setting.is-expert .safe-command-setting-icon {
+  border-color: #91683a;
+  color: #efb766;
+  background: #302215;
+}
+
+.safe-command-setting > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.safe-command-setting strong {
+  font-size: 11px;
+}
+
+.safe-command-setting small {
+  color: #87959c;
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.safe-command-setting input {
+  width: 18px;
+  height: 18px;
+  accent-color: #65cda7;
+}
+
+.expert-command-warning {
+  display: grid;
+  min-height: 62px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: start;
+  gap: 9px;
+  padding: 11px 12px;
+  border-left: 2px solid #db9b4d;
+  color: #e4b979;
+  background: #271d12;
+}
+
+.expert-command-warning > span {
+  display: grid;
+  gap: 3px;
+}
+
+.expert-command-warning strong {
+  font-size: 10px;
+}
+
+.expert-command-warning small {
+  color: #af936d;
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.application-setting-error {
+  min-height: 16px;
+  margin: 0;
+  color: #ef8585;
+  font-size: 9px;
 }
 
 .local-machine-settings {
@@ -8642,6 +8771,12 @@ button.real-run-check:hover {
   text-transform: uppercase;
 }
 
+.operator-console-policy.is-expert {
+  border-color: #8f6535;
+  color: #efbd78;
+  background: #2a1f13;
+}
+
 .operator-console-title strong {
   overflow: hidden;
   color: #d8e0e4;
@@ -8893,6 +9028,14 @@ button.real-run-check:hover {
 
 .operator-console > footer.is-safe > i {
   background: #67d4ad;
+}
+
+.operator-console > footer.is-expert {
+  color: #c9a26d;
+}
+
+.operator-console > footer.is-expert > i {
+  background: #e3a657;
 }
 
 .operator-console > footer > span {

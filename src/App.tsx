@@ -58,6 +58,10 @@ import {
   selectMachineProfile,
   updateMachineLocalSettings,
 } from "./api/profiles";
+import {
+  getApplicationPreferences,
+  updateApplicationPreferences,
+} from "./api/preferences";
 import { formatCoordinate, PositionReadout } from "./components/PositionReadout";
 import { SafetyControls } from "./components/SafetyControls";
 import { ControllerInspector } from "./features/controller/ControllerInspector";
@@ -127,6 +131,10 @@ import type {
 } from "./shared/settings";
 import type { InstalledScriptPlugin } from "./shared/scriptPlugins";
 import { emptyToolLibrary } from "./shared/tooling";
+import {
+  defaultApplicationPreferences,
+  type ApplicationPreferencesUpdate,
+} from "./shared/preferences";
 
 const MachineSettingsDialog = lazy(async () => ({
   default: (await import("./features/machine-settings/MachineSettingsDialog"))
@@ -246,6 +254,9 @@ export default function App() {
   const [uiError, setUiError] = useState<string>();
   const [logOpen, setLogOpen] = useState(developmentFixture === "logs");
   const [consoleOpen, setConsoleOpen] = useState(developmentFixture === "console");
+  const [applicationPreferences, setApplicationPreferences] = useState(
+    defaultApplicationPreferences,
+  );
   const [workZeroOpen, setWorkZeroOpen] = useState(false);
   const [zProbeOpen, setZProbeOpen] = useState(developmentProbeFixture);
   const [probeEstablishedZDatum, setProbeEstablishedZDatum] =
@@ -289,11 +300,27 @@ export default function App() {
 
   useEffect(() => {
     if (!desktopRuntime) return;
+    void getApplicationPreferences()
+      .then(setApplicationPreferences)
+      .catch((error: unknown) => setUiError(String(error)));
     void tauriScriptPluginGateway
       .list()
       .then(setScriptPlugins)
       .catch((error: unknown) => setUiError(String(error)));
   }, [desktopRuntime]);
+
+  const saveApplicationPreferences = async (
+    update: ApplicationPreferencesUpdate,
+  ) => {
+    if (!desktopRuntime) {
+      const next = { ...applicationPreferences, ...update };
+      setApplicationPreferences(next);
+      return next;
+    }
+    const next = await updateApplicationPreferences(update);
+    setApplicationPreferences(next);
+    return next;
+  };
 
   const synchronizeConnectedMachine = async (): Promise<boolean> => {
     if (!desktopRuntime || snapshot.connection !== "connected") return false;
@@ -1111,6 +1138,7 @@ export default function App() {
             hasConnection,
             isConnected,
             likelyGrblOnly,
+            safeCommandMode: applicationPreferences.safeCommandMode,
             selectedMachineName: selectedMachine?.name,
             selectedTransport,
             snapshot,
@@ -1123,9 +1151,11 @@ export default function App() {
       <Suspense fallback={null}>
         {settingsOpen && (
           <MachineSettingsDialog
+            applicationPreferences={applicationPreferences}
             initialQuery={settingsFocus === "motion" ? "acceleration" : ""}
             initialView={settingsFocus === "motion" ? "controller" : "local"}
             onClose={() => setSettingsOpen(false)}
+            onApplicationPreferencesUpdate={saveApplicationPreferences}
             onLocalUpdate={updateLocalMachine}
             onOpenToolLibrary={() => {
               setSettingsOpen(false);
@@ -1152,12 +1182,18 @@ export default function App() {
             desktopRuntime={desktopRuntime || developmentFixture === "console"}
             execute={
               developmentFixture === "console"
-                ? (command) => previewOperatorConsole(command, snapshot)
+                ? (command) =>
+                    previewOperatorConsole(
+                      command,
+                      snapshot,
+                      applicationPreferences.safeCommandMode,
+                    )
                 : undefined
             }
             onClose={() => setConsoleOpen(false)}
             onSnapshot={pluginHost.machineState.publish}
             open
+            safeCommandMode={applicationPreferences.safeCommandMode}
             snapshot={snapshot}
           />
         )}

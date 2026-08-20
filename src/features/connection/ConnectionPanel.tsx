@@ -31,6 +31,7 @@ export interface ConnectionPanelView {
   readonly hasConnection: boolean;
   readonly isConnected: boolean;
   readonly likelyGrblOnly: boolean;
+  readonly safeCommandMode: boolean;
   readonly selectedMachineName?: string;
   readonly selectedTransport: TransportDescriptor;
   readonly snapshot: ControllerSnapshot;
@@ -69,6 +70,7 @@ export function ConnectionPanel({ actions, controls, view }: ConnectionPanelProp
     hasConnection,
     isConnected,
     likelyGrblOnly,
+    safeCommandMode,
     selectedMachineName,
     selectedTransport,
     snapshot,
@@ -134,7 +136,7 @@ export function ConnectionPanel({ actions, controls, view }: ConnectionPanelProp
           <SquareTerminal aria-hidden="true" size={14} />
           <span>
             <strong>Консоль</strong>
-            <small>Безопасные запросы</small>
+            <small>{safeCommandMode ? "Безопасные запросы" : "Экспертные команды"}</small>
           </span>
         </button>
       </div>

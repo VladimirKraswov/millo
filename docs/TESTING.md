@@ -69,12 +69,14 @@ controller spindle, and declared flood/mist outputs. Use it for desktop and
 narrow-viewport screenshots of the complete Motion Deck and WCS/output
 disclosure without requiring CNC hardware.
 
-`/?fixture=console` opens the read-only operator console against deterministic
+`/?fixture=console` opens the safe operator console against deterministic
 status, firmware, settings, modal, and coordinate responses. Browser checks
 require a stable modal rectangle, independent transcript scrolling, no page or
 dialog horizontal overflow, a successful `$I`, a visible blocked `G0 X1`, and
-no React console errors. Rust tests additionally prove rejected commands write
-zero bytes and line queries fail while the controller reports Run.
+no React console errors. Component/model tests separately render expert mode and
+preserve case for one bounded line. Rust tests prove safe rejections write zero
+bytes, expert lines are actor-serialized, and queries fail while Run is active.
+Preference-store tests cover safe-by-default persistence and backup recovery.
 
 Program file-picker tests require a visible `Open G-code` primary action in the
 empty workspace, the complete supported extension allowlist, and a stable
@@ -310,8 +312,10 @@ port names remain untouched.
   structured `[OPT]` planner/RX capacities, modal state, WCS/TLO, and probe
   parameters.
 - Mock Inspector responses cover the full Rust-to-UI readiness path.
-- The Tauri command surface contains no raw-line or general movement endpoint;
-  only typed guarded step-jog use cases are exposed.
+- The Tauri command surface contains no raw transport or arbitrary-byte
+  endpoint. Its console command accepts a policy-validated line only through the
+  actor; safe mode defaults to the diagnostic allowlist and expert mode remains
+  Idle/Alarm-only, operation-fenced, audited, and evidence-invalidating.
 
 ## Current work-coordinate coverage
 

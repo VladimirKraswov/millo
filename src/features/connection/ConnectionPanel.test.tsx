@@ -38,6 +38,7 @@ const baseView: Props["view"] = {
   hasConnection: false,
   isConnected: false,
   likelyGrblOnly: true,
+  safeCommandMode: true,
   selectedTransport: serialTransport,
   snapshot: emptySnapshot,
   transportLocked: false,
@@ -91,5 +92,20 @@ describe("ConnectionPanel", () => {
     expect(markup).toContain("Serial link lost");
     expect(markup).toContain("Журнал");
     expect(markup).toContain("Закрыть ошибку");
+  });
+
+  it("labels the console entry point with the active command policy", () => {
+    const safeMarkup = renderToStaticMarkup(
+      <ConnectionPanel actions={actions} view={baseView} />,
+    );
+    const expertMarkup = renderToStaticMarkup(
+      <ConnectionPanel
+        actions={actions}
+        view={{ ...baseView, safeCommandMode: false }}
+      />,
+    );
+
+    expect(safeMarkup).toContain("Безопасные запросы");
+    expect(expertMarkup).toContain("Экспертные команды");
   });
 });

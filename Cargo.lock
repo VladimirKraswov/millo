@@ -2174,6 +2174,7 @@ dependencies = [
  "millo-heightmap",
  "millo-journal",
  "millo-pcb",
+ "millo-preferences",
  "millo-profile",
  "millo-recovery",
  "millo-restart",
@@ -2271,6 +2272,16 @@ dependencies = [
  "millo-gcode",
  "millo-tooling",
  "serde",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "millo-preferences"
+version = "0.1.1"
+dependencies = [
+ "millo-storage",
+ "serde",
+ "serde_json",
  "thiserror 2.0.20",
 ]
 

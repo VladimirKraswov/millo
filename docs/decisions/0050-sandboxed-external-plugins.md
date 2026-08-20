@@ -27,9 +27,11 @@ registered.
 
 A call returns one tagged action. Job source is reparsed and published to the
 ordinary Program workflow. Jog and coordinate actions require an operator
-confirmation and delegate to existing typed actor methods. The actor remains
-the only serial owner and preserves connection, Idle, profile, distance, feed,
-coordinate, and verification policy.
+confirmation and delegate to existing typed actor methods. The optional
+`machine.commands` capability may return one bounded `rawCommand`, but only for
+the reviewed digest, after confirmation, while global safe command mode is
+disabled. It still enters the same actor and never exposes serial bytes or a
+response reader. The actor remains the only serial owner.
 
 The system operator-macro package runs through this same path. First-party React
 plugins remain on the linked in-memory host because they are compiled and
@@ -38,12 +40,13 @@ reviewed with the application.
 ## Consequences
 
 - Community macros can add and remove UI, open parameter windows, create jobs,
-  observe granted state, and request guarded machine actions without raw serial.
+  observe granted state, and request guarded machine actions without owning raw
+  serial.
 - Source changes cannot inherit silent authority from an older reviewed build.
 - The package is portable and auditable without bundling a JavaScript toolchain.
 - Version 1 does not provide QtScript compatibility, arbitrary custom layout,
-  native code, storage, network, probing, or sender-line capabilities. Each may
-  be added only as a separate typed capability with its own policy and tests.
+  native code, storage, network, probing, sender ownership, or arbitrary bytes.
+  Each may be added only as a separate capability with its own policy and tests.
 
 ## Validation
 
