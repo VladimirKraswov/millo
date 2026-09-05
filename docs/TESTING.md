@@ -36,6 +36,15 @@ and does not retry failed tests to hide instability. Inspect an actual CI run
 before claiming cross-platform verification. `playwright-report/` and
 `test-results/` are local generated artifacts, not source files.
 
+CI uses macOS 15 and Ubuntu 24.04. Playwright 1.63 resolves a frozen WebKit
+revision 2251 on macOS 14 rather than 2359; the driver rejects that browser with
+`Unknown setting: PushAPIEnabled` before any app code runs. The initial macOS 14
+run passed Rust/Chromium but not WebKit. This is not recorded as a UI test pass.
+`browserSetup.ts` now opens a page in each configured engine before running any
+scenario, so a protocol/runtime mismatch fails once instead of timing out all
+tests. This CI image choice does not change Millo's declared deployment target
+or establish native compatibility with every older macOS release.
+
 Browser projects run with one worker to avoid competing software WebGL contexts
 and cold transforms on development machines. Vite ignores Rust build outputs
 and browser reports, preventing unrelated file-watcher traffic during tests.

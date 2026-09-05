@@ -91,8 +91,10 @@ live in `src/app/developmentFixtures.ts` and cannot become production state.
 `DialogHost` records focus and activation without changing pointer behavior.
 `DialogSurface` provides one Escape/focus lifecycle for feature and plugin
 dialogs. Only the top surface reacts to Escape; live `dismissible` guards apply
-to both keyboard dismissal and feature close buttons. Operational panels are
-nonmodal so navigation remains available. Closing UI never cancels motion.
+to both keyboard dismissal and feature close buttons. Nonmodal panels do not
+trap keyboard focus. Pointer hit-testing and backdrop placement remain owned by
+each feature's layout; `aria-modal` does not make a backdrop click-through.
+Closing UI never cancels motion.
 
 `src/styles.css` contains ordered imports of feature styles. The migration
 preserved the concatenated source of all 1,461 top-level rules byte-for-byte;

@@ -2,6 +2,7 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests/workflow",
+  globalSetup: "./tests/workflow/browserSetup.ts",
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: 0,

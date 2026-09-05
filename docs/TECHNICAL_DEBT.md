@@ -25,8 +25,8 @@
   дополнительных очередей записи или второго sender.
 - Проверки UI и ядра не объединяются в одну клиентскую проверку: UI объясняет
   состояние, Rust повторно проверяет полномочия и свежесть перед действием.
-- Фокус и закрытие окна не посылают GRBL-команд. Операционные панели позволяют
-  пользоваться остальной рабочей областью.
+- Фокус и закрытие окна не посылают GRBL-команд. Nonmodal-панели не удерживают
+  Tab; размещение и обработка кликов backdrop остаются частью layout функции.
 - Тесты разных сбоев, race conditions и режимов не удаляются как «дубли» только
   потому, что используют одинаковую заготовку.
 - Координаторы остаются координаторами, а не универсальным framework. Их
@@ -63,6 +63,22 @@ advisory для локальной копии glib не считается до�
 typecheck, production bundle budgets, rustfmt и Clippy `-D warnings` также
 прошли. Проверка notices воспроизводима. Это результат macOS-прогона;
 оптимизированный Linux regression проверяется отдельным CI job step.
+
+Linux job первого CI-прогона также прошёл полностью, включая optimized glib
+regression. Предупреждение о принудительной смене runtime старых Actions
+устранено обновлением checkout/setup-node/upload-artifact на Node 24 версии,
+закреплённые по commit SHA. Checkout не сохраняет token в git config.
+Версии сверены с официальными manifests:
+[checkout](https://github.com/actions/checkout/blob/v7.0.1/action.yml),
+[setup-node](https://github.com/actions/setup-node/blob/v7.0.0/action.yml),
+[upload-artifact](https://github.com/actions/upload-artifact/blob/v7.0.1/action.yml).
+
+Первый macOS 14 CI выполнил Rust/Chromium, но не смог создать страницу WebKit:
+`Unknown setting: PushAPIEnabled`. Playwright 1.63 выбирает для macOS 14
+замороженную revision 2251 вместо 2359. CI перенесён на macOS 15; перед сценариями
+теперь создаётся тестовая страница каждого browser engine. Проверки приложения
+не ослаблены и не переведены в retries. Это не доказательство совместимости
+native WebView со всеми старыми версиями macOS.
 
 ```bash
 cargo fetch --locked
