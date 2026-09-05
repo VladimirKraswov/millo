@@ -33,6 +33,7 @@ millo-serial = { path = "../crates/millo-serial" }
 millo-script = { path = "../crates/millo-script" }
 millo-settings = { path = "../crates/millo-settings" }
 millo-sender = { path = "../crates/millo-sender" }
+millo-storage = { path = "../crates/millo-storage" }
 millo-tooling = { path = "../crates/millo-tooling" }
 millo-transport = { path = "../crates/millo-transport" }
 serde.workspace = true

@@ -31,14 +31,23 @@ src/plugins/my-plugin/
 production-файлов плагина запрещён `npm run test:architecture`.
 
 ```tsx
+import { useSyncExternalStore } from "react";
 import {
   createPluginManifest,
   definePlugin,
   uiSlots,
   type InMemoryPluginModule,
+  type PluginMachineReadCapability,
 } from "../../plugin-sdk";
 
 export const SAMPLE_PLUGIN_ID = "dev.example.sample";
+
+function SamplePanel({ machine }: { machine: PluginMachineReadCapability }) {
+  const snapshot = useSyncExternalStore(
+    machine.subscribe, machine.current, machine.current,
+  );
+  return <output>{snapshot.machine.reportedMode}</output>;
+}
 
 export function createSamplePlugin(): InMemoryPluginModule {
   return definePlugin({
@@ -103,6 +112,13 @@ helper-функцией и не должны задаваться вручную
 другого плагина и тестировать machine behavior без React и Tauri.
 
 ### Trusted capabilities v1
+
+Снимки `machine.read` полностью immutable, включая homing, pins, overrides
+и буферы. Храните настройки плагина отдельно, не дописывайте поля в snapshot.
+Ошибка одного подписчика не прерывает доставку другим; исключения обработчика
+диагностики также изолируются. После unload нет новых callback. Асинхронная
+подписка host сначала регистрирует listener, затем читает snapshot, чтобы не
+терять обновления при открытии панели.
 
 - `ui.contribute`: регистрация React contribution в именованном slot.
 - `machine.read`: frozen snapshot и автоматически очищаемая подписка.

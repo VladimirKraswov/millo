@@ -2183,6 +2183,7 @@ dependencies = [
  "millo-sender",
  "millo-serial",
  "millo-settings",
+ "millo-storage",
  "millo-tooling",
  "millo-transport",
  "serde",

@@ -1,10 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { createUiExtensionRegistry } from "../platform/extensions/UiExtensionRegistry";
 import type { ControllerSnapshot } from "../shared/machine";
 import { emptySnapshot } from "../shared/machine";
-import { SafetyControls } from "./SafetyControls";
+import { RealtimeControls } from "../features/machine-control/RealtimeControls";
 
 const snapshot = (mode: "idle" | "jog"): ControllerSnapshot => ({
   ...emptySnapshot,
@@ -18,29 +17,15 @@ const snapshot = (mode: "idle" | "jog"): ControllerSnapshot => ({
 
 const renderControls = (mode: "idle" | "jog"): string =>
   renderToStaticMarkup(
-    <SafetyControls
+    <RealtimeControls
       desktopRuntime
-      extensionRegistry={createUiExtensionRegistry()}
-      machineBound
-      machineGateway={{ jogPadStep: vi.fn(), startContinuousJog: vi.fn(), cancelJog: vi.fn() }}
-      maxJogDistanceMm={50}
-      maxJogFeedMmPerMin={1_000}
-      useProbeForZ={false}
-    homingInstalled={false}
-    spindleControl="manual"
-    floodCoolantControl={false}
-    mistCoolantControl={false}
-      activeCoordinateSystem="g54"
       onError={vi.fn()}
-      onInspection={vi.fn()}
-      onOpenMotionSettings={vi.fn()}
       onSnapshot={vi.fn()}
       snapshot={snapshot(mode)}
-      workCoordinateGateway={{ setZero: vi.fn(), returnToZero: vi.fn() }}
     />,
   );
 
-describe("SafetyControls layout", () => {
+describe("RealtimeControls layout", () => {
   it("keeps all three safety action slots mounted when jog starts", () => {
     const idle = renderControls("idle");
     const jog = renderControls("jog");

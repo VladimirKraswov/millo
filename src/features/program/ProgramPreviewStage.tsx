@@ -1,5 +1,6 @@
 import { Play, X } from "lucide-react";
 import { lazy, Suspense } from "react";
+import { FeatureErrorBoundary } from "../../components/FeatureErrorBoundary";
 
 import type { Position } from "../../shared/machine";
 import type { GcodeProgram, ProgramLine } from "../../shared/program";
@@ -47,6 +48,7 @@ export function ProgramPreviewStage({
 
   return (
     <div className="program-preview-stage">
+      <FeatureErrorBoundary name="Траекторию">
       <Suspense
         fallback={<div className="toolpath-preview is-loading">Загрузка траектории...</div>}
       >
@@ -61,6 +63,7 @@ export function ProgramPreviewStage({
           view={view}
         />
       </Suspense>
+      </FeatureErrorBoundary>
       <div className="preview-legend" aria-label="Обозначения траектории">
         <span className="is-cut">Рабочий ход</span>
         <span className="is-rapid">Быстрый ход</span>

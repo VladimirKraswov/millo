@@ -1,4 +1,4 @@
-import type { ControllerSnapshot, Position } from "../../shared/machine";
+import type { ControllerSnapshot } from "../../shared/machine";
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
@@ -22,7 +22,10 @@ export class MachineSnapshotStore implements MachineStateSource {
   private snapshot: ReadonlyControllerSnapshot;
   private readonly listeners = new Set<MachineStateListener>();
 
-  constructor(initialSnapshot: ControllerSnapshot) {
+  constructor(
+    initialSnapshot: ControllerSnapshot,
+    private readonly onListenerError: (error: unknown) => void = console.error,
+  ) {
     this.snapshot = freezeSnapshot(initialSnapshot);
   }
 
@@ -40,29 +43,32 @@ export class MachineSnapshotStore implements MachineStateSource {
 
   publish = (snapshot: ControllerSnapshot): void => {
     this.snapshot = freezeSnapshot(snapshot);
-    for (const listener of [...this.listeners]) listener(this.snapshot);
+    const current = this.snapshot;
+    for (const listener of [...this.listeners]) {
+      if (!this.listeners.has(listener)) continue;
+      try {
+        listener(current);
+      } catch (error) {
+        try {
+          this.onListenerError(error);
+        } catch {
+          // Diagnostics must not interrupt delivery to the remaining observers.
+        }
+      }
+    }
   };
 }
 
 function freezeSnapshot(
   snapshot: ControllerSnapshot,
 ): ReadonlyControllerSnapshot {
-  const machine = Object.freeze({
-    ...snapshot.machine,
-    machinePosition: freezePosition(snapshot.machine.machinePosition),
-    workPosition: freezePosition(snapshot.machine.workPosition),
-    workCoordinateOffset: freezePosition(snapshot.machine.workCoordinateOffset),
-  });
-  return Object.freeze({
-    ...snapshot,
-    machine,
-    resetNotice: snapshot.resetNotice
-      ? Object.freeze({ ...snapshot.resetNotice })
-      : undefined,
-    alarm: snapshot.alarm ? Object.freeze({ ...snapshot.alarm }) : undefined,
-  });
+  return freezeTree(structuredClone(snapshot));
 }
 
-function freezePosition(position?: Position): Readonly<Position> | undefined {
-  return position ? Object.freeze({ ...position }) : undefined;
+function freezeTree<T>(value: T): DeepReadonly<T> {
+  if (value !== null && typeof value === "object") {
+    for (const child of Object.values(value)) freezeTree(child);
+    Object.freeze(value);
+  }
+  return value as DeepReadonly<T>;
 }

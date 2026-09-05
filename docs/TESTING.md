@@ -1,5 +1,41 @@
 # Testing and definition of done
 
+## Product gate
+
+```bash
+npm ci
+npx playwright install chromium
+npm run verify:product
+```
+
+`verify:product` runs the existing `verify` gate and then the executable
+Playwright suite in `tests/workflow`. Desktop (1440x960), compact native-size
+(860x600), and narrow responsive (390x844) projects exercise preparation,
+confirmation, pause/resume/stop, completed Check, rerun, M6 and searchable help.
+Scene tests decode canvas screenshots and require nonblank color variation,
+changed pixels after changing view, and no document horizontal overflow.
+WebGL fault injection must leave the navigation and realtime controls mounted.
+
+These tests use development gateways, not physical serial. They do not prove
+native WebView behavior or mechanical braking time. Narrow viewport tests do
+not imply a supported mobile distribution. Existing Rust actor/PTY fixtures
+remain the protocol boundary. `vitest.config.ts` keeps Playwright specs out of
+Vitest, avoiding duplicated execution and false test discovery.
+
+CI is defined in `.github/workflows/verify.yml` for macOS and Linux. It runs
+with no CNC hardware or signing credentials, stores failure traces/screenshots,
+and does not retry failed tests to hide instability. Inspect an actual CI run
+before claiming cross-platform verification. `playwright-report/` and
+`test-results/` are local generated artifacts, not source files.
+
+Browser projects run with one worker to avoid competing software WebGL contexts
+and cold transforms on development machines. Vite ignores Rust build outputs
+and browser reports, preventing unrelated file-watcher traffic during tests.
+
+The longer sections below document the accumulated domain coverage, including
+historical manually exercised fixtures. Only tests present in the current
+source and executed in the current run count as automated release evidence.
+
 Every vertical slice must update tests and documentation in the same commit.
 The standard local gate is:
 

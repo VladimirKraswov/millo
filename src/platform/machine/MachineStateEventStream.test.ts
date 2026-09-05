@@ -78,6 +78,25 @@ describe("bindMachineStateStream", () => {
     dispose();
   });
 
+  it("waits for listener registration before taking the initial snapshot", async () => {
+    const listening = deferred<() => void>();
+    let controller = snapshot(1);
+    const readCurrent = vi.fn(async () => controller);
+    const store = new MachineSnapshotStore(emptySnapshot);
+    const dispose = bindMachineStateStream({
+      store,
+      stream: { readCurrent, listen: () => listening.promise },
+    });
+    await flushPromises();
+    expect(readCurrent).not.toHaveBeenCalled();
+    controller = snapshot(2);
+    listening.resolve(() => undefined);
+    await flushPromises();
+    await flushPromises();
+    expect(store.current().pollSequence).toBe(2);
+    dispose();
+  });
+
   it("cleans up a listener that resolves after the binding is disposed", async () => {
     const initial = deferred<ControllerSnapshot>();
     const listening = deferred<() => void>();

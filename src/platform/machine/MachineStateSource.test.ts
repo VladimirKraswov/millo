@@ -7,6 +7,7 @@ import { MachineSnapshotStore } from "./MachineStateSource";
 function snapshot(pollSequence: number): ControllerSnapshot {
   return {
     ...emptySnapshot,
+    homing: { ...emptySnapshot.homing },
     connection: "connected",
     machine: {
       ...emptySnapshot.machine,
@@ -26,6 +27,8 @@ describe("MachineSnapshotStore", () => {
         ...snapshot(1).machine,
         workPosition: { x: 4, y: 5, z: 6 },
         workCoordinateOffset: { x: 7, y: 8, z: 9 },
+        bufferState: { plannerAvailable: 15, rxAvailable: 128 },
+        overrides: { feedPercent: 100, rapidPercent: 100, spindlePercent: 100 },
       },
       resetNotice: { banner: "Grbl 1.1f", sequence: 1 },
       alarm: { code: 3, message: "Reset while in motion" },
@@ -37,6 +40,9 @@ describe("MachineSnapshotStore", () => {
     input.machine.machinePosition!.x = 99;
     input.resetNotice!.banner = "Mutated";
     input.alarm!.message = "Mutated";
+    input.homing.state = "homed";
+    input.machine.bufferState!.rxAvailable = 0;
+    input.machine.overrides!.feedPercent = 200;
 
     expect(current.machine.reportedMode).toBe("Idle");
     expect(current.machine.machinePosition?.x).toBe(1);
@@ -49,6 +55,11 @@ describe("MachineSnapshotStore", () => {
     expect(Object.isFrozen(current.machine.workCoordinateOffset)).toBe(true);
     expect(Object.isFrozen(current.resetNotice)).toBe(true);
     expect(Object.isFrozen(current.alarm)).toBe(true);
+    expect(current.homing.state).toBe("unreferenced");
+    expect(current.machine.bufferState?.rxAvailable).toBe(128);
+    expect(current.machine.overrides?.feedPercent).toBe(100);
+    expect(Object.isFrozen(current.homing)).toBe(true);
+    expect(Object.isFrozen(current.machine.overrides)).toBe(true);
     expect(() => {
       (current as ControllerSnapshot).pollSequence = 99;
     }).toThrow();
@@ -66,5 +77,23 @@ describe("MachineSnapshotStore", () => {
 
     expect(listener).toHaveBeenCalledOnce();
     expect(listener.mock.calls[0]?.[0].pollSequence).toBe(1);
+  });
+
+  it("delivers state when a subscriber or its error reporter throws", () => {
+    const store = new MachineSnapshotStore(snapshot(0), () => { throw new Error("reporter"); });
+    const listener = vi.fn();
+    store.subscribe(() => { throw new Error("plugin"); });
+    store.subscribe(listener);
+    expect(() => store.publish(snapshot(2))).not.toThrow();
+    expect(listener.mock.calls[0]?.[0].pollSequence).toBe(2);
+  });
+
+  it("does not call an observer unloaded during the current dispatch", () => {
+    const store = new MachineSnapshotStore(snapshot(0));
+    const listener = vi.fn();
+    store.subscribe(() => unsubscribe());
+    const unsubscribe = store.subscribe(listener);
+    store.publish(snapshot(1));
+    expect(listener).not.toHaveBeenCalled();
   });
 });

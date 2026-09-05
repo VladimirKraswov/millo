@@ -44,6 +44,26 @@ calls into commands and events.
 
 ### Frontend composition
 
+The workstation shell is in `src/app/workspace`: status/coordinates and
+independent realtime controls, navigation, persistent notices, and a root
+recovery view. Preview and job error boundaries contain render failures;
+`report_ui_error` writes bounded diagnostics into the native audit log.
+These boundaries do not protect against a blocked JS thread or a dead process.
+
+`bindSnapshotStream` is the common controller/sender/surface subscription
+lifecycle. Listener setup precedes the initial read, and any newer event wins
+over that read. Cleanup is idempotent even if registration resolves late.
+`MachineSnapshotStore` clones and deeply freezes the entire DTO and isolates
+observer failures. `useProbeDatum` binds established Z to a profile and controller
+session; primitive coordinate dependencies prevent equal polling packets from
+aborting asynchronous restoration.
+
+Program execution helpers are private to `millo-command/program_execution.rs`;
+the actor retains exclusive ownership of all writes. Parsing, CAM and export
+commands live in `src-tauri/src/commands/program_io.rs`. Export uses a separate
+atomic replacement primitive with unique temporary names, not the persistent
+JSON stores' backup namespace.
+
 `App.tsx` is the composition root: it owns application state, selects concrete
 gateways, bootstraps the plugin host, and connects feature callbacks. It does not
 own the presentation of those features. Connection diagnostics, controller

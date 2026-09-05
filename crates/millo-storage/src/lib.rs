@@ -4,6 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod export;
+pub use export::replace_file_atomically;
+
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;

@@ -39,6 +39,8 @@ const ignoredDirectories = new Set([
   "icons",
   "node_modules",
   "target",
+  "playwright-report",
+  "test-results",
 ]);
 const legacyBrand = ["gantry", "on"].join("");
 const staleFiles = [];

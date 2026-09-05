@@ -3,11 +3,10 @@ import {
   Suspense,
   useEffect,
   useMemo,
-  useRef,
   useState,
   useSyncExternalStore,
 } from "react";
-import { KeyRound, Puzzle } from "lucide-react";
+import { Puzzle } from "lucide-react";
 
 import { bootstrapPluginHost } from "./app/bootstrapPluginHost";
 import { DeferredDisposal } from "./app/DeferredDisposal";
@@ -62,7 +61,11 @@ import {
   getApplicationPreferences,
   updateApplicationPreferences,
 } from "./api/preferences";
-import { formatCoordinate, PositionReadout } from "./components/PositionReadout";
+import { formatCoordinate } from "./components/PositionReadout";
+import { MachineStatusStrip } from "./app/workspace/MachineStatusStrip";
+import { WorkspaceNavigation } from "./app/workspace/WorkspaceNavigation";
+import { WorkspaceNotice } from "./app/workspace/WorkspaceNotice";
+import { FeatureErrorBoundary } from "./components/FeatureErrorBoundary";
 import { SafetyControls } from "./components/SafetyControls";
 import { ControllerInspector } from "./features/controller/ControllerInspector";
 import {
@@ -83,9 +86,8 @@ import {
 } from "./features/program/previewFixtureFirstCut";
 import { ProgramWorkspace } from "./features/program/ProgramWorkspace";
 import { MachineProfiles } from "./features/machine-profiles/MachineProfiles";
-import { ProbeIndicator } from "./features/probe/ProbeIndicator";
 import { previewHeightmapGateway } from "./features/heightmap/previewHeightmapGateway";
-import { heightmapHasCurrentZDatum } from "./features/heightmap/heightmapModel";
+import { useProbeDatum } from "./features/work-zero/useProbeDatum";
 import { WorkZeroDialog } from "./features/work-zero/WorkZeroDialog";
 import { WorkspaceToolsMenu } from "./components/WorkspaceToolsMenu";
 import { ScriptPluginContributions } from "./features/script-plugins/ScriptPluginContributions";
@@ -111,7 +113,6 @@ import {
   type HardwareInspection,
   type TransportDescriptor,
   type WorkCoordinateSystem,
-  type ZProbeOutcome,
 } from "./shared/machine";
 import {
   hasControllerSession,
@@ -135,6 +136,8 @@ import {
   defaultApplicationPreferences,
   type ApplicationPreferencesUpdate,
 } from "./shared/preferences";
+
+const HelpDialog = lazy(async () => ({ default: (await import("./features/help/HelpDialog")).HelpDialog }));
 
 const MachineSettingsDialog = lazy(async () => ({
   default: (await import("./features/machine-settings/MachineSettingsDialog"))
@@ -173,13 +176,6 @@ const disconnectedTransport: TransportDescriptor = {
   likelyGrbl: false,
 };
 
-interface ProbeEstablishedZDatum {
-  readonly coordinateSystem: WorkCoordinateSystem;
-  readonly resetCount: number;
-  readonly reconnectCount: number;
-  readonly source: "probe" | "heightmap";
-  readonly workCoordinateOffsetZ?: number;
-}
 
 export default function App() {
   const pluginHost = useMemo(
@@ -252,6 +248,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [discovering, setDiscovering] = useState(false);
   const [uiError, setUiError] = useState<string>();
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [noticeError, setNoticeError] = useState<string>();
   const [logOpen, setLogOpen] = useState(developmentFixture === "logs");
   const [consoleOpen, setConsoleOpen] = useState(developmentFixture === "console");
   const [applicationPreferences, setApplicationPreferences] = useState(
@@ -259,9 +257,6 @@ export default function App() {
   );
   const [workZeroOpen, setWorkZeroOpen] = useState(false);
   const [zProbeOpen, setZProbeOpen] = useState(developmentProbeFixture);
-  const [probeEstablishedZDatum, setProbeEstablishedZDatum] =
-    useState<ProbeEstablishedZDatum>();
-  const zDatumRestoreKey = useRef<string | undefined>(undefined);
   const [toolLibraryOpen, setToolLibraryOpen] = useState(
     developmentFixture === "tools",
   );
@@ -368,18 +363,6 @@ export default function App() {
     }
   }, [snapshot.connection]);
 
-  const rememberProbeEstablishedZDatum = (
-    outcome: ZProbeOutcome,
-    source: ProbeEstablishedZDatum["source"],
-  ) => {
-    setProbeEstablishedZDatum({
-      coordinateSystem: outcome.coordinateSystem,
-      resetCount: outcome.snapshot.resetCount,
-      reconnectCount: outcome.snapshot.reconnectCount,
-      source,
-      workCoordinateOffsetZ: outcome.snapshot.machine.workCoordinateOffset?.z,
-    });
-  };
 
   useEffect(() => {
     if (generatedJob) setWorkbenchView("program");
@@ -517,6 +500,7 @@ export default function App() {
     activeTransport;
   const displayedTransport = transportLocked ? activeTransport : selectedTransport;
   const displayedError = uiError ?? snapshot.lastError;
+  useEffect(() => { if (displayedError) setNoticeError(displayedError); }, [displayedError]);
   const controlsBusy = busy || inspecting || profileBusy || machineSyncing;
   const effectiveMachineProfiles =
     hasConnection && controllerSettings
@@ -542,90 +526,12 @@ export default function App() {
   const maxJogDistanceMm = selectedMachine?.maxJogDistanceMm ?? 50;
   const workPositionView = resolveWorkPosition(snapshot, inspection);
 
-  useEffect(() => {
-    if (!probeEstablishedZDatum) return;
-    if (
-      snapshot.connection !== "connected" ||
-      snapshot.resetCount !== probeEstablishedZDatum.resetCount ||
-      snapshot.reconnectCount !== probeEstablishedZDatum.reconnectCount ||
-      workPositionView.coordinateSystem.toLowerCase() !==
-        probeEstablishedZDatum.coordinateSystem.toLowerCase() ||
-      (
-        probeEstablishedZDatum.workCoordinateOffsetZ !== undefined &&
-        snapshot.machine.workCoordinateOffset !== undefined &&
-        Math.abs(
-          probeEstablishedZDatum.workCoordinateOffsetZ -
-          snapshot.machine.workCoordinateOffset.z,
-        ) > 0.01
-      )
-    ) {
-      setProbeEstablishedZDatum(undefined);
-    }
-  }, [
-    probeEstablishedZDatum,
-    snapshot.connection,
-    snapshot.machine.workCoordinateOffset,
-    snapshot.reconnectCount,
-    snapshot.resetCount,
-    workPositionView.coordinateSystem,
-  ]);
-
-  useEffect(() => {
-    if (
-      !desktopRuntime ||
-      probeEstablishedZDatum ||
-      snapshot.connection !== "connected" ||
-      !selectedMachine?.id
-    ) return;
-    const profileId = selectedMachine.id;
-    const offset = snapshot.machine.workCoordinateOffset;
-    const restoreKey = [
-      profileId,
-      snapshot.resetCount,
-      snapshot.reconnectCount,
-      workPositionView.coordinateSystem,
-      offset?.x,
-      offset?.y,
-      offset?.z,
-    ].join(":");
-    if (zDatumRestoreKey.current === restoreKey) return;
-    zDatumRestoreKey.current = restoreKey;
-    let active = true;
-    void tauriHeightmapGateway.getSession().then((session) => {
-      const stored = session.active;
-      const binding = stored?.map.coordinateBinding;
-      const currentOffset = snapshot.machine.workCoordinateOffset;
-      if (
-        !active ||
-        stored?.machineProfileId !== profileId ||
-        !binding ||
-        !currentOffset ||
-        !heightmapHasCurrentZDatum(
-          stored.map,
-          session.coordinateBindingStale,
-          workPositionView.coordinateSystem.toLowerCase() as WorkCoordinateSystem,
-          currentOffset,
-        )
-      ) return;
-      setProbeEstablishedZDatum({
-        coordinateSystem: binding.coordinateSystem,
-        resetCount: snapshot.resetCount,
-        reconnectCount: snapshot.reconnectCount,
-        source: "heightmap",
-        workCoordinateOffsetZ: currentOffset.z,
-      });
-    }).catch(() => undefined);
-    return () => { active = false; };
-  }, [
-    desktopRuntime,
-    probeEstablishedZDatum,
-    selectedMachine?.id,
-    snapshot.connection,
-    snapshot.machine.workCoordinateOffset,
-    snapshot.reconnectCount,
-    snapshot.resetCount,
-    workPositionView.coordinateSystem,
-  ]);
+  const { datum: probeEstablishedZDatum, remember: rememberProbeEstablishedZDatum } = useProbeDatum({
+    snapshot,
+    coordinateSystem: workPositionView.coordinateSystem,
+    profileId: selectedMachine?.id,
+    gateway: desktopRuntime ? tauriHeightmapGateway : undefined,
+  });
 
   useEffect(() => {
     if (transportLocked || !selectedMachine?.connection) return;
@@ -807,7 +713,7 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className="app-shell workstation">
       <header className="topbar">
         <div className="brand">
           <span className="brand-mark" aria-hidden="true">
@@ -863,112 +769,34 @@ export default function App() {
         </div>
       </header>
 
+      <MachineStatusStrip
+        snapshot={snapshot} position={workPositionView.position}
+        coordinateSystem={workPositionView.coordinateSystem}
+        desktopRuntime={desktopRuntime} busy={controlsBusy}
+        onProbe={() => setZProbeOpen(true)} onZero={() => setWorkZeroOpen(true)}
+        onUnlock={() => void runAction(unlockAlarm)}
+        onAcknowledgeReset={() => void runAction(acknowledgeReset)}
+        onSnapshot={pluginHost.machineState.publish} onError={setUiError}
+        onReset={() => setInspection(undefined)}
+      />
       <main className="workspace">
+        <WorkspaceNavigation view={workbenchView} onView={setWorkbenchView}
+          onTools={() => setToolLibraryOpen(true)} onProbe={() => setZProbeOpen(true)}
+          onLog={() => setLogOpen(true)} onHelp={() => setHelpOpen(true)}
+          onSettings={() => { setSettingsFocus("local"); setSettingsOpen(true); }}
+        />
         <section
           className={`machine-panel is-${workbenchView}`}
-          aria-labelledby="machine-state-title"
+          aria-label={workbenchView === "program" ? "Рабочая область задания" : "Настройки контроллера"}
         >
-          <div className="section-heading">
-            <div>
-              <span>Контроллер GRBL</span>
-              <h1 id="machine-state-title">
-                {snapshot.machine.reportedMode}
-                {snapshot.machine.substate !== undefined
-                  ? `:${snapshot.machine.substate}`
-                  : ""}
-              </h1>
-            </div>
-            <div className="machine-heading-status">
-              {snapshot.alarm ? (
-                <div className="operator-notice alarm-notice" role="alert">
-                  <div>
-                    <span>Аварийное состояние</span>
-                    <strong>
-                      {snapshot.alarm.code !== undefined
-                        ? `ALARM:${snapshot.alarm.code}`
-                        : snapshot.alarm.message}
-                    </strong>
-                  </div>
-                  <button
-                    aria-label="Разблокировать станок"
-                    disabled={controlsBusy || !desktopRuntime}
-                    onClick={() => void runAction(unlockAlarm)}
-                    title="Разблокировать станок"
-                    type="button"
-                  >
-                    <KeyRound aria-hidden="true" size={13} />
-                  </button>
-                </div>
-              ) : snapshot.resetNotice ? (
-                <div className="operator-notice reset-notice" role="status">
-                  <div>
-                    <span>Контроллер перезапущен</span>
-                    <strong>{snapshot.resetNotice.banner}</strong>
-                  </div>
-                  <button type="button" onClick={() => void runAction(acknowledgeReset)}>
-                    OK
-                  </button>
-                </div>
-              ) : (
-                <div aria-hidden="true" className="operator-notice is-empty" />
-              )}
-              <div className="machine-indicators">
-                <ProbeIndicator
-                  active={snapshot.machine.pins?.probe ?? false}
-                  connection={snapshot.connection}
-                  onClick={() => setZProbeOpen(true)}
-                />
-                <span className={`mode-indicator is-${snapshot.machine.mode}`}>
-                  {snapshot.machine.mode}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="readout-section">
-            <div className="readout-label">
-              <span>Рабочая позиция</span>
-              <small>{workPositionView.coordinateSystem}</small>
-            </div>
-            <PositionReadout position={workPositionView.position} />
-            <div className="machine-position-secondary">
-              <span>Станок · G53</span>
-              <code>
-                X {formatCoordinate(snapshot.machine.machinePosition?.x)} · Y{" "}
-                {formatCoordinate(snapshot.machine.machinePosition?.y)} · Z{" "}
-                {formatCoordinate(snapshot.machine.machinePosition?.z)}
-              </code>
-            </div>
-          </div>
-
-          <div className="workbench-tabs" role="tablist" aria-label="Рабочий раздел">
-            <button
-              aria-controls="program-workbench"
-              aria-selected={workbenchView === "program"}
-              onClick={() => setWorkbenchView("program")}
-              role="tab"
-              type="button"
-            >
-              Задание
-            </button>
-            <button
-              aria-controls="controller-workbench"
-              aria-selected={workbenchView === "controller"}
-              onClick={() => setWorkbenchView("controller")}
-              role="tab"
-              type="button"
-            >
-              Контроллер
-            </button>
-          </div>
-
           <div
             className="workbench-panel"
             hidden={workbenchView !== "program"}
             id="program-workbench"
-            role="tabpanel"
           >
+            <FeatureErrorBoundary name="Задание" onError={setUiError}>
             <ProgramWorkspace
+              onError={setUiError}
               desktopRuntime={desktopRuntime}
               senderGateway={
                 developmentFixture === "check-running"
@@ -1057,13 +885,13 @@ export default function App() {
               }
               tools={toolLibrary.tools}
             />
+            </FeatureErrorBoundary>
           </div>
 
           <div
             className="workbench-panel"
             hidden={workbenchView !== "controller"}
             id="controller-workbench"
-            role="tabpanel"
           >
             <ControllerInspector
               busy={controlsBusy}
@@ -1074,18 +902,7 @@ export default function App() {
             />
           </div>
 
-          <div className="telemetry-row">
-            <div>
-              <span>Подача</span>
-              <strong>{snapshot.machine.feedRate.toFixed(1)}</strong>
-              <small>mm/min</small>
-            </div>
-            <div>
-              <span>Шпиндель</span>
-              <strong>{snapshot.machine.spindleSpeed.toFixed(0)}</strong>
-              <small>rpm</small>
-            </div>
-          </div>
+
         </section>
 
         <ConnectionPanel
@@ -1133,7 +950,7 @@ export default function App() {
             controlsBusy,
             desktopRuntime,
             discovering,
-            displayedError,
+            displayedError: undefined,
             displayedTransport,
             hasConnection,
             isConnected,
@@ -1147,6 +964,14 @@ export default function App() {
           }}
         />
       </main>
+      <footer className="workspace-statusbar">
+        <span>{selectedMachine?.name ?? "Станок не выбран"}</span>
+        <span>Подача <b>{snapshot.machine.feedRate.toFixed(0)}</b> мм/мин</span>
+        <span>Шпиндель <b>{snapshot.machine.spindleSpeed.toFixed(0)}</b> об/мин</span>
+        <span title="Машинные координаты">G53 · X {formatCoordinate(snapshot.machine.machinePosition?.x)} · Y {formatCoordinate(snapshot.machine.machinePosition?.y)} · Z {formatCoordinate(snapshot.machine.machinePosition?.z)}</span>
+      </footer>
+      <WorkspaceNotice message={noticeError} onDismiss={() => setNoticeError(undefined)} onLog={() => setLogOpen(true)} />
+      <Suspense fallback={null}>{helpOpen && <HelpDialog onClose={() => setHelpOpen(false)} />}</Suspense>
 
       <Suspense fallback={null}>
         {settingsOpen && (

@@ -23,6 +23,7 @@ import {
   type DragEvent,
 } from "react";
 
+import { bindSnapshotStream } from "../../platform/state/bindSnapshotStream";
 import type { ProgramGateway } from "../../platform/program/ProgramGateway";
 import type { HeightmapGateway } from "../../platform/machine/HeightmapGateway";
 import type {
@@ -133,6 +134,7 @@ interface ProgramWorkspaceProps {
   readonly machineContext?: ProgramMachineContext;
   readonly onInspection?: (inspection: HardwareInspection) => void;
   readonly onProgramChange?: (program?: GcodeProgram) => void;
+  readonly onError?: (message: string) => void;
   readonly realRunAvailable?: boolean;
   readonly realRunGateway?: RealRunPreflightGateway;
   readonly realRunTarget?: boolean;
@@ -158,6 +160,7 @@ export function ProgramWorkspace({
   machineContext,
   onInspection,
   onProgramChange,
+  onError,
   realRunAvailable = false,
   realRunGateway,
   realRunTarget = false,
@@ -205,6 +208,7 @@ export function ProgramWorkspace({
   const [surfaceSession, setSurfaceSession] = useState<SurfaceSession>();
   const [surfaceMapBusy, setSurfaceMapBusy] = useState(false);
   const [error, setError] = useState<string>();
+  useEffect(() => { if (error) onError?.(error); }, [error, onError]);
   const handledIncomingJob = useRef(0);
   const reopenFirstCutAfterCheck = useRef(false);
   const program = loaded?.program;
@@ -212,10 +216,7 @@ export function ProgramWorkspace({
 
   useEffect(() => {
     if (!heightmapGateway) return;
-    let active = true;
-    let unsubscribe: (() => void) | undefined;
     const accept = (session: SurfaceSession) => {
-      if (!active) return;
       setSurfaceSession(session);
       setProgramExecutionOptions((current) => {
         const usable = session.applicationEnabled &&
@@ -228,19 +229,14 @@ export function ProgramWorkspace({
       });
       setRealRunReport(undefined);
     };
-    void heightmapGateway.getSession().then(accept).catch((reason: unknown) => {
-      if (active) setError(String(reason));
+    return bindSnapshotStream({
+      stream: {
+        readCurrent: () => heightmapGateway.getSession(),
+        listen: (handler) => heightmapGateway.subscribeSession(handler),
+      },
+      onSnapshot: accept,
+      onError: (reason) => setError(String(reason)),
     });
-    void heightmapGateway.subscribeSession(accept).then((stop) => {
-      if (active) unsubscribe = stop;
-      else stop();
-    }).catch((reason: unknown) => {
-      if (active) setError(String(reason));
-    });
-    return () => {
-      active = false;
-      unsubscribe?.();
-    };
   }, [heightmapGateway, machineContext?.machineProfileId]);
 
   useEffect(() => {
@@ -288,31 +284,11 @@ export function ProgramWorkspace({
 
   useEffect(() => {
     if (!desktopRuntime || !senderGateway) return;
-    let active = true;
-    let unsubscribe: (() => void) | undefined;
-    void senderGateway
-      .snapshot()
-      .then((snapshot) => {
-        if (active) setSender(snapshot);
-      })
-      .catch((reason: unknown) => {
-        if (active) setError(String(reason));
-      });
-    void senderGateway
-      .subscribe((snapshot) => {
-        if (active) setSender(snapshot);
-      })
-      .then((stop) => {
-        if (active) unsubscribe = stop;
-        else stop();
-      })
-      .catch((reason: unknown) => {
-        if (active) setError(String(reason));
-      });
-    return () => {
-      active = false;
-      unsubscribe?.();
-    };
+    return bindSnapshotStream({
+      stream: { readCurrent: () => senderGateway.snapshot(), listen: (handler) => senderGateway.subscribe(handler) },
+      onSnapshot: setSender,
+      onError: (reason) => setError(String(reason)),
+    });
   }, [desktopRuntime, senderGateway]);
 
   useEffect(() => {
@@ -1472,7 +1448,7 @@ export function ProgramWorkspace({
         />
       )}
 
-      {error && (
+      {error && !onError && (
         <div className="program-error" role="alert">
           <span>{error}</span>
           <button aria-label="Закрыть сообщение" onClick={() => setError(undefined)} type="button">×</button>
