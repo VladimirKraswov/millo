@@ -5337,17 +5337,32 @@ mod tests {
         expected: HeightmapOperationState,
     ) -> HeightmapOperationSnapshot {
         let mut snapshots = arbiter.subscribe_heightmap();
-        for _ in 0..2_000 {
-            let snapshot = snapshots.borrow_and_update().clone();
-            if snapshot.state == expected {
-                return snapshot;
+        // Virtual motion uses wall-clock travel time; timer tick counts differ by OS.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let snapshot = snapshots.borrow_and_update().clone();
+                if snapshot.state == expected {
+                    return snapshot;
+                }
+                assert!(
+                    !matches!(
+                        snapshot.state,
+                        HeightmapOperationState::Completed
+                            | HeightmapOperationState::Failed
+                            | HeightmapOperationState::Cancelled
+                    ),
+                    "heightmap terminated before {expected:?}: {snapshot:?}"
+                );
+                snapshots.changed().await.expect("heightmap stream closed");
             }
-            tokio::select! {
-                changed = snapshots.changed() => changed.unwrap(),
-                _ = tokio::time::sleep(Duration::from_millis(5)) => {}
-            }
-        }
-        panic!("heightmap did not reach {expected:?}");
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "heightmap did not reach {expected:?}: {:?}",
+                snapshots.borrow()
+            )
+        })
     }
 
     #[tokio::test]
