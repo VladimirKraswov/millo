@@ -1,6 +1,7 @@
-import { StrictMode, useState } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { DialogHost, DialogSurface } from "../../src/components/DialogSurface";
+import { acceptsKeyboardJogEvent } from "../../src/features/jog-pad/keyboardJogModel";
 
 export function mount() {
   const host = document.createElement("div");
@@ -19,11 +20,21 @@ function Harness() {
   const [nested, setNested] = useState(false);
   const [locked, setLocked] = useState(false);
   const [modal, setModal] = useState(true);
+  const [jogRequests, setJogRequests] = useState(0);
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent) => {
+      if (event.code === "ArrowUp" && acceptsKeyboardJogEvent(event)) setJogRequests(value => value + 1);
+    };
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  }, []);
   return (
     <>
       <button onClick={() => setOpen(true)}>Open surface</button>
       <button onClick={() => { setModal(false); setOpen(true); }}>Open panel</button>
       <button>Outside</button>
+      <button onKeyDown={event => event.preventDefault()}>Widget</button>
+      <output aria-label="Keyboard jog requests">{jogRequests}</output>
       {open && (
         <DialogSurface
           aria-label="Parent"

@@ -11,6 +11,7 @@ import {
   Settings2,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { acceptsKeyboardJogEvent } from "./keyboardJogModel";
 
 import type { MachineCommandGateway } from "../../platform/machine/MachineCommandGateway";
 import type {
@@ -324,16 +325,10 @@ export function JogPad({
       BracketLeft: ["a", -1],
       BracketRight: ["a", 1],
     };
-    const isEditable = (target: EventTarget | null) => {
-      const element = target instanceof HTMLElement ? target : undefined;
-      return Boolean(
-        element?.closest("input, textarea, select, [contenteditable='true'], [role='textbox']"),
-      );
-    };
     const onKeyDown = (event: KeyboardEvent) => {
       const binding = bindings[event.code];
-      if (!binding || event.repeat || isEditable(event.target) || activeKeyboardCode.current) return;
-      if (!canMoveRef.current || event.altKey || event.ctrlKey || event.metaKey) return;
+      if (!binding || !acceptsKeyboardJogEvent(event) || activeKeyboardCode.current) return;
+      if (!canMoveRef.current) return;
       event.preventDefault();
       const [axis, direction] = binding;
       if (axis === "a" && !rotaryEnabledRef.current) return;

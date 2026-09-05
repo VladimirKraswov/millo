@@ -14,6 +14,7 @@
 | Состояние и JSX смешаны в главных экранах | Отдельные координаторы приложения/задания; surface-session hook и чистая readiness projection | Render/policy tests и полные browser workflows |
 | 11 462 строки CSS в одном файле | 31 тематический файл и явно упорядоченный index | При миграции проверено точное совпадение исходного текста после конкатенации; screenshots и проверки геометрии |
 | Разные Escape/focus механизмы | Общие DialogHost/DialogSurface для всех feature/system-plugin диалогов | StrictMode, вложенные окна, запрет закрытия, Tab, Escape, возврат фокуса, отсутствие запуска по Enter |
+| Глобальные стрелки Jog могли срабатывать внутри диалога | Общая keyboard policy уступает диалогам, вводу, меню, IME и обработанным событиям | Browser regression: фокус поверхности, input, обычная рабочая область и обработанная стрелка; keyup для остановки не фильтруется |
 | Chromium не выявлял WebKit-особенности | Пять проектов: три Chromium, два WebKit | Те же сценарии без ослабления проверок; найден и исправлен возврат фокуса после pointer activation |
 | Хрупкий regex для архитектурных импортов | Разбор TypeScript AST и ограничения роста координаторов/стилей | test:architecture в обычном gate |
 | glib 0.18.5 передавал неизменяемый out-pointer в C | Минимальный совместимый upstream backport, один glib во всём GTK dependency graph | SHA-256 исходника, Cargo metadata, оптимизированный Linux iterator test |
@@ -79,6 +80,11 @@ regression. Предупреждение о принудительной сме�
 теперь создаётся тестовая страница каждого browser engine. Проверки приложения
 не ослаблены и не переведены в retries. Это не доказательство совместимости
 native WebView со всеми старыми версиями macOS.
+
+Повторный [CI 76d2e66](https://github.com/VladimirKraswov/millo/actions/runs/33991930220)
+успешно выполнил полный gate на macOS 15 и Ubuntu 24.04, без предупреждения
+о Node 20 Actions. После уточнения Keyboard Jog повторены 40 локальных
+browser scenarios и typecheck; финальный commit также проходит обычный CI.
 
 ```bash
 cargo fetch --locked

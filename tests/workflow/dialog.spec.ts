@@ -13,6 +13,8 @@ test("dialog stack traps focus, respects live guards and restores its opener", a
   await opener.click();
   const parent = page.getByRole("dialog", { name: "Parent", exact: true });
   await expect(parent).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByLabel("Keyboard jog requests")).toHaveText("0");
   await page.keyboard.press("Shift+Tab");
   await expect(
     page.getByRole("button", { name: "Close parent" }),
@@ -21,6 +23,8 @@ test("dialog stack traps focus, respects live guards and restores its opener", a
   await expect(
     page.getByRole("textbox", { name: "First input" }),
   ).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByLabel("Keyboard jog requests")).toHaveText("0");
   await page.getByRole("checkbox", { name: "Lock dismissal" }).check();
   await page.keyboard.press("Escape");
   await expect(parent).toBeVisible();
@@ -42,4 +46,9 @@ test("dialog stack traps focus, respects live guards and restores its opener", a
   await page.keyboard.press("Escape");
   await expect(parent).not.toBeVisible();
   await expect(outside).toBeFocused();
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByLabel("Keyboard jog requests")).toHaveText("1");
+  await page.getByRole("button", { name: "Widget", exact: true }).focus();
+  await page.keyboard.press("ArrowUp");
+  await expect(page.getByLabel("Keyboard jog requests")).toHaveText("1");
 });
