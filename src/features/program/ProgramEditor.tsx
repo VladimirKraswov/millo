@@ -1,3 +1,4 @@
+import { DialogSurface } from "../../components/DialogSurface";
 import {
   Check,
   ClipboardPaste,
@@ -99,7 +100,8 @@ export function ProgramEditor({
   const parseSequence = useRef(0);
   const source = history.source;
   const dirty = source !== document.source;
-  const currentRevisionReady = parseState === "ready" && previewSource === source;
+  const currentRevisionReady =
+    parseState === "ready" && previewSource === source;
   const sourceLines = useMemo(() => source.split("\n"), [source]);
   const firstVisibleLine = Math.min(
     Math.max(0, sourceLines.length - 1),
@@ -222,7 +224,9 @@ export function ProgramEditor({
 
   const save = async (transformed: boolean) => {
     if (!gateway.save || !currentRevisionReady || saveBusy) return;
-    const saveSource = transformed ? buildProcessedProgramSource(preview) : source;
+    const saveSource = transformed
+      ? buildProcessedProgramSource(preview)
+      : source;
     if (!saveSource.trim()) {
       setOperationError("Обработанная копия не содержит исполняемых строк");
       return;
@@ -257,7 +261,10 @@ export function ProgramEditor({
     const offset = sourceOffsetAtLine(source, sourceLine);
     const textarea = textareaRef.current;
     if (textarea) {
-      textarea.scrollTop = Math.max(0, (sourceLine - 1) * EDITOR_LINE_HEIGHT - 80);
+      textarea.scrollTop = Math.max(
+        0,
+        (sourceLine - 1) * EDITOR_LINE_HEIGHT - 80,
+      );
       setScroll({ left: textarea.scrollLeft, top: textarea.scrollTop });
     }
     setSelectedSourceLine(sourceLine);
@@ -291,25 +298,35 @@ export function ProgramEditor({
 
   const updateCaretLine = () => {
     const textarea = textareaRef.current;
-    if (textarea) setSelectedSourceLine(sourceLineAtOffset(source, textarea.selectionStart));
+    if (textarea)
+      setSelectedSourceLine(
+        sourceLineAtOffset(source, textarea.selectionStart),
+      );
   };
 
   return (
     <div className="program-editor-backdrop" role="presentation">
-      <section
+      <DialogSurface
+        onDismiss={requestClose}
         aria-labelledby="program-editor-title"
-        aria-modal="true"
         className="program-editor"
-        role="dialog"
       >
         <header>
           <div>
             <span>Program Editor</span>
             <h2 id="program-editor-title">{document.program.sourceName}</h2>
           </div>
-          <div className="program-editor-parse-state" data-state={parseState} role="status">
+          <div
+            className="program-editor-parse-state"
+            data-state={parseState}
+            role="status"
+          >
             {parseState === "parsing" ? (
-              <LoaderCircle aria-hidden="true" className="is-spinning" size={15} />
+              <LoaderCircle
+                aria-hidden="true"
+                className="is-spinning"
+                size={15}
+              />
             ) : parseState === "ready" ? (
               <Check aria-hidden="true" size={15} />
             ) : (
@@ -333,35 +350,78 @@ export function ProgramEditor({
           </button>
         </header>
 
-        <div className="program-editor-toolbar" role="toolbar" aria-label="Редактирование G-code">
+        <div
+          className="program-editor-toolbar"
+          role="toolbar"
+          aria-label="Редактирование G-code"
+        >
           <div>
-            <button aria-label="Отменить" disabled={history.past.length === 0} onClick={undo} title="Отменить" type="button">
+            <button
+              aria-label="Отменить"
+              disabled={history.past.length === 0}
+              onClick={undo}
+              title="Отменить"
+              type="button"
+            >
               <Undo2 aria-hidden="true" size={15} />
             </button>
-            <button aria-label="Повторить" disabled={history.future.length === 0} onClick={redo} title="Повторить" type="button">
+            <button
+              aria-label="Повторить"
+              disabled={history.future.length === 0}
+              onClick={redo}
+              title="Повторить"
+              type="button"
+            >
               <Redo2 aria-hidden="true" size={15} />
             </button>
           </div>
           <div>
-            <button aria-label="Копировать" onClick={() => void copy(false)} title="Копировать" type="button">
+            <button
+              aria-label="Копировать"
+              onClick={() => void copy(false)}
+              title="Копировать"
+              type="button"
+            >
               <Copy aria-hidden="true" size={15} />
             </button>
-            <button aria-label="Вырезать" onClick={() => void copy(true)} title="Вырезать" type="button">
+            <button
+              aria-label="Вырезать"
+              onClick={() => void copy(true)}
+              title="Вырезать"
+              type="button"
+            >
               <Scissors aria-hidden="true" size={15} />
             </button>
-            <button aria-label="Вставить" onClick={() => void paste()} title="Вставить" type="button">
+            <button
+              aria-label="Вставить"
+              onClick={() => void paste()}
+              title="Вставить"
+              type="button"
+            >
               <ClipboardPaste aria-hidden="true" size={15} />
             </button>
           </div>
           <div>
-            <button aria-label="Вставить строку" onClick={() => commit(insertProgramLine(source, selection()))} title="Вставить строку" type="button">
+            <button
+              aria-label="Вставить строку"
+              onClick={() => commit(insertProgramLine(source, selection()))}
+              title="Вставить строку"
+              type="button"
+            >
               <ListPlus aria-hidden="true" size={15} />
             </button>
-            <button aria-label="Удалить выбранные строки" onClick={() => commit(deleteProgramLines(source, selection()))} title="Удалить выбранные строки" type="button">
+            <button
+              aria-label="Удалить выбранные строки"
+              onClick={() => commit(deleteProgramLines(source, selection()))}
+              title="Удалить выбранные строки"
+              type="button"
+            >
               <Trash2 aria-hidden="true" size={15} />
             </button>
           </div>
-          <code>L{selectedSourceLine} · {sourceLines.length} строк</code>
+          <code>
+            L{selectedSourceLine} · {sourceLines.length} строк
+          </code>
         </div>
 
         <div className="program-editor-body">
@@ -369,26 +429,39 @@ export function ProgramEditor({
             <div
               aria-hidden="true"
               className="program-editor-gutter"
-              style={{ transform: `translateY(${firstVisibleLine * EDITOR_LINE_HEIGHT - scroll.top}px)` }}
+              style={{
+                transform: `translateY(${firstVisibleLine * EDITOR_LINE_HEIGHT - scroll.top}px)`,
+              }}
             >
               {visibleLines.map((_, index) => (
-                <span key={firstVisibleLine + index}>{firstVisibleLine + index + 1}</span>
+                <span key={firstVisibleLine + index}>
+                  {firstVisibleLine + index + 1}
+                </span>
               ))}
             </div>
             <pre
               aria-hidden="true"
               className="program-editor-highlight"
-              style={{ transform: `translate(${-scroll.left}px, ${firstVisibleLine * EDITOR_LINE_HEIGHT - scroll.top}px)` }}
+              style={{
+                transform: `translate(${-scroll.left}px, ${firstVisibleLine * EDITOR_LINE_HEIGHT - scroll.top}px)`,
+              }}
             >
               {visibleLines.map((line, index) => {
                 const sourceLine = firstVisibleLine + index + 1;
                 return (
                   <span
-                    className={sourceLine === selectedSourceLine ? "is-current" : undefined}
+                    className={
+                      sourceLine === selectedSourceLine
+                        ? "is-current"
+                        : undefined
+                    }
                     key={sourceLine}
                   >
                     {tokenizeGcodeLine(line).map((token, tokenIndex) => (
-                      <i className={`syntax-${token.kind}`} key={`${sourceLine}-${tokenIndex}`}>
+                      <i
+                        className={`syntax-${token.kind}`}
+                        key={`${sourceLine}-${tokenIndex}`}
+                      >
                         {token.text}
                       </i>
                     ))}
@@ -419,9 +492,18 @@ export function ProgramEditor({
             />
           </div>
 
-          <aside className="program-editor-preview" aria-label="Preview текущей ревизии">
+          <aside
+            className="program-editor-preview"
+            aria-label="Preview текущей ревизии"
+          >
             <div className="program-editor-scene">
-              <Suspense fallback={<div className="toolpath-preview is-loading">Загрузка траектории...</div>}>
+              <Suspense
+                fallback={
+                  <div className="toolpath-preview is-loading">
+                    Загрузка траектории...
+                  </div>
+                }
+              >
                 <ToolpathPreview
                   onSelectSourceLine={focusSourceLine}
                   program={preview}
@@ -444,7 +526,9 @@ export function ProgramEditor({
             <div className="program-editor-warnings">
               <div>
                 <span>Диагностика parser</span>
-                <strong>{currentRevisionReady ? preview.warnings.length : "--"}</strong>
+                <strong>
+                  {currentRevisionReady ? preview.warnings.length : "--"}
+                </strong>
               </div>
               {parseError ? (
                 <p>{parseError}</p>
@@ -492,10 +576,16 @@ export function ProgramEditor({
             </button>
           </div>
           <div className="program-editor-footer-status" role="status">
-            {operationError ?? saveNotice ?? (dirty ? "Есть неприменённые правки" : "Без изменений")}
+            {operationError ??
+              saveNotice ??
+              (dirty ? "Есть неприменённые правки" : "Без изменений")}
           </div>
           <div className="program-editor-primary-actions">
-            <button className={discardArmed ? "is-danger" : undefined} onClick={requestClose} type="button">
+            <button
+              className={discardArmed ? "is-danger" : undefined}
+              onClick={requestClose}
+              type="button"
+            >
               {discardArmed ? "Ещё раз: отменить" : "Отмена"}
             </button>
             <button
@@ -509,7 +599,7 @@ export function ProgramEditor({
             </button>
           </div>
         </footer>
-      </section>
+      </DialogSurface>
     </div>
   );
 }

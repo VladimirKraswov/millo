@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["vendor/glib"]
 members = [
   "crates/millo-audit",
   "crates/millo-cam",
@@ -12,6 +13,7 @@ members = [
   "crates/millo-heightmap",
   "crates/millo-mock",
   "crates/millo-pcb",
+  "crates/millo-platform-tests",
   "crates/millo-preferences",
   "crates/millo-journal",
   "crates/millo-profile",
@@ -44,3 +46,7 @@ sha2 = "0.10"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "signal", "sync", "time"] }
 rhai = { version = "1.25.1", features = ["serde", "sync"] }
+
+[patch.crates-io]
+# GTK3 requires glib 0.18; backport RUSTSEC-2024-0429 without an ABI migration.
+glib = { path = "vendor/glib" }

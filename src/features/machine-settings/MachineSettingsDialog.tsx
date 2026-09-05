@@ -1,3 +1,4 @@
+import { DialogSurface } from "../../components/DialogSurface";
 import {
   Check,
   CircleAlert,
@@ -53,7 +54,10 @@ interface MachineSettingsDialogProps {
   ) => Promise<ApplicationPreferences>;
   onLocalUpdate: (profile: MachineProfile) => Promise<MachineProfileState>;
   onOpenToolLibrary: () => void;
-  onRollback: (key: string, revision: number) => Promise<ControllerSettingsState>;
+  onRollback: (
+    key: string,
+    revision: number,
+  ) => Promise<ControllerSettingsState>;
   onWrite: (
     request: ControllerSettingEditRequest,
   ) => Promise<ControllerSettingsState>;
@@ -128,7 +132,10 @@ export function MachineSettingsDialog({
     });
   }, [settings, statuses]);
 
-  useEffect(() => setLocalDraft(profile ? { ...profile } : undefined), [profile]);
+  useEffect(
+    () => setLocalDraft(profile ? { ...profile } : undefined),
+    [profile],
+  );
 
   useEffect(() => {
     setSafeCommandMode(applicationPreferences.safeCommandMode);
@@ -140,7 +147,8 @@ export function MachineSettingsDialog({
       window.clearTimeout(pending.timer);
     }
     timers.current.clear();
-    if (localTimer.current !== undefined) window.clearTimeout(localTimer.current);
+    if (localTimer.current !== undefined)
+      window.clearTimeout(localTimer.current);
     localTimer.current = undefined;
     setStatuses({});
     setErrors({});
@@ -153,7 +161,8 @@ export function MachineSettingsDialog({
         window.clearTimeout(pending.timer);
       }
       timers.current.clear();
-      if (localTimer.current !== undefined) window.clearTimeout(localTimer.current);
+      if (localTimer.current !== undefined)
+        window.clearTimeout(localTimer.current);
       localTimer.current = undefined;
     };
   }, [open, profile?.id, settingsIdentity]);
@@ -267,7 +276,8 @@ export function MachineSettingsDialog({
   const updateLocalDraft = (next: MachineProfile) => {
     setLocalDraft(next);
     setLocalStatus("pending");
-    if (localTimer.current !== undefined) window.clearTimeout(localTimer.current);
+    if (localTimer.current !== undefined)
+      window.clearTimeout(localTimer.current);
     const expectedLifecycle = lifecycle.current;
     const expectedProfileId = next.id;
     localTimer.current = window.setTimeout(async () => {
@@ -308,49 +318,60 @@ export function MachineSettingsDialog({
   };
 
   const statusIcon = (status: WriteStatus | undefined) => {
-    if (status === "pending") return <Clock3 aria-label="Ожидает записи" size={14} />;
-    if (status === "saving") return <Settings2 aria-label="Запись и проверка" size={14} />;
+    if (status === "pending")
+      return <Clock3 aria-label="Ожидает записи" size={14} />;
+    if (status === "saving")
+      return <Settings2 aria-label="Запись и проверка" size={14} />;
     if (status === "saved") return <Check aria-label="Проверено" size={14} />;
-    if (status === "error") return <CircleAlert aria-label="Ошибка записи" size={14} />;
+    if (status === "error")
+      return <CircleAlert aria-label="Ошибка записи" size={14} />;
     return null;
   };
 
   return (
     <div className="machine-dialog-backdrop" role="presentation">
-      <section
+      <DialogSurface
+        onDismiss={onClose}
         aria-labelledby="settings-dialog-title"
-        aria-modal="true"
         className="machine-dialog machine-settings-dialog"
-        role="dialog"
       >
         <header>
           <div>
             <span>Настройки станка</span>
-            <h2 id="settings-dialog-title">{profile?.name ?? "Настройки станка"}</h2>
+            <h2 id="settings-dialog-title">
+              {profile?.name ?? "Настройки станка"}
+            </h2>
           </div>
-          <button aria-label="Закрыть" onClick={onClose} title="Закрыть" type="button">
+          <button
+            aria-label="Закрыть"
+            onClick={onClose}
+            title="Закрыть"
+            type="button"
+          >
             <X aria-hidden="true" size={18} />
           </button>
         </header>
 
         <nav className="settings-tabs" aria-label="Раздел настроек">
-          {(["application", "local", "controller", "history"] as const).map((tab) => (
-            <button
-              aria-selected={view === tab}
-              key={tab}
-              onClick={() => setView(tab)}
-              role="tab"
-              type="button"
-            >
-              {tab === "application"
-                ? "Приложение"
-                : tab === "local"
-                  ? "Станок"
-                  : tab === "controller"
-                    ? "Контроллер"
-                    : "Ревизии"}
-            </button>
-          ))}
+          {(["application", "local", "controller", "history"] as const).map(
+            (tab) => (
+              <button
+                aria-selected={view === tab}
+                key={tab}
+                onClick={() => setView(tab)}
+                role="tab"
+                type="button"
+              >
+                {tab === "application"
+                  ? "Приложение"
+                  : tab === "local"
+                    ? "Станок"
+                    : tab === "controller"
+                      ? "Контроллер"
+                      : "Ревизии"}
+              </button>
+            ),
+          )}
         </nav>
 
         <div className="machine-dialog-body settings-dialog-body">
@@ -388,15 +409,17 @@ export function MachineSettingsDialog({
                 <span>
                   <strong>Безопасный режим команд</strong>
                   <small>
-                    Консоль принимает только ?, $I, $$, $G и $#. Плагины не могут
-                    использовать capability machine.commands.
+                    Консоль принимает только ?, $I, $$, $G и $#. Плагины не
+                    могут использовать capability machine.commands.
                   </small>
                 </span>
                 <input
                   aria-label="Безопасный режим команд"
                   checked={safeCommandMode}
                   disabled={preferenceStatus === "saving"}
-                  onChange={(event) => void updateSafeCommandMode(event.target.checked)}
+                  onChange={(event) =>
+                    void updateSafeCommandMode(event.target.checked)
+                  }
                   type="checkbox"
                 />
               </label>
@@ -407,9 +430,9 @@ export function MachineSettingsDialog({
                   <span>
                     <strong>Экспертный режим включён</strong>
                     <small>
-                      Консоль и явно разрешённые плагины смогут отправлять произвольные
-                      GRBL-строки. Они могут запустить движение, шпиндель или изменить
-                      настройки контроллера.
+                      Консоль и явно разрешённые плагины смогут отправлять
+                      произвольные GRBL-строки. Они могут запустить движение,
+                      шпиндель или изменить настройки контроллера.
                     </small>
                   </span>
                 </div>
@@ -423,14 +446,21 @@ export function MachineSettingsDialog({
           {view === "local" && localDraft && (
             <section className="local-machine-settings">
               <div className={`autosave-state is-${localStatus}`}>
-                <span className="autosave-icon-slot">{statusIcon(localStatus)}</span>
+                <span className="autosave-icon-slot">
+                  {statusIcon(localStatus)}
+                </span>
                 <span>Локальные данные сохраняются автоматически</span>
               </div>
               <label className="machine-name-field">
                 <span>Название</span>
                 <input
                   maxLength={80}
-                  onChange={(event) => updateLocalDraft({ ...localDraft, name: event.target.value })}
+                  onChange={(event) =>
+                    updateLocalDraft({
+                      ...localDraft,
+                      name: event.target.value,
+                    })
+                  }
                   type="text"
                   value={localDraft.name}
                 />
@@ -438,19 +468,24 @@ export function MachineSettingsDialog({
               <div className="controller-travel-summary">
                 <span>Рабочая область из контроллера</span>
                 <strong>
-                  {localDraft.travelMm.x} × {localDraft.travelMm.y} × {localDraft.travelMm.z} mm
+                  {localDraft.travelMm.x} × {localDraft.travelMm.y} ×{" "}
+                  {localDraft.travelMm.z} mm
                 </strong>
-                <small>$130 · $131 · $132 редактируются во вкладке «Контроллер»</small>
+                <small>
+                  $130 · $131 · $132 редактируются во вкладке «Контроллер»
+                </small>
               </div>
               <label className="machine-jog-limit-field">
                 <span>
                   <strong>Максимальный шаг Jog</strong>
                   <small>
-                    Локальный предел одного перемещения · не больше {Math.max(
+                    Локальный предел одного перемещения · не больше{" "}
+                    {Math.max(
                       localDraft.travelMm.x,
                       localDraft.travelMm.y,
                       localDraft.travelMm.z,
-                    )} mm
+                    )}{" "}
+                    mm
                   </small>
                 </span>
                 <span>
@@ -481,7 +516,12 @@ export function MachineSettingsDialog({
                     <input
                       checked={localDraft.spindleControl === mode}
                       name="settings-spindle"
-                      onChange={() => updateLocalDraft({ ...localDraft, spindleControl: mode })}
+                      onChange={() =>
+                        updateLocalDraft({
+                          ...localDraft,
+                          spindleControl: mode,
+                        })
+                      }
                       type="radio"
                     />
                     {mode === "manual" ? "Вручную" : "Контроллером"}
@@ -500,7 +540,10 @@ export function MachineSettingsDialog({
                     <input
                       checked={Boolean(localDraft[key as keyof MachineProfile])}
                       onChange={(event) =>
-                        updateLocalDraft({ ...localDraft, [key]: event.target.checked })
+                        updateLocalDraft({
+                          ...localDraft,
+                          [key]: event.target.checked,
+                        })
                       }
                       type="checkbox"
                     />
@@ -513,10 +556,14 @@ export function MachineSettingsDialog({
                 onClick={onOpenToolLibrary}
                 type="button"
               >
-                <span className="tooling-settings-icon"><Wrench aria-hidden="true" size={18} /></span>
+                <span className="tooling-settings-icon">
+                  <Wrench aria-hidden="true" size={18} />
+                </span>
                 <span>
                   <strong>Оснастка и режимы резания</strong>
-                  <small>Фрезы, геометрия, подачи и рекомендации по применению</small>
+                  <small>
+                    Фрезы, геометрия, подачи и рекомендации по применению
+                  </small>
                 </span>
                 <span>Открыть</span>
               </button>
@@ -540,7 +587,9 @@ export function MachineSettingsDialog({
                     <label className="controller-edit-toggle">
                       <input
                         checked={controllerEditing}
-                        onChange={(event) => setControllerEditing(event.target.checked)}
+                        onChange={(event) =>
+                          setControllerEditing(event.target.checked)
+                        }
                         type="checkbox"
                       />
                       <span>Разрешить запись в GRBL</span>
@@ -551,7 +600,10 @@ export function MachineSettingsDialog({
                     className={`controller-write-warning${controllerEditing ? " is-empty" : ""}`}
                   >
                     <ShieldAlert aria-hidden="true" size={17} />
-                    <span>Поля доступны только после явного разрешения. Каждая запись проверяется повторным `$$`.</span>
+                    <span>
+                      Поля доступны только после явного разрешения. Каждая
+                      запись проверяется повторным `$$`.
+                    </span>
                   </div>
                   <div className="settings-groups">
                     {grouped.map(({ group, values }) => (
@@ -562,28 +614,49 @@ export function MachineSettingsDialog({
                         </header>
                         <div>
                           {values.map((setting) => {
-                            const baseline = settings.sessionBaseline[setting.key];
-                            const previous = settings.previousBaseline?.[setting.key];
-                            const changed = baseline !== undefined && !settingValuesEqual(setting.value, baseline);
+                            const baseline =
+                              settings.sessionBaseline[setting.key];
+                            const previous =
+                              settings.previousBaseline?.[setting.key];
+                            const changed =
+                              baseline !== undefined &&
+                              !settingValuesEqual(setting.value, baseline);
                             return (
-                              <label className={`setting-row ${changed ? "is-changed" : ""}`} key={setting.key}>
+                              <label
+                                className={`setting-row ${changed ? "is-changed" : ""}`}
+                                key={setting.key}
+                              >
                                 <code>{setting.key}</code>
                                 <span>
                                   <strong>{setting.title}</strong>
-                                  <small className={errors[setting.key] ? "is-error" : undefined}>
+                                  <small
+                                    className={
+                                      errors[setting.key]
+                                        ? "is-error"
+                                        : undefined
+                                    }
+                                  >
                                     {errors[setting.key] ||
                                       (setting.known
-                                        ? setting.unit ?? "GRBL"
+                                        ? (setting.unit ?? "GRBL")
                                         : "Unknown firmware setting")}
                                   </small>
                                 </span>
                                 {setting.kind === "boolean" ? (
                                   <input
-                                    checked={(draftValues[setting.key] ?? setting.value) === "1"}
+                                    checked={
+                                      (draftValues[setting.key] ??
+                                        setting.value) === "1"
+                                    }
                                     disabled={!controllerEditing}
                                     onChange={(event) => {
-                                      const value = event.target.checked ? "1" : "0";
-                                      setDraftValues((current) => ({ ...current, [setting.key]: value }));
+                                      const value = event.target.checked
+                                        ? "1"
+                                        : "0";
+                                      setDraftValues((current) => ({
+                                        ...current,
+                                        [setting.key]: value,
+                                      }));
                                       scheduleWrite(setting.key, value);
                                     }}
                                     type="checkbox"
@@ -595,21 +668,42 @@ export function MachineSettingsDialog({
                                     onBlur={() => flushWrite(setting.key)}
                                     onChange={(event) => {
                                       const value = event.target.value;
-                                      setDraftValues((current) => ({ ...current, [setting.key]: value }));
+                                      setDraftValues((current) => ({
+                                        ...current,
+                                        [setting.key]: value,
+                                      }));
                                       scheduleWrite(setting.key, value);
                                     }}
                                     type="text"
-                                    value={draftValues[setting.key] ?? setting.value}
+                                    value={
+                                      draftValues[setting.key] ?? setting.value
+                                    }
                                   />
                                 )}
-                                <span className={`setting-write-state is-${statuses[setting.key] ?? "idle"}`}>
+                                <span
+                                  className={`setting-write-state is-${statuses[setting.key] ?? "idle"}`}
+                                >
                                   {statusIcon(statuses[setting.key])}
                                 </span>
                                 <button
                                   aria-label={`Откатить ${setting.key} к ${baseline}`}
-                                  disabled={!controllerEditing || !changed || statuses[setting.key] === "saving"}
-                                  onClick={() => enqueue(setting.key, baseline ?? setting.value, "rollback")}
-                                  title={changed ? `К baseline сессии: ${baseline}` : "Значение не менялось"}
+                                  disabled={
+                                    !controllerEditing ||
+                                    !changed ||
+                                    statuses[setting.key] === "saving"
+                                  }
+                                  onClick={() =>
+                                    enqueue(
+                                      setting.key,
+                                      baseline ?? setting.value,
+                                      "rollback",
+                                    )
+                                  }
+                                  title={
+                                    changed
+                                      ? `К baseline сессии: ${baseline}`
+                                      : "Значение не менялось"
+                                  }
                                   type="button"
                                 >
                                   <RotateCcw aria-hidden="true" size={14} />
@@ -620,11 +714,23 @@ export function MachineSettingsDialog({
                                   disabled={
                                     !controllerEditing ||
                                     previous === undefined ||
-                                    settingValuesEqual(setting.value, previous) ||
+                                    settingValuesEqual(
+                                      setting.value,
+                                      previous,
+                                    ) ||
                                     statuses[setting.key] === "saving"
                                   }
-                                  onClick={() => enqueue(setting.key, previous ?? setting.value)}
-                                  title={previous === undefined ? "Нет предыдущей ревизии" : `Предыдущая сессия: ${previous}`}
+                                  onClick={() =>
+                                    enqueue(
+                                      setting.key,
+                                      previous ?? setting.value,
+                                    )
+                                  }
+                                  title={
+                                    previous === undefined
+                                      ? "Нет предыдущей ревизии"
+                                      : `Предыдущая сессия: ${previous}`
+                                  }
                                   type="button"
                                 >
                                   <History aria-hidden="true" size={14} />
@@ -640,7 +746,9 @@ export function MachineSettingsDialog({
               ) : (
                 <div className="inspector-empty">
                   <strong>Контроллер не подключён</strong>
-                  <span>Настройки всегда считываются заново при подключении</span>
+                  <span>
+                    Настройки всегда считываются заново при подключении
+                  </span>
                 </div>
               )}
             </section>
@@ -652,25 +760,41 @@ export function MachineSettingsDialog({
               <div>
                 <strong>Исходные значения текущего подключения</strong>
                 <span>
-                  Откат у поля всегда возвращает значение, считанное при этом подключении.
+                  Откат у поля всегда возвращает значение, считанное при этом
+                  подключении.
                 </span>
               </div>
               <dl>
-                <div><dt>Идентификатор</dt><dd>{settings?.fingerprint.label ?? "Нет соединения"}</dd></div>
-                <div><dt>Надёжность ID</dt><dd>{settings?.fingerprint.confidence ?? "--"}</dd></div>
-                <div><dt>Архивных ревизий</dt><dd>{settings?.revisionCount ?? 0}</dd></div>
-                <div><dt>Параметров</dt><dd>{settings?.snapshot.values.length ?? 0}</dd></div>
+                <div>
+                  <dt>Идентификатор</dt>
+                  <dd>{settings?.fingerprint.label ?? "Нет соединения"}</dd>
+                </div>
+                <div>
+                  <dt>Надёжность ID</dt>
+                  <dd>{settings?.fingerprint.confidence ?? "--"}</dd>
+                </div>
+                <div>
+                  <dt>Архивных ревизий</dt>
+                  <dd>{settings?.revisionCount ?? 0}</dd>
+                </div>
+                <div>
+                  <dt>Параметров</dt>
+                  <dd>{settings?.snapshot.values.length ?? 0}</dd>
+                </div>
               </dl>
               {settings?.previousBaseline && (
                 <div className="previous-revision">
                   <strong>Предыдущая сессия сохранена</strong>
-                  <span>Её значения доступны как резервная копия и не заменяют данные контроллера.</span>
+                  <span>
+                    Её значения доступны как резервная копия и не заменяют
+                    данные контроллера.
+                  </span>
                 </div>
               )}
             </section>
           )}
         </div>
-      </section>
+      </DialogSurface>
     </div>
   );
 }

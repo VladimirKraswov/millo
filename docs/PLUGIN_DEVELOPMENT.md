@@ -90,8 +90,45 @@ helper-функцией и не должны задаваться вручную
 4. Проверьте отсутствие функции без grant, её работу с grant и закрытие proxy
    после `unload`.
 
-Пример регистрации уже есть в `src/App.tsx`; эталонные реализации находятся в
+Пример регистрации уже есть в `src/app/useWorkstation.ts`; эталонные реализации находятся в
 `src/plugins/image-to-gcode` и `src/plugins/spoilboard-surfacing`.
+
+### Диалоги плагина
+
+Встроенные плагины импортируют `DialogSurface` из `src/plugin-sdk`, не создают
+собственный глобальный Escape listener и не управляют фокусом вручную.
+`DialogHost` уже установлен в корне приложения. Он учитывает особенности
+WebKit и возвращает фокус на кнопку открытия, даже если клик её не сфокусировал.
+
+```tsx
+import { DialogSurface } from "../../plugin-sdk";
+
+<DialogSurface
+  aria-labelledby="my-job-title"
+  onDismiss={onClose}
+  dismissible={!exporting}
+  className="my-job-dialog"
+>
+  <header>
+    <h2 id="my-job-title">Моё задание</h2>
+    <button type="button" disabled={exporting} onClick={onClose} aria-label="Закрыть">
+      <X size={18} aria-hidden="true" />
+    </button>
+  </header>
+  {children}
+</DialogSurface>
+```
+
+`X` импортируется из `lucide-react`. Внешний backdrop и layout остаются за
+плагином; `DialogSurface` не добавляет визуальную тему. По умолчанию Tab остаётся
+в диалоге. Для неблокирующей операционной панели используйте `modal={false}`.
+При открытии фокус получает сама поверхность, а не кнопка запуска. Escape
+закрывает только верхний диалог и соблюдает актуальный `dismissible`.
+`onDismiss` закрывает UI; остановка станка всегда должна быть отдельной typed
+командой. Выгрузка плагина очищает и обработчики диалога, и регистрации capability.
+
+Этот React-компонент относится только к trusted-плагинам. Формат внешних
+Rhai-пакетов и границы выдаваемых им возможностей от этого не меняются.
 
 ### Границы модуля
 

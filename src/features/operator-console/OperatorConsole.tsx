@@ -1,3 +1,4 @@
+import { DialogSurface } from "../../components/DialogSurface";
 import {
   LoaderCircle,
   Send,
@@ -44,7 +45,10 @@ export interface OperatorConsoleProps {
   readonly snapshot: ControllerSnapshot;
 }
 
-const retainLatest = <T,>(items: readonly T[], maximum: number): readonly T[] =>
+const retainLatest = <T,>(
+  items: readonly T[],
+  maximum: number,
+): readonly T[] =>
   items.length <= maximum ? items : items.slice(items.length - maximum);
 
 export function OperatorConsole({
@@ -78,15 +82,22 @@ export function OperatorConsole({
   if (!open) return null;
 
   const append = (entry: ConsoleEntry) =>
-    setEntries((current) => retainLatest([...current, entry], MAX_TRANSCRIPT_ENTRIES));
+    setEntries((current) =>
+      retainLatest([...current, entry], MAX_TRANSCRIPT_ENTRIES),
+    );
 
   const complete = (id: number, update: Partial<ConsoleEntry>) =>
     setEntries((current) =>
-      current.map((entry) => (entry.id === id ? { ...entry, ...update } : entry)),
+      current.map((entry) =>
+        entry.id === id ? { ...entry, ...update } : entry,
+      ),
     );
 
   const submit = async (requested: string) => {
-    const command = normalizeSubmittedConsoleCommand(requested, safeCommandMode);
+    const command = normalizeSubmittedConsoleCommand(
+      requested,
+      safeCommandMode,
+    );
     const id = nextId.current++;
     const timestampMs = Date.now();
 
@@ -113,7 +124,10 @@ export function OperatorConsole({
 
     append({ id, command, timestampMs, state: "pending", lines: [] });
     setCommandHistory((current) =>
-      retainLatest([...current.filter((item) => item !== command), command], MAX_COMMAND_HISTORY),
+      retainLatest(
+        [...current.filter((item) => item !== command), command],
+        MAX_COMMAND_HISTORY,
+      ),
     );
     setHistoryCursor(undefined);
     setInput("");
@@ -124,7 +138,8 @@ export function OperatorConsole({
       complete(id, {
         state: exchange.completion === "ok" ? "completed" : "rejected",
         completion: exchange.completion,
-        lines: exchange.lines.length > 0 ? exchange.lines : [exchange.completion],
+        lines:
+          exchange.lines.length > 0 ? exchange.lines : [exchange.completion],
       });
     } catch (error) {
       complete(id, {
@@ -137,18 +152,21 @@ export function OperatorConsole({
   const recallHistory = (direction: -1 | 1) => {
     if (commandHistory.length === 0) return;
     const current = historyCursor ?? commandHistory.length;
-    const next = Math.min(commandHistory.length, Math.max(0, current + direction));
+    const next = Math.min(
+      commandHistory.length,
+      Math.max(0, current + direction),
+    );
     setHistoryCursor(next);
     setInput(next === commandHistory.length ? "" : commandHistory[next]);
   };
 
   return (
     <div className="operator-console-backdrop" role="presentation">
-      <section
+      <DialogSurface
+        onDismiss={onClose}
+        modal={false}
         aria-labelledby="operator-console-title"
-        aria-modal="true"
         className="operator-console"
-        role="dialog"
       >
         <header>
           <div className="operator-console-title">
@@ -159,7 +177,9 @@ export function OperatorConsole({
             </div>
           </div>
           <div className="operator-console-header-actions">
-            <span className={`operator-console-policy${safeCommandMode ? "" : " is-expert"}`}>
+            <span
+              className={`operator-console-policy${safeCommandMode ? "" : " is-expert"}`}
+            >
               {safeCommandMode ? (
                 <ShieldCheck aria-hidden="true" size={13} />
               ) : (
@@ -176,13 +196,22 @@ export function OperatorConsole({
             >
               <Trash2 aria-hidden="true" size={15} />
             </button>
-            <button aria-label="Закрыть консоль" onClick={onClose} title="Закрыть" type="button">
+            <button
+              aria-label="Закрыть консоль"
+              onClick={onClose}
+              title="Закрыть"
+              type="button"
+            >
               <X aria-hidden="true" size={17} />
             </button>
           </div>
         </header>
 
-        <div className="operator-console-palette" role="group" aria-label="Безопасные запросы">
+        <div
+          className="operator-console-palette"
+          role="group"
+          aria-label="Безопасные запросы"
+        >
           {safeConsoleCommands.map((descriptor) => (
             <button
               disabled={pending || !desktopRuntime || !connected}
@@ -204,7 +233,10 @@ export function OperatorConsole({
             </div>
           ) : (
             entries.map((entry) => (
-              <article className={`console-entry is-${entry.state}`} key={entry.id}>
+              <article
+                className={`console-entry is-${entry.state}`}
+                key={entry.id}
+              >
                 <div className="console-entry-command">
                   <time dateTime={new Date(entry.timestampMs).toISOString()}>
                     {new Date(entry.timestampMs).toLocaleTimeString("ru-RU", {
@@ -216,7 +248,11 @@ export function OperatorConsole({
                   </time>
                   <code>{entry.command}</code>
                   {entry.state === "pending" ? (
-                    <LoaderCircle aria-label="Выполняется" className="is-spinning" size={13} />
+                    <LoaderCircle
+                      aria-label="Выполняется"
+                      className="is-spinning"
+                      size={13}
+                    />
                   ) : (
                     <span>{entry.completion ?? "blocked"}</span>
                   )}
@@ -272,7 +308,15 @@ export function OperatorConsole({
             <Send aria-hidden="true" size={16} />
           </button>
         </form>
-        <footer className={validCommand ? (safeCommandMode ? "is-safe" : "is-expert") : undefined}>
+        <footer
+          className={
+            validCommand
+              ? safeCommandMode
+                ? "is-safe"
+                : "is-expert"
+              : undefined
+          }
+        >
           <i aria-hidden="true" />
           <span>
             {connected
@@ -280,7 +324,7 @@ export function OperatorConsole({
               : "Контроллер не подключён"}
           </span>
         </footer>
-      </section>
+      </DialogSurface>
     </div>
   );
 }

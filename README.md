@@ -40,7 +40,8 @@ Rust владеет доменными правилами и serial-портом
 
 ```bash
 npm ci
-npx playwright install chromium
+npx playwright install chromium webkit
+cargo fetch --locked
 npm run verify:product
 npm run tauri dev
 ```
@@ -64,6 +65,8 @@ npm run virtual-controller
 | --- | --- |
 | Назначение и критерии продукта | [PRODUCT](docs/PRODUCT.md) |
 | Переработка и оставшиеся ограничения | [PRODUCT_REVIEW](docs/PRODUCT_REVIEW.md) |
+| Закрытие технического долга | [TECHNICAL_DEBT](docs/TECHNICAL_DEBT.md) |
+| Сторонние компоненты и тексты лицензий | [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md) |
 | Сценарии оператора | [OPERATOR_WORKFLOW](docs/OPERATOR_WORKFLOW.md) |
 | Архитектура | [ARCHITECTURE](docs/ARCHITECTURE.md) |
 | Создание и подключение плагинов | [PLUGIN_DEVELOPMENT](docs/PLUGIN_DEVELOPMENT.md) |

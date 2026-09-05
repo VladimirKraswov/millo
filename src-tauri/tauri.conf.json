@@ -59,7 +59,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [],
+    "resources": ["resources/third-party-notices.json"],
     "macOS": {
       "minimumSystemVersion": "11.0"
     },

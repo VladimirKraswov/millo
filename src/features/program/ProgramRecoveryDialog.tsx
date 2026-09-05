@@ -1,3 +1,4 @@
+import { DialogSurface } from "../../components/DialogSurface";
 import {
   Check,
   CircleAlert,
@@ -30,7 +31,9 @@ interface ProgramRecoveryDialogProps {
   readonly onPrepare: (
     request: ProgramRecoveryPreparationRequest,
   ) => Promise<ProgramRecoveryPackage>;
-  readonly onPrepared: (prepared: ProgramRecoveryPackage) => Promise<void> | void;
+  readonly onPrepared: (
+    prepared: ProgramRecoveryPackage,
+  ) => Promise<void> | void;
 }
 
 const checklist: ReadonlyArray<{
@@ -51,7 +54,8 @@ const checklist: ReadonlyArray<{
   {
     key: "motionPowerRestored",
     title: "Силовая часть и позиция проверены",
-    detail: "Драйверы осей запитаны, а фактическая позиция не взята из одного только GRBL.",
+    detail:
+      "Драйверы осей запитаны, а фактическая позиция не взята из одного только GRBL.",
   },
   {
     key: "restartPointInspected",
@@ -89,12 +93,14 @@ const continuityOptions: ReadonlyArray<{
   {
     value: "motionPowerLostOrUnknown",
     title: "Силовая часть отключалась или не уверен",
-    detail: "Безопасный вариант: начать программу с начала после восстановления XYZ-ноля.",
+    detail:
+      "Безопасный вариант: начать программу с начала после восстановления XYZ-ноля.",
   },
   {
     value: "controllerInterrupted",
     title: "Станок и контроллер отключились",
-    detail: "Использовать последний физический Ln и повторить участок с clearance rapid.",
+    detail:
+      "Использовать последний физический Ln и повторить участок с clearance rapid.",
   },
   {
     value: "hostInterruptedMachinePowered",
@@ -159,12 +165,15 @@ export function ProgramRecoveryDialog({
   };
 
   return (
-    <div className="machine-dialog-backdrop recovery-backdrop" role="presentation">
-      <section
+    <div
+      className="machine-dialog-backdrop recovery-backdrop"
+      role="presentation"
+    >
+      <DialogSurface
+        onDismiss={onClose}
+        dismissible={!busy}
         aria-labelledby="recovery-title"
-        aria-modal="true"
         className="machine-dialog recovery-dialog"
-        role="dialog"
       >
         <header>
           <div>
@@ -183,7 +192,9 @@ export function ProgramRecoveryDialog({
         </header>
 
         <div className="recovery-dialog-body">
-          <div className={`recovery-evidence${candidate.ready ? "" : " is-blocked"}`}>
+          <div
+            className={`recovery-evidence${candidate.ready ? "" : " is-blocked"}`}
+          >
             {candidate.ready ? (
               <History aria-hidden="true" size={20} />
             ) : (
@@ -229,8 +240,9 @@ export function ProgramRecoveryDialog({
             <span>
               <strong>Что сделать с этой записью?</strong>
               <small>
-                Даже если станок дошёл до конца, Millo мог не успеть сохранить финальный
-                статус. Подтвердите завершение или подготовьте безопасный повторный запуск.
+                Даже если станок дошёл до конца, Millo мог не успеть сохранить
+                финальный статус. Подтвердите завершение или подготовьте
+                безопасный повторный запуск.
               </small>
             </span>
           </div>
@@ -249,7 +261,8 @@ export function ProgramRecoveryDialog({
                       option.value !== "motionPowerLostOrUnknown";
                     const disabled =
                       busy ||
-                      (checkpointOption && !candidate.checkpointRestartAvailable);
+                      (checkpointOption &&
+                        !candidate.checkpointRestartAvailable);
                     return (
                       <label key={option.value}>
                         <input
@@ -319,7 +332,10 @@ export function ProgramRecoveryDialog({
                   </span>
                   <span>
                     <strong>Станок готов к восстановлению</strong>
-                    <small>Координаты, питание, точка возврата и свободный маршрут проверены</small>
+                    <small>
+                      Координаты, питание, точка возврата и свободный маршрут
+                      проверены
+                    </small>
                   </span>
                 </label>
               </div>
@@ -342,9 +358,9 @@ export function ProgramRecoveryDialog({
                 <div>
                   <CircleAlert aria-hidden="true" size={17} />
                   <p>
-                    GRBL может питаться от USB и увеличивать <code>Ln:</code>, пока
-                    драйверы двигателей обесточены. При сомнении Millo начинает
-                    программу с начала.
+                    GRBL может питаться от USB и увеличивать <code>Ln:</code>,
+                    пока драйверы двигателей обесточены. При сомнении Millo
+                    начинает программу с начала.
                   </p>
                 </div>
               </details>
@@ -387,7 +403,7 @@ export function ProgramRecoveryDialog({
             </button>
           )}
         </footer>
-      </section>
+      </DialogSurface>
     </div>
   );
 }

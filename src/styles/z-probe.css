@@ -1,0 +1,274 @@
+.z-probe-backdrop {
+  z-index: 76;
+}
+
+.z-probe-dialog {
+  width: min(560px, 100%);
+}
+
+.z-probe-dialog.is-heightmap {
+  width: min(1180px, calc(100vw - 32px));
+  height: min(780px, calc(100vh - 32px));
+}
+
+.z-probe-dialog.is-heightmap .z-probe-body {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.z-probe-body {
+  overflow: auto;
+  padding: 16px 18px 4px;
+}
+
+.z-probe-live,
+.z-probe-result {
+  display: grid;
+  min-height: 52px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border: 1px solid #344149;
+  border-radius: 5px;
+  color: #8d9aa2;
+  background: #11191e;
+}
+
+.z-probe-live span,
+.z-probe-result span {
+  display: grid;
+  gap: 3px;
+}
+
+.z-probe-live strong,
+.z-probe-result strong {
+  color: #dce5e9;
+  font-size: 11px;
+}
+
+.z-probe-live small,
+.z-probe-result small,
+.z-probe-fields small {
+  color: #7c8991;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.z-probe-live.is-triggered {
+  border-color: #3a836a;
+  color: #73d5b1;
+  background: #13241e;
+}
+
+.z-probe-live.is-unavailable {
+  opacity: 0.62;
+}
+
+.z-probe-fields {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.probe-workflow-selector {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+  padding: 4px;
+  border: 1px solid #2c3840;
+  border-radius: 5px;
+  background: #0c1216;
+}
+
+.probe-workflow-selector button {
+  display: grid;
+  min-height: 44px;
+  place-content: center;
+  gap: 2px;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: #829097;
+  background: transparent;
+  cursor: pointer;
+}
+
+.probe-workflow-selector button[aria-selected="true"] {
+  border-color: #4d8f79;
+  color: #dff5ed;
+  background: #173228;
+}
+
+.probe-workflow-selector strong {
+  font-size: 10px;
+}
+
+.probe-workflow-selector small {
+  font-size: 8px;
+}
+
+.probe-mode-empty {
+  display: grid;
+  min-height: 110px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  color: #718087;
+}
+
+.probe-mode-empty span {
+  display: grid;
+  gap: 4px;
+}
+
+.probe-mode-empty strong {
+  color: #c5cfd4;
+  font-size: 11px;
+}
+
+.probe-mode-empty small {
+  font-size: 9px;
+}
+
+.z-probe-fields > label,
+.z-probe-advanced label {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  padding: 11px;
+  border: 1px solid #2c3840;
+  border-radius: 5px;
+  background: #0e1519;
+}
+
+.z-probe-fields > label > span:first-child,
+.z-probe-advanced label > span:first-child {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #b8c2c8;
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.z-probe-input {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #3b4850;
+  border-radius: 4px;
+  background: #11191e;
+}
+
+.z-probe-input input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  border: 0;
+  outline: 0;
+  color: #e2e9ed;
+  background: transparent;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+}
+
+.z-probe-input:focus-within {
+  border-color: #61a98e;
+}
+
+.z-probe-input code {
+  padding: 0 9px;
+  color: #78868e;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
+.z-probe-advanced {
+  margin-top: 10px;
+  border-top: 1px solid #29343b;
+  border-bottom: 1px solid #29343b;
+}
+
+.z-probe-advanced summary {
+  padding: 10px 2px;
+  color: #8c999f;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.z-probe-advanced > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.z-probe-result {
+  margin-top: 12px;
+  border-color: #375d50;
+  color: #70c7a7;
+  background: #12201b;
+}
+
+.z-probe-profile-note {
+  margin: 10px 0 0;
+  color: #d3a85f;
+  font-size: 9px;
+}
+
+.z-probe-workflow-note {
+  margin: 12px 0 0;
+  padding: 10px 11px;
+  border-left: 2px solid #4f8c77;
+  color: #8e9ba2;
+  background: #10191d;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.z-probe-workflow-note strong {
+  color: #cfd9de;
+}
+
+.z-probe-confirmation {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  color: #bac4c9;
+  cursor: pointer;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.z-probe-confirmation input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #70cdaa;
+}
+
+.z-probe-message {
+  min-height: 29px;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-top: 1px solid #29343b;
+  color: #8d9aa2;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.z-probe-actions {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  border-top: 1px solid #2b363e;
+}
+

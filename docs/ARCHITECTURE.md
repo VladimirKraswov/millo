@@ -58,23 +58,48 @@ observer failures. `useProbeDatum` binds established Z to a profile and controll
 session; primitive coordinate dependencies prevent equal polling packets from
 aborting asynchronous restoration.
 
-Program execution helpers are private to `millo-command/program_execution.rs`;
-the actor retains exclusive ownership of all writes. Parsing, CAM and export
-commands live in `src-tauri/src/commands/program_io.rs`. Export uses a separate
+`millo-command/lib.rs` declares the actor state and request contract. `client.rs`
+owns the public handle, `dispatch.rs` routes requests, and `runtime.rs` owns the
+actor loop and publication. Probe, heightmap, jog, homing, configuration,
+work-coordinate and program-execution modules implement operations on that same
+actor state. They do not own a second port, queue or worker. Private helpers are
+visible only within this crate; moving modules does not create a bypass API.
+Tests share builders in `tests/mod.rs` and are grouped by operation.
+
+Tauri command modules group connection, diagnostics, machine control, profiles,
+program run, recovery, scripts, settings, surface and tooling. Their existing
+IPC names are re-exported from `commands.rs`, which retains shared application
+state and persistence coordination. Parsing, CAM and export commands live in
+`src-tauri/src/commands/program_io.rs`. Export uses a separate
 atomic replacement primitive with unique temporary names, not the persistent
 JSON stores' backup namespace.
 
-`App.tsx` is the composition root: it owns application state, selects concrete
-gateways, bootstraps the plugin host, and connects feature callbacks. It does not
-own the presentation of those features. Connection diagnostics, controller
+`App.tsx` composes the workstation and dialogs. `app/useWorkstation.ts` owns
+application state, selects concrete gateways, bootstraps the plugin host and
+connects feature callbacks. Connection diagnostics, controller
 inspection, coordinate readout, program preview, run status, and program
 diagnostics are separate components with typed `view`/`actions` or narrow props.
 
-`ProgramWorkspace` remains the orchestration boundary for one loaded program.
-Its Three.js stage, sender status, line/diagnostic browser, and timing readout
+`useProgramWorkspace` coordinates one loaded program. `useProgramSurface`
+binds surface-session events and application options; `programReadinessView`
+projects read-only readiness details. `ProgramWorkspace`, its Three.js stage,
+sender status, line/diagnostic browser and timing readout
 are independent presentation modules. They receive immutable values and typed
 callbacks; they do not import Tauri or select a transport. Development fixtures
 live in `src/app/developmentFixtures.ts` and cannot become production state.
+
+`DialogHost` records focus and activation without changing pointer behavior.
+`DialogSurface` provides one Escape/focus lifecycle for feature and plugin
+dialogs. Only the top surface reacts to Escape; live `dismissible` guards apply
+to both keyboard dismissal and feature close buttons. Operational panels are
+nonmodal so navigation remains available. Closing UI never cancels motion.
+
+`src/styles.css` contains ordered imports of feature styles. The migration
+preserved the concatenated source of all 1,461 top-level rules byte-for-byte;
+media overrides retain their original order. Do not sort imports alphabetically
+or move shared overrides without visual regression checks. Architecture checks
+bound coordinator/style size and use the TypeScript AST for imports, re-exports,
+dynamic literal imports and type imports rather than matching comments as code.
 
 Cross-feature controller policy is expressed once. TypeScript uses
 `shared/controllerReadiness.ts`; Rust uses

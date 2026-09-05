@@ -1,0 +1,526 @@
+.tool-library-backdrop {
+  position: fixed;
+  z-index: 78;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: #05080be8;
+}
+
+.tool-library-dialog {
+  display: flex;
+  width: min(1060px, 100%);
+  height: min(760px, calc(100vh - 40px));
+  overflow: hidden;
+  flex-direction: column;
+  border: 1px solid #3b4952;
+  border-radius: 8px;
+  color: #e8edf1;
+  background: #11181c;
+  box-shadow: 0 24px 80px #000a;
+}
+
+.tool-library-dialog > header {
+  display: flex;
+  min-height: 64px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  border-bottom: 1px solid #2b363e;
+}
+
+.tool-library-dialog > header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.tool-library-dialog > header span,
+.tool-form-section h3,
+.tool-field > span,
+.tool-editor-heading span {
+  color: #798790;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.tool-library-dialog > header h2 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.tool-library-dialog > header > button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #3c4951;
+  border-radius: 4px;
+  color: #aab6bd;
+  background: #151d22;
+  cursor: pointer;
+}
+
+.tool-library-body {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  grid-template-columns: 330px minmax(0, 1fr);
+}
+
+.tool-library-list {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-right: 1px solid #2b363e;
+  background: #0d1317;
+}
+
+.tool-library-list-actions {
+  display: grid;
+  min-width: 0;
+  min-height: 54px;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+  border-bottom: 1px solid #263139;
+}
+
+.tool-library-list-actions button,
+.tool-library-editor footer button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 10px;
+  border: 1px solid #3a4750;
+  border-radius: 4px;
+  color: #bdc7cc;
+  background: #172026;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 650;
+}
+
+.tool-library-scroll {
+  min-height: 0;
+  padding: 6px;
+  overflow: auto;
+}
+
+.tool-library-item {
+  display: grid;
+  width: 100%;
+  min-height: 68px;
+  grid-template-columns: 54px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #bac5ca;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tool-library-item:hover {
+  background: #151e23;
+}
+
+.tool-library-item[aria-pressed="true"] {
+  border-color: #467361;
+  color: #e8f2ee;
+  background: #17251f;
+}
+
+.tool-library-item > span {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.tool-library-item strong,
+.tool-library-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-library-item strong {
+  font-size: 10px;
+}
+
+.tool-library-item small {
+  color: #74828a;
+  font-size: 8px;
+}
+
+.tool-library-item em {
+  padding: 2px 4px;
+  border: 1px solid #3b4c45;
+  border-radius: 3px;
+  color: #78978a;
+  font-size: 6px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.tool-schematic {
+  position: relative;
+  width: 84px;
+  height: 96px;
+  overflow: hidden;
+  border: 1px solid #2d3a41;
+  border-radius: 4px;
+  background: #0b1114;
+}
+
+.tool-schematic.is-compact {
+  width: 50px;
+  height: 54px;
+}
+
+.tool-schematic-axis {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 50%;
+  border-left: 1px dashed #344148;
+}
+
+.tool-schematic-shank,
+.tool-schematic-neck,
+.tool-schematic-cutter {
+  position: absolute;
+  z-index: 1;
+  left: 50%;
+  display: block;
+  transform: translateX(-50%);
+}
+
+.tool-schematic-shank {
+  top: 10px;
+  width: var(--tool-shank-width, 18px);
+  height: 36px;
+  border: 1px solid #78878e;
+  background: #29343a;
+}
+
+.tool-schematic-neck {
+  top: 45px;
+  width: 14px;
+  height: 8px;
+  background: #526168;
+}
+
+.tool-schematic-cutter {
+  top: 52px;
+  width: var(--tool-cutter-width, 24px);
+  height: 32px;
+  border: 1px solid #65b394;
+  background: repeating-linear-gradient(72deg, #173127 0 4px, #4b8e73 5px 7px);
+}
+
+.tool-schematic.is-compact .tool-schematic-shank {
+  top: 5px;
+  width: var(--tool-shank-width, 10px);
+  height: 20px;
+}
+
+.tool-schematic.is-compact .tool-schematic-neck {
+  top: 24px;
+  width: 10px;
+  height: 5px;
+}
+
+.tool-schematic.is-compact .tool-schematic-cutter {
+  top: 28px;
+  width: var(--tool-cutter-width, 17px);
+  height: 20px;
+}
+
+.tool-schematic.is-ballNose .tool-schematic-cutter {
+  border-radius: 0 0 50% 50%;
+}
+
+.tool-schematic.is-vBit .tool-schematic-cutter,
+.tool-schematic.is-engraving .tool-schematic-cutter {
+  border: 0;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+.tool-schematic.is-drill .tool-schematic-cutter {
+  clip-path: polygon(20% 0, 80% 0, 80% 70%, 50% 100%, 20% 70%);
+}
+
+.tool-schematic.is-engraving .tool-schematic-cutter {
+  height: 36px;
+}
+
+.tool-schematic.is-surfacing .tool-schematic-cutter {
+  height: 21px;
+  border-radius: 3px 3px 0 0;
+}
+
+.tool-schematic.is-compact.is-engraving .tool-schematic-cutter {
+  height: 22px;
+}
+
+.tool-schematic.is-compact.is-surfacing .tool-schematic-cutter {
+  height: 14px;
+}
+
+.tool-library-editor {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: 88px minmax(0, 1fr) 62px;
+}
+
+.tool-editor-heading {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #29353c;
+  background: #10171b;
+}
+
+.tool-editor-heading .tool-schematic {
+  width: 60px;
+  height: 66px;
+  flex: 0 0 auto;
+}
+
+.tool-editor-heading .tool-schematic-shank {
+  top: 5px;
+  height: 26px;
+}
+
+.tool-editor-heading .tool-schematic-neck {
+  top: 30px;
+}
+
+.tool-editor-heading .tool-schematic-cutter {
+  top: 37px;
+  height: 23px;
+}
+
+.tool-editor-heading > div {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.tool-editor-heading strong {
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tool-editor-scroll {
+  min-height: 0;
+  padding: 16px 18px 24px;
+  overflow: auto;
+}
+
+.tool-form-section {
+  margin-bottom: 20px;
+}
+
+.tool-form-section h3 {
+  margin: 0 0 8px;
+}
+
+.tool-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.tool-field {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.tool-field.is-wide {
+  grid-column: 1 / -1;
+}
+
+.tool-field > div {
+  display: grid;
+  min-height: 36px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #35434c;
+  border-radius: 4px;
+  background: #0d1317;
+}
+
+.tool-field input,
+.tool-field select,
+.tool-field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #35434c;
+  border-radius: 4px;
+  color: #e4eaed;
+  background: #0d1317;
+}
+
+.tool-field > input,
+.tool-field select {
+  height: 36px;
+  padding: 0 9px;
+}
+
+.tool-field > div input {
+  height: 34px;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.tool-field small {
+  padding: 0 8px;
+  color: #73828b;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.tool-field textarea {
+  min-height: 76px;
+  padding: 9px;
+  resize: vertical;
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.tool-knowledge {
+  border-top: 1px solid #2c383f;
+  border-bottom: 1px solid #2c383f;
+}
+
+.tool-knowledge summary {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  color: #b7c2c8;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+  list-style: none;
+}
+
+.tool-knowledge[open] summary svg {
+  transform: rotate(180deg);
+}
+
+.tool-knowledge-body {
+  display: grid;
+  padding: 0 0 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.tool-knowledge-body > p,
+.tool-knowledge-body > a {
+  grid-column: 1 / -1;
+}
+
+.tool-knowledge-body p {
+  margin: 0;
+  color: #aab5bb;
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.tool-knowledge-body section {
+  padding: 10px 12px;
+  border-left: 2px solid #66b596;
+  background: #14221c;
+}
+
+.tool-knowledge-body section.is-caution {
+  border-left-color: #d5a052;
+  background: #211b12;
+}
+
+.tool-knowledge-body strong {
+  color: #cdd7d3;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.tool-knowledge-body ul {
+  display: grid;
+  margin: 7px 0 0;
+  padding-left: 14px;
+  gap: 5px;
+  color: #91a19a;
+  font-size: 9px;
+  line-height: 13px;
+}
+
+.tool-knowledge-body a {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: 6px;
+  color: #77d6b3;
+  font-size: 9px;
+  text-decoration: none;
+}
+
+.tool-library-editor footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 18px;
+  border-top: 1px solid #2b363e;
+}
+
+.tool-library-editor footer > div:last-child {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 7px;
+}
+
+.tool-library-editor footer .primary-action {
+  min-width: 112px;
+  border-color: #64caa1;
+  color: #0b1712;
+  background: #77d6b3;
+}
+
+.tool-library-editor footer button.is-danger {
+  border-color: #ad5555;
+  color: #ffd2d2;
+  background: #3a1d20;
+}
+
+.tool-editor-status {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  color: #7e8d95;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

@@ -1,0 +1,253 @@
+.work-zero {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #263139;
+}
+
+.work-zero-heading,
+.work-zero-heading > div {
+  display: flex;
+}
+
+.work-zero-heading {
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.work-zero-heading > div {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.work-zero-heading span {
+  color: #75838c;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.work-zero-heading strong {
+  color: #dce4e9;
+  font-size: 12px;
+}
+
+.work-zero-heading code {
+  padding: 3px 6px;
+  border: 1px solid #394750;
+  border-radius: 3px;
+  color: #8d9aa2;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
+.work-zero-return {
+  margin-top: 11px;
+  padding: 10px 0 11px;
+  border-top: 1px solid #2b373e;
+  border-bottom: 1px solid #2b373e;
+}
+
+.work-zero-return > div:first-child {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  color: #75cfad;
+}
+
+.work-zero-return > div:first-child > span {
+  display: grid;
+  gap: 2px;
+}
+
+.work-zero-return strong {
+  color: #dce4e8;
+  font-size: 10px;
+}
+
+.work-zero-return small {
+  color: #75838c;
+  font-size: 8px;
+}
+
+.work-zero-return > div:nth-child(2) {
+  display: grid;
+  margin-top: 9px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.work-zero-return button {
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid #466458;
+  border-radius: 4px;
+  color: #c6ded5;
+  background: #18251f;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.work-zero-return button:hover:not(:disabled) {
+  border-color: #69b497;
+  color: #e3f4ed;
+  background: #1b3027;
+}
+
+.work-zero-return button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.work-zero-return-status {
+  display: block;
+  min-height: 13px;
+  margin-top: 7px;
+  overflow: hidden;
+  color: #78878f;
+  font-size: 8px;
+  line-height: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-zero-confirmation {
+  display: grid;
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+  color: #aeb9bf;
+  cursor: pointer;
+  font-size: 9px;
+  line-height: 12px;
+}
+
+.work-zero-confirmation input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: #77d6b3;
+}
+
+.work-zero-confirmation:has(input:disabled) {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.work-zero-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.work-zero-all {
+  display: flex;
+  width: 100%;
+  min-height: 42px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+  border: 1px solid #4c8d76;
+  border-radius: 5px;
+  color: #d9f8ec;
+  background: #205d49;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.work-zero-all:hover:not(:disabled) {
+  border-color: #77d6b3;
+  background: #287159;
+}
+
+.work-zero-all:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.work-zero-backdrop {
+  z-index: 74;
+}
+
+.work-zero-dialog {
+  width: min(520px, 100%);
+}
+
+.work-zero-dialog-body {
+  padding: 0 18px 18px;
+}
+
+.work-zero-current {
+  display: grid;
+  min-height: 52px;
+  grid-template-columns: 22px minmax(50px, 1fr) repeat(3, auto);
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid #2a363e;
+  color: #77d6b3;
+}
+
+.work-zero-current span {
+  color: #89969e;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.work-zero-current code {
+  color: #cfd9de;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.work-zero-dialog .work-zero {
+  margin-top: 0;
+  padding-top: 16px;
+  border-top: 0;
+}
+
+.work-zero-actions button {
+  display: flex;
+  min-width: 0;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #3d6f60;
+  border-radius: 4px;
+  color: #bde7d7;
+  background: #172a23;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.work-zero-actions button span {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+}
+
+.work-zero-actions button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.work-zero-status {
+  min-height: 27px;
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid #263139;
+  overflow: hidden;
+  color: #7f8e96;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

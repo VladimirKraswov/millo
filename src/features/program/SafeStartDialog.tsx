@@ -1,3 +1,4 @@
+import { DialogSurface } from "../../components/DialogSurface";
 import { CornerDownRight, Play, Route, ScanSearch, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -65,12 +66,15 @@ export function SafeStartDialog({
   };
 
   return (
-    <div className="machine-dialog-backdrop safe-start-backdrop" role="presentation">
-      <section
+    <div
+      className="machine-dialog-backdrop safe-start-backdrop"
+      role="presentation"
+    >
+      <DialogSurface
+        onDismiss={onClose}
+        dismissible={!busy}
         aria-labelledby="safe-start-title"
-        aria-modal="true"
         className="machine-dialog safe-start-dialog"
-        role="dialog"
       >
         <header>
           <div>
@@ -102,7 +106,9 @@ export function SafeStartDialog({
           <label className="safe-start-z">
             <span>
               <strong>Safe Z</strong>
-              <small>Не ниже геометрии программы: {minimumSafeZ.toFixed(3)} mm</small>
+              <small>
+                Не ниже геометрии программы: {minimumSafeZ.toFixed(3)} mm
+              </small>
             </span>
             <span>
               <input
@@ -122,8 +128,9 @@ export function SafeStartDialog({
             <CornerDownRight aria-hidden="true" size={18} />
             <p>
               Millo найдёт последний безопасный rapid-вход перед L{sourceLine},
-              поднимется на Safe Z и восстановит WCS, режимы, подачу и инструмент.
-              Рез внутри уже начатого участка не будет продолжен вслепую.
+              поднимется на Safe Z и восстановит WCS, режимы, подачу и
+              инструмент. Рез внутри уже начатого участка не будет продолжен
+              вслепую.
             </p>
           </div>
 
@@ -131,7 +138,10 @@ export function SafeStartDialog({
             <ScanSearch aria-hidden="true" size={17} />
             <span>
               <strong>Следующий шаг: GRBL Check</strong>
-              <small>Проверяется весь сформированный остаток, включая безопасный подлёт.</small>
+              <small>
+                Проверяется весь сформированный остаток, включая безопасный
+                подлёт.
+              </small>
             </span>
           </div>
 
@@ -165,7 +175,7 @@ export function SafeStartDialog({
             {busy ? "Запускаем Check..." : "Подготовить и запустить Check"}
           </button>
         </footer>
-      </section>
+      </DialogSurface>
     </div>
   );
 }

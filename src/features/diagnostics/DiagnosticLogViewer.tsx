@@ -1,3 +1,4 @@
+import { DialogSurface } from "../../components/DialogSurface";
 import {
   AlertCircle,
   Bug,
@@ -17,7 +18,11 @@ import type {
   AuditLevel,
   AuditLogSnapshot,
 } from "../../shared/audit";
-import { auditCounts, defaultAuditLevels, filterAuditEntries } from "./auditLogModel";
+import {
+  auditCounts,
+  defaultAuditLevels,
+  filterAuditEntries,
+} from "./auditLogModel";
 
 const categories: readonly (AuditCategory | "all")[] = [
   "all",
@@ -63,7 +68,8 @@ export function DiagnosticLogViewer({
 }: DiagnosticLogViewerProps) {
   const [snapshot, setSnapshot] = useState(initialSnapshot ?? emptySnapshot);
   const [category, setCategory] = useState<AuditCategory | "all">("all");
-  const [levels, setLevels] = useState<ReadonlySet<AuditLevel>>(defaultAuditLevels);
+  const [levels, setLevels] =
+    useState<ReadonlySet<AuditLevel>>(defaultAuditLevels);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -115,12 +121,19 @@ export function DiagnosticLogViewer({
 
   return (
     <div className="log-viewer-backdrop" role="presentation">
-      <section aria-label="Журнал диагностики" aria-modal="true" className="log-viewer" role="dialog">
+      <DialogSurface
+        onDismiss={onClose}
+        modal={false}
+        aria-label="Журнал диагностики"
+        className="log-viewer"
+      >
         <header>
           <div>
             <span>Диагностика</span>
             <strong>Журнал событий</strong>
-            <small>{snapshot.activePath ?? "Постоянный файл доступен в Tauri"}</small>
+            <small>
+              {snapshot.activePath ?? "Постоянный файл доступен в Tauri"}
+            </small>
           </div>
           <dl>
             <div className={counts.errors > 0 ? "has-errors" : undefined}>
@@ -146,7 +159,12 @@ export function DiagnosticLogViewer({
             >
               <RefreshCw aria-hidden="true" size={15} />
             </button>
-            <button aria-label="Закрыть журнал" onClick={onClose} title="Закрыть" type="button">
+            <button
+              aria-label="Закрыть журнал"
+              onClick={onClose}
+              title="Закрыть"
+              type="button"
+            >
               <X aria-hidden="true" size={16} />
             </button>
           </div>
@@ -164,7 +182,9 @@ export function DiagnosticLogViewer({
           </label>
           <select
             aria-label="Категория журнала"
-            onChange={(event) => setCategory(event.target.value as AuditCategory | "all")}
+            onChange={(event) =>
+              setCategory(event.target.value as AuditCategory | "all")
+            }
             value={category}
           >
             {categories.map((item) => (
@@ -207,14 +227,19 @@ export function DiagnosticLogViewer({
         </div>
 
         <div
-          aria-hidden={snapshot.droppedEntries === 0 && snapshot.writeFailures === 0}
+          aria-hidden={
+            snapshot.droppedEntries === 0 && snapshot.writeFailures === 0
+          }
           className={`log-health-warning${
-            snapshot.droppedEntries === 0 && snapshot.writeFailures === 0 ? " is-empty" : ""
+            snapshot.droppedEntries === 0 && snapshot.writeFailures === 0
+              ? " is-empty"
+              : ""
           }`}
           role="alert"
         >
           <TriangleAlert aria-hidden="true" size={14} />
-          Очередь потеряла {snapshot.droppedEntries} событий; ошибок записи: {snapshot.writeFailures}
+          Очередь потеряла {snapshot.droppedEntries} событий; ошибок записи:{" "}
+          {snapshot.writeFailures}
         </div>
 
         <div className="log-stream" role="log">
@@ -226,7 +251,10 @@ export function DiagnosticLogViewer({
             </div>
           ) : (
             [...visibleEntries].reverse().map((entry) => (
-              <details className={`log-entry is-${entry.level}`} key={`${entry.sessionId}-${entry.sequence}`}>
+              <details
+                className={`log-entry is-${entry.level}`}
+                key={`${entry.sessionId}-${entry.sequence}`}
+              >
                 <summary>
                   <i aria-hidden="true" />
                   <time dateTime={new Date(entry.timestampMs).toISOString()}>
@@ -255,9 +283,11 @@ export function DiagnosticLogViewer({
         </div>
         <footer>
           <span>Сессия {snapshot.sessionId}</span>
-          <strong>{visibleEntries.length} из {snapshot.entries.length}</strong>
+          <strong>
+            {visibleEntries.length} из {snapshot.entries.length}
+          </strong>
         </footer>
-      </section>
+      </DialogSurface>
     </div>
   );
 }

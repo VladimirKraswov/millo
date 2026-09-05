@@ -1,0 +1,243 @@
+.dry-run-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 11px;
+  border-bottom: 1px solid #27323a;
+  background: #10171b;
+}
+
+.dry-run-heading,
+.dry-run-line,
+.dry-run-actions {
+  display: flex;
+  align-items: center;
+}
+
+.sender-zero-return {
+  display: grid;
+  min-height: 34px;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) repeat(3, 38px);
+  align-items: center;
+  gap: 5px;
+  padding: 5px;
+  border: 1px solid #344149;
+  border-radius: 4px;
+  background: #11191e;
+}
+
+.sender-zero-return > span {
+  padding-left: 4px;
+  color: #87949c;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.sender-zero-return > button {
+  min-width: 0;
+  height: 25px;
+  padding: 0;
+  border: 1px solid #3b4a52;
+  border-radius: 3px;
+  color: #bed0d7;
+  background: #172127;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.sender-zero-return > button:hover:not(:disabled) {
+  border-color: #5f9c87;
+  color: #9be0c6;
+}
+
+.dry-run-heading {
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.dry-run-heading > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dry-run-heading span,
+.dry-run-card > small {
+  color: #75838c;
+  font-size: 8px;
+}
+
+.dry-run-heading strong {
+  color: #c9d3d8;
+  font-size: 10px;
+}
+
+.dry-run-heading code,
+.dry-run-line code {
+  color: #8fe0c0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
+.dry-run-progress {
+  height: 3px;
+  overflow: hidden;
+  background: #27323a;
+}
+
+.dry-run-progress i {
+  display: block;
+  height: 100%;
+  background: #69cfaa;
+  transition: width 120ms linear;
+}
+
+.dry-run-line {
+  min-width: 0;
+  gap: 7px;
+}
+
+.dry-run-line span {
+  flex: 0 0 auto;
+  color: #75838c;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
+.dry-run-line code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sender-timing {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  color: #75838c;
+  font-size: 8px;
+}
+
+.sender-timing span {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.sender-timing code {
+  color: #c9d3d8;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
+.sender-heartbeat {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  padding-top: 5px;
+  border-top: 1px solid #263139;
+  color: #75838c;
+  font-size: 7px;
+}
+
+.sender-heartbeat code {
+  overflow: hidden;
+  color: #aebbc1;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sender-heartbeat strong {
+  min-width: 56px;
+  color: #77d6b3;
+  font-size: 7px;
+  white-space: nowrap;
+}
+
+.dry-run-actions {
+  display: grid;
+  min-height: 28px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.dry-run-actions button {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid #3f8069;
+  border-radius: 4px;
+  color: #b9e7d6;
+  background: #172821;
+  font-size: 9px;
+  font-weight: 600;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.program-run-card .dry-run-actions button:only-child,
+.program-run-card .dry-run-actions button.is-terminal-action,
+.program-run-card .dry-run-actions button.is-return-zero {
+  grid-column: 1 / -1;
+}
+
+.dry-run-actions button.is-return-zero {
+  border-color: #61727c;
+  color: #d5e0e5;
+  background: #182126;
+}
+
+.is-placeholder {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.dry-run-actions button.is-cancel {
+  border-color: #73484b;
+  color: #e8b4b4;
+  background: #28191b;
+}
+
+.dry-run-actions button.is-cancel.is-confirming {
+  border-color: #bd5b61;
+  color: #ffe5e5;
+  background: #6a292f;
+}
+
+.dry-run-actions button:disabled {
+  opacity: 0.36;
+  cursor: default;
+}
+
+.dry-run-card.is-completed .dry-run-heading strong {
+  color: #77d6b3;
+}
+
+.dry-run-card.is-toolChange {
+  border-bottom-color: #806a3e;
+  background: #1d1911;
+}
+
+.dry-run-card.is-toolChange .dry-run-heading strong,
+.dry-run-card.is-toolChange .dry-run-line code {
+  color: #f0bd68;
+}
+
+.dry-run-card.is-failed .dry-run-heading strong,
+.dry-run-card > small.is-error {
+  color: #ef8585;
+}
+

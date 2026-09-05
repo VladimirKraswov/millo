@@ -1,0 +1,355 @@
+.recovery-dialog-body {
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.recovery-evidence {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 18px;
+  border-bottom: 1px solid #534529;
+  color: #e0ad57;
+  background: #1d1911;
+}
+
+.recovery-evidence.is-blocked {
+  border-color: #5d3438;
+  color: #e68484;
+  background: #211619;
+}
+
+.recovery-evidence > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recovery-evidence strong {
+  overflow: hidden;
+  color: #ede7dd;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recovery-evidence span {
+  color: #978d7d;
+  font-size: 9px;
+  line-height: 13px;
+}
+
+.recovery-evidence small {
+  color: #766f64;
+  font-size: 8px;
+  line-height: 12px;
+}
+
+.recovery-evidence dl {
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 14px;
+  margin: 0;
+}
+
+.recovery-evidence dl > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recovery-evidence dt {
+  color: #81796e;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.recovery-evidence dd {
+  margin: 0;
+  color: #d9b777;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+}
+
+.recovery-evidence .recovery-restart-position {
+  grid-column: 1 / -1;
+}
+
+.recovery-warning {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 9px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #403722;
+  color: #d5a957;
+  background: #171711;
+}
+
+.recovery-decision {
+  display: grid;
+  min-height: 58px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-bottom: 1px solid #344048;
+  color: #d6a657;
+  background: #151817;
+}
+
+.recovery-decision > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recovery-decision strong {
+  color: #e3e9ec;
+  font-size: 10px;
+}
+
+.recovery-decision small {
+  color: #89969d;
+  font-size: 8px;
+  line-height: 12px;
+}
+
+.recovery-warning.is-blocked {
+  border-color: #543337;
+  color: #e68484;
+  background: #1c1416;
+}
+
+.recovery-warning p {
+  margin: 0;
+  color: #a8a093;
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.recovery-warning code {
+  color: #d5a957;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: inherit;
+}
+
+.recovery-continuity {
+  display: grid;
+  gap: 0;
+  padding: 10px 18px 0;
+  border-bottom: 1px solid #27323a;
+  background: #10171b;
+}
+
+.recovery-continuity-disclosure,
+.recovery-explanation {
+  border-bottom: 1px solid #27323a;
+  background: #10171b;
+}
+
+.recovery-continuity-disclosure > summary,
+.recovery-explanation > summary {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 18px;
+  color: #aab5bb;
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.recovery-continuity-disclosure > summary small {
+  color: #77d6b3;
+  font-size: 8px;
+}
+
+.recovery-continuity-disclosure .recovery-continuity {
+  padding-top: 0;
+  border-top: 1px solid #27323a;
+  border-bottom: 0;
+}
+
+.recovery-explanation > div {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  gap: 9px;
+  padding: 0 18px 12px;
+  color: #d5a957;
+}
+
+.recovery-explanation p {
+  margin: 0;
+  color: #8f9a9f;
+  font-size: 8px;
+  line-height: 13px;
+}
+
+.recovery-explanation code {
+  color: #d5a957;
+}
+
+.recovery-confirmation-details {
+  border-bottom: 1px solid #27323a;
+}
+
+.recovery-continuity legend {
+  padding-top: 10px;
+}
+
+.recovery-continuity label {
+  display: grid;
+  min-height: 52px;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid #222d34;
+  cursor: pointer;
+}
+
+.recovery-continuity input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #77d6b3;
+}
+
+.recovery-continuity label > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recovery-continuity strong {
+  color: #dce3e6;
+  font-size: 10px;
+}
+
+.recovery-continuity small {
+  color: #7e8b93;
+  font-size: 8px;
+  line-height: 12px;
+}
+
+.recovery-continuity label:has(input:disabled) {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.recovery-safe-z {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 9px 18px;
+  border-bottom: 1px solid #27323a;
+  background: #10171b;
+}
+
+.recovery-safe-z > span {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recovery-safe-z > span:last-child {
+  align-items: center;
+  flex-direction: row;
+}
+
+.recovery-safe-z strong {
+  color: #dce4e8;
+  font-size: 11px;
+}
+
+.recovery-safe-z small {
+  color: #7f8c93;
+  font-size: 8px;
+}
+
+.recovery-safe-z input {
+  width: 110px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #46545d;
+  border-radius: 4px;
+  color: #e6ecef;
+  background: #0d1418;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+}
+
+.recovery-safe-z code {
+  color: #7f8c93;
+  font-size: 9px;
+}
+
+.recovery-checklist {
+  min-height: 0;
+}
+
+.recovery-checklist label {
+  position: relative;
+  display: grid;
+  min-height: 54px;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  border-bottom: 1px solid #27323a;
+  cursor: pointer;
+}
+
+.recovery-checklist input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.recovery-checklist label > span:first-of-type {
+  display: grid;
+  width: 21px;
+  height: 21px;
+  place-items: center;
+  border: 1px solid #526069;
+  border-radius: 4px;
+  color: transparent;
+  background: #0e1418;
+}
+
+.recovery-checklist input:checked + span {
+  border-color: #64b797;
+  color: #09120f;
+  background: #77d6b3;
+}
+
+.recovery-checklist label > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.recovery-checklist strong {
+  color: #dce3e6;
+  font-size: 10px;
+}
+
+.recovery-checklist small {
+  color: #7e8b93;
+  font-size: 8px;
+  line-height: 12px;
+}
+
+.recovery-dialog footer {
+  border-top: 1px solid #2b363e;
+}
+

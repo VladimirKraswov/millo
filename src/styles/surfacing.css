@@ -1,0 +1,407 @@
+.surfacing-backdrop {
+  position: fixed;
+  z-index: 79;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: #05080bec;
+}
+
+.surfacing-dialog {
+  display: grid;
+  width: min(1120px, 100%);
+  height: min(780px, calc(100vh - 40px));
+  overflow: hidden;
+  grid-template-rows: 66px minmax(0, 1fr) 64px;
+  border: 1px solid #3b4952;
+  border-radius: 8px;
+  color: #e8edf1;
+  background: #11181c;
+  box-shadow: 0 24px 80px #000b;
+}
+
+.surfacing-dialog > header,
+.surfacing-dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 18px;
+}
+
+.surfacing-dialog > header {
+  border-bottom: 1px solid #2b363e;
+}
+
+.surfacing-dialog > header > div {
+  display: grid;
+  gap: 2px;
+}
+
+.surfacing-dialog > header span,
+.surfacing-settings legend,
+.surfacing-field > span,
+.surfacing-tool-card > div > span {
+  color: #7d8a92;
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.surfacing-dialog > header h2 {
+  margin: 0;
+  font-size: 19px;
+}
+
+.surfacing-dialog > header > button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #3b4850;
+  border-radius: 4px;
+  color: #aab6bd;
+  background: #151d22;
+  cursor: pointer;
+}
+
+.surfacing-body {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-columns: minmax(360px, 0.9fr) minmax(470px, 1.1fr);
+}
+
+.surfacing-preview,
+.surfacing-settings {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.surfacing-preview {
+  padding: 20px;
+  border-right: 1px solid #2b363e;
+  background: #0b1114;
+}
+
+.surfacing-map {
+  position: relative;
+  display: grid;
+  width: min(100%, 430px);
+  aspect-ratio: 1.45;
+  margin: 0 auto 16px;
+  place-items: center;
+  padding: 28px 36px 34px;
+  border: 1px solid #27343b;
+  background-color: #0e161a;
+  background-image:
+    linear-gradient(#243139 1px, transparent 1px),
+    linear-gradient(90deg, #243139 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.surfacing-map-area {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: 2px solid #d8a856;
+  background: #18211f;
+  box-shadow: inset 0 0 0 1px #664f2d;
+}
+
+.surfacing-raster-lines {
+  position: absolute;
+  inset: 8%;
+  display: block;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent 0 12px,
+    #72d2af 12px 14px
+  );
+}
+
+.surfacing-map.is-y .surfacing-raster-lines {
+  background: repeating-linear-gradient(
+    90deg,
+    transparent 0 12px,
+    #72d2af 12px 14px
+  );
+}
+
+.surfacing-width,
+.surfacing-height,
+.surfacing-origin {
+  position: absolute;
+  color: #7f8e96;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+}
+
+.surfacing-width {
+  right: 36px;
+  bottom: 11px;
+  left: 36px;
+  text-align: center;
+}
+
+.surfacing-height {
+  top: 50%;
+  left: 6px;
+  transform: rotate(-90deg) translateY(-50%);
+}
+
+.surfacing-origin {
+  bottom: 10px;
+  left: 10px;
+  color: #d8a856;
+}
+
+.surfacing-tool-card {
+  display: grid;
+  min-height: 74px;
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  padding: 9px 11px;
+  border: 1px solid #334149;
+  border-radius: 5px;
+  background: #121a1f;
+}
+
+.surfacing-tool-card > div {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.surfacing-tool-card select {
+  width: 100%;
+  height: 32px;
+  min-width: 0;
+  padding: 0 8px;
+  border: 1px solid #3a4952;
+  border-radius: 4px;
+  color: #e0e8eb;
+  background: #0d1418;
+  font-size: 10px;
+}
+
+.surfacing-tool-card small {
+  color: #7b8991;
+  font-size: 8px;
+}
+
+.surfacing-preview .tool-knowledge {
+  margin-top: 12px;
+}
+
+.surfacing-preview .tool-knowledge-body {
+  grid-template-columns: 1fr;
+}
+
+.surfacing-preview .tool-knowledge-body > p,
+.surfacing-preview .tool-knowledge-body > a {
+  grid-column: 1;
+}
+
+.surfacing-settings {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 14px 20px;
+}
+
+.surfacing-settings fieldset {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.surfacing-settings legend {
+  margin-bottom: 8px;
+}
+
+.surfacing-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.surfacing-field {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.surfacing-field > div {
+  display: grid;
+  min-height: 36px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid #35434c;
+  border-radius: 4px;
+  background: #0d1317;
+}
+
+.surfacing-field input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px;
+  border: 0;
+  color: #e4eaed;
+  background: transparent;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.surfacing-field small {
+  padding: 0 8px;
+  color: #728089;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.surfacing-axis {
+  display: grid;
+  margin-top: 8px;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.surfacing-start-mode {
+  margin: 0 0 6px;
+}
+
+.surfacing-start-note {
+  display: block;
+  min-height: 28px;
+  margin: 0 0 8px;
+  color: #829198;
+  font-size: 9px;
+  line-height: 14px;
+}
+
+.surfacing-axis button {
+  height: 32px;
+  border: 1px solid #35434c;
+  border-radius: 4px;
+  color: #8e9ba2;
+  background: #121a1f;
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.surfacing-axis button[aria-pressed="true"] {
+  border-color: #5dad90;
+  color: #d9f0e7;
+  background: #183027;
+}
+
+.surfacing-estimate {
+  display: grid;
+  margin: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid #2f3b42;
+  border-radius: 4px;
+  background: #0d1418;
+}
+
+.surfacing-estimate > div {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border-right: 1px solid #2f3b42;
+}
+
+.surfacing-estimate > div:last-child {
+  border-right: 0;
+}
+
+.surfacing-estimate dt {
+  color: #77858d;
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.surfacing-estimate dd {
+  margin: 0;
+  color: #d5dde1;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+}
+
+.surfacing-status {
+  display: flex;
+  min-height: 40px;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-left: 2px solid #d4a350;
+  color: #aab5bb;
+  background: #211b12;
+  font-size: 9px;
+  line-height: 13px;
+}
+
+.surfacing-status.is-ready {
+  border-left-color: #68c4a1;
+  color: #bce4d5;
+  background: #14231d;
+}
+
+.surfacing-status.is-error {
+  border-left-color: #dd6d71;
+  color: #f0a3a5;
+  background: #2a171a;
+}
+
+.surfacing-dialog > footer {
+  border-top: 1px solid #2b363e;
+}
+
+.surfacing-dialog > footer > div {
+  display: flex;
+  gap: 7px;
+}
+
+.surfacing-dialog > footer button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid #3b4850;
+  border-radius: 4px;
+  color: #bdc7cc;
+  background: #172026;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.surfacing-dialog > footer button:disabled,
+.surfacing-dialog > header button:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.surfacing-dialog > footer .surfacing-generate {
+  border-color: #8e6d38;
+  color: #f0d5a6;
+  background: #2a2114;
+}
+
+.surfacing-dialog > footer .primary-action {
+  min-width: 154px;
+  border-color: #64caa1;
+  color: #0b1712;
+  background: #77d6b3;
+}
+

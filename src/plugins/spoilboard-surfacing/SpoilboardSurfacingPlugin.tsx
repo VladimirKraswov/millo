@@ -9,7 +9,10 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import { DialogSurface } from "../../plugin-sdk";
 
+import { ToolKnowledgePanel } from "../../features/tool-library/ToolKnowledgePanel";
+import { ToolSchematic } from "../../features/tool-library/ToolSchematic";
 import type {
   PluginJobsCapability,
   PluginToolsCapability,
@@ -18,12 +21,7 @@ import type {
   GeneratedSurfacingJob,
   SurfacingJobSettings,
 } from "../../shared/jobs";
-import {
-  supportsSurfacing,
-  toolKindLabels,
-} from "../../shared/tooling";
-import { ToolKnowledgePanel } from "../../features/tool-library/ToolKnowledgePanel";
-import { ToolSchematic } from "../../features/tool-library/ToolSchematic";
+import { supportsSurfacing, toolKindLabels } from "../../shared/tooling";
 import { usePluginToolLibrary } from "../usePluginToolLibrary";
 
 interface SpoilboardSurfacingPluginProps {
@@ -58,17 +56,19 @@ export function SpoilboardSurfacingPlugin({
   const [open, setOpen] = useState(initialOpen);
   const toolLibrary = usePluginToolLibrary(tools);
   const compatibleTools = useMemo(
-    () => [...toolLibrary.tools]
-      .filter(supportsSurfacing)
-      .sort((left, right) => {
-        const kindOrder = Number(right.kind === "surfacing") - Number(left.kind === "surfacing");
+    () =>
+      [...toolLibrary.tools].filter(supportsSurfacing).sort((left, right) => {
+        const kindOrder =
+          Number(right.kind === "surfacing") -
+          Number(left.kind === "surfacing");
         return kindOrder || right.diameterMm - left.diameterMm;
       }),
     [toolLibrary.tools],
   );
   const [toolId, setToolId] = useState<string>();
   const [startMode, setStartMode] = useState<SurfacingStartMode>("workZero");
-  const [settings, setSettings] = useState<SurfacingJobSettings>(defaultSettings);
+  const [settings, setSettings] =
+    useState<SurfacingJobSettings>(defaultSettings);
   const [generated, setGenerated] = useState<GeneratedSurfacingJob>();
   const [busy, setBusy] = useState<"generate" | "save">();
   const [notice, setNotice] = useState<string>();
@@ -91,15 +91,6 @@ export function SpoilboardSurfacingPlugin({
     }));
     setGenerated(undefined);
   }, [selectedTool, startMode]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) setOpen(false);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [busy, open]);
 
   const updateNumber = (key: keyof SurfacingJobSettings, value: number) => {
     setSettings((current) => ({ ...current, [key]: value }));
@@ -157,118 +148,416 @@ export function SpoilboardSurfacingPlugin({
 
   return (
     <>
-      <button className="surfacing-launcher" onClick={() => setOpen(true)} type="button">
+      <button
+        className="surfacing-launcher"
+        onClick={() => setOpen(true)}
+        type="button"
+      >
         <Layers3 aria-hidden="true" size={15} />
         <span>Выравнивание</span>
       </button>
-      {open && createPortal(
-        <div className="surfacing-backdrop">
-          <section aria-labelledby="surfacing-title" aria-modal="true" className="surfacing-dialog" role="dialog">
-            <header>
-              <div><span>Системный плагин</span><h2 id="surfacing-title">Выравнивание поверхности</h2></div>
-              <button aria-label="Закрыть" disabled={Boolean(busy)} onClick={() => setOpen(false)} title="Закрыть" type="button"><X aria-hidden="true" size={18} /></button>
-            </header>
-
-            <div className="surfacing-body">
-              <section className="surfacing-preview">
-                <div className={`surfacing-map is-${settings.rasterAxis}`}>
-                  <div className="surfacing-map-area"><span className="surfacing-raster-lines" /></div>
-                  <span className="surfacing-width">{number(settings.widthMm)} mm</span>
-                  <span className="surfacing-height">{number(settings.heightMm)} mm</span>
-                  <span className="surfacing-origin">X{number(settings.originXMm)} · Y{number(settings.originYMm)}</span>
+      {open &&
+        createPortal(
+          <div className="surfacing-backdrop">
+            <DialogSurface
+              onDismiss={() => setOpen(false)}
+              dismissible={!Boolean(busy)}
+              aria-labelledby="surfacing-title"
+              className="surfacing-dialog"
+            >
+              <header>
+                <div>
+                  <span>Системный плагин</span>
+                  <h2 id="surfacing-title">Выравнивание поверхности</h2>
                 </div>
-                <div className="surfacing-tool-card">
-                  {selectedTool ? <ToolSchematic compact tool={selectedTool} /> : <Grid2X2 aria-hidden="true" size={24} />}
-                  <div>
-                    <span>Инструмент</span>
-                    <select onChange={(event) => setToolId(event.target.value)} value={toolId ?? ""}>
-                      {compatibleTools.map((tool) => <option key={tool.id} value={tool.id}>{tool.name}</option>)}
-                    </select>
-                    {selectedTool && <small>{toolKindLabels[selectedTool.kind]} · Ø {selectedTool.diameterMm} mm · {selectedTool.fluteCount} кромки</small>}
-                  </div>
-                </div>
-                {selectedTool && <ToolKnowledgePanel tool={selectedTool} />}
-              </section>
+                <button
+                  aria-label="Закрыть"
+                  disabled={Boolean(busy)}
+                  onClick={() => setOpen(false)}
+                  title="Закрыть"
+                  type="button"
+                >
+                  <X aria-hidden="true" size={18} />
+                </button>
+              </header>
 
-              <section className="surfacing-settings">
-                <fieldset>
-                  <legend>Область и старт</legend>
-                  <div className="surfacing-axis surfacing-start-mode" role="group" aria-label="Положение первой точки">
-                    <button aria-pressed={startMode === "workZero"} onClick={() => selectStartMode("workZero")} type="button">Старт из X0 Y0</button>
-                    <button aria-pressed={startMode === "insideArea"} onClick={() => selectStartMode("insideArea")} type="button">Фреза внутри границ</button>
+              <div className="surfacing-body">
+                <section className="surfacing-preview">
+                  <div className={`surfacing-map is-${settings.rasterAxis}`}>
+                    <div className="surfacing-map-area">
+                      <span className="surfacing-raster-lines" />
+                    </div>
+                    <span className="surfacing-width">
+                      {number(settings.widthMm)} mm
+                    </span>
+                    <span className="surfacing-height">
+                      {number(settings.heightMm)} mm
+                    </span>
+                    <span className="surfacing-origin">
+                      X{number(settings.originXMm)} · Y
+                      {number(settings.originYMm)}
+                    </span>
                   </div>
-                  <small className="surfacing-start-note">
-                    {startMode === "workZero"
-                      ? `Центр фрезы начнёт в X${number(startXMm)} Y${number(startYMm)}; половина диаметра выйдет за начальные края.`
-                      : `Центр фрезы начнёт в X${number(startXMm)} Y${number(startYMm)}; режущая часть останется внутри области.`}
-                  </small>
-                  <div className="surfacing-fields">
-                    <NumberField label="Ширина X" max={100000} min={0.1} onChange={(value) => updateNumber("widthMm", value)} step={1} suffix="mm" value={settings.widthMm} />
-                    <NumberField label="Высота Y" max={100000} min={0.1} onChange={(value) => updateNumber("heightMm", value)} step={1} suffix="mm" value={settings.heightMm} />
-                    <NumberField label="Начало X" max={100000} min={-100000} onChange={(value) => updateNumber("originXMm", value)} step={1} suffix="mm" value={settings.originXMm} />
-                    <NumberField label="Начало Y" max={100000} min={-100000} onChange={(value) => updateNumber("originYMm", value)} step={1} suffix="mm" value={settings.originYMm} />
+                  <div className="surfacing-tool-card">
+                    {selectedTool ? (
+                      <ToolSchematic compact tool={selectedTool} />
+                    ) : (
+                      <Grid2X2 aria-hidden="true" size={24} />
+                    )}
+                    <div>
+                      <span>Инструмент</span>
+                      <select
+                        onChange={(event) => setToolId(event.target.value)}
+                        value={toolId ?? ""}
+                      >
+                        {compatibleTools.map((tool) => (
+                          <option key={tool.id} value={tool.id}>
+                            {tool.name}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedTool && (
+                        <small>
+                          {toolKindLabels[selectedTool.kind]} · Ø{" "}
+                          {selectedTool.diameterMm} mm ·{" "}
+                          {selectedTool.fluteCount} кромки
+                        </small>
+                      )}
+                    </div>
                   </div>
-                </fieldset>
-                <fieldset>
-                  <legend>Снятие поверхности</legend>
-                  <div className="surfacing-fields">
-                    <NumberField label="Снять всего" max={100} min={0.001} onChange={(value) => updateNumber("removalMm", value)} step={0.05} suffix="mm" value={settings.removalMm} />
-                    <NumberField label="За проход" max={20} min={0.001} onChange={(value) => updateNumber("depthPerPassMm", value)} step={0.05} suffix="mm" value={settings.depthPerPassMm} />
-                    <NumberField label="Безопасный Z" max={10000} min={-10000} onChange={(value) => updateNumber("safeZMm", value)} step={0.5} suffix="mm" value={settings.safeZMm} />
-                    <NumberField label="Перекрытие" max={95} min={1} onChange={(value) => updateNumber("stepoverPercent", value)} step={1} suffix="% Ø" value={settings.stepoverPercent} />
-                  </div>
-                </fieldset>
-                <fieldset>
-                  <legend>Движение</legend>
-                  <div className="surfacing-fields">
-                    <NumberField label="Подача XY" max={100000} min={1} onChange={(value) => updateNumber("feedMmPerMin", value)} step={50} suffix="mm/min" value={settings.feedMmPerMin} />
-                    <NumberField label="Подача Z" max={50000} min={1} onChange={(value) => updateNumber("plungeMmPerMin", value)} step={25} suffix="mm/min" value={settings.plungeMmPerMin} />
-                  </div>
-                  <div className="surfacing-axis" role="group" aria-label="Направление проходов">
-                    <button aria-pressed={settings.rasterAxis === "x"} onClick={() => { setSettings((current) => ({ ...current, rasterAxis: "x" })); setGenerated(undefined); }} type="button">Вдоль X</button>
-                    <button aria-pressed={settings.rasterAxis === "y"} onClick={() => { setSettings((current) => ({ ...current, rasterAxis: "y" })); setGenerated(undefined); }} type="button">Вдоль Y</button>
-                  </div>
-                </fieldset>
-                <dl className="surfacing-estimate">
-                  <div><dt>Первый XY</dt><dd>X{number(startXMm)} · Y{number(startYMm)}</dd></div>
-                  <div><dt>Шаг</dt><dd>{selectedTool ? number(selectedTool.diameterMm * settings.stepoverPercent / 100) : "—"} mm</dd></div>
-                  <div><dt>Проходов Z</dt><dd>{settings.depthPerPassMm > 0 ? Math.ceil(settings.removalMm / settings.depthPerPassMm) : "—"}</dd></div>
-                  <div><dt>Шпиндель</dt><dd>{selectedTool?.spindleRpm.toLocaleString("ru-RU") ?? "—"} rpm</dd></div>
-                </dl>
-                <div className={`surfacing-status${error || validation ? " is-error" : generated ? " is-ready" : ""}`} aria-live="polite">
-                  {error ?? validation ?? (notice ? <><Check aria-hidden="true" size={14} />{notice}</> : `Перед XY станок поднимет Z до ${number(settings.safeZMm)} mm. Шпиндель запускается вручную.`)}
-                </div>
-              </section>
-            </div>
+                  {selectedTool && <ToolKnowledgePanel tool={selectedTool} />}
+                </section>
 
-            <footer>
-              <button disabled={!generated || Boolean(busy)} onClick={() => void save()} type="button"><Download aria-hidden="true" size={15} />{busy === "save" ? "Сохранение" : "Сохранить .nc"}</button>
-              <div>
-                <button className="surfacing-generate" disabled={Boolean(validation) || !selectedTool || Boolean(busy)} onClick={() => void generate()} type="button"><Sparkles aria-hidden="true" size={15} />{busy === "generate" ? "Расчёт" : generated ? "Пересчитать" : "Создать G-code"}</button>
-                <button className="primary-action" disabled={!generated || Boolean(busy)} onClick={openJob} type="button"><FolderOpen aria-hidden="true" size={15} />Открыть в задании</button>
+                <section className="surfacing-settings">
+                  <fieldset>
+                    <legend>Область и старт</legend>
+                    <div
+                      className="surfacing-axis surfacing-start-mode"
+                      role="group"
+                      aria-label="Положение первой точки"
+                    >
+                      <button
+                        aria-pressed={startMode === "workZero"}
+                        onClick={() => selectStartMode("workZero")}
+                        type="button"
+                      >
+                        Старт из X0 Y0
+                      </button>
+                      <button
+                        aria-pressed={startMode === "insideArea"}
+                        onClick={() => selectStartMode("insideArea")}
+                        type="button"
+                      >
+                        Фреза внутри границ
+                      </button>
+                    </div>
+                    <small className="surfacing-start-note">
+                      {startMode === "workZero"
+                        ? `Центр фрезы начнёт в X${number(startXMm)} Y${number(startYMm)}; половина диаметра выйдет за начальные края.`
+                        : `Центр фрезы начнёт в X${number(startXMm)} Y${number(startYMm)}; режущая часть останется внутри области.`}
+                    </small>
+                    <div className="surfacing-fields">
+                      <NumberField
+                        label="Ширина X"
+                        max={100000}
+                        min={0.1}
+                        onChange={(value) => updateNumber("widthMm", value)}
+                        step={1}
+                        suffix="mm"
+                        value={settings.widthMm}
+                      />
+                      <NumberField
+                        label="Высота Y"
+                        max={100000}
+                        min={0.1}
+                        onChange={(value) => updateNumber("heightMm", value)}
+                        step={1}
+                        suffix="mm"
+                        value={settings.heightMm}
+                      />
+                      <NumberField
+                        label="Начало X"
+                        max={100000}
+                        min={-100000}
+                        onChange={(value) => updateNumber("originXMm", value)}
+                        step={1}
+                        suffix="mm"
+                        value={settings.originXMm}
+                      />
+                      <NumberField
+                        label="Начало Y"
+                        max={100000}
+                        min={-100000}
+                        onChange={(value) => updateNumber("originYMm", value)}
+                        step={1}
+                        suffix="mm"
+                        value={settings.originYMm}
+                      />
+                    </div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>Снятие поверхности</legend>
+                    <div className="surfacing-fields">
+                      <NumberField
+                        label="Снять всего"
+                        max={100}
+                        min={0.001}
+                        onChange={(value) => updateNumber("removalMm", value)}
+                        step={0.05}
+                        suffix="mm"
+                        value={settings.removalMm}
+                      />
+                      <NumberField
+                        label="За проход"
+                        max={20}
+                        min={0.001}
+                        onChange={(value) =>
+                          updateNumber("depthPerPassMm", value)
+                        }
+                        step={0.05}
+                        suffix="mm"
+                        value={settings.depthPerPassMm}
+                      />
+                      <NumberField
+                        label="Безопасный Z"
+                        max={10000}
+                        min={-10000}
+                        onChange={(value) => updateNumber("safeZMm", value)}
+                        step={0.5}
+                        suffix="mm"
+                        value={settings.safeZMm}
+                      />
+                      <NumberField
+                        label="Перекрытие"
+                        max={95}
+                        min={1}
+                        onChange={(value) =>
+                          updateNumber("stepoverPercent", value)
+                        }
+                        step={1}
+                        suffix="% Ø"
+                        value={settings.stepoverPercent}
+                      />
+                    </div>
+                  </fieldset>
+                  <fieldset>
+                    <legend>Движение</legend>
+                    <div className="surfacing-fields">
+                      <NumberField
+                        label="Подача XY"
+                        max={100000}
+                        min={1}
+                        onChange={(value) =>
+                          updateNumber("feedMmPerMin", value)
+                        }
+                        step={50}
+                        suffix="mm/min"
+                        value={settings.feedMmPerMin}
+                      />
+                      <NumberField
+                        label="Подача Z"
+                        max={50000}
+                        min={1}
+                        onChange={(value) =>
+                          updateNumber("plungeMmPerMin", value)
+                        }
+                        step={25}
+                        suffix="mm/min"
+                        value={settings.plungeMmPerMin}
+                      />
+                    </div>
+                    <div
+                      className="surfacing-axis"
+                      role="group"
+                      aria-label="Направление проходов"
+                    >
+                      <button
+                        aria-pressed={settings.rasterAxis === "x"}
+                        onClick={() => {
+                          setSettings((current) => ({
+                            ...current,
+                            rasterAxis: "x",
+                          }));
+                          setGenerated(undefined);
+                        }}
+                        type="button"
+                      >
+                        Вдоль X
+                      </button>
+                      <button
+                        aria-pressed={settings.rasterAxis === "y"}
+                        onClick={() => {
+                          setSettings((current) => ({
+                            ...current,
+                            rasterAxis: "y",
+                          }));
+                          setGenerated(undefined);
+                        }}
+                        type="button"
+                      >
+                        Вдоль Y
+                      </button>
+                    </div>
+                  </fieldset>
+                  <dl className="surfacing-estimate">
+                    <div>
+                      <dt>Первый XY</dt>
+                      <dd>
+                        X{number(startXMm)} · Y{number(startYMm)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Шаг</dt>
+                      <dd>
+                        {selectedTool
+                          ? number(
+                              (selectedTool.diameterMm *
+                                settings.stepoverPercent) /
+                                100,
+                            )
+                          : "—"}{" "}
+                        mm
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Проходов Z</dt>
+                      <dd>
+                        {settings.depthPerPassMm > 0
+                          ? Math.ceil(
+                              settings.removalMm / settings.depthPerPassMm,
+                            )
+                          : "—"}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt>Шпиндель</dt>
+                      <dd>
+                        {selectedTool?.spindleRpm.toLocaleString("ru-RU") ??
+                          "—"}{" "}
+                        rpm
+                      </dd>
+                    </div>
+                  </dl>
+                  <div
+                    className={`surfacing-status${error || validation ? " is-error" : generated ? " is-ready" : ""}`}
+                    aria-live="polite"
+                  >
+                    {error ??
+                      validation ??
+                      (notice ? (
+                        <>
+                          <Check aria-hidden="true" size={14} />
+                          {notice}
+                        </>
+                      ) : (
+                        `Перед XY станок поднимет Z до ${number(settings.safeZMm)} mm. Шпиндель запускается вручную.`
+                      ))}
+                  </div>
+                </section>
               </div>
-            </footer>
-          </section>
-        </div>,
-        document.body,
-      )}
+
+              <footer>
+                <button
+                  disabled={!generated || Boolean(busy)}
+                  onClick={() => void save()}
+                  type="button"
+                >
+                  <Download aria-hidden="true" size={15} />
+                  {busy === "save" ? "Сохранение" : "Сохранить .nc"}
+                </button>
+                <div>
+                  <button
+                    className="surfacing-generate"
+                    disabled={
+                      Boolean(validation) || !selectedTool || Boolean(busy)
+                    }
+                    onClick={() => void generate()}
+                    type="button"
+                  >
+                    <Sparkles aria-hidden="true" size={15} />
+                    {busy === "generate"
+                      ? "Расчёт"
+                      : generated
+                        ? "Пересчитать"
+                        : "Создать G-code"}
+                  </button>
+                  <button
+                    className="primary-action"
+                    disabled={!generated || Boolean(busy)}
+                    onClick={openJob}
+                    type="button"
+                  >
+                    <FolderOpen aria-hidden="true" size={15} />
+                    Открыть в задании
+                  </button>
+                </div>
+              </footer>
+            </DialogSurface>
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
 
-function NumberField({ label, value, min, max, step, suffix, onChange }: { readonly label: string; readonly value: number; readonly min: number; readonly max: number; readonly step: number; readonly suffix: string; readonly onChange: (value: number) => void }) {
-  return <label className="surfacing-field"><span>{label}</span><div><input max={max} min={min} onChange={(event) => onChange(Number(event.target.value))} step={step} type="number" value={value} /><small>{suffix}</small></div></label>;
+function NumberField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  suffix,
+  onChange,
+}: {
+  readonly label: string;
+  readonly value: number;
+  readonly min: number;
+  readonly max: number;
+  readonly step: number;
+  readonly suffix: string;
+  readonly onChange: (value: number) => void;
+}) {
+  return (
+    <label className="surfacing-field">
+      <span>{label}</span>
+      <div>
+        <input
+          max={max}
+          min={min}
+          onChange={(event) => onChange(Number(event.target.value))}
+          step={step}
+          type="number"
+          value={value}
+        />
+        <small>{suffix}</small>
+      </div>
+    </label>
+  );
 }
 
-const validate = (diameter: number | undefined, settings: SurfacingJobSettings): string | undefined => {
+const validate = (
+  diameter: number | undefined,
+  settings: SurfacingJobSettings,
+): string | undefined => {
   if (!diameter) return "Добавьте плоскую или торцевую фрезу в библиотеку.";
-  if (Object.values(settings).some((value) => typeof value === "number" && !Number.isFinite(value))) return "Заполните все числовые поля.";
-  if (settings.widthMm < diameter || settings.heightMm < diameter) return `Область должна быть не меньше диаметра фрезы ${diameter} mm.`;
-  if (settings.edgeOverrunMm > diameter / 2) return "Выход за край не может быть больше радиуса фрезы.";
-  if (settings.depthPerPassMm > settings.removalMm) return "Съём за проход не может быть больше общего съёма.";
-  if (settings.safeZMm <= settings.surfaceZMm) return "Безопасный Z должен быть выше поверхности.";
+  if (
+    Object.values(settings).some(
+      (value) => typeof value === "number" && !Number.isFinite(value),
+    )
+  )
+    return "Заполните все числовые поля.";
+  if (settings.widthMm < diameter || settings.heightMm < diameter)
+    return `Область должна быть не меньше диаметра фрезы ${diameter} mm.`;
+  if (settings.edgeOverrunMm > diameter / 2)
+    return "Выход за край не может быть больше радиуса фрезы.";
+  if (settings.depthPerPassMm > settings.removalMm)
+    return "Съём за проход не может быть больше общего съёма.";
+  if (settings.safeZMm <= settings.surfaceZMm)
+    return "Безопасный Z должен быть выше поверхности.";
   return undefined;
 };
 
-const number = (value: number): string => Number.isFinite(value) ? Number(value.toFixed(3)).toString() : "—";
-const readableError = (reason: unknown): string => String(reason).replace(/^Error:\s*/, "");
+const number = (value: number): string =>
+  Number.isFinite(value) ? Number(value.toFixed(3)).toString() : "—";
+const readableError = (reason: unknown): string =>
+  String(reason).replace(/^Error:\s*/, "");

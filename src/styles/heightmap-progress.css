@@ -1,0 +1,251 @@
+.heightmap-progress > i b {
+  display: block;
+  height: 100%;
+  background: #6ed0aa;
+  transition: width 160ms ease;
+}
+
+.heightmap-primary-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.heightmap-primary-actions:has(> button:only-child) {
+  grid-template-columns: 1fr;
+}
+
+.heightmap-primary-actions button {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #3b4850;
+  border-radius: 4px;
+  color: #b9c4c9;
+  background: #151d22;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.heightmap-primary-actions .is-primary {
+  border-color: #4f987e;
+  color: #e0f8ef;
+  background: #205d49;
+}
+
+.heightmap-primary-actions .is-danger {
+  border-color: #8b4e52;
+  color: #ffd3d3;
+  background: #4b2528;
+}
+
+.heightmap-action-dock {
+  padding: 8px 3px 0 0;
+  border-top: 1px solid #2c373e;
+  background: #11181c;
+}
+
+.heightmap-status-message {
+  min-height: 30px;
+  margin: 8px 0 0;
+  color: #74828a;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.heightmap-status-message.is-empty {
+  visibility: hidden;
+}
+
+.heightmap-status-message.is-error {
+  padding: 7px 8px;
+  border-left: 2px solid #df686e;
+  color: #eba0a3;
+  background: #281719;
+}
+
+.heightmap-values-wrap {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: 38px minmax(0, 1fr);
+  background: #0b1013;
+}
+
+.heightmap-values-summary {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 0 12px;
+  border-bottom: 1px solid #263139;
+  color: #75848b;
+  font-size: 8px;
+}
+
+.heightmap-values-summary code {
+  color: #c6d0d5;
+}
+
+.heightmap-values-scroll {
+  overflow: auto;
+  padding: 8px;
+}
+
+.heightmap-values table {
+  border-collapse: separate;
+  border-spacing: 3px;
+}
+
+.heightmap-values-wrap table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 3px;
+}
+
+.heightmap-values-wrap th {
+  color: #6f7e85;
+  font-size: 8px;
+  font-weight: 500;
+}
+
+.heightmap-values-wrap td {
+  min-width: 58px;
+  height: 42px;
+  padding: 4px 6px;
+  border: 1px solid #2e3a41;
+  border-left-width: 3px;
+  border-radius: 3px;
+  background: #11181c;
+  text-align: right;
+}
+
+.heightmap-values-wrap td strong,
+.heightmap-values-wrap td small {
+  display: block;
+  font-family: "SFMono-Regular", Consolas, monospace;
+}
+
+.heightmap-values-wrap td strong {
+  color: #d9e1e5;
+  font-size: 9px;
+}
+
+.heightmap-values-wrap td small {
+  margin-top: 3px;
+  color: #6e7c83;
+  font-size: 7px;
+}
+
+.heightmap-values-empty {
+  display: grid;
+  place-content: center;
+  gap: 5px;
+  color: #6e7d84;
+  text-align: center;
+}
+
+.heightmap-values-empty strong {
+  color: #bac5ca;
+  font-size: 11px;
+}
+
+.heightmap-values-empty span {
+  font-size: 8px;
+}
+
+.z-probe-actions button {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid #3c4951;
+  border-radius: 4px;
+  color: #b9c4ca;
+  background: #151d22;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.z-probe-actions .is-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-color: #4f987e;
+  color: #e0f8ef;
+  background: #205d49;
+}
+
+.z-probe-actions .is-danger {
+  border-color: #8b4e52;
+  color: #ffd3d3;
+  background: #4b2528;
+}
+
+.z-probe-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@media (max-width: 620px) {
+  .z-probe-fields,
+  .z-probe-advanced > div {
+    grid-template-columns: 1fr;
+  }
+
+  .z-probe-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .z-probe-dialog.is-heightmap {
+    height: calc(100vh - 16px);
+  }
+
+  .z-probe-dialog.is-heightmap .z-probe-body {
+    overflow: auto;
+  }
+
+  .heightmap-workspace {
+    grid-template-columns: 1fr;
+    overflow: visible;
+  }
+
+  .heightmap-visual {
+    min-height: 390px;
+  }
+
+  .heightmap-settings {
+    order: -1;
+    height: min(520px, max(400px, calc(100vh - 310px)));
+    overflow: hidden;
+  }
+
+  .heightmap-settings-scroll {
+    overflow: auto;
+  }
+
+  .heightmap-action-dock {
+    padding: 8px 0;
+  }
+}
+
+@media (max-width: 620px) {
+  .probe-workflow-selector strong {
+    font-size: 9px;
+  }
+
+  .probe-workflow-selector small {
+    display: none;
+  }
+
+  .heightmap-surface-controls,
+  .heightmap-field-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+

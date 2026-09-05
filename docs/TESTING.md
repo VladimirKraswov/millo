@@ -4,7 +4,9 @@
 
 ```bash
 npm ci
-npx playwright install chromium
+npx playwright install chromium webkit
+cargo fetch --locked
+npm run test:notices
 npm run verify:product
 ```
 
@@ -12,12 +14,18 @@ npm run verify:product
 Playwright suite in `tests/workflow`. Desktop (1440x960), compact native-size
 (860x600), and narrow responsive (390x844) projects exercise preparation,
 confirmation, pause/resume/stop, completed Check, rerun, M6 and searchable help.
+WebKit adds desktop and narrow projects using the same assertions. A shared
+dialog scenario checks nested surfaces, live dismissal guards, Tab wrapping,
+initial non-command focus, Escape and focus return in React StrictMode.
+Pointer activation must also restore focus on WebKit, where a button click does
+not necessarily focus the button. Tests do not relax this assertion per engine.
 Scene tests decode canvas screenshots and require nonblank color variation,
 changed pixels after changing view, and no document horizontal overflow.
 WebGL fault injection must leave the navigation and realtime controls mounted.
 
 These tests use development gateways, not physical serial. They do not prove
-native WebView behavior or mechanical braking time. Narrow viewport tests do
+all native WebView behavior or mechanical braking time. Playwright WebKit is
+not the exact OS WebKitGTK/WKWebView build distributed by Tauri. Narrow viewport tests do
 not imply a supported mobile distribution. Existing Rust actor/PTY fixtures
 remain the protocol boundary. `vitest.config.ts` keeps Playwright specs out of
 Vitest, avoiding duplicated execution and false test discovery.
@@ -48,6 +56,17 @@ in API/gateway adapters, and production plugin code reaches host services only
 through `src/plugin-sdk`. `npm run test:dependencies` is the explicit npm
 supply-chain gate; `cargo audit` is run for release review because RustSec
 reports target-specific and maintenance warnings requiring human triage.
+The architecture gate also verifies the fingerprint and unique resolved path of
+the maintained glib patch. Linux CI executes
+`cargo test -p millo-platform-tests --release --locked` to test its string iterator
+under optimization without rebuilding the entire desktop app in release mode.
+This package is test-only and is not linked into Millo. A local macOS pass does
+not execute the Linux-only regression.
+
+`npm run notices:generate` refreshes the packaged third-party inventory and
+license texts; `npm run test:notices` fails if locked dependencies and notices
+diverge. Fetch the locked Cargo graph first, including other platform sources.
+Neither a source fingerprint nor zero npm advisories proves all dependencies safe.
 Production build runs `test:bundle`: the initial application chunk is limited to
 500 KiB and every lazy chunk to 600 KiB. Toolpath and Heightmap Three.js scenes
 must stay lazy; importing either scene eagerly breaks this budget instead of

@@ -1,3 +1,4 @@
+import { DialogSurface } from "../../components/DialogSurface";
 import { Gauge, Plus, Router, ScanLine, Settings, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -131,9 +132,11 @@ export function MachineProfiles({
             disabled={locked || busy || state.profiles.length === 0}
             onChange={(event) => void onSelect(event.target.value)}
             value={selected?.id ?? ""}
-            title={locked
-              ? "Профиль определяется подключённым контроллером. Для ручной смены сначала отключите станок."
-              : "Выбрать профиль станка"}
+            title={
+              locked
+                ? "Профиль определяется подключённым контроллером. Для ручной смены сначала отключите станок."
+                : "Выбрать профиль станка"
+            }
           >
             {!selected && <option value="">Не выбран</option>}
             {state.profiles.map((profile) => (
@@ -143,9 +146,8 @@ export function MachineProfiles({
             ))}
           </select>
         </label>
-        <small title={locked
-          ? "Профиль привязан к текущему подключению"
-          : undefined}
+        <small
+          title={locked ? "Профиль привязан к текущему подключению" : undefined}
         >
           {selected
             ? `${locked ? "Привязан · " : ""}${formatMachineTravel(selected)}`
@@ -173,11 +175,14 @@ export function MachineProfiles({
 
       {open && (
         <div className="machine-dialog-backdrop" role="presentation">
-          <section
+          <DialogSurface
+            onDismiss={() => {
+              setOpen(false);
+              onOnboardingDismiss();
+            }}
+            dismissible={!dialogBusy}
             aria-labelledby="machine-dialog-title"
-            aria-modal="true"
             className="machine-dialog"
-            role="dialog"
           >
             <header>
               <div>
@@ -201,20 +206,27 @@ export function MachineProfiles({
             </header>
 
             <div className="machine-dialog-body">
-              {!onboardingDraft && <button
-                className="detect-machine-action"
-                disabled={!canDetect || dialogBusy}
-                onClick={() => void detect()}
-                type="button"
-              >
-                <ScanLine aria-hidden="true" size={17} />
-                {dialogBusy ? "Чтение контроллера" : "Считать из выбранного GRBL"}
-              </button>}
+              {!onboardingDraft && (
+                <button
+                  className="detect-machine-action"
+                  disabled={!canDetect || dialogBusy}
+                  onClick={() => void detect()}
+                  type="button"
+                >
+                  <ScanLine aria-hidden="true" size={17} />
+                  {dialogBusy
+                    ? "Чтение контроллера"
+                    : "Считать из выбранного GRBL"}
+                </button>
+              )}
 
               {onboardingDraft && (
                 <div className="onboarding-machine-note">
                   <ScanLine aria-hidden="true" size={17} />
-                  <span>Параметры считаны из GRBL. Задайте локальное имя и фактическое оснащение.</span>
+                  <span>
+                    Параметры считаны из GRBL. Задайте локальное имя и
+                    фактическое оснащение.
+                  </span>
                 </div>
               )}
 
@@ -266,11 +278,19 @@ export function MachineProfiles({
               <label className="machine-jog-limit-field">
                 <span>
                   <strong>Максимальный jog</strong>
-                  <small>Предел одного ручного перемещения для этой машины</small>
+                  <small>
+                    Предел одного ручного перемещения для этой машины
+                  </small>
                 </span>
                 <span>
                   <input
-                    max={Math.max(draft.travelMm.x, draft.travelMm.y, draft.travelMm.z) || undefined}
+                    max={
+                      Math.max(
+                        draft.travelMm.x,
+                        draft.travelMm.y,
+                        draft.travelMm.z,
+                      ) || undefined
+                    }
                     min="0.01"
                     onChange={(event) =>
                       setDraft((current) => ({
@@ -359,7 +379,11 @@ export function MachineProfiles({
                       setDraft((current) => ({
                         ...current,
                         rotaryAxis: event.target.checked
-                          ? { travelDegrees: 360, maxJogDegrees: 30, maxFeedDegreesPerMin: 720 }
+                          ? {
+                              travelDegrees: 360,
+                              maxJogDegrees: 30,
+                              maxFeedDegreesPerMin: 720,
+                            }
                           : undefined,
                       }))
                     }
@@ -369,21 +393,28 @@ export function MachineProfiles({
                 </label>
                 {draft.rotaryAxis && (
                   <div>
-                    {([
-                      ["travelDegrees", "Ход", "°"],
-                      ["maxJogDegrees", "Jog", "°"],
-                      ["maxFeedDegreesPerMin", "Скорость", "°/min"],
-                    ] as const).map(([key, label, unit]) => (
+                    {(
+                      [
+                        ["travelDegrees", "Ход", "°"],
+                        ["maxJogDegrees", "Jog", "°"],
+                        ["maxFeedDegreesPerMin", "Скорость", "°/min"],
+                      ] as const
+                    ).map(([key, label, unit]) => (
                       <label key={key}>
                         <span>{label}</span>
                         <input
                           min="0.01"
-                          onChange={(event) => setDraft((current) => ({
-                            ...current,
-                            rotaryAxis: current.rotaryAxis
-                              ? { ...current.rotaryAxis, [key]: Number(event.target.value) }
-                              : undefined,
-                          }))}
+                          onChange={(event) =>
+                            setDraft((current) => ({
+                              ...current,
+                              rotaryAxis: current.rotaryAxis
+                                ? {
+                                    ...current.rotaryAxis,
+                                    [key]: Number(event.target.value),
+                                  }
+                                : undefined,
+                            }))
+                          }
                           step="0.01"
                           type="number"
                           value={draft.rotaryAxis?.[key] ?? ""}
@@ -399,7 +430,8 @@ export function MachineProfiles({
                 <div className="detected-machine-meta">
                   <ScanLine aria-hidden="true" size={14} />
                   <span>
-                    GRBL {draft.detectedController.firmwareVersion ?? "detected"}
+                    GRBL{" "}
+                    {draft.detectedController.firmwareVersion ?? "detected"}
                   </span>
                   <code>$130 · $131 · $132</code>
                 </div>
@@ -430,10 +462,12 @@ export function MachineProfiles({
                 onClick={() => void submit()}
                 type="button"
               >
-                {onboardingDraft ? "Добавить и привязать" : "Добавить и выбрать"}
+                {onboardingDraft
+                  ? "Добавить и привязать"
+                  : "Добавить и выбрать"}
               </button>
             </footer>
-          </section>
+          </DialogSurface>
         </div>
       )}
     </>

@@ -1,0 +1,192 @@
+:root {
+  color: #e8edf1;
+  background: #0b0f12;
+  font-family:
+    Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid #77d6b3;
+  outline-offset: 2px;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-rows: 66px minmax(0, 1fr);
+  height: 100vh;
+  min-height: 0;
+  background: #0b0f12;
+}
+
+.topbar {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(320px, 440px) auto minmax(150px, 1fr);
+  align-items: center;
+  gap: 18px;
+  padding: 0 22px;
+  border-bottom: 1px solid #263039;
+  background: #11171b;
+}
+
+.topbar-tools {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.script-manager-trigger {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 1px solid #3b4850;
+  border-radius: 4px;
+  color: #aebac1;
+  background: #171f24;
+  cursor: pointer;
+}
+
+.script-manager-trigger:hover:not(:disabled) {
+  border-color: #68ba9c;
+  color: #8de0c1;
+  background: #1b2c26;
+}
+
+.script-manager-trigger:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.workspace-tools-menu {
+  position: relative;
+  z-index: 20;
+}
+
+.workspace-tools-menu-trigger {
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid #3b4850;
+  border-radius: 4px;
+  color: #c7d0d5;
+  background: #171f24;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.workspace-tools-menu-trigger:hover,
+.workspace-tools-menu-trigger[aria-expanded="true"] {
+  border-color: #68ba9c;
+  color: #e3f7ef;
+  background: #1b2c26;
+}
+
+.workspace-tools-menu-trigger > svg:last-child {
+  color: #75838b;
+  transition: transform 120ms ease;
+}
+
+.workspace-tools-menu-trigger[aria-expanded="true"] > svg:last-child {
+  transform: rotate(180deg);
+}
+
+.workspace-tools-menu-popover {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  display: grid;
+  width: 224px;
+  gap: 4px;
+  padding: 7px;
+  border: 1px solid #3b4850;
+  border-radius: 6px;
+  background: #11181d;
+  box-shadow: 0 14px 36px #0009;
+}
+
+.workspace-tools-menu-popover[hidden] {
+  display: none;
+}
+
+.workspace-tools-menu-popover > span {
+  padding: 4px 7px 6px;
+  color: #75838b;
+  font-size: 8px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.workspace-tools-menu-popover .image-job-launcher,
+.workspace-tools-menu-popover .pcb-launcher,
+.workspace-tools-menu-popover .surfacing-launcher,
+.workspace-tools-menu-popover .script-command-launcher {
+  display: flex;
+  width: 100%;
+  height: 38px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: #c5cfd4;
+  background: transparent;
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 650;
+  text-align: left;
+}
+
+.workspace-tools-menu-popover .image-job-launcher:hover,
+.workspace-tools-menu-popover .pcb-launcher:hover,
+.workspace-tools-menu-popover .surfacing-launcher:hover,
+.workspace-tools-menu-popover .script-command-launcher:hover {
+  border-color: #36584b;
+  color: #e2f3ec;
+  background: #17251f;
+}
+
+.workspace-tools-menu-popover .image-job-launcher svg {
+  color: #72cfad;
+}
+
+.workspace-tools-menu-popover .pcb-launcher svg {
+  color: #72d9b6;
+}
+
+.workspace-tools-menu-popover .surfacing-launcher svg {
+  color: #e0ad61;
+}
+
+.workspace-tools-menu-popover .script-command-launcher svg {
+  color: #78c7df;
+}
+

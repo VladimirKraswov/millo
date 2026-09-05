@@ -1,0 +1,156 @@
+.brand,
+.connection-state,
+.brand > div,
+.connection-state > div {
+  display: flex;
+  align-items: center;
+}
+
+.brand,
+.connection-state {
+  gap: 11px;
+}
+
+.brand > div,
+.connection-state > div {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.brand strong {
+  font-size: 17px;
+  line-height: 20px;
+}
+
+.brand span,
+.connection-state small {
+  color: #85939d;
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.brand-mark {
+  position: relative;
+  width: 32px;
+  height: 32px;
+  border: 1px solid #4c5f6c;
+  border-radius: 6px;
+}
+
+.brand-mark::before,
+.brand-mark::after,
+.brand-mark i {
+  position: absolute;
+  display: block;
+  content: "";
+  background: #77d6b3;
+}
+
+.brand-mark::before {
+  left: 8px;
+  bottom: 7px;
+  width: 14px;
+  height: 2px;
+}
+
+.brand-mark::after {
+  left: 8px;
+  bottom: 7px;
+  width: 2px;
+  height: 15px;
+}
+
+.brand-mark i {
+  right: 7px;
+  top: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ffb454;
+}
+
+.connection-state {
+  min-width: 138px;
+  justify-self: end;
+}
+
+.machine-switcher {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 22px minmax(120px, 1fr) auto 30px 30px;
+  align-items: center;
+  gap: 9px;
+  height: 44px;
+  padding: 0 7px 0 11px;
+  border-right: 1px solid #2d3941;
+  border-left: 1px solid #2d3941;
+}
+
+.machine-switcher > svg {
+  color: #77d6b3;
+}
+
+.machine-switcher label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.machine-switcher label > span {
+  color: #74828b;
+  font-size: 8px;
+  line-height: 10px;
+  text-transform: uppercase;
+}
+
+.machine-switcher select {
+  width: 100%;
+  min-width: 0;
+  padding: 0 20px 0 0;
+  overflow: hidden;
+  border: 0;
+  color: #e3e9ec;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+}
+
+.machine-switcher select:disabled {
+  opacity: 0.7;
+}
+
+.machine-switcher > small {
+  color: #84929b;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.machine-switcher > button,
+.machine-dialog header > button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #3c4951;
+  border-radius: 4px;
+  color: #aab6bd;
+  background: #151d22;
+  cursor: pointer;
+}
+
+.machine-switcher > button:hover:not(:disabled),
+.machine-dialog header > button:hover:not(:disabled) {
+  border-color: #5e766d;
+  color: #8fe0c0;
+  background: #1a2723;
+}
+
+.machine-switcher > button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+

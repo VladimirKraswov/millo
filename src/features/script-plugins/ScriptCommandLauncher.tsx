@@ -1,3 +1,4 @@
+import { DialogSurface } from "../../components/DialogSurface";
 import { Check, LoaderCircle, Play, X } from "lucide-react";
 import { useMemo, useState } from "react";
 
@@ -99,18 +100,21 @@ export function ScriptCommandLauncher({
 
       {open && (
         <div className="script-dialog-backdrop" role="presentation">
-          <section
+          <DialogSurface
+            onDismiss={() => setOpen(false)}
             aria-labelledby={`script-command-${plugin.package.manifest.id}-${command.id}`}
-            aria-modal="true"
             className="script-command-dialog"
-            role="dialog"
           >
             <header>
               <div className="script-command-heading">
-                <span className="script-command-icon"><Icon aria-hidden="true" size={19} /></span>
+                <span className="script-command-icon">
+                  <Icon aria-hidden="true" size={19} />
+                </span>
                 <div>
                   <small>{plugin.package.manifest.name}</small>
-                  <h2 id={`script-command-${plugin.package.manifest.id}-${command.id}`}>
+                  <h2
+                    id={`script-command-${plugin.package.manifest.id}-${command.id}`}
+                  >
                     {command.title}
                   </h2>
                 </div>
@@ -177,7 +181,9 @@ export function ScriptCommandLauncher({
                 />
                 <span>
                   <strong>Станок готов</strong>
-                  <small>Зона свободна, инструмент и направление проверены</small>
+                  <small>
+                    Зона свободна, инструмент и направление проверены
+                  </small>
                 </span>
               </label>
             )}
@@ -190,7 +196,11 @@ export function ScriptCommandLauncher({
               <span>{localError ?? result ?? "Результат появится здесь"}</span>
             </div>
             <footer>
-              <button className="secondary-action" onClick={() => setOpen(false)} type="button">
+              <button
+                className="secondary-action"
+                onClick={() => setOpen(false)}
+                type="button"
+              >
                 Закрыть
               </button>
               <button
@@ -200,14 +210,18 @@ export function ScriptCommandLauncher({
                 type="button"
               >
                 {busy ? (
-                  <LoaderCircle aria-hidden="true" className="is-spinning" size={16} />
+                  <LoaderCircle
+                    aria-hidden="true"
+                    className="is-spinning"
+                    size={16}
+                  />
                 ) : (
                   <Play aria-hidden="true" size={16} />
                 )}
                 Выполнить
               </button>
             </footer>
-          </section>
+          </DialogSurface>
         </div>
       )}
     </>

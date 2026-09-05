@@ -1,0 +1,10 @@
+[package]
+name = "millo-platform-tests"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Platform dependency regression tests, not linked into Millo"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+glib = "=0.18.5"

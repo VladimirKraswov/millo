@@ -1,11 +1,5 @@
-import {
-  Check,
-  CircleAlert,
-  Power,
-  RefreshCw,
-  Waves,
-  X,
-} from "lucide-react";
+import { DialogSurface } from "../../components/DialogSurface";
+import { Check, CircleAlert, Power, RefreshCw, Waves, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type {
@@ -47,7 +41,9 @@ interface FirstCutAuthorizationDialogProps {
     confirmation: FirstCutConfirmation,
   ) => Promise<FirstCutPreparation>;
   readonly onAuthorized: (preparation: FirstCutPreparation) => void;
-  readonly onStart: (preparation: FirstCutPreparation) => Promise<SenderSnapshot>;
+  readonly onStart: (
+    preparation: FirstCutPreparation,
+  ) => Promise<SenderSnapshot>;
   readonly onStarted: (snapshot: SenderSnapshot) => void;
   readonly onClose: () => void;
 }
@@ -92,8 +88,10 @@ export function FirstCutAuthorizationDialog({
     confirmation,
     { report, gatewayAvailable: true, busy: operationBusy },
   );
-  const surfaceMapCanChange = surfaceMap?.usable === true && surfaceMap.coversProgram;
-  const surfaceMapSelectionChanged = intent === "cutting" &&
+  const surfaceMapCanChange =
+    surfaceMap?.usable === true && surfaceMap.coversProgram;
+  const surfaceMapSelectionChanged =
+    intent === "cutting" &&
     surfaceMap !== undefined &&
     surfaceMapSelected !== surfaceMap.enabled;
   const primaryLabel = operationBusy
@@ -127,7 +125,8 @@ export function FirstCutAuthorizationDialog({
   };
 
   const applySurfaceMapSelection = async () => {
-    if (!surfaceMap || !surfaceMapCanChange || !surfaceMapSelectionChanged) return;
+    if (!surfaceMap || !surfaceMapCanChange || !surfaceMapSelectionChanged)
+      return;
     setBusy(true);
     setError(undefined);
     try {
@@ -139,37 +138,44 @@ export function FirstCutAuthorizationDialog({
     }
   };
 
-  const setupReady = confirmation.xyzZeroVerified &&
+  const setupReady =
+    confirmation.xyzZeroVerified &&
     confirmation.safeZVerified &&
     confirmation.pathClear &&
     confirmation.powerControlReachable &&
     (intent === "airRun"
       ? confirmation.toolRemoved
       : confirmation.stockSecured && confirmation.toolSecured);
-  const setSetupReady = (ready: boolean) => setConfirmation((current) => ({
-    ...current,
-    xyzZeroVerified: ready,
-    safeZVerified: ready,
-    pathClear: ready,
-    powerControlReachable: ready,
-    stockSecured: current.intent === "cutting" && ready,
-    toolSecured: current.intent === "cutting" && ready,
-    toolRemoved: current.intent === "airRun" && ready,
-  }));
+  const setSetupReady = (ready: boolean) =>
+    setConfirmation((current) => ({
+      ...current,
+      xyzZeroVerified: ready,
+      safeZVerified: ready,
+      pathClear: ready,
+      powerControlReachable: ready,
+      stockSecured: current.intent === "cutting" && ready,
+      toolSecured: current.intent === "cutting" && ready,
+      toolRemoved: current.intent === "airRun" && ready,
+    }));
   const hasSurfaceMap = executionOptions.surfaceMapId !== undefined;
-  const suspiciousSurfaceMapSelected = intent === "cutting" &&
+  const suspiciousSurfaceMapSelected =
+    intent === "cutting" &&
     hasSurfaceMap &&
     surfaceMap?.suspiciousNeighborJump === true;
-  const canAuthorize = controls.canAuthorize &&
+  const canAuthorize =
+    controls.canAuthorize &&
     (!suspiciousSurfaceMapSelected || surfaceQualityConfirmed);
 
   return (
-    <div className="machine-dialog-backdrop first-cut-backdrop" role="presentation">
-      <section
+    <div
+      className="machine-dialog-backdrop first-cut-backdrop"
+      role="presentation"
+    >
+      <DialogSurface
+        onDismiss={onClose}
+        dismissible={!operationBusy}
         aria-labelledby="first-cut-title"
-        aria-modal="true"
         className="machine-dialog first-cut-dialog"
-        role="dialog"
       >
         <header>
           <div>
@@ -191,18 +197,25 @@ export function FirstCutAuthorizationDialog({
           <CircleAlert aria-hidden="true" size={18} />
           <div>
             <strong>Проверьте станок перед стартом</strong>
-            <span>Контроллер и G-code уже проверены. Остались только физические действия.</span>
+            <span>
+              Контроллер и G-code уже проверены. Остались только физические
+              действия.
+            </span>
           </div>
           <code>{intent === "airRun" ? "CHECK" : "RUN"}</code>
         </div>
         <div className="program-run-mode-summary">
           <span>Режим</span>
-          <strong>{intent === "airRun" ? "Проверка движения" : "Обработка"}</strong>
+          <strong>
+            {intent === "airRun" ? "Проверка движения" : "Обработка"}
+          </strong>
         </div>
         {intent === "cutting" && depthCorrection && (
           <div className="program-run-mode-summary">
             <span>Коррекция глубины</span>
-            <strong>ΔZ {formatSignedOffset(depthCorrection.adjustmentMm)} мм</strong>
+            <strong>
+              ΔZ {formatSignedOffset(depthCorrection.adjustmentMm)} мм
+            </strong>
           </div>
         )}
         {intent === "cutting" && startingToolNumber !== undefined && (
@@ -212,18 +225,23 @@ export function FirstCutAuthorizationDialog({
           </div>
         )}
         {intent === "cutting" && surfaceMap && (
-          <div className={`first-cut-surface-map ${surfaceMapStatusClass(
-            surfaceMap,
-            surfaceMapSelected,
-          )}`}>
+          <div
+            className={`first-cut-surface-map ${surfaceMapStatusClass(
+              surfaceMap,
+              surfaceMapSelected,
+            )}`}
+          >
             <Waves aria-hidden="true" size={18} />
             <span>
-              <strong>{surfaceMapStatusTitle(surfaceMap, surfaceMapSelected)}</strong>
+              <strong>
+                {surfaceMapStatusTitle(surfaceMap, surfaceMapSelected)}
+              </strong>
               <small>{surfaceMap.detail}</small>
               {!surfaceMapSelected && surfaceMapCanChange && (
                 <em>
-                  Без компенсации перепад поверхности до {surfaceMap.zRangeMm.toFixed(3)} мм
-                  может изменить фактическую глубину обработки.
+                  Без компенсации перепад поверхности до{" "}
+                  {surfaceMap.zRangeMm.toFixed(3)} мм может изменить фактическую
+                  глубину обработки.
                 </em>
               )}
               {surfaceMapSelectionChanged && (
@@ -235,7 +253,9 @@ export function FirstCutAuthorizationDialog({
                 aria-label="Компенсировать траекторию по карте высот"
                 checked={surfaceMapSelected}
                 disabled={operationBusy || !surfaceMapCanChange}
-                onChange={(event) => setSurfaceMapSelected(event.target.checked)}
+                onChange={(event) =>
+                  setSurfaceMapSelected(event.target.checked)
+                }
                 role="switch"
                 type="checkbox"
               />
@@ -256,9 +276,11 @@ export function FirstCutAuthorizationDialog({
             </span>
             <span>
               <strong>
-                Заготовка, фреза{intent === "cutting" && startingToolNumber !== undefined
+                Заготовка, фреза
+                {intent === "cutting" && startingToolNumber !== undefined
                   ? ` T${startingToolNumber}`
-                  : ""}, ноль и траектория готовы
+                  : ""}
+                , ноль и траектория готовы
               </strong>
               <small>
                 {intent === "airRun"
@@ -272,13 +294,17 @@ export function FirstCutAuthorizationDialog({
               <input
                 checked={confirmation.probeRemoved}
                 disabled={operationBusy}
-                onChange={(event) => setConfirmation((current) => ({
-                  ...current,
-                  probeRemoved: event.target.checked,
-                }))}
+                onChange={(event) =>
+                  setConfirmation((current) => ({
+                    ...current,
+                    probeRemoved: event.target.checked,
+                  }))
+                }
                 type="checkbox"
               />
-              <span aria-hidden="true" className="first-cut-checkmark"><Check size={13} /></span>
+              <span aria-hidden="true" className="first-cut-checkmark">
+                <Check size={13} />
+              </span>
               <span>
                 <strong>Щуп и провода убраны</strong>
                 <small>Цепь щупа не может попасть под инструмент или оси</small>
@@ -290,38 +316,56 @@ export function FirstCutAuthorizationDialog({
               <input
                 checked={surfaceQualityConfirmed}
                 disabled={operationBusy}
-                onChange={(event) => setSurfaceQualityConfirmed(event.target.checked)}
+                onChange={(event) =>
+                  setSurfaceQualityConfirmed(event.target.checked)
+                }
                 type="checkbox"
               />
-              <span aria-hidden="true" className="first-cut-checkmark"><Check size={13} /></span>
+              <span aria-hidden="true" className="first-cut-checkmark">
+                <Check size={13} />
+              </span>
               <span>
                 <strong>Резкий перепад карты проверен</strong>
                 <small>
-                  Между соседними точками до {surfaceMap.maximumNeighborDeltaMm.toFixed(3)} мм.
-                  Контакт щупа был надёжным, фреза и её вылет после измерения не менялись.
+                  Между соседними точками до{" "}
+                  {surfaceMap.maximumNeighborDeltaMm.toFixed(3)} мм. Контакт
+                  щупа был надёжным, фреза и её вылет после измерения не
+                  менялись.
                 </small>
               </span>
             </label>
           )}
           <label>
             <input
-              checked={intent === "airRun"
-                ? confirmation.manualSpindleOff
-                : confirmation.manualSpindleRunning}
+              checked={
+                intent === "airRun"
+                  ? confirmation.manualSpindleOff
+                  : confirmation.manualSpindleRunning
+              }
               disabled={operationBusy}
-              onChange={(event) => setConfirmation((current) => ({
-                ...current,
-                manualSpindleOff: current.intent === "airRun" && event.target.checked,
-                manualSpindleRunning: current.intent === "cutting" && event.target.checked,
-              }))}
+              onChange={(event) =>
+                setConfirmation((current) => ({
+                  ...current,
+                  manualSpindleOff:
+                    current.intent === "airRun" && event.target.checked,
+                  manualSpindleRunning:
+                    current.intent === "cutting" && event.target.checked,
+                }))
+              }
               type="checkbox"
             />
-            <span aria-hidden="true" className="first-cut-checkmark"><Check size={13} /></span>
+            <span aria-hidden="true" className="first-cut-checkmark">
+              <Check size={13} />
+            </span>
             <span>
-              <strong>{intent === "airRun" ? "Шпиндель выключен" : "Шпиндель запущен"}</strong>
-              <small>{intent === "airRun"
-                ? "Станок движется по траектории без обработки материала"
-                : "Ручной шпиндель вращается в нужном направлении"}</small>
+              <strong>
+                {intent === "airRun" ? "Шпиндель выключен" : "Шпиндель запущен"}
+              </strong>
+              <small>
+                {intent === "airRun"
+                  ? "Станок движется по траектории без обработки материала"
+                  : "Ручной шпиндель вращается в нужном направлении"}
+              </small>
             </span>
           </label>
         </div>
@@ -332,24 +376,32 @@ export function FirstCutAuthorizationDialog({
           {error ?? "Нет ошибок"}
         </p>
         <footer>
-          <button disabled={operationBusy} onClick={onClose} type="button">Отмена</button>
+          <button disabled={operationBusy} onClick={onClose} type="button">
+            Отмена
+          </button>
           <button
             className="first-cut-authorize"
-            disabled={surfaceMapSelectionChanged
-              ? operationBusy || !surfaceMapCanChange
-              : !canAuthorize}
-            onClick={() => void (surfaceMapSelectionChanged
-              ? applySurfaceMapSelection()
-              : authorizeAndStart())}
+            disabled={
+              surfaceMapSelectionChanged
+                ? operationBusy || !surfaceMapCanChange
+                : !canAuthorize
+            }
+            onClick={() =>
+              void (surfaceMapSelectionChanged
+                ? applySurfaceMapSelection()
+                : authorizeAndStart())
+            }
             type="button"
           >
-            {surfaceMapSelectionChanged
-              ? <RefreshCw aria-hidden="true" size={15} />
-              : <Power aria-hidden="true" size={15} />}
+            {surfaceMapSelectionChanged ? (
+              <RefreshCw aria-hidden="true" size={15} />
+            ) : (
+              <Power aria-hidden="true" size={15} />
+            )}
             {primaryLabel}
           </button>
         </footer>
-      </section>
+      </DialogSurface>
     </div>
   );
 }
@@ -369,7 +421,8 @@ function surfaceMapStatusTitle(
   selected: boolean,
 ): string {
   if (!surfaceMap.usable) return `Карта #${surfaceMap.mapId} устарела`;
-  if (!surfaceMap.coversProgram) return `Карта #${surfaceMap.mapId} не покрывает задание`;
+  if (!surfaceMap.coversProgram)
+    return `Карта #${surfaceMap.mapId} не покрывает задание`;
   if (selected !== surfaceMap.enabled) {
     return selected
       ? `Карта #${surfaceMap.mapId} будет включена`

@@ -1,3 +1,4 @@
+import { DialogSurface } from "../../components/DialogSurface";
 import { Check, CircleAlert, Play, Wrench, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -14,9 +15,7 @@ interface ToolChangeDialogProps {
   readonly sourceLine: number;
   readonly requestedTool?: number;
   readonly onClose: () => void;
-  readonly onComplete: (
-    confirmation: ToolChangeConfirmation,
-  ) => Promise<void>;
+  readonly onComplete: (confirmation: ToolChangeConfirmation) => Promise<void>;
 }
 
 const checklist: ReadonlyArray<{
@@ -94,12 +93,15 @@ export function ToolChangeDialog({
   };
 
   return (
-    <div className="machine-dialog-backdrop first-cut-backdrop" role="presentation">
-      <section
+    <div
+      className="machine-dialog-backdrop first-cut-backdrop"
+      role="presentation"
+    >
+      <DialogSurface
+        onDismiss={onClose}
+        dismissible={!busy}
         aria-labelledby="tool-change-title"
-        aria-modal="true"
         className="machine-dialog first-cut-dialog tool-change-dialog"
-        role="dialog"
       >
         <header>
           <div>
@@ -125,7 +127,10 @@ export function ToolChangeDialog({
           <CircleAlert aria-hidden="true" size={18} />
           <div>
             <strong>Выполнение остановлено перед M6</strong>
-            <span>Команда M6 не отправлялась в GRBL. Перед продолжением Millo проверит Idle и G54-G59.</span>
+            <span>
+              Команда M6 не отправлялась в GRBL. Перед продолжением Millo
+              проверит Idle и G54-G59.
+            </span>
           </div>
           <code>M6</code>
         </div>
@@ -133,7 +138,11 @@ export function ToolChangeDialog({
         <div className="tool-change-identity">
           <Wrench aria-hidden="true" size={16} />
           <span>Запрошен</span>
-          <strong>{requestedTool === undefined ? "инструмент из задания" : `T${requestedTool}`}</strong>
+          <strong>
+            {requestedTool === undefined
+              ? "инструмент из задания"
+              : `T${requestedTool}`}
+          </strong>
           <code>L{sourceLine}</code>
         </div>
 
@@ -154,7 +163,10 @@ export function ToolChangeDialog({
             </span>
             <span>
               <strong>Смена инструмента завершена</strong>
-              <small>Инструмент закреплён, Z-ноль и свободный путь проверены, шпиндель запущен</small>
+              <small>
+                Инструмент закреплён, Z-ноль и свободный путь проверены,
+                шпиндель запущен
+              </small>
             </span>
           </label>
         </div>
@@ -191,7 +203,7 @@ export function ToolChangeDialog({
             {busy ? "Проверка контроллера..." : "Проверить и продолжить"}
           </button>
         </footer>
-      </section>
+      </DialogSurface>
     </div>
   );
 }

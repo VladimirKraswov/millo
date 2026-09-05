@@ -1,3 +1,4 @@
+import { DialogSurface } from "../../components/DialogSurface";
 import { Crosshair, X } from "lucide-react";
 
 import type { WorkCoordinateGateway } from "../../platform/machine/WorkCoordinateGateway";
@@ -37,24 +38,35 @@ export function WorkZeroDialog({
   if (!open) return null;
 
   return (
-    <div className="machine-dialog-backdrop work-zero-backdrop" role="presentation">
-      <section
+    <div
+      className="machine-dialog-backdrop work-zero-backdrop"
+      role="presentation"
+    >
+      <DialogSurface
+        onDismiss={onClose}
+        modal={false}
         aria-labelledby="work-zero-dialog-title"
-        aria-modal="true"
         className="machine-dialog work-zero-dialog"
-        role="dialog"
       >
         <header>
           <div>
             <span>Рабочая система · {activeCoordinateSystem}</span>
             <h2 id="work-zero-dialog-title">Рабочий ноль</h2>
           </div>
-          <button aria-label="Закрыть" onClick={onClose} title="Закрыть" type="button">
+          <button
+            aria-label="Закрыть"
+            onClick={onClose}
+            title="Закрыть"
+            type="button"
+          >
             <X aria-hidden="true" size={16} />
           </button>
         </header>
         <div className="work-zero-dialog-body">
-          <div className="work-zero-current" aria-label="Текущая рабочая позиция">
+          <div
+            className="work-zero-current"
+            aria-label="Текущая рабочая позиция"
+          >
             <Crosshair aria-hidden="true" size={18} />
             <span>Сейчас</span>
             <code>X {formatAxis(position?.x)}</code>
@@ -72,7 +84,7 @@ export function WorkZeroDialog({
             useProbeForZ={useProbeForZ}
           />
         </div>
-      </section>
+      </DialogSurface>
     </div>
   );
 }

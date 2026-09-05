@@ -1,0 +1,3 @@
+vendor/glib/** linguist-vendored
+src-tauri/resources/third-party-notices.json linguist-generated
+THIRD_PARTY_NOTICES.md linguist-generated

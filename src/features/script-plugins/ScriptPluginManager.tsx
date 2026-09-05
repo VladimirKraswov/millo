@@ -1,3 +1,4 @@
+import { DialogSurface } from "../../components/DialogSurface";
 import {
   Braces,
   Check,
@@ -145,35 +146,62 @@ export function ScriptPluginManager({
 
   return (
     <div className="script-dialog-backdrop" role="presentation">
-      <section aria-labelledby="script-manager-title" aria-modal="true" className="script-manager" role="dialog">
+      <DialogSurface
+        onDismiss={onClose}
+        aria-labelledby="script-manager-title"
+        className="script-manager"
+      >
         <header>
           <div>
             <small>Расширения Millo</small>
             <h2 id="script-manager-title">Макросы и плагины</h2>
           </div>
-          <button aria-label="Закрыть" className="icon-button" onClick={onClose} type="button">
+          <button
+            aria-label="Закрыть"
+            className="icon-button"
+            onClick={onClose}
+            type="button"
+          >
             <X aria-hidden="true" size={20} />
           </button>
         </header>
 
         <div className="script-manager-toolbar">
-          <button disabled={busy} onClick={() => void createMacro()} type="button">
+          <button
+            disabled={busy}
+            onClick={() => void createMacro()}
+            type="button"
+          >
             <Plus aria-hidden="true" size={15} /> Новый макрос
           </button>
-          <button disabled={busy} onClick={() => void importPackage()} type="button">
+          <button
+            disabled={busy}
+            onClick={() => void importPackage()}
+            type="button"
+          >
             <FileUp aria-hidden="true" size={15} /> Импорт
           </button>
-          <span className={localError ? "is-error" : ""} role={localError ? "alert" : undefined}>
+          <span
+            className={localError ? "is-error" : ""}
+            role={localError ? "alert" : undefined}
+          >
             <LockKeyhole aria-hidden="true" size={14} />
             {localError ?? "Код работает в sandbox"}
           </span>
         </div>
 
         <div className="script-manager-body">
-          <nav aria-label="Установленные плагины" className="script-plugin-list">
+          <nav
+            aria-label="Установленные плагины"
+            className="script-plugin-list"
+          >
             {plugins.map((plugin) => (
               <button
-                className={plugin.package.manifest.id === selected?.package.manifest.id ? "is-active" : ""}
+                className={
+                  plugin.package.manifest.id === selected?.package.manifest.id
+                    ? "is-active"
+                    : ""
+                }
                 key={plugin.package.manifest.id}
                 onClick={() => setSelectedId(plugin.package.manifest.id)}
                 type="button"
@@ -181,7 +209,10 @@ export function ScriptPluginManager({
                 <Braces aria-hidden="true" size={17} />
                 <span>
                   <strong>{plugin.package.manifest.name}</strong>
-                  <small>{plugin.bundled ? "Системный" : "Пользовательский"} · {plugin.enabled ? "Включён" : "Выключен"}</small>
+                  <small>
+                    {plugin.bundled ? "Системный" : "Пользовательский"} ·{" "}
+                    {plugin.enabled ? "Включён" : "Выключен"}
+                  </small>
                 </span>
                 <i className={plugin.enabled ? "is-enabled" : ""} />
               </button>
@@ -200,21 +231,34 @@ export function ScriptPluginManager({
                   <button
                     aria-label="Экспортировать пакет"
                     disabled={busy}
-                    onClick={() => void perform(async () => {
-                      await gateway.exportPackage(selected.package.manifest.id, selected.digest);
-                    })}
+                    onClick={() =>
+                      void perform(async () => {
+                        await gateway.exportPackage(
+                          selected.package.manifest.id,
+                          selected.digest,
+                        );
+                      })
+                    }
                     title="Экспортировать .millo-plugin"
                     type="button"
                   >
                     <Download aria-hidden="true" size={15} />
                   </button>
                   <button
-                    className={selected.enabled ? "plugin-toggle is-enabled" : "plugin-toggle"}
+                    className={
+                      selected.enabled
+                        ? "plugin-toggle is-enabled"
+                        : "plugin-toggle"
+                    }
                     disabled={busy}
                     onClick={toggleEnabled}
                     type="button"
                   >
-                    {selected.enabled ? <Check aria-hidden="true" size={15} /> : <ShieldCheck aria-hidden="true" size={15} />}
+                    {selected.enabled ? (
+                      <Check aria-hidden="true" size={15} />
+                    ) : (
+                      <ShieldCheck aria-hidden="true" size={15} />
+                    )}
                     {selected.enabled ? "Включён" : "Проверить и включить"}
                   </button>
                 </div>
@@ -229,13 +273,23 @@ export function ScriptPluginManager({
                   {declaredCapabilities.map((capability) => (
                     <label key={capability}>
                       <input
-                        checked={selected.grantedCapabilities.includes(capability)}
-                        disabled={busy || selected.enabled || selected.package.manifest.capabilities.required.includes(capability)}
+                        checked={selected.grantedCapabilities.includes(
+                          capability,
+                        )}
+                        disabled={
+                          busy ||
+                          selected.enabled ||
+                          selected.package.manifest.capabilities.required.includes(
+                            capability,
+                          )
+                        }
                         onChange={() => toggleCapability(capability)}
                         type="checkbox"
                       />
                       <span>{capabilityLabels[capability]}</span>
-                      {selected.package.manifest.capabilities.required.includes(capability) && <small>обязательно</small>}
+                      {selected.package.manifest.capabilities.required.includes(
+                        capability,
+                      ) && <small>обязательно</small>}
                     </label>
                   ))}
                 </div>
@@ -254,11 +308,20 @@ export function ScriptPluginManager({
                 <header>
                   <div>
                     <strong>Rhai script</strong>
-                    <small>{selected.bundled ? "Системный код доступен только для чтения" : "Изменение сбросит доверие и выключит плагин"}</small>
+                    <small>
+                      {selected.bundled
+                        ? "Системный код доступен только для чтения"
+                        : "Изменение сбросит доверие и выключит плагин"}
+                    </small>
                   </div>
                   {!selected.bundled && (
-                    <button disabled={busy || source === selected.package.source} onClick={saveSource} type="button">
-                      <Save aria-hidden="true" size={14} /> {saved ? "Сохранено" : "Сохранить"}
+                    <button
+                      disabled={busy || source === selected.package.source}
+                      onClick={saveSource}
+                      type="button"
+                    >
+                      <Save aria-hidden="true" size={14} />{" "}
+                      {saved ? "Сохранено" : "Сохранить"}
                     </button>
                   )}
                 </header>
@@ -278,11 +341,13 @@ export function ScriptPluginManager({
                 <button
                   className="script-delete"
                   disabled={busy}
-                  onClick={() => void perform(async () => {
-                    await gateway.delete(selected.package.manifest.id);
-                    setSelectedId(undefined);
-                    await refresh();
-                  })}
+                  onClick={() =>
+                    void perform(async () => {
+                      await gateway.delete(selected.package.manifest.id);
+                      setSelectedId(undefined);
+                      await refresh();
+                    })
+                  }
                   type="button"
                 >
                   <Trash2 aria-hidden="true" size={14} /> Удалить плагин
@@ -293,7 +358,7 @@ export function ScriptPluginManager({
             <div className="script-plugin-empty">Плагины не установлены</div>
           )}
         </div>
-      </section>
+      </DialogSurface>
     </div>
   );
 }

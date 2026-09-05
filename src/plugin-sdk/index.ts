@@ -7,6 +7,7 @@ import {
 } from "../platform/plugins/PluginManifest";
 
 export { uiSlots } from "../platform/extensions/UiExtensionRegistry";
+export { DialogSurface } from "../components/DialogSurface";
 export {
   PLUGIN_API_VERSION,
   PLUGIN_MANIFEST_VERSION,
@@ -38,7 +39,9 @@ export function definePluginManifest(
   return validatePluginManifest(manifest);
 }
 
-export function definePlugin(plugin: InMemoryPluginModule): InMemoryPluginModule {
+export function definePlugin(
+  plugin: InMemoryPluginModule,
+): InMemoryPluginModule {
   validatePluginManifest(plugin.manifest);
   return Object.freeze(plugin);
 }

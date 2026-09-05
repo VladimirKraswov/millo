@@ -1,14 +1,34 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import ts from "typescript";
 
 const root = new URL("../", import.meta.url);
 const sourceRoot = new URL("../src", import.meta.url);
 const violations = [];
+const moduleBudgets = {
+  "crates/millo-command/src/lib.rs": 550,
+  "src-tauri/src/commands.rs": 1150,
+  "src/App.tsx": 750,
+  "src/app/useWorkstation.ts": 850,
+  "src/features/program/ProgramWorkspace.tsx": 750,
+  "src/features/program/useProgramWorkspace.ts": 950,
+  "src/styles.css": 80,
+};
+for (const [path, limit] of Object.entries(moduleBudgets)) {
+  if (readFileSync(new URL(`../${path}`, import.meta.url), "utf8").split("\n").length > limit) {
+    violations.push(`${path}: exceeds ${limit} lines; extract a responsibility before growing the coordinator`);
+  }
+}
+for (const name of readdirSync(new URL("../src/styles", import.meta.url))) {
+  if (name.endsWith(".css") && readFileSync(new URL(`../src/styles/${name}`, import.meta.url), "utf8").split("\n").length > 900) {
+    violations.push(`src/styles/${name}: feature stylesheet exceeds 900 lines`);
+  }
+}
 
 for (const path of sourceFiles(sourceRoot.pathname)) {
   const projectPath = relative(root.pathname, path);
   const source = readFileSync(path, "utf8");
-  const imports = moduleSpecifiers(source);
+  const imports = moduleSpecifiers(source, path);
 
   if (
     imports.some((specifier) => specifier.startsWith("@tauri-apps/")) &&
@@ -58,15 +78,24 @@ function sourceFiles(directory) {
   });
 }
 
-function moduleSpecifiers(source) {
+function moduleSpecifiers(source, path) {
   const matches = [];
-  for (const pattern of [
-    /\bfrom\s*["']([^"']+)["']/g,
-    /\bimport\s*["']([^"']+)["']/g,
-    /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
-  ]) {
-    for (const match of source.matchAll(pattern)) matches.push(match[1]);
+  const tree = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
+  function visit(node) {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+        node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      matches.push(node.moduleSpecifier.text);
+    }
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        node.arguments[0] && ts.isStringLiteralLike(node.arguments[0])) {
+      matches.push(node.arguments[0].text);
+    }
+    if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
+      matches.push(node.argument.literal.text);
+    }
+    ts.forEachChild(node, visit);
   }
+  visit(tree);
   return matches;
 }
 

@@ -126,6 +126,10 @@ tests, configuration, and direct/transitive dependency reports.
 
 ## Residual boundaries
 
+The monolith, dialog, WebKit, notices and glib items below are a historical
+snapshot. See [TECHNICAL_DEBT.md](TECHNICAL_DEBT.md) for the subsequent refactor
+and the current separation between resolved work and upstream constraints.
+
 - `styles.css` is still a large ordered cascade shared by mature operator
   screens. Splitting it mechanically during a behavior refactor could change
   precedence without a useful product change. Extract it feature by feature
