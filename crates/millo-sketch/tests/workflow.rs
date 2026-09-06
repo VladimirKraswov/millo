@@ -25,6 +25,8 @@ fn shape(id: &str, kind: SketchOperationKind) -> SketchShape {
         x_mm: 30.0,
         y_mm: 30.0,
         rotation_degrees: 0.0,
+        constraints: SketchConstraints::default(),
+        locked: false,
         geometry: SketchGeometry::Rectangle {
             width: 20.0,
             height: 20.0,

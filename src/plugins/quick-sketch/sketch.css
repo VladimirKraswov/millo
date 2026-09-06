@@ -130,8 +130,7 @@
 .sketch-dialog .sketch-file-input {
   display: none;
 }
-.sketch-snap,
-.sketch-template-tools {
+.sketch-snap {
   display: flex;
   gap: 8px;
   align-items: center;
@@ -140,10 +139,6 @@
   margin-left: 6px;
   color: #adc0c4;
 }
-.sketch-template-tools {
-  margin-left: auto;
-}
-.sketch-template,
 .sketch-new-confirm {
   display: flex;
   gap: 14px;
@@ -153,10 +148,6 @@
   background: #162923;
   flex-shrink: 0;
   flex-wrap: wrap;
-}
-.sketch-template .sketch-number {
-  flex: 1;
-  min-width: 120px;
 }
 .sketch-new-confirm {
   align-items: center;
@@ -199,7 +190,152 @@
   cursor: grab;
 }
 .sketch-canvas.is-select .sketch-figure {
+  cursor: pointer;
+}
+.sketch-canvas.is-select.can-drag .sketch-figure:not(.is-locked) {
   cursor: move;
+}
+.sketch-dialog .sketch-new-button {
+  margin-left: auto;
+}
+.sketch-dialog details.sketch-stock {
+  padding: 14px 16px;
+  margin: 0;
+  border-top: 0;
+}
+.sketch-stock > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.sketch-stock > summary span {
+  font-weight: 400;
+  color: #92acb5;
+  font-size: 11px;
+}
+.sketch-stock-fields {
+  padding-top: 14px;
+}
+.sketch-dialog input:disabled {
+  opacity: 0.65;
+}
+.sketch-inspector-tabs {
+  display: flex;
+  margin: 16px 0;
+  gap: 4px;
+}
+.sketch-inspector-tabs button {
+  flex: 1;
+  font-size: 12px;
+}
+.sketch-inspector-tabs [aria-selected="true"] {
+  border-color: #76d4b2;
+  background: #203b34;
+  color: #b9ebdc;
+}
+.sketch-position {
+  margin-top: 16px;
+  border-top: 1px solid #34474e;
+  padding-top: 12px;
+}
+.sketch-position header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.sketch-position h3 {
+  margin: 0;
+}
+.sketch-position header button {
+  width: 34px;
+  height: 34px;
+  padding: 5px;
+}
+.sketch-links summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sketch-axis-link {
+  margin: 14px 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.sketch-axis-link legend {
+  padding: 0;
+  font-size: 12px;
+  font-weight: 650;
+  color: #87c8da;
+}
+.sketch-axis-link .sketch-select {
+  margin-top: 10px;
+}
+.sketch-link-distance {
+  display: flex;
+  gap: 6px;
+  align-items: end;
+  margin-top: 10px;
+}
+.sketch-link-distance > label {
+  flex: 1;
+  min-width: 0;
+}
+.sketch-link-direction {
+  display: flex;
+}
+.sketch-link-distance button {
+  width: 31px;
+  height: 34px;
+  padding: 4px;
+}
+.sketch-alignment {
+  padding: 16px;
+  border-top: 1px solid #34474e;
+}
+.sketch-alignment > .sketch-number {
+  margin-top: 18px;
+}
+.sketch-alignment .sketch-fields {
+  margin-top: 12px;
+}
+.sketch-alignment button {
+  font-size: 11px;
+  min-width: 0;
+  white-space: normal;
+}
+.sketch-dimensions {
+  pointer-events: none;
+}
+.sketch-dimension path {
+  fill: none;
+  stroke: #a5b5bc;
+  stroke-width: 0.8px;
+}
+.sketch-dimension text {
+  fill: #e6ecee;
+  stroke: #10181c;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  paint-order: stroke;
+  vector-effect: non-scaling-stroke;
+}
+.sketch-dimension.is-linked path {
+  stroke: #79c9df;
+}
+.sketch-dimension.is-linked text {
+  fill: #9de2f3;
+}
+.sketch-operations button > span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
 }
 .sketch-figure > polygon {
   stroke: #75d5b4;
@@ -512,7 +648,9 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
-.sketch-feedback:has(details[open]) { height: 130px; }
+.sketch-feedback:has(details[open]) {
+  height: 130px;
+}
 .sketch-feedback.is-error {
   color: #ffaaa5;
   background: #341e21;
@@ -544,9 +682,6 @@
   font-size: 11px;
 }
 @media (max-width: 1050px) {
-  .sketch-template-tools {
-    margin-left: 0;
-  }
   .sketch-body {
     grid-template-columns: minmax(0, 1fr) 300px;
   }
@@ -580,9 +715,6 @@
   }
   .sketch-toolbar button {
     min-height: 32px;
-  }
-  .sketch-template-tools {
-    gap: 5px;
   }
   .sketch-body {
     display: block;
@@ -619,9 +751,7 @@
     font-size: 11px;
     max-height: 90px;
   }
-  .sketch-feedback:has(details[open]) { height: 90px; }
-  .sketch-template {
-    max-height: 220px;
-    overflow: auto;
+  .sketch-feedback:has(details[open]) {
+    height: 90px;
   }
 }

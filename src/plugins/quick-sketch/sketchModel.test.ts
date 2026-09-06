@@ -2,8 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   createShape,
   emptySketch,
-  fanShapes,
-  grilleShapes,
   shapePoints,
   snap,
   validateSketch,
@@ -12,24 +10,19 @@ import { decodeSketch } from "./sketchStorage";
 import { sketchHistory } from "./sketchHistory";
 
 describe("sketch document", () => {
-  it("creates editable fan mounting holes and a tabbed outline", () => {
-    const shapes = fanShapes(
-      { opening: 70, pitch: 71.5, hole: 4.2, plate: 100 },
-      { x: 100, y: 70 },
+  it("creates generic editable primitives without injecting a template", () => {
+    expect(emptySketch().shapes).toEqual([]);
+    const hole = createShape({ kind: "circle", diameter: 4 }, 20, 20);
+    const plate = createShape(
+      { kind: "rectangle", width: 40, height: 30, radius: 0 },
+      50,
+      50,
     );
-    expect(shapes).toHaveLength(6);
-    expect(new Set(shapes.map((s) => s.id)).size).toBe(6);
-    expect(shapes[0].xMm).toBe(64.25);
-    expect(shapes[0].operation.kind).toBe("pocket");
-    expect(shapes[4].operation).toMatchObject({
-      kind: "inside",
-      tabs: { count: 4 },
-    });
-    expect(shapes[5].operation).toMatchObject({
+    expect(hole.operation.kind).toBe("pocket");
+    expect(plate.operation).toMatchObject({
       kind: "outside",
       tabs: { count: 4 },
     });
-    expect(grilleShapes({ x: 100, y: 70 })).toHaveLength(5);
   });
   it("transforms exact dimensions about the shape centre", () => {
     const shape = createShape(
@@ -46,10 +39,7 @@ describe("sketch document", () => {
   it("project save/load preserves all operations, tools and stock without generating code", () => {
     const doc = {
       ...emptySketch(),
-      shapes: fanShapes(
-        { opening: 70, pitch: 71.5, hole: 4.2, plate: 100 },
-        { x: 100, y: 70 },
-      ),
+      shapes: [createShape({ kind: "circle", diameter: 4 }, 20, 20)],
     };
     expect(decodeSketch(JSON.stringify({ version: 1, document: doc }))).toEqual(
       doc,
@@ -60,7 +50,7 @@ describe("sketch document", () => {
     const doc = emptySketch();
     for (const text of [
       "{",
-      JSON.stringify({ version: 2, document: doc }),
+      JSON.stringify({ version: 99, document: doc }),
       JSON.stringify({
         version: 1,
         document: { ...doc, stock: { ...doc.stock, widthMm: -1 } },

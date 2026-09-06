@@ -2,6 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { panelProject } from "./sketchFixtures";
 
 const fixture = resolve("target/debug/examples/fixture");
 async function mount(page: Page) {
@@ -39,21 +40,43 @@ async function mount(page: Page) {
   ).toBeVisible();
 }
 async function number(page: Page, name: string, value: string) {
-  const input = page.getByRole("spinbutton", { name, exact: true });
+  const input = page.getByRole("spinbutton", {
+    name,
+    exact: true,
+    includeHidden: true,
+  });
+  if (!(await input.isVisible())) {
+    const ancestors = input.locator("xpath=ancestor::details");
+    for (let i = 0; i < (await ancestors.count()); i++) {
+      const details = ancestors.nth(i);
+      if ((await details.getAttribute("open")) === null)
+        await details.locator(":scope > summary").click();
+    }
+  }
   await input.fill(value);
   await input.press("Tab");
 }
 
-test("fan project: native CAM, multiple tools, project roundtrip, stale code and publication", async ({
+test("sheet project: native CAM, multiple tools, project roundtrip, stale code and publication", async ({
   page,
 }, testInfo) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await mount(page);
-  await page.getByRole("button", { name: "Вентилятор", exact: true }).click();
-  await page.getByRole("button", { name: "Добавить в чертёж" }).click();
+  await expect(
+    page.getByRole("button", { name: "Вентилятор", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Решётка", exact: true }),
+  ).toHaveCount(0);
+  await page.getByLabel("Файл проекта Millo").setInputFiles({
+    name: "panel.millo-sketch.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(panelProject())),
+  });
   await expect(page.locator(".sketch-operations button")).toHaveCount(6);
   await page.getByRole("button", { name: /^Панель Деталь/ }).click();
+  await page.getByRole("tab", { name: "Обработка", exact: true }).click();
   const select = page.getByLabel("Фреза для фигуры");
   const other = await select.locator("option").allTextContents();
   const label = other.find((text) => text.startsWith("Ø6.35"));
@@ -76,7 +99,7 @@ test("fan project: native CAM, multiple tools, project roundtrip, stale code and
   const saved = await download;
   const path = await saved.path();
   const project = JSON.parse(readFileSync(path!, "utf8"));
-  expect(project.version).toBe(1);
+  expect(project.version).toBe(2);
   expect(project.document.shapes).toHaveLength(6);
   await number(page, "Толщина листа", "2.5");
   await expect(
@@ -97,7 +120,7 @@ test("fan project: native CAM, multiple tools, project roundtrip, stale code and
     page.getByRole("button", { name: "Открыть в задании", exact: true }),
   ).toBeEnabled();
   await page.screenshot({
-    path: testInfo.outputPath("fan-sketch.png"),
+    path: testInfo.outputPath("sheet-sketch.png"),
     fullPage: true,
   });
   const overflow = await page
@@ -181,4 +204,111 @@ test("sketch gestures, undo, numeric edits, persistence and invalid project rema
   await expect(
     page.getByRole("dialog", { name: "Чертёж и раскрой" }),
   ).toBeVisible();
+});
+
+test("dimensions, edge clearance, alignment and drag protection survive project save/load", async ({
+  page,
+}, testInfo) => {
+  const errors: string[] = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await mount(page);
+  await page
+    .getByLabel("Файл проекта Millo")
+    .setInputFiles(
+      resolve("fixtures/sketch/constrained-holes.millo-sketch.json"),
+    );
+  const y = page.getByRole("spinbutton", { name: "Центр Y", exact: true });
+  await expect(
+    page.getByRole("spinbutton", { name: "Центр X", exact: true }),
+  ).toHaveValue("12");
+  const drag = async () => {
+    const shape = page.locator('[data-shape-id="a"]');
+    await shape.scrollIntoViewIfNeeded();
+    const b = await shape.boundingBox();
+    await page.mouse.move(b!.x + b!.width / 2, b!.y + b!.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b!.x + 35, b!.y + 30, { steps: 6 });
+    await page.mouse.up();
+  };
+  await drag();
+  await expect(y).toHaveValue("20");
+  await page
+    .getByRole("button", { name: "Блокировка положения", exact: true })
+    .click();
+  await page
+    .getByRole("button", {
+      name: "Разрешить перетаскивание фигур",
+      exact: true,
+    })
+    .click();
+  await drag();
+  await expect(y).toHaveValue("20");
+  await page
+    .getByRole("button", { name: "Блокировка положения", exact: true })
+    .click();
+  await number(page, "Диаметр отверстия", "6");
+  await expect(
+    page.getByRole("spinbutton", { name: "Центр X", exact: true }),
+  ).toHaveValue("13");
+  await page.getByRole("button", { name: /^Отверстие B Карман/ }).click();
+  await expect(
+    page.getByRole("spinbutton", { name: "Центр X", exact: true }),
+  ).toHaveValue("43");
+  await number(page, "Расстояние X", "25");
+  await expect(
+    page.getByRole("spinbutton", { name: "Центр X", exact: true }),
+  ).toHaveValue("38");
+  await expect(page.locator('[data-dimension="X 25 мм"]')).toHaveCount(1);
+  await page.getByRole("button", { name: "Ниже опоры", exact: true }).click();
+  await number(page, "Расстояние Y", "5");
+  await expect(y).toHaveValue("15");
+  await page.getByRole("button", { name: "Выше опоры", exact: true }).click();
+  await expect(y).toHaveValue("25");
+  await page
+    .getByRole("button", { name: "Выбирать несколько фигур", exact: true })
+    .click();
+  await page.getByRole("button", { name: /^Отверстие A Карман/ }).click();
+  await page
+    .getByRole("button", { name: "По горизонтали", exact: true })
+    .click();
+  await number(page, "Шаг между центрами", "40");
+  await page
+    .getByRole("button", { name: "Разместить по X", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Выбирать несколько фигур", exact: true })
+    .click();
+  await page.getByRole("button", { name: /^Отверстие A Карман/ }).click();
+  await number(page, "Центр Y", "30");
+  await page.getByRole("button", { name: /^Отверстие B Карман/ }).click();
+  await expect(
+    page.getByRole("spinbutton", { name: "Центр X", exact: true }),
+  ).toHaveValue("53");
+  await expect(y).toHaveValue("30");
+  await page.screenshot({
+    path: testInfo.outputPath("dimensioned-sketch.png"),
+    fullPage: true,
+  });
+  const download = page.waitForEvent("download");
+  await page
+    .getByRole("button", { name: "Сохранить проект", exact: true })
+    .click();
+  const saved = await download;
+  const data = JSON.parse(readFileSync((await saved.path())!, "utf8"));
+  expect(data.document.shapes[1].constraints.x).toMatchObject({
+    referenceId: "a",
+    offsetMm: 40,
+  });
+  await page.getByLabel("Файл проекта Millo").setInputFiles({
+    name: "roundtrip.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(data)),
+  });
+  await page
+    .getByRole("button", { name: "Создать G-code", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Открыть в задании", exact: true }),
+  ).toBeEnabled();
+  expect(errors).toEqual([]);
 });

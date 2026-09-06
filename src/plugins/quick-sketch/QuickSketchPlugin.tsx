@@ -9,7 +9,6 @@ import { createPortal } from "react-dom";
 import {
   Circle,
   Download,
-  Fan,
   FilePlus2,
   Focus,
   FolderOpen,
@@ -19,6 +18,10 @@ import {
   Pentagon,
   Redo2,
   Ruler,
+  Move,
+  LockKeyhole,
+  Link2,
+  ListChecks,
   Save,
   Square,
   Undo2,
@@ -38,17 +41,22 @@ import type {
 } from "../../shared/sketch";
 import { usePluginToolLibrary } from "../usePluginToolLibrary";
 import { SketchCanvas } from "./SketchCanvas";
-import { SketchInspector, SketchNumber } from "./SketchInspector";
+import { SketchInspector } from "./SketchInspector";
+import { SketchStockPanel } from "./SketchStockPanel";
+import { SketchAlignmentPanel } from "./SketchAlignmentPanel";
+import {
+  arrangeShapes,
+  moveSketchShape,
+  removeSketchShapes,
+  resolveSketch,
+} from "./sketchConstraints";
 import {
   createShape,
   emptySketch,
-  fanShapes,
-  grilleShapes,
   operationLabels,
   preferredTool,
   validateSketch,
   type DrawMode,
-  type FanTemplate,
 } from "./sketchModel";
 import { sketchHistory } from "./sketchHistory";
 import { decodeSketch, loadDraft, saveDraft } from "./sketchStorage";
@@ -67,19 +75,27 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
     future: [],
   }));
   const doc = history.present;
-  const [selectedId, setSelectedId] = useState<string>();
+  const [selection, setSelection] = useState<readonly string[]>([]);
+  const [multiSelect, setMultiSelect] = useState(false);
+  const selectedId = selection[selection.length - 1];
+  const selectedShapes = doc.shapes.filter((s) => selection.includes(s.id));
+  const select = (id?: string, additive = false) =>
+    setSelection((current) =>
+      !id
+        ? []
+        : additive || multiSelect
+          ? current.includes(id)
+            ? current.filter((value) => value !== id)
+            : [...current, id]
+          : [id],
+    );
   const [mode, setMode] = useState<DrawMode>("select");
+  const [dragEnabled, setDragEnabled] = useState(false);
+  const [showDimensions, setShowDimensions] = useState(true);
   const [drawing, setDrawing] = useState(false);
   const [cancelDrawing, setCancelDrawing] = useState(0);
   const [grid, setGrid] = useState(1),
     [resetView, setResetView] = useState(0);
-  const [template, setTemplate] = useState(false);
-  const [fan, setFan] = useState<FanTemplate>({
-    opening: 70,
-    pitch: 71.5,
-    hole: 4.2,
-    plate: 100,
-  });
   const [newConfirm, setNewConfirm] = useState(false);
   const [generated, setGenerated] = useState<{
     job: GeneratedSketchJob;
@@ -114,9 +130,13 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
   const selected = doc.shapes.find((s) => s.id === selectedId);
   const validation = validateSketch(doc, library.tools);
   const edit = (document: SketchJobRequest) => {
-    dispatch({ type: "edit", document });
-    setNotice(undefined);
-    setError(undefined);
+    try {
+      dispatch({ type: "edit", document: resolveSketch(document) });
+      setNotice(undefined);
+      setError(undefined);
+    } catch (reason) {
+      setError(String(reason).replace(/^Error:\s*/, ""));
+    }
   };
   const updateShape = (shape: SketchShape) =>
     edit({
@@ -129,7 +149,8 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
       return;
     }
     edit({ ...doc, shapes: [...doc.shapes, ...shapes] });
-    setSelectedId(shapes[0]?.id);
+    setSelection(shapes[0] ? [shapes[0].id] : []);
+    setMultiSelect(false);
     setMode("select");
   };
   const create = (geometry: SketchGeometry, point: SketchPoint) =>
@@ -143,9 +164,9 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
       ),
     ]);
   const remove = () => {
-    if (selected) {
-      edit({ ...doc, shapes: doc.shapes.filter((s) => s.id !== selected.id) });
-      setSelectedId(undefined);
+    if (selection.length) {
+      edit(removeSketchShapes(doc, selection));
+      setSelection([]);
     }
   };
   const copies = (count: number, dx: number, dy: number) => {
@@ -157,6 +178,21 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
         name: `${selected.name} · ${i + 2}`,
         xMm: selected.xMm + dx * (i + 1),
         yMm: selected.yMm + dy * (i + 1),
+        locked: false,
+        constraints: {
+          x: {
+            referenceId: selected.id,
+            referenceAnchor: "center",
+            ownAnchor: "center",
+            offsetMm: dx * (i + 1),
+          },
+          y: {
+            referenceId: selected.id,
+            referenceAnchor: "center",
+            ownAnchor: "center",
+            offsetMm: dy * (i + 1),
+          },
+        },
       })),
     );
   };
@@ -232,7 +268,8 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
           "Чертёж изменился во время загрузки. Откройте файл ещё раз",
         );
       edit(document);
-      setSelectedId(document.shapes[0]?.id);
+      setSelection(document.shapes[0] ? [document.shapes[0].id] : []);
+      setMultiSelect(false);
       setMode("select");
       setResetView((v) => v + 1);
       setNotice(`Проект открыт: ${file.name}`);
@@ -256,7 +293,6 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
       remove();
     }
   };
-  const center = { x: doc.stock.widthMm / 2, y: doc.stock.heightMm / 2 };
   const launch = () => {
     if (!job || busy) return;
     try {
@@ -294,7 +330,8 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                 </div>
                 <input
                   className="sketch-name"
-                  aria-label="Название чертежа"
+                  aria-label="Название проекта"
+                  title="Название проекта"
                   value={doc.sourceName}
                   maxLength={100}
                   onChange={(e) => edit({ ...doc, sourceName: e.target.value })}
@@ -345,7 +382,7 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                 <span className="sketch-toolbar-divider" />
                 {(
                   [
-                    ["select", "Выделение и перемещение", MousePointer2],
+                    ["select", "Выделение", MousePointer2],
                     ["pan", "Перемещение вида", Hand],
                     ["rectangle", "Прямоугольник: два угла", Square],
                     ["circle", "Круг: центр и радиус", Circle],
@@ -363,6 +400,33 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                     <Icon size={19} />
                   </button>
                 ))}
+                <button
+                  type="button"
+                  title="Выбирать несколько фигур"
+                  aria-label="Выбирать несколько фигур"
+                  aria-pressed={multiSelect}
+                  onClick={() => setMultiSelect((v) => !v)}
+                >
+                  <ListChecks size={19} />
+                </button>
+                <button
+                  type="button"
+                  title="Разрешить перетаскивание фигур"
+                  aria-label="Разрешить перетаскивание фигур"
+                  aria-pressed={dragEnabled}
+                  onClick={() => setDragEnabled((v) => !v)}
+                >
+                  <Move size={19} />
+                </button>
+                <button
+                  type="button"
+                  title="Показать размеры"
+                  aria-label="Показать размеры"
+                  aria-pressed={showDimensions}
+                  onClick={() => setShowDimensions((v) => !v)}
+                >
+                  <Ruler size={19} />
+                </button>
                 <span className="sketch-toolbar-divider" />
                 <button
                   type="button"
@@ -405,75 +469,20 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                     ))}
                   </select>
                 </label>
-                <div className="sketch-template-tools">
-                  <button
-                    type="button"
-                    onClick={() => setTemplate((v) => !v)}
-                    aria-expanded={template}
-                  >
-                    <Fan size={16} />
-                    Вентилятор
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      add(grilleShapes(center, preferredTool(library.tools)))
-                    }
-                  >
-                    <Grid2X2 size={16} />
-                    Решётка
-                  </button>
-                  <button
-                    type="button"
-                    title="Новый чертёж"
-                    aria-label="Новый чертёж"
-                    onClick={() =>
-                      doc.shapes.length
-                        ? setNewConfirm(true)
-                        : edit(emptySketch())
-                    }
-                  >
-                    <FilePlus2 size={19} />
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className="sketch-new-button"
+                  title="Новый проект"
+                  aria-label="Новый проект"
+                  onClick={() =>
+                    doc.shapes.length
+                      ? setNewConfirm(true)
+                      : edit(emptySketch())
+                  }
+                >
+                  <FilePlus2 size={19} />
+                </button>
               </div>
-              {template && (
-                <div className="sketch-template">
-                  <SketchNumber
-                    label="Диаметр воздуховода"
-                    value={fan.opening}
-                    min={5}
-                    onChange={(opening) => setFan({ ...fan, opening })}
-                  />
-                  <SketchNumber
-                    label="Межосевое креплений"
-                    value={fan.pitch}
-                    min={5}
-                    onChange={(pitch) => setFan({ ...fan, pitch })}
-                  />
-                  <SketchNumber
-                    label="Диаметр креплений"
-                    value={fan.hole}
-                    min={1}
-                    onChange={(hole) => setFan({ ...fan, hole })}
-                  />
-                  <SketchNumber
-                    label="Размер панели"
-                    value={fan.plate}
-                    min={10}
-                    onChange={(plate) => setFan({ ...fan, plate })}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      add(fanShapes(fan, center, preferredTool(library.tools)));
-                      setTemplate(false);
-                    }}
-                  >
-                    Добавить в чертёж
-                  </button>
-                </div>
-              )}
               {newConfirm && (
                 <div className="sketch-new-confirm" role="alert">
                   <span>
@@ -483,7 +492,7 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                     type="button"
                     onClick={() => {
                       edit(emptySketch());
-                      setSelectedId(undefined);
+                      setSelection([]);
                       setNewConfirm(false);
                     }}
                   >
@@ -498,18 +507,20 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                 <div className="sketch-workarea">
                   <SketchCanvas
                     document={doc}
-                    selectedId={selectedId}
+                    selection={selection}
+                    dragEnabled={dragEnabled && !multiSelect}
+                    showDimensions={showDimensions}
                     mode={mode}
                     grid={grid}
                     resetView={resetView}
                     cancelDrawing={cancelDrawing}
                     onDrawingChange={setDrawing}
                     generated={job}
-                    onSelect={setSelectedId}
+                    onSelect={select}
                     onCreate={create}
                     onMove={(id, p) => {
                       const s = doc.shapes.find((s) => s.id === id);
-                      if (s) updateShape({ ...s, xMm: p.x, yMm: p.y });
+                      if (s) updateShape(moveSketchShape(s, p));
                     }}
                   />
                   <div
@@ -521,10 +532,18 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                         key={s.id}
                         type="button"
                         className={`is-${s.operation.kind}`}
-                        aria-pressed={s.id === selectedId}
-                        onClick={() => setSelectedId(s.id)}
+                        aria-pressed={selection.includes(s.id)}
+                        onClick={(e) =>
+                          select(s.id, e.shiftKey || e.metaKey || e.ctrlKey)
+                        }
                       >
-                        <span>{s.name}</span>
+                        <span>
+                          {s.locked && <LockKeyhole size={12} />}{" "}
+                          {(s.constraints?.x || s.constraints?.y) && (
+                            <Link2 size={12} />
+                          )}{" "}
+                          {s.name}
+                        </span>
                         <small>
                           {operationLabels[s.operation.kind]} ·{" "}
                           {s.operation.through
@@ -536,104 +555,47 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                   </div>
                 </div>
                 <aside className="sketch-sidebar">
-                  <section className="sketch-stock">
-                    <h3>Заготовка</h3>
-                    <div className="sketch-fields">
-                      <SketchNumber
-                        label="Ширина листа"
-                        min={1}
-                        value={doc.stock.widthMm}
-                        onChange={(widthMm) =>
-                          edit({ ...doc, stock: { ...doc.stock, widthMm } })
+                  <SketchStockPanel document={doc} onChange={edit} />
+                  {selectedShapes.length > 1 ? (
+                    <SketchAlignmentPanel
+                      shapes={selectedShapes}
+                      onAlign={(ref, axis, step) => {
+                        try {
+                          edit(arrangeShapes(doc, selection, ref, axis, step));
+                        } catch (reason) {
+                          setError(String(reason).replace(/^Error:\s*/, ""));
                         }
-                      />
-                      <SketchNumber
-                        label="Высота листа"
-                        min={1}
-                        value={doc.stock.heightMm}
-                        onChange={(heightMm) =>
-                          edit({ ...doc, stock: { ...doc.stock, heightMm } })
-                        }
-                      />
-                      <SketchNumber
-                        label="Толщина листа"
-                        min={0.05}
-                        max={100}
-                        value={doc.stock.thicknessMm}
-                        onChange={(thicknessMm) =>
-                          edit({ ...doc, stock: { ...doc.stock, thicknessMm } })
-                        }
-                      />
-                      <SketchNumber
-                        label="Безопасный Z"
-                        min={0.5}
-                        max={100}
-                        value={doc.stock.safeZMm}
-                        onChange={(safeZMm) =>
-                          edit({ ...doc, stock: { ...doc.stock, safeZMm } })
-                        }
-                      />
-                    </div>
-                    <span className="sketch-datum">Z0 · верх материала</span>
-                    <details>
-                      <summary>Подложка и управление шпинделем</summary>
-                      <SketchNumber
-                        label="Выход в подложку"
-                        value={doc.stock.breakthroughMm}
-                        max={1}
-                        onChange={(breakthroughMm) =>
-                          edit({
-                            ...doc,
-                            stock: { ...doc.stock, breakthroughMm },
-                          })
-                        }
-                      />
-                      <label className="sketch-select">
-                        <span>Шпиндель</span>
-                        <select
-                          aria-label="Управление шпинделем"
-                          value={doc.stock.spindleMode}
-                          onChange={(e) =>
-                            edit({
-                              ...doc,
-                              stock: {
-                                ...doc.stock,
-                                spindleMode: e.target.value as
-                                  | "manual"
-                                  | "controller",
-                              },
-                            })
-                          }
-                        >
-                          <option value="manual">Включаю вручную</option>
-                          <option value="controller">
-                            Управляется контроллером · M3/M5
-                          </option>
-                        </select>
-                      </label>
-                    </details>
-                  </section>
-                  <SketchInspector
-                    shape={selected}
-                    stock={doc.stock}
-                    tools={library.tools}
-                    onChange={updateShape}
-                    onDelete={remove}
-                    onDuplicate={() => copies(1, 10, 10)}
-                    onArray={copies}
-                  />
+                      }}
+                    />
+                  ) : (
+                    <SketchInspector
+                      shape={selected}
+                      document={doc}
+                      tools={library.tools}
+                      onChange={updateShape}
+                      onDelete={remove}
+                      onDuplicate={() => copies(1, 10, 10)}
+                      onArray={copies}
+                    />
+                  )}
                 </aside>
               </div>
               <div
                 className={`sketch-feedback${error ? " is-error" : ""}`}
                 aria-live="polite"
               >
-                {error ??
-                  notice ??
-                  (job
-                    ? `${job.summary.operations.length} операций · смен инструмента: ${job.summary.toolChangeCount} · траектория рассчитана`
-                    : (validation ??
-                      "Параметры реза из библиотеки инструмента. Проверьте режим для своего материала."))}
+                {busy === "project"
+                  ? "Сохранение проекта…"
+                  : busy === "save"
+                    ? "Сохранение G-code…"
+                    : busy === "generate"
+                      ? "Расчёт траектории…"
+                      : (error ??
+                        notice ??
+                        (job
+                          ? `${job.summary.operations.length} операций · смен инструмента: ${job.summary.toolChangeCount} · траектория рассчитана`
+                          : (validation ??
+                            "Параметры реза из библиотеки инструмента. Проверьте режим для своего материала.")))}
                 {job && (
                   <details>
                     <summary>

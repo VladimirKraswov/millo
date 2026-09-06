@@ -15,4 +15,3 @@ thiserror.workspace = true
 [dev-dependencies]
 serde_json.workspace = true
 millo-dry-run = { path = "../millo-dry-run" }
-

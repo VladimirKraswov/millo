@@ -67,6 +67,44 @@ pub struct SketchShape {
     pub rotation_degrees: f64,
     pub geometry: SketchGeometry,
     pub operation: SketchOperation,
+    #[serde(default)]
+    pub constraints: SketchConstraints,
+    #[serde(default)]
+    pub locked: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SketchAnchorName {
+    Min,
+    Center,
+    Max,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SketchAnchor {
+    Named(SketchAnchorName),
+    Vertex(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SketchAxisConstraint {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_id: Option<String>,
+    pub reference_anchor: SketchAnchor,
+    pub own_anchor: SketchAnchor,
+    pub offset_mm: f64,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SketchConstraints {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x: Option<SketchAxisConstraint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub y: Option<SketchAxisConstraint>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

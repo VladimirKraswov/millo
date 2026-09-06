@@ -1,8 +1,10 @@
+mod constraints;
 mod geometry;
 mod model;
 mod planner;
 mod postprocessor;
 
+pub use constraints::resolve_sketch;
 use millo_tooling::CuttingTool;
 pub use model::*;
 use thiserror::Error;
@@ -15,10 +17,19 @@ const MAX_PASSES: usize = 200;
 #[error("{0}")]
 pub struct SketchError(pub String);
 
+pub fn project_file_name(name: &str) -> String {
+    let gcode_name = postprocessor::filename(name);
+    format!(
+        "{}.millo-sketch.json",
+        gcode_name.strip_suffix(".nc").unwrap_or(&gcode_name)
+    )
+}
+
 pub fn generate_sketch_job(
     request: SketchJobRequest,
     tools: &[CuttingTool],
 ) -> Result<GeneratedSketchJob, SketchError> {
+    let request = resolve_sketch(request)?;
     let plan = planner::plan(&request, tools)?;
     postprocessor::generate(&request, &plan)
 }

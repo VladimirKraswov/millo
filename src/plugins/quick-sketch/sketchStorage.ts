@@ -1,5 +1,6 @@
 import type { SketchJobRequest } from "../../shared/sketch";
 import { emptySketch } from "./sketchModel";
+import { resolveSketch } from "./sketchConstraints";
 
 const key = "millo.quick-sketch.v1";
 // Stored drafts are untrusted input too. CAM performs the authoritative geometric validation.
@@ -13,9 +14,14 @@ export function decodeSketch(text: string): SketchJobRequest {
   const bounded = (v: unknown, min: number, max: number) =>
     typeof v === "number" && Number.isFinite(v) && v >= min && v <= max;
   const fail = () => {
-    throw new Error("Некорректный формат чертежа Millo v1");
+    throw new Error("Некорректный формат чертежа Millo (v1/v2)");
   };
-  if (!object(data) || data.version !== 1 || !object(data.document))
+  if (
+    !object(data) ||
+    ![1, 2].includes(Number(data.version)) ||
+    typeof data.version !== "number" ||
+    !object(data.document)
+  )
     return fail();
   const doc = data.document;
   if (
@@ -66,6 +72,30 @@ export function decodeSketch(text: string): SketchJobRequest {
     )
       return fail();
     ids.add(s.id);
+    if (s.locked !== undefined && typeof s.locked !== "boolean") return fail();
+    if (s.constraints !== undefined) {
+      if (
+        !object(s.constraints) ||
+        Object.keys(s.constraints).some((k) => k !== "x" && k !== "y")
+      )
+        return fail();
+      const validAnchor = (v: unknown) =>
+        ["min", "center", "max"].includes(String(v)) ||
+        (Number.isInteger(v) && bounded(v, 0, 255));
+      for (const binding of Object.values(s.constraints)) {
+        if (
+          !object(binding) ||
+          !validAnchor(binding.referenceAnchor) ||
+          !validAnchor(binding.ownAnchor) ||
+          !bounded(binding.offsetMm, -10_000, 10_000) ||
+          (binding.referenceId !== undefined &&
+            (typeof binding.referenceId !== "string" ||
+              !binding.referenceId ||
+              binding.referenceId.length > 100))
+        )
+          return fail();
+      }
+    }
     if (g.kind === "rectangle") {
       if (!numbers(g, ["width", "height", "radius"])) return fail();
     } else if (g.kind === "circle") {
@@ -127,7 +157,7 @@ export function decodeSketch(text: string): SketchJobRequest {
     )
       return fail();
   }
-  return doc as unknown as SketchJobRequest;
+  return resolveSketch(doc as unknown as SketchJobRequest);
 }
 export function loadDraft(): SketchJobRequest {
   try {
@@ -139,7 +169,7 @@ export function loadDraft(): SketchJobRequest {
 }
 export function saveDraft(doc: SketchJobRequest): boolean {
   try {
-    localStorage.setItem(key, JSON.stringify({ version: 1, document: doc }));
+    localStorage.setItem(key, JSON.stringify({ version: 2, document: doc }));
     return true;
   } catch {
     return false;

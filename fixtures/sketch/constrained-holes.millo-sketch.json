@@ -1,0 +1,91 @@
+{
+  "version": 2,
+  "document": {
+    "sourceName": "Два отверстия",
+    "stock": {
+      "widthMm": 100,
+      "heightMm": 70,
+      "thicknessMm": 3,
+      "safeZMm": 5,
+      "breakthroughMm": 0.1,
+      "spindleMode": "manual"
+    },
+    "shapes": [
+      {
+        "id": "a",
+        "name": "Отверстие A",
+        "xMm": 12,
+        "yMm": 20,
+        "rotationDegrees": 0,
+        "geometry": {
+          "kind": "circle",
+          "diameter": 4
+        },
+        "operation": {
+          "kind": "pocket",
+          "toolId": "preset-carbide3d-102",
+          "through": true,
+          "depthMm": 1,
+          "stepdownMm": 0.5,
+          "stepoverPercent": 35,
+          "feedMmPerMin": 400,
+          "plungeMmPerMin": 100,
+          "spindleRpm": 10000,
+          "tabs": {
+            "count": 0,
+            "widthMm": 3,
+            "heightMm": 0.6
+          }
+        },
+        "constraints": {
+          "x": {
+            "referenceAnchor": "min",
+            "ownAnchor": "min",
+            "offsetMm": 10
+          }
+        }
+      },
+      {
+        "id": "b",
+        "name": "Отверстие B",
+        "xMm": 99,
+        "yMm": 88,
+        "rotationDegrees": 0,
+        "geometry": {
+          "kind": "circle",
+          "diameter": 4
+        },
+        "operation": {
+          "kind": "pocket",
+          "toolId": "preset-carbide3d-102",
+          "through": true,
+          "depthMm": 1,
+          "stepdownMm": 0.5,
+          "stepoverPercent": 35,
+          "feedMmPerMin": 400,
+          "plungeMmPerMin": 100,
+          "spindleRpm": 10000,
+          "tabs": {
+            "count": 0,
+            "widthMm": 3,
+            "heightMm": 0.6
+          }
+        },
+        "constraints": {
+          "x": {
+            "referenceId": "a",
+            "referenceAnchor": "center",
+            "ownAnchor": "center",
+            "offsetMm": 30
+          },
+          "y": {
+            "referenceId": "a",
+            "referenceAnchor": "center",
+            "ownAnchor": "center",
+            "offsetMm": 0
+          }
+        }
+      }
+    ]
+  }
+}

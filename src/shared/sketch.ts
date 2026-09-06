@@ -14,11 +14,7 @@ export type SketchGeometry =
   | { readonly kind: "circle"; readonly diameter: number }
   | { readonly kind: "polygon"; readonly points: readonly SketchPoint[] };
 export type SketchOperationKind =
-  | "pocket"
-  | "inside"
-  | "outside"
-  | "engrave"
-  | "drill";
+  "pocket" | "inside" | "outside" | "engrave" | "drill";
 export interface SketchTabs {
   readonly count: number;
   readonly widthMm: number;
@@ -44,6 +40,19 @@ export interface SketchShape {
   readonly rotationDegrees: number;
   readonly geometry: SketchGeometry;
   readonly operation: SketchOperation;
+  readonly constraints?: Readonly<
+    Partial<Record<SketchAxis, SketchAxisConstraint>>
+  >;
+  readonly locked?: boolean;
+}
+export type SketchAxis = "x" | "y";
+export type SketchAnchor = "min" | "center" | "max" | number;
+export interface SketchAxisConstraint {
+  /** Omitted for the stock. Numeric anchors identify polygon vertices. */
+  readonly referenceId?: string;
+  readonly referenceAnchor: SketchAnchor;
+  readonly ownAnchor: SketchAnchor;
+  readonly offsetMm: number;
 }
 export interface SketchStock {
   readonly widthMm: number;
@@ -59,7 +68,7 @@ export interface SketchJobRequest {
   readonly shapes: readonly SketchShape[];
 }
 export interface SketchProject {
-  readonly version: 1;
+  readonly version: 2;
   readonly document: SketchJobRequest;
 }
 export interface SketchOperationSummary {

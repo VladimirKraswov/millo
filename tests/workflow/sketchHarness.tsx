@@ -43,7 +43,7 @@ export async function mount() {
       saveSketchProject: (doc: SketchJobRequest) =>
         save(
           "sketch.millo-sketch.json",
-          JSON.stringify({ version: 1, document: doc }),
+          JSON.stringify({ version: 2, document: doc }),
         ),
       save: (job) => save(job.sourceName, job.source),
     },

@@ -14,17 +14,25 @@ import type {
   SketchShape,
 } from "../../shared/sketch";
 import { shapePoints, snap, svgPoints, type DrawMode } from "./sketchModel";
+import {
+  anchorOffset,
+  moveSketchShape,
+  resolveSketch,
+} from "./sketchConstraints";
+import { SketchDimensions } from "./SketchDimensions";
 
 interface Props {
   readonly document: SketchJobRequest;
-  readonly selectedId?: string;
+  readonly selection: readonly string[];
+  readonly dragEnabled: boolean;
+  readonly showDimensions: boolean;
   readonly mode: DrawMode;
   readonly grid: number;
   readonly resetView: number;
   readonly cancelDrawing: number;
   readonly onDrawingChange: (active: boolean) => void;
   readonly generated?: GeneratedSketchJob;
-  readonly onSelect: (id?: string) => void;
+  readonly onSelect: (id?: string, additive?: boolean) => void;
   readonly onMove: (id: string, point: SketchPoint) => void;
   readonly onCreate: (geometry: SketchGeometry, point: SketchPoint) => void;
 }
@@ -38,7 +46,9 @@ type Gesture = {
 
 export function SketchCanvas({
   document: doc,
-  selectedId,
+  selection,
+  dragEnabled,
+  showDimensions,
   mode,
   grid,
   resetView,
@@ -49,7 +59,21 @@ export function SketchCanvas({
   onMove,
   onCreate,
 }: Props) {
+  const selectedId = selection[selection.length - 1];
   const svg = useRef<SVGSVGElement>(null);
+  const [viewport, setViewport] = useState({ width: 800, height: 500 });
+  useLayoutEffect(() => {
+    const element = svg.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) =>
+      setViewport({
+        width: entry.contentRect.width,
+        height: entry.contentRect.height,
+      }),
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const [view, setView] = useState({
     x: -15,
     y: -doc.stock.heightMm - 15,
@@ -154,7 +178,18 @@ export function SketchCanvas({
       target.closest("[data-shape-id]")?.getAttribute("data-shape-id") ??
       undefined;
     const shape = doc.shapes.find((s) => s.id === id);
-    if (mode === "select") onSelect(id);
+    if (mode === "select") {
+      const additive = event.shiftKey || event.metaKey || event.ctrlKey;
+      onSelect(id, additive);
+      if (
+        !dragEnabled ||
+        additive ||
+        !shape ||
+        shape.locked ||
+        (shape.constraints?.x && shape.constraints?.y)
+      )
+        return;
+    }
     setGesture({
       start: p,
       current: p,
@@ -211,6 +246,21 @@ export function SketchCanvas({
       svg.current.releasePointerCapture(event.pointerId);
   };
   const selected = doc.shapes.find((s) => s.id === selectedId);
+  let displayDoc = doc;
+  if (gesture?.shape) {
+    const moved = moveSketchShape(gesture.shape, {
+      x: gesture.shape.xMm + gesture.current.x - gesture.start.x,
+      y: gesture.shape.yMm + gesture.current.y - gesture.start.y,
+    });
+    try {
+      displayDoc = resolveSketch({
+        ...doc,
+        shapes: doc.shapes.map((s) => (s.id === moved.id ? moved : s)),
+      });
+    } catch {
+      /* Keep the last valid layout outside the supported coordinate range. */
+    }
+  }
   const minorGrid = Math.max(
     grid || 1,
     10 ** Math.ceil(Math.log10(view.width / 40)),
@@ -225,7 +275,7 @@ export function SketchCanvas({
       )}
       <svg
         ref={svg}
-        className={`sketch-canvas is-${mode}`}
+        className={`sketch-canvas is-${mode}${dragEnabled ? " can-drag" : ""}`}
         viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`}
         role="application"
         aria-label="Чертёж заготовки"
@@ -280,29 +330,20 @@ export function SketchCanvas({
           height={Math.max(1, doc.stock.heightMm)}
           fill="url(#sketch-grid)"
         />
-        {[...doc.shapes]
-          .sort(
-            (a, b) =>
-              Number(b.operation.kind === "outside") -
-              Number(a.operation.kind === "outside"),
-          )
+        {[...displayDoc.shapes]
+          .sort((a, b) => {
+            const area = (s: SketchShape) =>
+              (anchorOffset(s, "x", "max") - anchorOffset(s, "x", "min")) *
+              (anchorOffset(s, "y", "max") - anchorOffset(s, "y", "min"));
+            return area(b) - area(a);
+          })
           .map((shape) => {
-            const moving =
-              gesture?.shape?.id === shape.id
-                ? {
-                    x: gesture.current.x - gesture.start.x,
-                    y: gesture.current.y - gesture.start.y,
-                  }
-                : { x: 0, y: 0 };
-            const points = shapePoints(shape).map((p) => ({
-              x: p.x + moving.x,
-              y: p.y + moving.y,
-            }));
+            const points = shapePoints(shape);
             return (
               <g
                 key={shape.id}
                 data-shape-id={shape.id}
-                className={`sketch-figure is-${shape.operation.kind}${selectedId === shape.id ? " is-selected" : ""}`}
+                className={`sketch-figure is-${shape.operation.kind}${selection.includes(shape.id) ? " is-selected" : ""}${shape.locked ? " is-locked" : ""}`}
               >
                 <title>{shape.name}</title>
                 <polygon
@@ -314,10 +355,10 @@ export function SketchCanvas({
                   points={svgPoints(points)}
                   vectorEffect="non-scaling-stroke"
                 />
-                {selectedId === shape.id && (
+                {selection.includes(shape.id) && (
                   <g
                     className="sketch-center"
-                    transform={`translate(${shape.xMm + moving.x} ${-shape.yMm - moving.y})`}
+                    transform={`translate(${shape.xMm} ${-shape.yMm})`}
                   >
                     <path
                       d={`M ${-view.width / 130} 0 H ${view.width / 130} M 0 ${-view.width / 130} V ${view.width / 130}`}
@@ -346,6 +387,22 @@ export function SketchCanvas({
             <title>Перемычка</title>
           </polyline>
         ))}
+        {showDimensions && !gesture && (
+          <SketchDimensions
+            document={displayDoc}
+            selection={selection}
+            unit={
+              3.5 /
+              Math.max(
+                0.01,
+                Math.min(
+                  viewport.width / view.width,
+                  viewport.height / view.height,
+                ),
+              )
+            }
+          />
+        )}
         {gesture && mode === "rectangle" && (
           <rect
             className="sketch-drawing"

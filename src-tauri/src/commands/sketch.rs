@@ -7,12 +7,14 @@ pub async fn save_sketch_project(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Option<GeneratedGcodeSaveOutcome>, String> {
+    let request = millo_sketch::resolve_sketch(request).map_err(|e| e.to_string())?;
+    let filename = millo_sketch::project_file_name(&request.source_name);
     if request.shapes.len() > 200 {
         return Err("В проекте больше 200 фигур".into());
     }
     // A project can be incomplete or reference tools absent on this computer.
     // Saving is deliberately independent of machining readiness.
-    let bytes = serde_json::to_vec_pretty(&json!({ "version": 1, "document": request }))
+    let bytes = serde_json::to_vec_pretty(&json!({ "version": 2, "document": request }))
         .map_err(|e| e.to_string())?;
     if bytes.len() > 512_000 {
         return Err("Проект больше 512 КБ".into());
@@ -20,7 +22,7 @@ pub async fn save_sketch_project(
     let (tx, rx) = tokio::sync::oneshot::channel();
     app.dialog()
         .file()
-        .set_file_name("sketch.millo-sketch.json")
+        .set_file_name(filename)
         .add_filter("Millo Sketch", &["json"])
         .save_file(move |path| {
             let _ = tx.send(path);

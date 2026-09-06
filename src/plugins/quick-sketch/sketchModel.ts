@@ -17,7 +17,7 @@ export const operationLabels: Record<SketchOperationKind, string> = {
   drill: "Сверление",
 };
 export const emptySketch = (): SketchJobRequest => ({
-  sourceName: "Мой чертёж.nc",
+  sourceName: "Новый проект",
   shapes: [],
   stock: {
     widthMm: 200,
@@ -153,81 +153,6 @@ export const svgPoints = (points: readonly SketchPoint[]) =>
   points.map((p) => `${p.x},${-p.y}`).join(" ");
 export const snap = (value: number, step: number) =>
   step > 0 ? Math.round(value / step) * step : value;
-
-export interface FanTemplate {
-  readonly opening: number;
-  readonly pitch: number;
-  readonly hole: number;
-  readonly plate: number;
-}
-export function fanShapes(
-  options: FanTemplate,
-  center: SketchPoint,
-  tool?: CuttingTool,
-): SketchShape[] {
-  const circle = createShape(
-    { kind: "circle", diameter: options.opening },
-    center.x,
-    center.y,
-    tool,
-  );
-  const opening = {
-    ...circle,
-    name: "Воздуховод",
-    operation: {
-      ...circle.operation,
-      kind: "inside" as const,
-      tabs: { count: 4, widthMm: 3, heightMm: 0.6 },
-    },
-  };
-  const holes = [-1, 1]
-    .flatMap((x) =>
-      [-1, 1].map((y) =>
-        createShape(
-          { kind: "circle", diameter: options.hole },
-          center.x + (x * options.pitch) / 2,
-          center.y + (y * options.pitch) / 2,
-          tool,
-        ),
-      ),
-    )
-    .map((s, i) => ({ ...s, name: `Крепление ${i + 1}` }));
-  const plate = createShape(
-    {
-      kind: "rectangle",
-      width: options.plate,
-      height: options.plate,
-      radius: 4,
-    },
-    center.x,
-    center.y,
-    tool,
-  );
-  return [...holes, opening, { ...plate, name: "Панель" }];
-}
-export function grilleShapes(
-  center: SketchPoint,
-  tool?: CuttingTool,
-): SketchShape[] {
-  return Array.from({ length: 5 }, (_, i) => {
-    const s = createShape(
-      { kind: "rectangle", width: 60, height: 5, radius: 2.5 },
-      center.x,
-      center.y + (i - 2) * 10,
-      tool,
-      i + 1,
-    );
-    return {
-      ...s,
-      name: `Прорезь ${i + 1}`,
-      operation: {
-        ...s.operation,
-        kind: "pocket" as const,
-        tabs: { ...s.operation.tabs, count: 0 },
-      },
-    };
-  });
-}
 
 export function validateSketch(
   document: SketchJobRequest,

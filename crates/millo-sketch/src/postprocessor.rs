@@ -227,7 +227,7 @@ fn comment(value: &str) -> String {
         .collect()
 }
 
-fn filename(value: &str) -> String {
+pub(crate) fn filename(value: &str) -> String {
     let stem = value.trim().strip_suffix(".nc").unwrap_or(value.trim());
     let name: String = stem
         .chars()
