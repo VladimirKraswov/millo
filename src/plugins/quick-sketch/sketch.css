@@ -1,0 +1,627 @@
+.sketch-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 125;
+  background: #0009;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+.sketch-dialog {
+  width: min(1540px, 100%);
+  height: min(940px, calc(100dvh - 32px));
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: #10181c;
+  color: #e3ebee;
+  border: 1px solid #40565d;
+  border-radius: 8px;
+  overflow: hidden;
+  font-size: 13px;
+}
+.sketch-dialog * {
+  box-sizing: border-box;
+  letter-spacing: 0;
+}
+.sketch-dialog button,
+.sketch-launcher {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: inherit;
+  border: 1px solid #34474e;
+  background: #172226;
+  border-radius: 4px;
+  min-height: 34px;
+  padding: 7px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.sketch-dialog button svg {
+  flex-shrink: 0;
+}
+.sketch-dialog button:hover:not(:disabled) {
+  background: #213239;
+  border-color: #749d98;
+}
+.sketch-dialog button[aria-pressed="true"] {
+  background: #21483c;
+  color: #a3ebd2;
+  border-color: #73d1b1;
+}
+.sketch-dialog button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.sketch-dialog :focus-visible {
+  outline: 2px solid #78d9b7;
+  outline-offset: 2px;
+}
+.sketch-dialog .primary-action {
+  background: #27735c;
+  border-color: #65b696;
+  color: #f1fcf7;
+}
+.sketch-header {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 18px;
+  border-bottom: 1px solid #2d3d44;
+  flex-shrink: 0;
+}
+.sketch-header h2 {
+  font-size: 20px;
+  margin: 3px 0 0;
+  line-height: 1.2;
+}
+.sketch-header > div > span {
+  font-size: 10px;
+  color: #94a6ad;
+}
+.sketch-dialog .sketch-header .sketch-name {
+  margin-left: auto;
+  width: 260px;
+}
+.sketch-header > div {
+  flex-shrink: 0;
+}
+.sketch-dialog input:not([type="checkbox"]),
+.sketch-dialog select {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  color: #e2ecee;
+  background: #0c1316;
+  border: 1px solid #354a53;
+  border-radius: 4px;
+  padding: 6px 9px;
+  font: inherit;
+}
+.sketch-dialog input[type="checkbox"] {
+  accent-color: #75d5b3;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.sketch-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 9px 14px;
+  border-bottom: 1px solid #2d3d44;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+.sketch-toolbar > button {
+  width: 35px;
+  height: 35px;
+  padding: 5px;
+}
+.sketch-toolbar-divider {
+  height: 22px;
+  width: 1px;
+  background: #34474e;
+  margin: 0 4px;
+}
+.sketch-dialog .sketch-file-input {
+  display: none;
+}
+.sketch-snap,
+.sketch-template-tools {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.sketch-snap {
+  margin-left: 6px;
+  color: #adc0c4;
+}
+.sketch-template-tools {
+  margin-left: auto;
+}
+.sketch-template,
+.sketch-new-confirm {
+  display: flex;
+  gap: 14px;
+  align-items: end;
+  padding: 12px 18px;
+  border-bottom: 1px solid #41544b;
+  background: #162923;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.sketch-template .sketch-number {
+  flex: 1;
+  min-width: 120px;
+}
+.sketch-new-confirm {
+  align-items: center;
+}
+.sketch-new-confirm > span {
+  flex: 1;
+}
+.sketch-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+}
+.sketch-workarea {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #0b1114;
+}
+.sketch-canvas-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+.sketch-canvas {
+  width: 100%;
+  height: calc(100% - 31px);
+  display: block;
+  touch-action: none;
+  user-select: none;
+}
+.sketch-canvas.is-rectangle,
+.sketch-canvas.is-circle,
+.sketch-canvas.is-polygon {
+  cursor: crosshair;
+}
+.sketch-canvas.is-pan {
+  cursor: grab;
+}
+.sketch-canvas.is-select .sketch-figure {
+  cursor: move;
+}
+.sketch-figure > polygon {
+  stroke: #75d5b4;
+  stroke-width: 1.4px;
+  fill: #72ceb412;
+}
+.sketch-figure.is-pocket > polygon {
+  fill: #6caede1c;
+  stroke: #89bfe5;
+}
+.sketch-figure.is-drill > polygon {
+  fill: #eac07622;
+  stroke: #eac076;
+}
+.sketch-figure.is-engrave > polygon {
+  fill: none;
+  stroke: #cba8d9;
+}
+.sketch-figure.is-selected > polygon {
+  stroke: #ffce7e;
+  stroke-width: 2px;
+}
+.sketch-figure > polygon.sketch-hit-outline {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 12px;
+}
+.sketch-center {
+  stroke: #ffce7e;
+  stroke-width: 1px;
+  pointer-events: none;
+}
+.sketch-cam-path {
+  fill: none;
+  stroke: #f5a75c;
+  stroke-width: 1px;
+  opacity: 0.8;
+  pointer-events: none;
+}
+.sketch-tab-path {
+  fill: none;
+  stroke: #f7d983;
+  stroke-width: 5px;
+  pointer-events: none;
+}
+.sketch-legend {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  display: flex;
+  gap: 12px;
+  font-size: 10px;
+  color: #aabcc3;
+  pointer-events: none;
+}
+.sketch-legend span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.sketch-legend span::before {
+  content: "";
+  width: 12px;
+  height: 2px;
+  background: #f5a75c;
+}
+.sketch-legend span + span::before {
+  height: 4px;
+  background: #f7d983;
+}
+.sketch-drawing {
+  fill: #89c4e322;
+  stroke: #94d3f4;
+  stroke-width: 1.5px;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+.sketch-origin {
+  fill: #a8b9c0;
+  pointer-events: none;
+}
+.sketch-origin path {
+  fill: none;
+  stroke: #78ddba;
+  stroke-width: 2px;
+}
+.sketch-canvas-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 8px 14px;
+  background: #10181ce8;
+  color: #adc0c7;
+  font:
+    11px ui-monospace,
+    monospace;
+  pointer-events: none;
+  min-height: 31px;
+}
+.sketch-canvas-status span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sketch-polygon-actions {
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  background: #10181c;
+  padding: 6px;
+  border: 1px solid #34474e;
+  border-radius: 4px;
+}
+.sketch-operations {
+  flex-shrink: 0;
+  max-height: 105px;
+  overflow: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 6px;
+  padding: 9px 12px;
+  border-top: 1px solid #2d3d44;
+  min-height: 54px;
+}
+.sketch-operations button {
+  flex-direction: column;
+  align-items: start;
+  gap: 2px;
+  max-width: 220px;
+  padding: 5px 10px;
+}
+.sketch-operations button > span,
+.sketch-operations button > small {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sketch-operations small {
+  font-size: 10px;
+  color: #a3b4bb;
+}
+.sketch-sidebar {
+  min-width: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-left: 1px solid #2d3d44;
+  scrollbar-gutter: stable;
+}
+.sketch-stock,
+.sketch-properties {
+  padding: 15px;
+  border-bottom: 1px solid #2d3d44;
+}
+.sketch-stock h3,
+.sketch-properties h3 {
+  margin: 0 0 12px;
+  font-size: 13px;
+}
+.sketch-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 9px;
+}
+.sketch-number {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  font-size: 11px;
+  color: #a4b6bd;
+}
+.sketch-number > div {
+  position: relative;
+}
+.sketch-number input {
+  padding-right: 40px !important;
+  font-family: ui-monospace, monospace !important;
+}
+.sketch-number small {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: #85999f;
+  font-size: 9px;
+  background: #0c1316;
+}
+.sketch-number input::-webkit-inner-spin-button {
+  margin-right: -3px;
+}
+.sketch-datum {
+  display: block;
+  margin-top: 11px;
+  color: #9fbdba;
+  font-size: 11px;
+}
+.sketch-dialog details {
+  border-top: 1px solid #2d3d44;
+  margin-top: 14px;
+  padding-top: 10px;
+}
+.sketch-dialog summary {
+  cursor: pointer;
+  color: #aabcc3;
+  font-size: 11px;
+}
+.sketch-dialog details[open] > summary {
+  margin-bottom: 12px;
+}
+.sketch-dialog details > button {
+  margin-top: 10px;
+}
+.sketch-select {
+  display: block;
+  margin: 14px 0 0;
+  font-size: 11px;
+  color: #a4b6bd;
+}
+.sketch-select > span {
+  display: block;
+  margin-bottom: 6px;
+}
+.sketch-properties > header {
+  display: flex;
+  gap: 5px;
+  margin-bottom: 14px;
+}
+.sketch-properties > header > input {
+  flex: 1;
+  font-weight: 600 !important;
+}
+.sketch-properties > header > button {
+  padding: 5px;
+  width: 32px;
+  flex-shrink: 0;
+}
+.sketch-properties.is-empty {
+  color: #9cafb5;
+}
+.sketch-tool {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 0;
+  height: 58px;
+  overflow: hidden;
+  font:
+    12px ui-monospace,
+    monospace;
+}
+.sketch-tool .tool-schematic {
+  width: 85px;
+  height: 52px;
+  flex-shrink: 0;
+}
+.sketch-tool small {
+  color: #91a6af;
+  font-size: 10px;
+}
+.sketch-depth {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 12px 0;
+  min-height: 28px;
+}
+.sketch-depth label,
+.sketch-tabs-settings > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.sketch-depth strong {
+  font:
+    12px ui-monospace,
+    monospace;
+  color: #f3c680;
+}
+.sketch-tabs-settings {
+  margin-top: 16px;
+}
+.sketch-tabs-settings .sketch-fields {
+  margin-top: 12px;
+}
+.sketch-vertices {
+  max-height: 220px;
+  overflow-y: auto;
+}
+.sketch-feedback {
+  flex-shrink: 0;
+  height: 64px;
+  min-height: 64px;
+  max-height: 130px;
+  overflow-y: auto;
+  padding: 9px 17px;
+  border-top: 1px solid #2d3d44;
+  color: #bac7cb;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.sketch-feedback:has(details[open]) { height: 130px; }
+.sketch-feedback.is-error {
+  color: #ffaaa5;
+  background: #341e21;
+}
+.sketch-feedback details {
+  margin-top: 6px;
+  padding-top: 5px;
+  border: none;
+}
+.sketch-feedback ol {
+  margin: 6px 0;
+  padding-left: 22px;
+}
+.sketch-feedback p {
+  color: #e7c18b;
+  margin: 6px 0;
+}
+.sketch-footer {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-top: 1px solid #2d3d44;
+  padding: 12px 16px;
+  flex-shrink: 0;
+}
+.sketch-footer > span {
+  margin-right: auto;
+  color: #9fb4bd;
+  font-size: 11px;
+}
+@media (max-width: 1050px) {
+  .sketch-template-tools {
+    margin-left: 0;
+  }
+  .sketch-body {
+    grid-template-columns: minmax(0, 1fr) 300px;
+  }
+  .sketch-footer > span {
+    display: none;
+  }
+  .sketch-footer {
+    justify-content: flex-end;
+  }
+}
+@media (max-width: 700px) {
+  .sketch-backdrop {
+    padding: 0;
+  }
+  .sketch-dialog {
+    border-radius: 0;
+    height: 100dvh;
+  }
+  .sketch-header {
+    padding: 10px;
+    gap: 10px;
+  }
+  .sketch-header h2 {
+    font-size: 16px;
+  }
+  .sketch-dialog .sketch-header .sketch-name {
+    width: 130px;
+  }
+  .sketch-toolbar {
+    padding: 7px 8px;
+  }
+  .sketch-toolbar button {
+    min-height: 32px;
+  }
+  .sketch-template-tools {
+    gap: 5px;
+  }
+  .sketch-body {
+    display: block;
+    overflow-y: auto;
+  }
+  .sketch-workarea {
+    height: 340px;
+  }
+  .sketch-canvas-wrap {
+    min-height: 270px;
+  }
+  .sketch-sidebar {
+    overflow: visible;
+    border-left: none;
+    border-top: 1px solid #2d3d44;
+  }
+  .sketch-operations {
+    max-height: 70px;
+  }
+  .sketch-footer {
+    padding: 8px;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .sketch-footer button {
+    font-size: 11px;
+    min-height: 38px;
+    flex: 1;
+  }
+  .sketch-footer .primary-action {
+    flex-basis: 100%;
+  }
+  .sketch-feedback {
+    font-size: 11px;
+    max-height: 90px;
+  }
+  .sketch-feedback:has(details[open]) { height: 90px; }
+  .sketch-template {
+    max-height: 220px;
+    overflow: auto;
+  }
+}

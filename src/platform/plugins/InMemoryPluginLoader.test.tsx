@@ -16,6 +16,7 @@ import type { MachineCommandGateway } from "../machine/MachineCommandGateway";
 import type { WorkCoordinateGateway } from "../machine/WorkCoordinateGateway";
 import { MachineSnapshotStore } from "../machine/MachineStateSource";
 import type { JobCreationCapability } from "../jobs/JobCreationService";
+import type { SketchJobRequest } from "../../shared/sketch";
 import type { ToolLibraryGateway } from "../tooling/ToolLibraryGateway";
 import { ToolLibraryService } from "../tooling/ToolLibraryService";
 import type {
@@ -452,6 +453,8 @@ describe("InMemoryPluginLoader", () => {
       generateSurfacing,
       inspectPcb: vi.fn(),
       generatePcb: vi.fn(),
+      generateSketch: vi.fn(),
+      saveSketchProject: vi.fn(),
       open,
       save,
     };
@@ -478,6 +481,10 @@ describe("InMemoryPluginLoader", () => {
     expect(save).toHaveBeenCalledWith(generated);
     await loader.unload(pluginId);
     expect(() => capability?.open(generated)).toThrow("no longer active");
+    await expect(capability?.generateSketch({} as SketchJobRequest)).rejects.toThrow("no longer active");
+    await expect(capability?.saveSketchProject({} as SketchJobRequest)).rejects.toThrow("no longer active");
+    expect(jobs.generateSketch).not.toHaveBeenCalled();
+    expect(jobs.saveSketchProject).not.toHaveBeenCalled();
   });
 
   it("scopes tools.read subscriptions and closes the proxy on unload", async () => {

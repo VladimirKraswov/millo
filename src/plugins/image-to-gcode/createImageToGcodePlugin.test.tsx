@@ -17,6 +17,8 @@ describe("Image to G-code bundled plugin", () => {
       generateSurfacing: vi.fn(),
       inspectPcb: vi.fn(),
       generatePcb: vi.fn(),
+      generateSketch: vi.fn(),
+      saveSketchProject: vi.fn(),
       save: vi.fn(),
     };
     const loader = new InMemoryPluginLoader({

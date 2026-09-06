@@ -12,6 +12,7 @@ import type {
 import type { ImageJobGateway } from "./ImageJobGateway";
 import { GeneratedJobStore } from "./GeneratedJobStore";
 import { JobCreationService } from "./JobCreationService";
+import type { GeneratedSketchJob, SketchJobRequest } from "../../shared/sketch";
 
 const request = {} as ImageJobRequest;
 const generated = {
@@ -42,6 +43,39 @@ const generatedPcb = {
 } as unknown as GeneratedPcbJob;
 
 describe("JobCreationService", () => {
+  it("publishes trusted sketch tool assignments but never publishes saved projects", async () => {
+    const store = new GeneratedJobStore();
+    const result = {
+      ...generatedSurfacing,
+      summary: {
+        operations: [
+          { toolNumber: 1, toolId: "small" },
+          { toolNumber: 1, toolId: "small" },
+          { toolNumber: 2, toolId: "large" },
+        ],
+        paths: [], tabPaths: [], warnings: [], toolChangeCount: 1,
+      },
+    } as unknown as GeneratedSketchJob;
+    const gateway: ImageJobGateway = {
+      generate: vi.fn(), generateSurfacing: vi.fn(),
+      inspectPcb: vi.fn(), generatePcb: vi.fn(),
+      generateSketch: vi.fn(async () => result),
+      saveSketchProject: vi.fn(async () => undefined), save: vi.fn(),
+    };
+    const service = new JobCreationService(gateway, store);
+    const draft = {} as SketchJobRequest;
+    await service.saveSketchProject(draft);
+    expect(gateway.saveSketchProject).toHaveBeenCalledWith(draft);
+    expect(store.current()).toBeUndefined();
+    const job = await service.generateSketch(draft);
+    expect(job.toolAssignments).toEqual([
+      { toolNumber: 1, toolId: "small" }, { toolNumber: 2, toolId: "large" },
+    ]);
+    expect(Object.isFrozen(job.summary.operations)).toBe(true);
+    expect(store.current()).toBeUndefined();
+    service.open(job);
+    expect(store.current()?.job).toBe(job);
+  });
   it("publishes only immutable jobs returned by the core gateway", async () => {
     const store = new GeneratedJobStore();
     const gateway: ImageJobGateway = {
@@ -49,6 +83,8 @@ describe("JobCreationService", () => {
       generateSurfacing: vi.fn(),
       inspectPcb: vi.fn(),
       generatePcb: vi.fn(),
+      generateSketch: vi.fn(),
+      saveSketchProject: vi.fn(),
       save: vi.fn(),
     };
     const service = new JobCreationService(gateway, store);
@@ -67,6 +103,8 @@ describe("JobCreationService", () => {
       generateSurfacing: vi.fn(),
       inspectPcb: vi.fn(),
       generatePcb: vi.fn(),
+      generateSketch: vi.fn(),
+      saveSketchProject: vi.fn(),
       save: vi.fn(),
     };
     const service = new JobCreationService(gateway, new GeneratedJobStore());
@@ -84,6 +122,8 @@ describe("JobCreationService", () => {
       generateSurfacing: vi.fn(async () => generatedSurfacing),
       inspectPcb: vi.fn(),
       generatePcb: vi.fn(),
+      generateSketch: vi.fn(),
+      saveSketchProject: vi.fn(),
       save: vi.fn(async () => undefined),
     };
     const service = new JobCreationService(gateway, store);
@@ -109,6 +149,8 @@ describe("JobCreationService", () => {
       generateSurfacing: vi.fn(),
       inspectPcb: vi.fn(async () => inspection),
       generatePcb: vi.fn(async () => generatedPcb),
+      generateSketch: vi.fn(),
+      saveSketchProject: vi.fn(),
       save: vi.fn(),
     };
     const service = new JobCreationService(gateway, new GeneratedJobStore());

@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 millo-audit = { path = "../crates/millo-audit" }
 millo-cam = { path = "../crates/millo-cam" }
+millo-sketch = { path = "../crates/millo-sketch" }
 millo-command = { path = "../crates/millo-command" }
 millo-controller = { path = "../crates/millo-controller" }
 millo-dry-run = { path = "../crates/millo-dry-run" }

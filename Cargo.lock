@@ -2181,6 +2181,7 @@ dependencies = [
  "millo-sender",
  "millo-serial",
  "millo-settings",
+ "millo-sketch",
  "millo-storage",
  "millo-tooling",
  "millo-transport",
@@ -2398,6 +2399,19 @@ version = "0.1.1"
 dependencies = [
  "millo-domain",
  "millo-storage",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "millo-sketch"
+version = "0.1.1"
+dependencies = [
+ "clipper2",
+ "millo-dry-run",
+ "millo-gcode",
+ "millo-tooling",
  "serde",
  "serde_json",
  "thiserror 2.0.20",

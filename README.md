@@ -21,7 +21,7 @@ Millo — приложение оператора GRBL-станка для macOS
 - Станок: профили, настройки из GRBL, Jog/continuous/keyboard, homing,
   G54–G59, объявленные в профиле выходы и опциональная ось A.
 - Поверхность: Z-probe, сетка высот, продолжение измерения и компенсация.
-- Подготовка: библиотека фрез, SVG/PNG, выравнивание, Gerber/Excellon PCB.
+- Подготовка: библиотека фрез, SVG/PNG, выравнивание, Gerber/Excellon PCB, 2D-чертёж и раскрой с сохранением проектов.
 - Обслуживание: журнал с экспортом, восстановление, локальная русская справка,
   консоль, стандартные и внешние плагины.
 
@@ -73,6 +73,7 @@ npm run virtual-controller
 | Внешние макросы | [EXTERNAL_PLUGINS](docs/EXTERNAL_PLUGINS.md) |
 | Проверки | [TESTING](docs/TESTING.md) |
 | Инструменты и PCB | [TOOL_LIBRARY](docs/TOOL_LIBRARY.md), [PCB_JOBS](docs/PCB_JOBS.md) |
+| Чертёж и раскрой | [SKETCH_CAM](docs/SKETCH_CAM.md): фигуры, карманы, перемычки, смена фрез и файлы проекта |
 | Управление | [MACHINE_CONTROL](docs/MACHINE_CONTROL.md), [OPERATOR_CONSOLE](docs/OPERATOR_CONSOLE.md) |
 | Виртуальный контроллер | [VIRTUAL_CONTROLLER](docs/VIRTUAL_CONTROLLER.md) |
 | Выпуск и ограничения | [ALPHA_RELEASE](docs/ALPHA_RELEASE.md), [WEBSITE_DEPLOYMENT](docs/WEBSITE_DEPLOYMENT.md) |

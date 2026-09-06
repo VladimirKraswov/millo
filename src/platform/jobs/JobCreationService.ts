@@ -1,3 +1,4 @@
+import type { GeneratedSketchJob, SketchJobRequest } from "../../shared/sketch";
 import type {
   GeneratedJob,
   GeneratedGcodeSaveOutcome,
@@ -5,6 +6,7 @@ import type {
   GeneratedPcbJob,
   GeneratedSurfacingJob,
   ImageJobRequest,
+  JobToolAssignment,
   PcbInspectRequest,
   PcbInspection,
   PcbJobRequest,
@@ -14,6 +16,8 @@ import type { ImageJobGateway } from "./ImageJobGateway";
 import { GeneratedJobStore } from "./GeneratedJobStore";
 
 export interface JobCreationCapability {
+  generateSketch(request: SketchJobRequest): Promise<GeneratedSketchJob>;
+  saveSketchProject(request: SketchJobRequest): Promise<GeneratedGcodeSaveOutcome | undefined>;
   generateImage(request: ImageJobRequest): Promise<GeneratedImageJob>;
   generateSurfacing(request: SurfacingJobRequest): Promise<GeneratedSurfacingJob>;
   inspectPcb(request: PcbInspectRequest): Promise<PcbInspection>;
@@ -36,6 +40,20 @@ export class JobCreationService implements JobCreationCapability {
     return result;
   }
 
+  saveSketchProject(request: SketchJobRequest): Promise<GeneratedGcodeSaveOutcome | undefined> {
+    return this.gateway.saveSketchProject(request);
+  }
+
+  async generateSketch(request: SketchJobRequest): Promise<GeneratedSketchJob> {
+    const generated = await this.gateway.generateSketch(request);
+    const result = deepFreeze({
+      ...generated,
+      toolAssignments: uniqueToolAssignments(generated.summary.operations),
+    });
+    this.issuedJobs.add(result);
+    return result;
+  }
+
   async generateSurfacing(request: SurfacingJobRequest): Promise<GeneratedSurfacingJob> {
     const generated = await this.gateway.generateSurfacing(request);
     const result = deepFreeze({
@@ -52,16 +70,9 @@ export class JobCreationService implements JobCreationCapability {
 
   async generatePcb(request: PcbJobRequest): Promise<GeneratedPcbJob> {
     const generated = await this.gateway.generatePcb(request);
-    const assignments = new Map<number, string>();
-    for (const operation of generated.summary.operations) {
-      assignments.set(operation.toolNumber, operation.toolId);
-    }
     const result = deepFreeze({
       ...generated,
-      toolAssignments: [...assignments].map(([toolNumber, toolId]) => ({
-        toolNumber,
-        toolId,
-      })),
+      toolAssignments: uniqueToolAssignments(generated.summary.operations),
     });
     this.issuedJobs.add(result);
     return result;
@@ -91,4 +102,9 @@ function deepFreeze<T>(value: T): T {
   Object.freeze(value);
   for (const child of Object.values(value)) deepFreeze(child);
   return value;
+}
+
+function uniqueToolAssignments(operations: readonly JobToolAssignment[]): JobToolAssignment[] {
+  const assignments = new Map(operations.map((operation) => [operation.toolNumber, operation.toolId]));
+  return [...assignments].map(([toolNumber, toolId]) => ({ toolNumber, toolId }));
 }

@@ -84,6 +84,10 @@ import {
   developmentSettingsFixture,
 } from "./developmentFixtures";
 import { previewPcbImageJobGateway } from "./previewPcbImageJobGateway";
+import {
+  createQuickSketchPlugin,
+  QUICK_SKETCH_PLUGIN_ID,
+} from "../plugins/quick-sketch/createQuickSketchPlugin";
 const subscribeEmptyToolLibrary = () => () => undefined;
 const readEmptyToolLibrary = () => emptyToolLibrary;
 const developmentToolAssignments = Object.freeze([
@@ -114,6 +118,10 @@ export function useWorkstation() {
           : previewToolLibraryGateway,
         grants: new CapabilityGrantStore([
           {
+            pluginId: QUICK_SKETCH_PLUGIN_ID,
+            capabilities: ["ui.contribute", "jobs.create", "tools.read"],
+          },
+          {
             pluginId: IMAGE_TO_GCODE_PLUGIN_ID,
             capabilities: ["ui.contribute", "jobs.create"],
           },
@@ -127,6 +135,7 @@ export function useWorkstation() {
           },
         ]),
         bundledPlugins: [
+          createQuickSketchPlugin({ initialOpen: developmentFixture === "sketch" }),
           createImageToGcodePlugin({
             initialOpen: developmentFixture === "image-job",
           }),

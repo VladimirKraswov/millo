@@ -8,6 +8,7 @@ import type {
 import type { MachineCommandGateway } from "../machine/MachineCommandGateway";
 import type { WorkCoordinateGateway } from "../machine/WorkCoordinateGateway";
 import type { JobCreationCapability } from "../jobs/JobCreationService";
+import type { GeneratedSketchJob, SketchJobRequest } from "../../shared/sketch";
 import type {
   GeneratedJob,
   GeneratedGcodeSaveOutcome,
@@ -70,6 +71,8 @@ export interface PluginMachineCoordinatesCapability {
 }
 
 export interface PluginJobsCapability {
+  generateSketch(request: SketchJobRequest): Promise<GeneratedSketchJob>;
+  saveSketchProject(request: SketchJobRequest): Promise<GeneratedGcodeSaveOutcome | undefined>;
   generateImage(request: ImageJobRequest): Promise<GeneratedImageJob>;
   generateSurfacing(request: SurfacingJobRequest): Promise<GeneratedSurfacingJob>;
   inspectPcb(request: PcbInspectRequest): Promise<PcbInspection>;
@@ -358,6 +361,18 @@ export class InMemoryPluginLoader {
     const jobs =
       hasCapability("jobs.create") && this.jobs
         ? Object.freeze({
+            saveSketchProject: async (request: SketchJobRequest) => {
+              resources.assertOpen();
+              const outcome = await this.jobs!.saveSketchProject(request);
+              resources.assertOpen();
+              return outcome;
+            },
+            generateSketch: async (request: SketchJobRequest) => {
+              resources.assertOpen();
+              const job = await this.jobs!.generateSketch(request);
+              resources.assertOpen();
+              return job;
+            },
             generateImage: async (request: ImageJobRequest) => {
               resources.assertOpen();
               const job = await this.jobs!.generateImage(request);

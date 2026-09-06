@@ -4,6 +4,7 @@ exclude = ["vendor/glib"]
 members = [
   "crates/millo-audit",
   "crates/millo-cam",
+  "crates/millo-sketch",
   "crates/millo-command",
   "crates/millo-controller",
   "crates/millo-dry-run",

@@ -8,6 +8,7 @@ import {
 
 export { uiSlots } from "../platform/extensions/UiExtensionRegistry";
 export { DialogSurface } from "../components/DialogSurface";
+export type { SketchJobRequest, SketchShape, SketchOperation, SketchStock, SketchProject, GeneratedSketchJob } from "../shared/sketch";
 export {
   PLUGIN_API_VERSION,
   PLUGIN_MANIFEST_VERSION,

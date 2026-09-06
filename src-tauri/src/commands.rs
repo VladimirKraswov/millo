@@ -105,6 +105,8 @@ use tokio::{
 };
 
 mod program_io;
+mod sketch;
+pub use sketch::*;
 mod script_command_model;
 
 pub use program_io::*;

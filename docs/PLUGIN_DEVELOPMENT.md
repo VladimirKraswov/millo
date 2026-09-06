@@ -93,6 +93,27 @@ helper-функцией и не должны задаваться вручную
 Пример регистрации уже есть в `src/app/useWorkstation.ts`; эталонные реализации находятся в
 `src/plugins/image-to-gcode` и `src/plugins/spoilboard-surfacing`.
 
+Для редактора с проектом см. `src/plugins/quick-sketch` и [SKETCH_CAM](SKETCH_CAM.md).
+Он включён по умолчанию и требует `ui.contribute`, `jobs.create`, `tools.read`.
+Контракты `SketchJobRequest` и `GeneratedSketchJob` экспортируются из SDK.
+
+```ts
+const job = await context.jobs.generateSketch(document);
+// Вызывать по отдельному действию пользователя после проверки preview:
+context.jobs.open(job);
+// Сохранение редактируемого проекта, без генерации и без движения:
+await context.jobs.saveSketchProject(document);
+// Экспорт рассчитанного G-code:
+await context.jobs.save(job);
+```
+
+Проверяйте наличие `context.jobs` в `activate` как в примере выше. Сохранение
+проекта открывает системный диалог и допускает незавершённый чертёж.
+`undefined` означает отмену диалога. Выгрузка закрывает оба новых метода,
+включая проверку после завершения асинхронного вызова. Rust-ядро принимает
+ID инструментов, но параметры реальной режущей геометрии получает из своей
+библиотеки. Плагин не может заменить их произвольными полями проекта.
+
 ### Диалоги плагина
 
 Встроенные плагины импортируют `DialogSurface` из `src/plugin-sdk`, не создают

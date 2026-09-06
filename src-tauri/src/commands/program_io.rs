@@ -1,4 +1,34 @@
 use super::*;
+use millo_sketch::{GeneratedSketchJob, SketchJobRequest};
+
+#[tauri::command]
+pub async fn generate_sketch_job(
+    request: SketchJobRequest,
+    state: State<'_, AppState>,
+) -> Result<GeneratedSketchJob, String> {
+    static GENERATION: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    let permit = GENERATION
+        .try_acquire()
+        .map_err(|_| "Расчёт чертежа уже выполняется")?;
+    let tools = state.tools.lock().await.state().tools;
+    let context = json!({ "sourceName": request.source_name, "shapes": request.shapes.len(), "stock": request.stock });
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        millo_sketch::generate_sketch_job(request, &tools)
+    })
+    .await
+    .map_err(|e| format!("Sketch CAM task failed: {e}"))?
+    .map_err(|e| e.to_string());
+    audit_operation(
+        &state.audit,
+        AuditCategory::Program,
+        "program.sketch_job_generated",
+        "Sketch G-code generated and reparsed",
+        context,
+        &result,
+    );
+    result
+}
 
 #[tauri::command]
 pub async fn parse_gcode_program(

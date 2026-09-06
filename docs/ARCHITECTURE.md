@@ -120,6 +120,14 @@ File API -> ProgramGateway -> typed Tauri parse command -> millo-gcode
 It does not pass through the command actor because parsing owns no controller
 state and cannot produce transport writes.
 
+The bundled `io.millo.quick-sketch` plugin uses `jobs.create.generateSketch`
+and `saveSketchProject`. Its pure `millo-sketch` crate owns polygon normalization,
+radius offsets, bounded pocket passes, exact tab transitions and host-managed
+M6 emission. Geometry uses the already adopted Clipper2 library. CAM runs on a
+blocking worker behind a single-generation permit; it never acquires the machine
+actor. Project save is atomic and independent of job publication or readiness.
+See [Sketch CAD/CAM](SKETCH_CAM.md) for the versioned document and limitations.
+
 Generated image jobs are another motion-free path. The plugin is a client of
 the application core, not the owner of CAM behavior:
 
