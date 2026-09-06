@@ -50,7 +50,7 @@ describe("ProgramLoader", () => {
     await expect(loader.load(file({ size: 0 }))).rejects.toThrow("пуст");
     await expect(
       loader.load(file({ size: MAX_PROGRAM_FILE_BYTES + 1 })),
-    ).rejects.toThrow("2 MB");
+    ).rejects.toThrow("64 MiB");
     expect(gateway.parse).not.toHaveBeenCalled();
   });
 });

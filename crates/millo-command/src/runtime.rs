@@ -100,6 +100,7 @@ pub(super) async fn run_actor(mut actor: ActorState, mut requests: mpsc::Receive
                 poll_active_heightmap(&mut actor).await;
             }
         }
+        observe_rotary_tool_change(&mut actor).await;
     }
 }
 

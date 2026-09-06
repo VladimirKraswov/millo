@@ -823,6 +823,7 @@ fn blocker_kind_id(kind: DryRunBlockerKind) -> &'static str {
         DryRunBlockerKind::CommandTooLong => "command-too-long",
         DryRunBlockerKind::HeightmapCompensation => "heightmap-compensation",
         DryRunBlockerKind::CuttingDepthAdjustment => "cutting-depth-adjustment",
+        DryRunBlockerKind::RotaryTransformation => "rotary-transformation",
     }
 }
 
@@ -1044,6 +1045,36 @@ mod tests {
         );
         assert!(report.ready);
         (program, report)
+    }
+
+    #[test]
+    fn rotary_depth_blocker_reaches_both_physical_run_preflights() {
+        let controller = snapshot(MachineMode::Idle);
+        let options = ProgramExecutionOptions {
+            cutting_depth_adjustment_um: Some(200),
+            ..ProgramExecutionOptions::default()
+        };
+        for intent in [ProgramRunIntent::AirRun, ProgramRunIntent::Cutting] {
+            let blocked = assess_real_run_preflight_with_options(
+                &program("G21 G90 G94\nG0 X0 Y0 Z-1\nG1 A90 F100"),
+                hardware(vec![readiness_check("axis-steps", ReadinessLevel::Pass)]),
+                &controller,
+                intent,
+                options,
+            );
+            assert!(!blocked.ready);
+            assert!(blocked.program_blockers.iter().any(|blocker| {
+                blocker.kind == "rotary-transformation" && blocker.source_line == Some(3)
+            }));
+            let corrected = assess_real_run_preflight_with_options(
+                &program("G21 G90 G94\nG1 X0 Y0 Z-1 F100\nG1 X0 Y0 Z-1 A90 F100"),
+                hardware(vec![readiness_check("axis-steps", ReadinessLevel::Pass)]),
+                &controller,
+                intent,
+                options,
+            );
+            assert!(corrected.ready, "{:?}", corrected.program_blockers);
+        }
     }
 
     #[test]

@@ -2,7 +2,8 @@ import { ChevronDown, ShieldAlert, TriangleAlert, Wrench } from "lucide-react";
 
 import type { GcodeProgram, ProgramWarning } from "../../shared/program";
 import type { RunPreflightReport } from "../../shared/realRun";
-import { ProgramLineTable } from "./ProgramLineTable";
+import { PagedProgramLineTable } from "./PagedProgramLineTable";
+import type { ProgramGateway } from "../../platform/program/ProgramGateway";
 import { ProgramPreflightReport } from "./ProgramPreflightReport";
 import {
   formatProgramDiagnostics,
@@ -13,6 +14,7 @@ import {
 export type ProgramDiagnosticView = "lines" | "warnings" | "preflight";
 
 interface ProgramInspectionProps {
+  readonly gateway?: ProgramGateway;
   readonly diagnosticView: ProgramDiagnosticView;
   readonly motionSourceLines: ReadonlySet<number>;
   readonly onOpenChange: (open: boolean) => void;
@@ -20,12 +22,14 @@ interface ProgramInspectionProps {
   readonly onView: (view: ProgramDiagnosticView) => void;
   readonly open: boolean;
   readonly program: GcodeProgram;
+  readonly source?: string;
   readonly realRunTarget: boolean;
   readonly report?: RunPreflightReport;
   readonly selectedSourceLine?: number;
 }
 
 export function ProgramInspection({
+  gateway,
   diagnosticView,
   motionSourceLines,
   onOpenChange,
@@ -33,6 +37,7 @@ export function ProgramInspection({
   onView,
   open,
   program,
+  source,
   realRunTarget,
   report,
   selectedSourceLine,
@@ -48,7 +53,7 @@ export function ProgramInspection({
       <summary>
         <span>Программа и диагностика</span>
         <code>
-          {program.lines.length} строк
+          {program.summary.lineCount} строк
           {diagnosticsLabel ? ` · ${diagnosticsLabel}` : ""}
         </code>
         <ChevronDown aria-hidden="true" size={13} />
@@ -61,7 +66,7 @@ export function ProgramInspection({
         <DiagnosticTab
           active={diagnosticView === "lines"}
           controls="program-lines-panel"
-          count={program.lines.length}
+          count={program.summary.lineCount}
           id="program-lines-tab"
           label="Строки"
           onClick={() => onView("lines")}
@@ -69,7 +74,7 @@ export function ProgramInspection({
         <DiagnosticTab
           active={diagnosticView === "warnings"}
           controls="program-warnings-panel"
-          count={program.warnings.length}
+          count={program.document?.warningCount ?? program.warnings.length}
           id="program-warnings-tab"
           label="Диагностика"
           onClick={() => onView("warnings")}
@@ -93,8 +98,10 @@ export function ProgramInspection({
         id="program-lines-panel"
         role="tabpanel"
       >
-        <ProgramLineTable
-          lines={program.lines}
+        <PagedProgramLineTable
+          program={program}
+          source={source}
+          gateway={gateway}
           motionSourceLines={motionSourceLines}
           onSelect={(sourceLine) =>
             onSelectSourceLine(selectedSourceLine === sourceLine ? undefined : sourceLine)
@@ -109,6 +116,7 @@ export function ProgramInspection({
         id="program-warnings-panel"
         role="tabpanel"
       >
+        {program.document && program.document.warningCount > program.warnings.length && <div className="program-page-error">Показаны первые {program.warnings.length} замечаний из {program.document.warningCount}. Проверка перед запуском учитывает все строки.</div>}
         {program.warnings.length === 0 ? (
           <div className="warnings-empty">Парсер не нашёл замечаний</div>
         ) : (

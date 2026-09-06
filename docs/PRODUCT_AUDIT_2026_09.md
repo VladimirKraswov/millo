@@ -82,10 +82,10 @@ cncjs [README](https://github.com/cncjs/cncjs/blob/a025ab212882a628fbd122d1010a1
 | GRBL serial sender, Hold/Reset, overrides, Check | Есть actor-owned lifecycle и регрессионные тесты | Основной продуктовый сценарий, но нужны повторяемые аппаратные замеры |
 | Work zero, Z probe, heightmap | Есть единый surface session, сохранение и компенсация | Не доказывает физическое положение после отключения питания/пропуска шагов |
 | Ручная M6 и повтор участка | Host barrier, восстановление modal state, отдельный Check и разрешение | Более строгий, не побайтово совместимый с произвольными скриптами Candle |
-| Редактор и 3D preview | Есть подсветка, undo/redo, выбор строки/сегмента, инструмент | Очень большие файлы ограничены: 2 MiB, 200000 строк, 500000 preview points |
+| Редактор и 3D preview | Полный native document, постраничные строки/редактор, bounded overview, delta undo | Проверен миллион строк; действуют совместные лимиты памяти, 64 MiB исходника, 2 млн строк, 4 млн точек. Не безлимитный disk streaming |
 | Подготовка обработки | Изображение/SVG, Gerber/Excellon, выравнивание, 2D CAD/CAM с проектом | Отличительная возможность Millo; это не замена полноценному 3D CAM |
 | Макросы/плагины | Встроенный React SDK и внешние bounded Rhai packages | Не равнозначно произвольным Qt/JS widgets; это осознанная граница доверия |
-| Поворотная ось | A доступна в профильном Jog/telemetry | Полноценное выполнение четырёхосевой программы пока не поддержано parser/policy |
+| Поворотная ось | XYZ+A parser/policy/sender, Zero A, preview углов, guarded restart/recovery | Нужна подтверждённая XYZA/angular прошивка. Нет rotary CAM/collision model; плоская heightmap с A не совместима |
 | Время обработки | Feed/dwell estimate с признаком неполноты | Не достигает planner/acceleration-aware оценки Candle |
 | Сеть и SD | Основной транспорт serial/PTY | Нет пользовательских Telnet/WebSocket и FluidNC SD lifecycle |
 | Другие прошивки и пульты | GRBL-first desktop | Нет Marlin/Smoothieware/TinyG/g2core, многоклиентного сервера, pendant API |
@@ -111,11 +111,11 @@ GRBL-блоков: [официальный parser](https://github.com/gnea/grbl/
    Сейчас captured envelope защищает continuous Jog, но не является полным
    доказательством размещения задания. Нужны отдельные fixtures для каждого
    преобразования и отрицательные аппаратные проверки без резания.
-2. Файлы существенно больше текущих лимитов: потоковый parse/plan, независимый
-   bounded preview и проверка на миллион строк с измерением памяти и latency
-   Hold. Простое повышение констант не решает стоимость копий и IPC.
+2. Следующий этап больших файлов: дисковый потоковый parse/plan для уменьшения
+   peak RSS. Native handles, bounded preview, страницы и миллион строк уже
+   реализованы: [границы и замеры](LARGE_PROGRAMS_AND_ROTARY.md).
 3. Firmware capability layer, затем network transport с heartbeat/разрывом,
-   FluidNC/grblHAL fixtures, A-axis execution и поддержанные coolant blocks.
+   дополнительные FluidNC/grblHAL hardware fixtures и поддержанные coolant blocks.
    Сетевой порт не должен создавать второго writer или обходить session fences.
 4. Отдельный кинематический estimator с rapid, acceleration и junction limits.
    Критерий: сравнение с измеренным временем и явно показанная погрешность.
@@ -126,8 +126,9 @@ GRBL-блоков: [официальный parser](https://github.com/gnea/grbl/
    отключение ПК. Автотесты не заменяют проверку реальной электрики и кинематики.
 
 Остаточные UI-оптимизации: `HeightmapScene` пока перестраивает геометрию при
-обновлении карты; определение текущего номера инструмента читает предшествующие
-строки. Это отдельные задачи на incremental buffers/modal index, а не основание
+обновлении карты. У больших документов номер инструмента теперь использует
+ограниченный modal index; для legacy small-file API остаётся чтение строк.
+Это отдельные задачи на incremental buffers, а не основание
 менять рабочую систему координат или ослаблять проверки запуска.
 
 Эти пункты остаются открытыми. Аудит улучшает текущий рабочий продукт, но не

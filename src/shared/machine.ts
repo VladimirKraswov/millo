@@ -314,7 +314,7 @@ export interface HomingStartOutcome {
   snapshot: ControllerSnapshot;
 }
 
-export type WorkAxis = "x" | "y" | "z";
+export type WorkAxis = "x" | "y" | "z" | "a";
 export type WorkCoordinateSystem = "g54" | "g55" | "g56" | "g57" | "g58" | "g59";
 
 export interface WorkCoordinateSelectionOutcome {

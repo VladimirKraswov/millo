@@ -1,8 +1,9 @@
 import type { GcodeProgram } from "../../shared/program";
 
 export function initialProgramToolNumber(
-  program: Pick<GcodeProgram, "lines">,
+  program: Pick<GcodeProgram, "lines" | "document">,
 ): number | undefined {
+  if (program.document) return program.document.initialToolNumber ?? undefined;
   let selectedTool: number | undefined;
   for (const line of program.lines) {
     if (!line.executable || line.blockDeleted) continue;
@@ -22,10 +23,22 @@ export function initialProgramToolNumber(
 }
 
 export function programToolNumberAtSourceLine(
-  program: Pick<GcodeProgram, "lines">,
+  program: Pick<GcodeProgram, "lines" | "document">,
   sourceLine: number | undefined,
 ): number | undefined {
   if (sourceLine === undefined) return initialProgramToolNumber(program);
+  if (program.document) {
+    if (sourceLine > program.document.toolSelectionCoverageLine) return undefined;
+    const entries = program.document.toolSelections;
+    let low = 0;
+    let high = entries.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (entries[mid].sourceLine <= sourceLine) low = mid + 1;
+      else high = mid;
+    }
+    return low > 0 ? entries[low - 1].tool ?? undefined : initialProgramToolNumber(program);
+  }
   let selectedTool: number | undefined;
   for (const line of program.lines) {
     if (line.sourceLine > sourceLine) break;

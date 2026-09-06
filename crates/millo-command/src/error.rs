@@ -2,6 +2,8 @@ use super::*;
 
 #[derive(Debug, Error)]
 pub enum ArbiterError {
+    #[error("Четырёхосевая программа не готова: {0}")]
+    RotaryProgramUnavailable(String),
     #[error(transparent)]
     Controller(#[from] ControllerError),
     #[error(transparent)]

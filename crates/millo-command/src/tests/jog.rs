@@ -213,7 +213,8 @@ async fn continuous_jog_is_bounded_and_cancelled_by_realtime_byte() {
 
 #[tokio::test]
 async fn optional_a_axis_uses_its_own_profile_limits() {
-    let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+    let transport = MockTransport::rotary();
+    let control = transport.control();
     let mut profile = HardwareProfile::first_machine();
     profile.axes.push("A".to_owned());
     profile.rotary_axis = Some(millo_domain::RotaryAxisProfile {
@@ -222,8 +223,15 @@ async fn optional_a_axis_uses_its_own_profile_limits() {
         max_feed_degrees_per_min: 720.0,
     });
     profile.max_jog_distance_mm = 1.0;
+    let (arbiter, worker) = CommandArbiter::new(
+        Box::new(transport),
+        ControllerConfig {
+            poll_interval: Duration::from_secs(60),
+            ..ControllerConfig::default()
+        },
+        profile,
+    );
     let task = tokio::spawn(worker);
-    arbiter.set_hardware_profile(profile).await.unwrap();
     arbiter.connect().await.unwrap();
 
     let outcome = arbiter

@@ -1,4 +1,11 @@
 mod background_compute;
+mod program_documents;
+mod rotary_restart;
+use program_documents::{ProgramInput, resolve_program};
+pub use program_documents::{
+    open_gcode_document, program_line_detail, program_line_page, save_processed_gcode_document,
+};
+use rotary_restart::verified_rotary_restart_state;
 mod tooling;
 pub use tooling::*;
 mod recovery;
@@ -76,7 +83,7 @@ use millo_recovery::{
     ProgramRecoveryCandidate, ProgramRecoveryPackage, ProgramRecoveryStore, RecoveryContinuity,
     RecoverySeed,
 };
-use millo_restart::{SafeStartIntent, SafeStartPackage, SafeStartRequest, build_safe_start};
+use millo_restart::{SafeStartIntent, SafeStartPackage, SafeStartRequest};
 use millo_run::{
     FirstCutConfirmation, FirstCutPreparation, ProgramRunIntent, RunPreflightReport,
     ToolChangeConfirmation, program_fingerprint,
@@ -146,11 +153,14 @@ pub struct GeneratedGcodeSaveOutcome {
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SelectedRunPreparationRequest {
-    pub request: ProgramParseRequest,
+    pub request: ProgramInput,
     pub selected_source_line: usize,
     pub safe_z_mm: f64,
     pub intent: ProgramRunIntent,
     pub execution_options: ProgramExecutionOptions,
+    #[serde(default)]
+    pub rotary_clearance_confirmed: bool,
+    pub initial_work_a_degrees: Option<f64>,
 }
 
 fn audit_operation<T>(
@@ -816,8 +826,11 @@ mod tests {
             request: ProgramParseRequest {
                 source_name: "two-features.nc".to_owned(),
                 source: source.to_owned(),
-            },
+            }
+            .into(),
             selected_source_line: 9,
+            rotary_clearance_confirmed: false,
+            initial_work_a_degrees: None,
             safe_z_mm: 8.0,
             intent: ProgramRunIntent::Cutting,
             execution_options: ProgramExecutionOptions::default(),

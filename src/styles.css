@@ -20,6 +20,7 @@
 @import "./styles/recovery.css";
 @import "./styles/authorization.css";
 @import "./styles/program-inspection.css";
+@import "./styles/program-documents.css";
 @import "./styles/program-editor.css";
 @import "./styles/controller-inspector.css";
 @import "./styles/operator-console.css";

@@ -24,6 +24,7 @@ use runtime::*;
 
 use std::{
     future::Future,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -86,6 +87,10 @@ use tokio::{
 
 mod operator_console;
 mod program_execution;
+mod rotary_tool_change;
+use rotary_tool_change::{RotaryRunReference, observe_rotary_tool_change};
+mod rotary_program;
+use rotary_program::*;
 
 use program_execution::*;
 
@@ -172,28 +177,28 @@ enum Request {
         response: oneshot::Sender<Result<OperatorConsoleExchange, ArbiterError>>,
     },
     PreflightRealRun {
-        program: GcodeProgram,
+        program: Arc<GcodeProgram>,
         intent: ProgramRunIntent,
         execution_options: ProgramExecutionOptions,
         heightmap: Option<Heightmap>,
         response: oneshot::Sender<Result<RunPreflightReport, ArbiterError>>,
     },
     AuthorizeFirstCut {
-        program: GcodeProgram,
+        program: Arc<GcodeProgram>,
         confirmation: FirstCutConfirmation,
         heightmap: Option<Heightmap>,
         require_check_certificate: bool,
         response: oneshot::Sender<Result<FirstCutPreparation, ArbiterError>>,
     },
     StartProgramRun {
-        program: GcodeProgram,
+        program: Arc<GcodeProgram>,
         authorization_id: u64,
         heightmap: Option<Heightmap>,
         dispatch_immediately: bool,
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
     },
     StartCheckRun {
-        program: GcodeProgram,
+        program: Arc<GcodeProgram>,
         execution_options: ProgramExecutionOptions,
         heightmap: Option<Heightmap>,
         response: oneshot::Sender<Result<SenderSnapshot, ArbiterError>>,
@@ -328,6 +333,8 @@ struct ActorState {
     execution_target: ExecutionTarget,
     sender: Sender,
     sender_dispatch_enabled: bool,
+    prepared_program_reference: Option<ControllerSnapshot>,
+    rotary_run_reference: Option<RotaryRunReference>,
     safety: SafetyManager,
     first_cut: FirstCutGate,
     program_check: ProgramCheckGate,
@@ -439,6 +446,7 @@ const fn work_axis_index(axis: WorkAxis) -> usize {
         WorkAxis::X => 0,
         WorkAxis::Y => 1,
         WorkAxis::Z => 2,
+        WorkAxis::A => 3,
     }
 }
 

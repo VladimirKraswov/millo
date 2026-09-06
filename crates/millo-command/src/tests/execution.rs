@@ -621,7 +621,7 @@ async fn first_cut_authorization_repeats_preflight_and_emits_no_motion() {
         preparation.authorization.program_fingerprint,
         preparation.report.program_fingerprint
     );
-    assert_eq!(preparation.authorization.poll_sequence, 2);
+    assert_eq!(preparation.authorization.poll_sequence, 3);
     assert_eq!(
         control.writes(),
         vec![
@@ -630,6 +630,7 @@ async fn first_cut_authorization_repeats_preflight_and_emits_no_motion() {
             b"$$\n".to_vec(),
             b"$G\n".to_vec(),
             b"$#\n".to_vec(),
+            b"?".to_vec(),
             b"?".to_vec(),
         ]
     );
@@ -1232,6 +1233,9 @@ async fn serial_fixture_hold_pauses_and_resume_continues_the_same_plan() {
 
     arbiter.resume_program_run().await.unwrap();
     assert_eq!(control.writes().last(), Some(&b"~".to_vec()));
+    // This fixture has not committed any bytes yet; admission still requires Idle.
+    assert!(arbiter.release_serial_run_fixture().await.is_err());
+    control.set_status("<Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:0,0>");
     arbiter.release_serial_run_fixture().await.unwrap();
     wait_for_sender(&arbiter, SenderState::Draining).await;
     control.set_status("<Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:0,0>");

@@ -10,7 +10,7 @@ use millo_transport::{Transport, TransportError};
 
 mod virtual_grbl;
 
-use virtual_grbl::{MotionLimits, VirtualGrbl};
+use virtual_grbl::{MotionLimits, VirtualGrbl, validate_axis_words};
 
 const DEFAULT_STATUS: &str = "<Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|FS:0,0>";
 
@@ -48,8 +48,7 @@ struct MockState {
     overrides: [u16; 3],
     virtual_motion_enabled: bool,
     virtual_grbl: VirtualGrbl,
-    rotary_position_degrees: f64,
-    rotary_report_enabled: bool,
+    last_probe_a: f64,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +61,10 @@ impl MockControl {
         let mut state = self.lock();
         state.status_line = status_line.into();
         let position = status_position(&state.status_line).unwrap_or([0.0; 3]);
+        if state.virtual_grbl.rotary_enabled {
+            state.virtual_grbl.rotary_position =
+                status_rotary_position(&state.status_line, "MPos").unwrap_or(0.0);
+        }
         state.virtual_grbl.sync_external_position(position);
     }
 
@@ -272,8 +275,7 @@ impl MockTransport {
                     overrides: [100, 100, 100],
                     virtual_motion_enabled: true,
                     virtual_grbl: VirtualGrbl::new(position),
-                    rotary_position_degrees: 0.0,
-                    rotary_report_enabled: false,
+                    last_probe_a: 0.0,
                 })),
             },
         }
@@ -281,6 +283,26 @@ impl MockTransport {
 
     pub fn control(&self) -> MockControl {
         self.control.clone()
+    }
+
+    /// Opt-in XYZA firmware fixture. A is angular (degrees), including in G20.
+    /// This never changes the capabilities of the default XYZ mock.
+    pub fn rotary() -> Self {
+        let transport = Self::default();
+        {
+            let mut state = transport.lock();
+            state.virtual_grbl.rotary_enabled = true;
+            for (number, value) in [
+                (103, "10.000"),
+                (113, "3600.000"),
+                (123, "360.000"),
+                (133, "3600.000"),
+            ] {
+                state.settings.insert(number, value.to_owned());
+            }
+            refresh_virtual_status(&mut state);
+        }
+        transport
     }
 
     fn lock(&self) -> MutexGuard<'_, MockState> {
@@ -309,6 +331,26 @@ impl Transport for MockTransport {
         }
 
         state.writes.push(data.to_vec());
+        if let Ok(command) = std::str::from_utf8(data) {
+            let command = command.trim_end_matches(['\r', '\n']);
+            let gcode = command
+                .strip_prefix("$J=")
+                .or_else(|| is_program_line(data).then_some(command));
+            if let Some(gcode) = gcode {
+                if let Err(code) = validate_axis_words(gcode, state.virtual_grbl.rotary_enabled) {
+                    state
+                        .active_reads
+                        .push_back(MockRead::Line(format!("error:{code}")));
+                    return Ok(());
+                }
+                if state.status_line.starts_with("<Alarm") {
+                    state
+                        .active_reads
+                        .push_back(MockRead::Line("error:9".to_owned()));
+                    return Ok(());
+                }
+            }
+        }
         if data == b"?" {
             let cycle = if let Some(cycle) = state.planned_cycles.pop_front() {
                 cycle
@@ -357,7 +399,9 @@ impl Transport for MockTransport {
                 state.status_line = state.status_line.replacen("<Hold:0", "<Run", 1);
             }
         } else if data == b"\x18" {
+            refresh_virtual_status(&mut state);
             let position = status_position(&state.status_line).unwrap_or([0.0; 3]);
+            state.active_wcs = 0;
             let work_position = subtract_position(position, state.work_offsets[state.active_wcs]);
             state.virtual_grbl.stop(position);
             state.status_line = format_status("Idle", position, work_position, 0.0);
@@ -368,6 +412,7 @@ impl Transport for MockTransport {
             state
                 .active_reads
                 .push_back(MockRead::Line("Grbl 1.1h ['$' for help]".to_owned()));
+            refresh_virtual_status(&mut state);
         } else if data == [0x85] {
             if state.virtual_motion_enabled {
                 let overrides = state.overrides;
@@ -465,6 +510,7 @@ impl Transport for MockTransport {
                         status_position(&state.status_line).unwrap_or([0.0; 3]);
                     machine_position[2] -= probe.max_travel_mm;
                     state.last_probe = machine_position;
+                    state.last_probe_a = state.virtual_grbl.rotary_position;
                     state.probe_succeeded = false;
                     let work_position =
                         subtract_position(machine_position, state.work_offsets[state.active_wcs]);
@@ -489,6 +535,7 @@ impl Transport for MockTransport {
                 let mut machine_position = status_position(&state.status_line).unwrap_or([0.0; 3]);
                 machine_position[2] -= trigger.unwrap_or_default();
                 state.last_probe = machine_position;
+                state.last_probe_a = state.virtual_grbl.rotary_position;
                 state.probe_succeeded = true;
                 let work_position =
                     subtract_position(machine_position, state.work_offsets[state.active_wcs]);
@@ -565,24 +612,26 @@ impl Transport for MockTransport {
             }
         } else if let Some(jog) = parse_jog(data) {
             if jog.axis == 3 {
-                state.rotary_report_enabled = true;
+                let current = state.virtual_grbl.rotary_position;
                 let distance = if jog.absolute {
-                    jog.distance_mm - state.rotary_position_degrees
+                    jog.distance_mm + state.virtual_grbl.rotary_work_offsets[state.active_wcs]
+                        - current
                 } else {
                     jog.distance_mm
                 } * state.jog_distance_scale;
-                state.rotary_position_degrees += distance;
-                state.status_line = status_with_rotary_position(
-                    &status_with_mode(&state.status_line, "Jog", jog.feed_mm_per_min),
-                    state.rotary_position_degrees,
+                let position = status_position(&state.status_line).unwrap_or([0.0; 3]);
+                let limits = motion_limits(&state);
+                let result = state.virtual_grbl.enqueue_coordinated_jog(
+                    position,
+                    current + distance,
+                    jog.feed_mm_per_min,
+                    limits,
                 );
-                state.jog_polls_remaining = mock_jog_status_polls(MockJog {
-                    distance_mm: distance,
-                    ..jog
-                });
-                state
-                    .active_reads
-                    .push_back(MockRead::Line("ok".to_owned()));
+                refresh_virtual_status(&mut state);
+                state.active_reads.push_back(MockRead::Line(match result {
+                    Ok(()) => "ok".to_owned(),
+                    Err(code) => format!("error:{code}"),
+                }));
                 return Ok(());
             }
             let mut position = status_position(&state.status_line).unwrap_or([0.0; 3]);
@@ -624,6 +673,26 @@ impl Transport for MockTransport {
             }
         } else if let Some(work_zero) = parse_work_zero(data) {
             let machine_position = status_position(&state.status_line).unwrap_or([0.0; 3]);
+            if work_zero.axis == 3 {
+                if state.status_line.starts_with("<Run")
+                    || state.status_line.starts_with("<Hold")
+                    || state.status_line.starts_with("<Jog")
+                {
+                    state
+                        .active_reads
+                        .push_back(MockRead::Line("error:8".to_owned()));
+                    return Ok(());
+                }
+                if status_mode(&state.status_line) != Some("Check") {
+                    state.virtual_grbl.rotary_work_offsets[work_zero.coordinate_system] =
+                        state.virtual_grbl.rotary_position - work_zero.value_mm;
+                    refresh_virtual_status(&mut state);
+                }
+                state
+                    .active_reads
+                    .push_back(MockRead::Line("ok".to_owned()));
+                return Ok(());
+            }
             state.work_offsets[work_zero.coordinate_system][work_zero.axis] =
                 machine_position[work_zero.axis] - work_zero.value_mm;
             if work_zero.coordinate_system == state.active_wcs {
@@ -844,6 +913,7 @@ fn parse_work_zero(data: &[u8]) -> Option<MockWorkZero> {
         b'X' => 0,
         b'Y' => 1,
         b'Z' => 2,
+        b'A' => 3,
         _ => return None,
     };
     let value_mm = words[3].get(1..)?.parse::<f64>().ok()?;
@@ -899,12 +969,27 @@ fn refresh_virtual_status(state: &mut MockState) {
     let work_offset = state.work_offsets[state.active_wcs];
     let overrides = state.overrides;
     if let Some(status) = state.virtual_grbl.status_line(work_offset, overrides) {
-        state.status_line = if state.rotary_report_enabled {
-            status_with_rotary_position(&status, state.rotary_position_degrees)
-        } else {
-            status
-        };
+        state.status_line = status;
     }
+    if state.virtual_grbl.rotary_enabled {
+        let a = state.virtual_grbl.rotary_position;
+        state.status_line = status_with_rotary_position(
+            &state.status_line,
+            a,
+            a - state.virtual_grbl.rotary_work_offsets[state.active_wcs],
+        );
+    }
+}
+
+fn status_rotary_position(status: &str, name: &str) -> Option<f64> {
+    status
+        .trim_end_matches('>')
+        .split('|')
+        .find_map(|field| field.strip_prefix(&format!("{name}:")))?
+        .split(',')
+        .nth(3)?
+        .parse()
+        .ok()
 }
 
 fn status_named_position(status: &str, name: &str) -> Option<[f64; 3]> {
@@ -977,7 +1062,7 @@ fn status_with_overrides(status: &str, overrides: [u16; 3]) -> String {
     format!("<{}>", fields.join("|"))
 }
 
-fn status_with_rotary_position(status: &str, a_degrees: f64) -> String {
+fn status_with_rotary_position(status: &str, machine_a: f64, work_a: f64) -> String {
     let mut fields = status
         .trim_start_matches('<')
         .trim_end_matches('>')
@@ -992,6 +1077,7 @@ fn status_with_rotary_position(status: &str, a_degrees: f64) -> String {
             };
             let values = coordinates.split(',').take(3).collect::<Vec<_>>();
             if values.len() == 3 {
+                let a_degrees = if name == "MPos" { machine_a } else { work_a };
                 *field = format!(
                     "{name}:{},{},{},{a_degrees:.3}",
                     values[0], values[1], values[2]
@@ -1075,11 +1161,20 @@ fn motion_limits(state: &MockState) -> MotionLimits {
             setting(112, 500.0),
         ],
         acceleration_mm_per_sec2: [setting(120, 50.0), setting(121, 50.0), setting(122, 30.0)],
+        rotary_rate_deg_per_min: setting(113, 3_600.0),
+        rotary_acceleration_deg_per_sec2: setting(123, 360.0),
     }
 }
 
 fn device_query_response(command: &[u8], state: &MockState) -> Option<VecDeque<MockRead>> {
     match command {
+        b"$I\n" | b"$I+\n" if state.virtual_grbl.rotary_enabled => Some(lines(&[
+            "[VER:1.1h.20260906:Millo VMC-4 rotary mock]",
+            &format!("[OPT:{}]", state.firmware_options),
+            "[AXS:4:XYZA]",
+            "[FIRMWARE:MilloVirtual]",
+            "ok",
+        ])),
         b"$I\n" => Some(lines(&[
             "[VER:1.1h.20260814:Millo VMC-3]",
             &format!("[OPT:{}]", state.firmware_options),
@@ -1094,7 +1189,7 @@ fn device_query_response(command: &[u8], state: &MockState) -> Option<VecDeque<M
             response.push_back(MockRead::Line("ok".to_owned()));
             Some(response)
         }
-        b"$G\n" => Some(lines(&[
+        b"$G\n" | b"$GC\n" => Some(lines(&[
             &state.virtual_grbl.modal_report(state.active_wcs),
             "ok",
         ])),
@@ -1104,17 +1199,31 @@ fn device_query_response(command: &[u8], state: &MockState) -> Option<VecDeque<M
                 .iter()
                 .enumerate()
                 .map(|(index, [x, y, z])| {
-                    MockRead::Line(format!("[G{}:{x:.3},{y:.3},{z:.3}]", index + 54))
+                    let a = if state.virtual_grbl.rotary_enabled {
+                        format!(",{:.3}", state.virtual_grbl.rotary_work_offsets[index])
+                    } else {
+                        String::new()
+                    };
+                    MockRead::Line(format!("[G{}:{x:.3},{y:.3},{z:.3}{a}]", index + 54))
                 })
                 .collect::<VecDeque<_>>();
             response.extend(lines(&[
-                "[G92:0.000,0.000,0.000]",
+                if state.virtual_grbl.rotary_enabled {
+                    "[G92:0.000,0.000,0.000,0.000]"
+                } else {
+                    "[G92:0.000,0.000,0.000]"
+                },
                 "[TLO:0.000]",
                 &format!(
-                    "[PRB:{:.3},{:.3},{:.3}:{}]",
+                    "[PRB:{:.3},{:.3},{:.3}{}:{}]",
                     state.last_probe[0],
                     state.last_probe[1],
                     state.last_probe[2],
+                    if state.virtual_grbl.rotary_enabled {
+                        format!(",{:.3}", state.last_probe_a)
+                    } else {
+                        String::new()
+                    },
                     u8::from(state.probe_succeeded)
                 ),
                 "ok",
@@ -1350,7 +1459,7 @@ mod tests {
 
     #[tokio::test]
     async fn optional_rotary_jog_reports_a_position() {
-        let mut transport = MockTransport::default();
+        let mut transport = MockTransport::rotary();
         transport.connect().await.unwrap();
         transport
             .write(b"$J=G91 G21 A5.000 F360.000\n")
@@ -1358,6 +1467,7 @@ mod tests {
             .unwrap();
         assert_eq!(transport.read_line().await.unwrap(), "ok");
 
+        transport.control().advance_program(Duration::from_secs(10));
         transport.write(b"?").await.unwrap();
         let status = transport.read_line().await.unwrap();
         assert!(status.contains("MPos:0.000,0.000,0.000,5.000"));

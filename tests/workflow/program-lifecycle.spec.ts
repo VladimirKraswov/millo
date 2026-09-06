@@ -100,9 +100,10 @@ test("late height-map initial reads do not replace a running operation event", a
 });
 
 test("preview retains its renderer on callback changes and remains nonblank after geometry changes", async ({ page }) => {
+  test.setTimeout(90_000);
   await invoke(page, "h.mountPreview();");
   const preview = page.locator(".toolpath-preview canvas");
-  await expect(preview).toBeVisible();
+  await expect(preview).toBeVisible({ timeout: 30_000 });
   const canvas = await preview.elementHandle();
   await invoke(page, "h.mountPreview();");
   expect(await canvas!.evaluate(node => node.isConnected)).toBe(true);

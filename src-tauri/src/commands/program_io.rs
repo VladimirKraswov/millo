@@ -185,7 +185,7 @@ pub async fn save_gcode_program(
     .await
 }
 
-async fn save_validated_gcode(
+pub(super) async fn save_validated_gcode(
     request: ProgramParseRequest,
     app: &AppHandle,
     audit: &AuditLog,
@@ -265,8 +265,28 @@ pub async fn prepare_selected_program_run(
         "intent": request.intent,
         "executionOptions": request.execution_options,
     });
+    let rotary_state = if request.rotary_clearance_confirmed {
+        let inspection = state
+            .arbiter
+            .inspect_device()
+            .await
+            .map_err(|error| error.to_string())?;
+        let snapshot = state
+            .arbiter
+            .refresh_status()
+            .await
+            .map_err(|error| error.to_string())?;
+        verified_rotary_restart_state(
+            &snapshot,
+            &inspection.device,
+            request.initial_work_a_degrees,
+            true,
+        )?
+    } else {
+        None
+    };
     let result = background_compute::run("Selected-run planner task failed", move || {
-        prepare_selected_run(request)
+        prepare_selected_run_with_rotary(request, rotary_state)
     })
     .await;
     audit_operation(
@@ -280,19 +300,28 @@ pub async fn prepare_selected_program_run(
     result
 }
 
+#[cfg(test)]
 pub(super) fn prepare_selected_run(
     request: SelectedRunPreparationRequest,
 ) -> Result<SafeStartPackage, String> {
-    let program = parse_program_with_options(
+    prepare_selected_run_with_rotary(request, None)
+}
+
+fn prepare_selected_run_with_rotary(
+    request: SelectedRunPreparationRequest,
+    rotary: Option<millo_restart::RotaryRestartState>,
+) -> Result<SafeStartPackage, String> {
+    let document = program_documents::resolve_program_blocking(
         request.request.clone(),
         ProgramParseOptions {
             block_delete: request.execution_options.block_delete,
         },
     )
     .map_err(|error| error.to_string())?;
-    let package = build_safe_start(
-        &program,
-        &request.request.source,
+    let program = &document.program;
+    let package = millo_restart::build_safe_start_with_rotary(
+        program,
+        &document.source,
         SafeStartRequest {
             selected_source_line: request.selected_source_line,
             safe_z_mm: request.safe_z_mm,
@@ -301,6 +330,7 @@ pub(super) fn prepare_selected_run(
                 ProgramRunIntent::Cutting => SafeStartIntent::Cutting,
             },
         },
+        rotary,
     )
     .map_err(|error| error.to_string())?;
     let prepared = parse_program_with_options(

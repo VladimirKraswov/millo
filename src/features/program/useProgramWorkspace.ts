@@ -35,7 +35,8 @@ import {
 } from "./operatorLayoutModel";
 import { hasActionableProgramWarnings } from "./programDiagnosticsModel";
 import { programReadinessView } from "./programReadinessView";
-import { programSourceIndex } from "./programSourceIndex";
+import { useProgramSelection } from "./useProgramSelection";
+import { programDocumentRequest } from "./programDocumentRequest";
 import { programToolVisualization } from "./programToolVisualizationModel";
 import type {
   ProgramWorkspaceProps,
@@ -346,17 +347,15 @@ export function useProgramWorkspace({
     }
   };
 
-  const prepareSelectedRun = (safeZMm: number): Promise<SafeStartPackage> => {
+  const prepareSelectedRun = (safeZMm: number, rotary?: { readonly initialWorkADegrees: number; readonly rotaryClearanceConfirmed: boolean }): Promise<SafeStartPackage> => {
     if (!loaded || !realRunGateway || selectedSourceLine === undefined) {
       throw new Error("Safe selected-line start is unavailable");
     }
     return realRunGateway.prepareSelectedRun({
-      request: {
-        sourceName: loaded.program.sourceName,
-        source: loaded.source,
-      },
+      request: programDocumentRequest(loaded),
       selectedSourceLine,
       safeZMm,
+      ...rotary,
       intent: programRunIntent,
       executionOptions: programExecutionOptions,
     });
@@ -445,22 +444,13 @@ export function useProgramWorkspace({
   };
 
   const bounds = program?.summary.bounds;
-  const sourceIndex = useMemo(() => program ? programSourceIndex(program) : undefined, [program]);
+  const { sourceIndex, selectedProgramLine, selectedToolpath, selectionError } = useProgramSelection(program, selectedSourceLine, gateway, loaded?.source);
+  useEffect(() => { if (selectionError) setError(selectionError); }, [selectionError]);
   const motionSourceLines = useMemo(
     () => new Set(sourceIndex?.motions.keys()),
     [sourceIndex],
   );
-  const selectedProgramLine = useMemo(
-    () => selectedSourceLine === undefined ? undefined : sourceIndex?.lines.get(selectedSourceLine),
-    [sourceIndex, selectedSourceLine],
-  );
-  const selectedMotionCount = useMemo(
-    () =>
-      selectedSourceLine === undefined
-        ? 0
-        : (sourceIndex?.motions.get(selectedSourceLine)?.length ?? 0),
-    [sourceIndex, selectedSourceLine],
-  );
+  const selectedMotionCount = selectedToolpath?.length ?? 0;
   const runSenderAction = async (action: () => Promise<SenderSnapshot>) => {
     if (senderCommandBusy) return;
     const isCurrent = captureScope();
@@ -556,10 +546,7 @@ export function useProgramWorkspace({
     setError(undefined);
     try {
       const reparsed = await gateway.parse(
-        {
-          sourceName: loaded.program.sourceName,
-          source: loaded.source,
-        },
+        programDocumentRequest(loaded),
         { blockDelete: value },
       );
       if (!isCurrent() || senderActiveRef.current) return;
@@ -630,10 +617,7 @@ export function useProgramWorkspace({
     setRealRunReport(undefined);
     try {
       const report = await realRunGateway.preflight(
-        {
-          sourceName: loaded.program.sourceName,
-          source: loaded.source,
-        },
+        programDocumentRequest(loaded),
         programRunIntent,
         programExecutionOptions,
       );
@@ -657,10 +641,7 @@ export function useProgramWorkspace({
       throw new Error("First-cut gateway is unavailable");
     }
     return realRunGateway.authorizeFirstCut(
-      {
-        sourceName: loaded.program.sourceName,
-        source: loaded.source,
-      },
+      programDocumentRequest(loaded),
       confirmation,
     );
   };
@@ -673,10 +654,7 @@ export function useProgramWorkspace({
     const reconcileSenderResult = captureSenderResult();
     try {
       const snapshot = await realRunGateway.startProgram(
-        {
-          sourceName: loaded.program.sourceName,
-          source: loaded.source,
-        },
+        programDocumentRequest(loaded),
         preparation.authorization.id,
         programExecutionOptions,
       );
@@ -701,10 +679,7 @@ export function useProgramWorkspace({
     setDiagnosticsOpen(false);
     void runSenderAction(() =>
       realRunGateway.startCheck(
-        {
-          sourceName: loaded.program.sourceName,
-          source: loaded.source,
-        },
+        programDocumentRequest(loaded),
         programExecutionOptions,
       ),
     );
@@ -722,10 +697,7 @@ export function useProgramWorkspace({
     const reconcileSenderResult = captureSenderResult();
     try {
       const checkSnapshot = await realRunGateway.startCheck(
-        {
-          sourceName: loaded.program.sourceName,
-          source: loaded.source,
-        },
+        programDocumentRequest(loaded),
         executionOptions,
       );
       setClearedSenderRunSequence(undefined);
@@ -900,6 +872,7 @@ export function useProgramWorkspace({
     safeStartOpen,
     selectedMotionCount,
     selectedProgramLine,
+    selectedToolpath,
     selectedSourceLine,
     sender,
     senderActive,

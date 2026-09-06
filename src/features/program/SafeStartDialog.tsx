@@ -7,10 +7,11 @@ import type { SafeStartPackage } from "../../shared/realRun";
 import { canPrepareSafeStart } from "./safeStartModel";
 
 interface SafeStartDialogProps {
+  readonly rotaryProgram?: boolean;
   readonly minimumSafeZ: number;
   readonly motionCount: number;
   readonly onClose: () => void;
-  readonly onPrepare: (safeZMm: number) => Promise<SafeStartPackage>;
+  readonly onPrepare: (safeZMm: number, rotary?: { readonly initialWorkADegrees: number; readonly rotaryClearanceConfirmed: boolean }) => Promise<SafeStartPackage>;
   readonly onPrepared: (prepared: SafeStartPackage) => Promise<void> | void;
   readonly open: boolean;
   readonly selectedCommand: string;
@@ -19,6 +20,7 @@ interface SafeStartDialogProps {
 }
 
 export function SafeStartDialog({
+  rotaryProgram = false,
   minimumSafeZ,
   motionCount,
   onClose,
@@ -32,6 +34,9 @@ export function SafeStartDialog({
   const [safeZ, setSafeZ] = useState(suggestedSafeZ);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [initialA, setInitialA] = useState("0");
+  const [rotaryConfirmed, setRotaryConfirmed] = useState(false);
+  const rotaryReady = !rotaryProgram || rotaryConfirmed && initialA.trim() !== "" && Number.isFinite(Number(initialA));
   const captureScope = useAsyncScope([open, sourceLine, suggestedSafeZ]);
 
   useEffect(() => {
@@ -39,11 +44,13 @@ export function SafeStartDialog({
     setSafeZ(suggestedSafeZ);
     setBusy(false);
     setError(undefined);
+    setRotaryConfirmed(false);
   }, [open, sourceLine, suggestedSafeZ]);
 
   if (!open) return null;
 
   const prepare = async () => {
+    if (!rotaryReady) return;
     if (
       !canPrepareSafeStart({
         busy,
@@ -59,7 +66,9 @@ export function SafeStartDialog({
     const isCurrent = captureScope();
     setError(undefined);
     try {
-      const prepared = await onPrepare(safeZ);
+      const prepared = rotaryProgram
+        ? await onPrepare(safeZ, { initialWorkADegrees: Number(initialA), rotaryClearanceConfirmed: rotaryConfirmed })
+        : await onPrepare(safeZ);
       if (!isCurrent()) return;
       await onPrepared(prepared);
       if (isCurrent()) onClose();
@@ -139,6 +148,15 @@ export function SafeStartDialog({
             </p>
           </div>
 
+          {rotaryProgram && <div className="safe-start-rotary">
+            <label>Угол A в начале исходной программы
+              <span><input aria-label="Начальный угол A" type="number" step="0.1" value={initialA} disabled={busy} onChange={(event) => setInitialA(event.target.value)} /> °</span>
+            </label>
+            <label><input type="checkbox" checked={rotaryConfirmed} disabled={busy} onChange={(event) => setRotaryConfirmed(event.target.checked)} />
+              <span>Индекс A восстановлен; на Safe Z заготовка и крепёж могут свободно повернуться</span>
+            </label>
+          </div>}
+
           <div className="safe-start-next">
             <ScanSearch aria-hidden="true" size={17} />
             <span>
@@ -165,7 +183,7 @@ export function SafeStartDialog({
           <button
             className="first-cut-authorize"
             disabled={
-              !canPrepareSafeStart({
+              !rotaryReady || !canPrepareSafeStart({
                 busy,
                 minimumSafeZ,
                 motionCount,

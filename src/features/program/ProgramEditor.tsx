@@ -1,8 +1,11 @@
 import { DialogSurface } from "../../components/DialogSurface";
 import {
   Check,
+  ChevronLeft,
+  ChevronRight,
   ClipboardPaste,
   Copy,
+  CornerDownLeft,
   FileOutput,
   ListPlus,
   LoaderCircle,
@@ -34,22 +37,22 @@ import {
   programWarningPresentation,
 } from "./programDiagnosticsModel";
 import {
-  buildProcessedProgramSource,
+  PROGRAM_EDITOR_HISTORY_BYTES,
   commitProgramEditorSource,
   createProgramEditorHistory,
   deleteProgramLines,
   insertProgramLine,
-  processedProgramName,
   redoProgramEditorSource,
   replaceTextSelection,
   selectedTextOrLines,
-  sourceLineAtOffset,
-  sourceOffsetAtLine,
   tokenizeGcodeLine,
   undoProgramEditorSource,
   type TextEdit,
-  type TextSelection,
 } from "./programEditorModel";
+import { PROGRAM_EDITOR_PAGE_LINES } from "./programEditorPaging";
+import { saveProgramEditorDocument } from "./programEditorSave";
+import { useProgramEditorPaging } from "./useProgramEditorPaging";
+import { useProgramSelection } from "./useProgramSelection";
 
 const ToolpathPreview = lazy(async () => {
   const module = await import("./ToolpathPreview");
@@ -89,15 +92,13 @@ export function ProgramEditor({
   const [previewGateway, setPreviewGateway] = useState(() => gateway);
   const [parseState, setParseState] = useState<ParseState>("ready");
   const [parseError, setParseError] = useState<string>();
-  const [selectedSourceLine, setSelectedSourceLine] = useState(1);
   const [scroll, setScroll] = useState({ left: 0, top: 0 });
   const [viewportHeight, setViewportHeight] = useState(480);
-  const [pendingSelection, setPendingSelection] = useState<TextSelection>();
+  const [jumpLine, setJumpLine] = useState("1");
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveNotice, setSaveNotice] = useState<string>();
   const [operationError, setOperationError] = useState<string>();
   const [discardArmed, setDiscardArmed] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const editorViewportRef = useRef<HTMLDivElement>(null);
   const parseSequence = useRef(0);
   const source = history.source;
@@ -105,7 +106,11 @@ export function ProgramEditor({
   const currentRevisionReady =
     parseState === "ready" && previewSource === source &&
     previewBlockDelete === blockDelete && previewGateway === gateway;
-  const sourceLines = useMemo(() => source.split("\n"), [source]);
+  const paging = useProgramEditorPaging(source, (edit) => commit(edit), setScroll);
+  const { page, offsets, textareaRef, selectedSourceLine, selection, focusSourceLine } = paging;
+  const { selectedToolpath } = useProgramSelection(currentRevisionReady ? preview : undefined, selectedSourceLine, gateway, source);
+  const paged = offsets.length > PROGRAM_EDITOR_PAGE_LINES;
+  const sourceLines = useMemo(() => page.text.split("\n"), [page.text]);
   const firstVisibleLine = Math.min(
     Math.max(0, sourceLines.length - 1),
     Math.max(0, Math.floor(scroll.top / EDITOR_LINE_HEIGHT) - EDITOR_OVERSCAN),
@@ -159,15 +164,7 @@ export function ProgramEditor({
     };
   }, [blockDelete, document.program.sourceName, gateway, source]);
 
-  useEffect(() => {
-    if (!pendingSelection) return;
-    const textarea = textareaRef.current;
-    if (!textarea) return;
-    textarea.focus();
-    textarea.setSelectionRange(pendingSelection.start, pendingSelection.end);
-    setSelectedSourceLine(sourceLineAtOffset(source, pendingSelection.start));
-    setPendingSelection(undefined);
-  }, [pendingSelection, source]);
+  useEffect(() => setJumpLine(String(selectedSourceLine)), [selectedSourceLine]);
 
   useEffect(() => {
     if (!discardArmed) return;
@@ -175,39 +172,28 @@ export function ProgramEditor({
     return () => window.clearTimeout(timer);
   }, [discardArmed]);
 
-  const selection = (): TextSelection => {
-    const textarea = textareaRef.current;
-    return {
-      start: textarea?.selectionStart ?? 0,
-      end: textarea?.selectionEnd ?? 0,
-    };
-  };
-
   const commit = (edit: TextEdit) => {
-    setHistory((current) => commitProgramEditorSource(current, edit.source));
-    setPendingSelection(edit.selection);
+    const before = selection();
+    setHistory((current) => commitProgramEditorSource(current, edit.source, edit.selection, before, edit.change));
+    paging.select(edit.selection);
     setSaveNotice(undefined);
-    setOperationError(undefined);
+    const change = edit.change;
+    const clearsHistory = change && (change.end - change.start + change.replacement.length) * 2 + 64 > PROGRAM_EDITOR_HISTORY_BYTES;
+    setOperationError(clearsHistory ? "История отмены очищена: крупная правка" : undefined);
     setDiscardArmed(false);
-  };
-
-  const commitSource = (nextSource: string, nextSelection: TextSelection) => {
-    commit({ source: nextSource, selection: nextSelection });
   };
 
   const undo = () => {
     const next = undoProgramEditorSource(history);
-    const offset = Math.min(next.source.length, selection().start);
     setHistory(next);
-    setPendingSelection({ start: offset, end: offset });
+    paging.select(next.selection);
     setSaveNotice(undefined);
   };
 
   const redo = () => {
     const next = redoProgramEditorSource(history);
-    const offset = Math.min(next.source.length, selection().start);
     setHistory(next);
-    setPendingSelection({ start: offset, end: offset });
+    paging.select(next.selection);
     setSaveNotice(undefined);
   };
 
@@ -231,24 +217,12 @@ export function ProgramEditor({
   };
 
   const save = async (transformed: boolean) => {
-    if (!gateway.save || !currentRevisionReady || saveBusy) return;
-    const saveSource = transformed
-      ? buildProcessedProgramSource(preview)
-      : source;
-    if (!saveSource.trim()) {
-      setOperationError("Обработанная копия не содержит исполняемых строк");
-      return;
-    }
+    if (!currentRevisionReady || saveBusy) return;
     setSaveBusy(true);
     setOperationError(undefined);
     setSaveNotice(undefined);
     try {
-      const outcome = await gateway.save({
-        sourceName: transformed
-          ? processedProgramName(document.program.sourceName)
-          : document.program.sourceName,
-        source: saveSource,
-      });
+      const outcome = await saveProgramEditorDocument(gateway, { program: preview, source }, transformed);
       if (outcome) setSaveNotice(`Сохранено · ${outcome.bytesWritten} байт`);
     } catch (reason) {
       setOperationError(`Не удалось сохранить: ${formatParseError(reason)}`);
@@ -265,21 +239,8 @@ export function ProgramEditor({
     setDiscardArmed(true);
   };
 
-  const focusSourceLine = (sourceLine: number) => {
-    const offset = sourceOffsetAtLine(source, sourceLine);
-    const textarea = textareaRef.current;
-    if (textarea) {
-      textarea.scrollTop = Math.max(
-        0,
-        (sourceLine - 1) * EDITOR_LINE_HEIGHT - 80,
-      );
-      setScroll({ left: textarea.scrollLeft, top: textarea.scrollTop });
-    }
-    setSelectedSourceLine(sourceLine);
-    setPendingSelection({ start: offset, end: offset });
-  };
-
   const onEditorKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (paging.keyDown(event)) return;
     const modifier = event.metaKey || event.ctrlKey;
     if (modifier && event.key.toLowerCase() === "z") {
       event.preventDefault();
@@ -304,20 +265,12 @@ export function ProgramEditor({
     });
   };
 
-  const updateCaretLine = () => {
-    const textarea = textareaRef.current;
-    if (textarea)
-      setSelectedSourceLine(
-        sourceLineAtOffset(source, textarea.selectionStart),
-      );
-  };
-
   return (
     <div className="program-editor-backdrop" role="presentation">
       <DialogSurface
         onDismiss={requestClose}
         aria-labelledby="program-editor-title"
-        className="program-editor"
+        className={`program-editor${paged ? " is-paged-editor" : ""}`}
       >
         <header>
           <div>
@@ -428,12 +381,32 @@ export function ProgramEditor({
             </button>
           </div>
           <code>
-            L{selectedSourceLine} · {sourceLines.length} строк
+            L{selectedSourceLine} · {offsets.length} строк
           </code>
         </div>
 
         <div className="program-editor-body">
-          <div className="program-editor-code" ref={editorViewportRef}>
+          <div className={`program-editor-code${paged ? " is-paged" : ""}`} ref={editorViewportRef}>
+            {paged && (
+              <div className="program-editor-pages" role="group" aria-label="Страницы исходного кода">
+                <button aria-label="Предыдущая страница" title="Предыдущая страница" type="button"
+                  disabled={page.firstLine === 1} onClick={() => focusSourceLine(page.firstLine - 1)}>
+                  <ChevronLeft aria-hidden="true" size={15} />
+                </button>
+                <code>L{page.firstLine}–{page.lastLine}</code>
+                <button aria-label="Следующая страница" title="Следующая страница" type="button"
+                  disabled={page.lastLine === offsets.length} onClick={() => focusSourceLine(page.lastLine + 1)}>
+                  <ChevronRight aria-hidden="true" size={15} />
+                </button>
+                <input aria-label="Перейти к строке" type="number" min={1} max={offsets.length} step={1}
+                  value={jumpLine} onChange={(event) => setJumpLine(event.target.value)}
+                  onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); focusSourceLine(Number(jumpLine)); } }} />
+                <button aria-label="Перейти к строке" title="Перейти к строке" type="button"
+                  onClick={() => focusSourceLine(Number(jumpLine))}>
+                  <CornerDownLeft aria-hidden="true" size={15} />
+                </button>
+              </div>
+            )}
             <div
               aria-hidden="true"
               className="program-editor-gutter"
@@ -443,7 +416,7 @@ export function ProgramEditor({
             >
               {visibleLines.map((_, index) => (
                 <span key={firstVisibleLine + index}>
-                  {firstVisibleLine + index + 1}
+                  {page.firstLine + firstVisibleLine + index}
                 </span>
               ))}
             </div>
@@ -455,7 +428,7 @@ export function ProgramEditor({
               }}
             >
               {visibleLines.map((line, index) => {
-                const sourceLine = firstVisibleLine + index + 1;
+                const sourceLine = page.firstLine + firstVisibleLine + index;
                 return (
                   <span
                     className={
@@ -483,19 +456,34 @@ export function ProgramEditor({
               autoCapitalize="off"
               autoCorrect="off"
               onChange={(event) =>
-                commitSource(event.currentTarget.value, {
+                paging.change(event.currentTarget.value, {
                   start: event.currentTarget.selectionStart,
                   end: event.currentTarget.selectionEnd,
+                  direction: event.currentTarget.selectionDirection,
                 })
               }
-              onClick={updateCaretLine}
+              onClick={() => paging.updateCaret(true)}
               onKeyDown={onEditorKeyDown}
-              onKeyUp={updateCaretLine}
+              onKeyUp={() => paging.updateCaret()}
               onScroll={onEditorScroll}
-              onSelect={updateCaretLine}
+              onSelect={() => paging.updateCaret()}
+              onCopy={(event) => {
+                event.preventDefault();
+                event.clipboardData.setData("text/plain", selectedTextOrLines(source, selection()).text);
+              }}
+              onCut={(event) => {
+                event.preventDefault();
+                const selected = selectedTextOrLines(source, selection());
+                event.clipboardData.setData("text/plain", selected.text);
+                commit(replaceTextSelection(source, selected.selection, ""));
+              }}
+              onPaste={(event) => {
+                event.preventDefault();
+                commit(replaceTextSelection(source, selection(), event.clipboardData.getData("text/plain")));
+              }}
               ref={textareaRef}
               spellCheck={false}
-              value={source}
+              value={page.text}
               wrap="off"
             />
           </div>
@@ -516,6 +504,7 @@ export function ProgramEditor({
                   onSelectSourceLine={focusSourceLine}
                   program={preview}
                   selectedSourceLine={selectedSourceLine}
+                  selectedToolpath={selectedToolpath}
                   toolVisualization={{
                     state: "removed",
                     showCutter: false,
@@ -530,17 +519,22 @@ export function ProgramEditor({
                   Preview последней корректной ревизии
                 </div>
               )}
+              {parseState !== "invalid" && preview.document?.previewSampled && (
+                <div className="program-editor-stale-preview is-sampled" title="Показана выборка траектории; границы и выполнение относятся ко всей программе.">
+                  Обзорная траектория
+                </div>
+              )}
             </div>
             <div className="program-editor-warnings">
               <div>
                 <span>Диагностика parser</span>
                 <strong>
-                  {currentRevisionReady ? preview.warnings.length : "--"}
+                  {currentRevisionReady ? programDiagnosticsSummary(preview).totalCount : "--"}
                 </strong>
               </div>
               {parseError ? (
                 <p>{parseError}</p>
-              ) : preview.warnings.length === 0 ? (
+              ) : programDiagnosticsSummary(preview).totalCount === 0 ? (
                 <p className="is-clear">Ошибок и предупреждений нет</p>
               ) : (
                 preview.warnings.slice(0, 4).map((warning, index) => {
@@ -574,7 +568,7 @@ export function ProgramEditor({
               Сохранить как
             </button>
             <button
-              disabled={!gateway.save || !currentRevisionReady || saveBusy}
+              disabled={(!gateway.save && !gateway.saveProcessed) || !currentRevisionReady || saveBusy}
               onClick={() => void save(true)}
               title="Сохранить нормализованную копию с применённой политикой optional block"
               type="button"

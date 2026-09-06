@@ -4,6 +4,13 @@ Current whole-product comparison and explicitly open gaps are tracked in
 [PRODUCT_AUDIT_2026_09](PRODUCT_AUDIT_2026_09.md). The implementation-level
 comparison below does not imply full feature parity with Candle or cncjs.
 
+Large-file and XYZA execution update: [LARGE_PROGRAMS_AND_ROTARY](LARGE_PROGRAMS_AND_ROTARY.md).
+Native immutable documents remove repeated full-source IPC and parsed-program
+copies; UI pages/overview do not limit executed/exported rows. Recovery now
+writes a small checkpoint plus an immutable SHA-256 source sidecar. These solve
+specific memory, serialization and checkpoint I/O costs; they do not imply
+unlimited input or a rotary collision simulator.
+
 This document compares execution-core behavior, not UI appearance or total
 application feature count. Candle is the compatibility reference; Millo keeps
 useful GRBL behavior while replacing unsafe coupling with explicit Rust use

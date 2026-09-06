@@ -502,6 +502,7 @@ pub enum WorkAxis {
     X,
     Y,
     Z,
+    A,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

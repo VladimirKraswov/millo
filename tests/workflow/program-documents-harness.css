@@ -1,0 +1,33 @@
+.workstation.program-documents-fixture {
+  display: block;
+  height: auto;
+  min-height: 0;
+  padding: 12px;
+}
+
+.program-documents-fixture h1 {
+  margin: 0 0 12px;
+  font-size: 16px;
+}
+
+.program-documents-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 12px;
+}
+
+.program-documents-scene {
+  display: grid;
+  min-width: 0;
+  height: 540px;
+}
+
+.program-documents-table {
+  min-width: 0;
+  height: 540px;
+}
+
+@media (max-width: 800px) {
+  .program-documents-layout { grid-template-columns: minmax(0, 1fr); }
+  .program-documents-table { height: 360px; }
+}

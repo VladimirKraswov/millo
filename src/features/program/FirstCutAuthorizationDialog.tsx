@@ -26,6 +26,7 @@ interface FirstCutAuthorizationDialogProps {
   };
   readonly report?: RunPreflightReport;
   readonly startingToolNumber?: number;
+  readonly rotaryProgram?: boolean;
   readonly surfaceMap?: {
     readonly mapId: number;
     readonly enabled: boolean;
@@ -56,6 +57,7 @@ export function FirstCutAuthorizationDialog({
   depthCorrection,
   report,
   startingToolNumber,
+  rotaryProgram = false,
   surfaceMap,
   onAuthorize,
   onAuthorized,
@@ -287,9 +289,10 @@ export function FirstCutAuthorizationDialog({
                 {intent === "cutting" && startingToolNumber !== undefined
                   ? ` T${startingToolNumber}`
                   : ""}
-                , ноль и траектория готовы
+                {rotaryProgram ? ", ноль XYZ, индекс A и вращение заготовки проверены" : ", ноль и траектория готовы"}
               </strong>
               <small>
+                {rotaryProgram && "Safe Z выше всей зоны вращения заготовки и крепежа. "}
                 {intent === "airRun"
                   ? "Инструмент снят, рабочая зона свободна"
                   : `${startingToolNumber === undefined ? "Фреза установлена" : `Установлен T${startingToolNumber}`}; крепёж не пересекает путь, питание доступно`}

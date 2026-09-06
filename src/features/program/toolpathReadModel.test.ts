@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
+import type { GcodeProgram } from "../../shared/program";
 
 import { previewFixtureProgram } from "./previewFixtureProgram";
 import {
   buildToolpathHighlightReadModel,
+  buildRotarySelectionReadModel,
   buildToolPositionReadModel,
   buildToolpathReadModel,
   sourceLineForIntersection,
+  formatRotaryDegrees,
 } from "./toolpathReadModel";
 
 describe("buildToolpathReadModel", () => {
@@ -99,5 +102,102 @@ describe("buildToolpathReadModel", () => {
 
     expect(tool.scenePosition).toEqual({ x: 21, y: -11.5, z: 8 });
     expect(tool.overProgram).toBe(false);
+  });
+
+  it("marks rotary-only motion at its XYZ position without inventing linear travel", () => {
+    const anchor = { x: 5, y: 2, z: -1 };
+    const program: GcodeProgram = {
+      ...previewFixtureProgram,
+      toolpath: [{
+        sourceLine: 4, kind: "linear", distanceMm: 0,
+        points: [anchor, anchor], rotary: { startDegrees: -90, endDegrees: 720 },
+      }],
+    };
+    const model = buildToolpathReadModel(program, 0.5);
+    expect([...model.rotaryPositions]).toEqual([-5, -5.5, 0]);
+    expect(model.rotarySourceLines).toEqual([4]);
+    expect([...model.cuttingPositions]).toEqual([-5, -5.5, 0, -5, -5.5, 0]);
+    const selection = buildToolpathHighlightReadModel(program, 4, model.center, 0.5);
+    expect(selection.segmentCount).toBe(1);
+    expect(selection.pointCount).toBe(2);
+    expect([...selection.positions]).toEqual([...model.cuttingPositions]);
+  });
+
+  it("does not change XYZ geometry or add stationary markers for simultaneous XYZ+A", () => {
+    const xyz = buildToolpathReadModel(previewFixtureProgram);
+    const rotary = buildToolpathReadModel({
+      ...previewFixtureProgram,
+      toolpath: previewFixtureProgram.toolpath.map((segment) => ({
+        ...segment, rotary: { startDegrees: 0, endDegrees: 1080 },
+      })),
+    });
+    expect(rotary).toEqual(xyz);
+  });
+
+  it("does not mark stationary held A as rotary travel", () => {
+    const anchor = { x: 0, y: 0, z: 0 };
+    const model = buildToolpathReadModel({
+      ...previewFixtureProgram,
+      toolpath: [{
+        sourceLine: 4, kind: "linear", distanceMm: 0,
+        points: [anchor, anchor], rotary: { startDegrees: 90, endDegrees: 90 },
+      }],
+    });
+    expect(model.rotaryPositions).toHaveLength(0);
+  });
+});
+
+describe("rotary selection", () => {
+  it("uses exact line details outside the sampled path without scanning the program", () => {
+    const program: GcodeProgram = {
+      ...previewFixtureProgram,
+      get toolpath(): GcodeProgram["toolpath"] { throw new Error("Unexpected full-path scan"); },
+    };
+    const detail: GcodeProgram["toolpath"] = [{
+      sourceLine: 100, kind: "linear", distanceMm: 10,
+      points: [{ x: 1, y: 2, z: -1 }, { x: 7, y: 8, z: -2 }],
+      rotary: { startDegrees: 720, endDegrees: 1080 },
+    }];
+    const center = { x: 1, y: 1, z: 1 };
+    const selection = buildToolpathHighlightReadModel(program, 100, center, 0.5, detail);
+    expect([...selection.positions]).toEqual([0, 1, -1.5, 6, 7, -2.5]);
+    expect(selection.segmentCount).toBe(1);
+    expect(buildRotarySelectionReadModel(program, 100, detail)).toEqual([detail[0].rotary]);
+    expect(buildToolpathHighlightReadModel(program, 99, center, 0, detail).segmentCount).toBe(0);
+    expect(buildRotarySelectionReadModel(program, 99, detail)).toEqual([]);
+    expect(buildToolpathHighlightReadModel(program, 100, center, 0, []).positions).toHaveLength(0);
+    expect(buildRotarySelectionReadModel(program, 100, [])).toEqual([]);
+  });
+
+  it("uses the cached source index across live selections, preserving segment boundaries", () => {
+    let scans = 0;
+    const segments: GcodeProgram["toolpath"] = [
+      { ...previewFixtureProgram.toolpath[0], sourceLine: 4, rotary: { startDegrees: -90, endDegrees: 720 } },
+      { ...previewFixtureProgram.toolpath[1], sourceLine: 4, rotary: { startDegrees: 720, endDegrees: 450 } },
+      { ...previewFixtureProgram.toolpath[1], sourceLine: 5, rotary: { startDegrees: 450, endDegrees: 450 } },
+    ];
+    const program: GcodeProgram = {
+      ...previewFixtureProgram,
+      get toolpath() { scans += 1; return segments; },
+    };
+    expect(buildRotarySelectionReadModel(program, undefined)).toEqual([]);
+    expect(scans).toBe(0);
+    expect(buildRotarySelectionReadModel(program, 4)).toEqual([
+      { startDegrees: -90, endDegrees: 720 }, { startDegrees: 720, endDegrees: 450 },
+    ]);
+    for (let status = 0; status < 1000; status += 1) {
+      expect(buildRotarySelectionReadModel(program, 5)).toEqual([{ startDegrees: 450, endDegrees: 450 }]);
+    }
+    expect(scans).toBe(1);
+    expect(buildRotarySelectionReadModel(program, 99)).toEqual([]);
+    expect(buildRotarySelectionReadModel(previewFixtureProgram, 4)).toEqual([]);
+  });
+
+  it("formats degrees without wrapping or treating absent telemetry as zero", () => {
+    expect(formatRotaryDegrees(-810.25)).toBe("-810.250°");
+    expect(formatRotaryDegrees(0)).toBe("0.000°");
+    expect(formatRotaryDegrees(undefined)).toBe("--");
+    expect(formatRotaryDegrees(NaN)).toBe("--");
+    expect(formatRotaryDegrees(Infinity)).toBe("--");
   });
 });

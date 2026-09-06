@@ -13,6 +13,8 @@ const MIN_ACCELERATION_MM_PER_SEC2: f64 = 1e-3;
 pub(crate) struct MotionLimits {
     pub(crate) max_rate_mm_per_min: [f64; 3],
     pub(crate) acceleration_mm_per_sec2: [f64; 3],
+    pub(crate) rotary_rate_deg_per_min: f64,
+    pub(crate) rotary_acceleration_deg_per_sec2: f64,
 }
 
 impl MotionLimits {
@@ -71,6 +73,7 @@ struct ModalState {
     absolute: bool,
     feed_mode: FeedMode,
     feed: f64,
+    angular_feed: f64,
     spindle_rpm: f64,
     spindle_mode: Option<u8>,
     coolant_mist: bool,
@@ -87,6 +90,7 @@ impl Default for ModalState {
             absolute: true,
             feed_mode: FeedMode::UnitsPerMinute,
             feed: 0.0,
+            angular_feed: 0.0,
             spindle_rpm: 0.0,
             spindle_mode: None,
             coolant_mist: false,
@@ -122,8 +126,13 @@ enum PathGeometry {
 }
 
 impl PathGeometry {
-    fn linear(start: [f64; 3], end: [f64; 3]) -> Option<Self> {
-        let length = distance(start, end);
+    fn coordinated_linear(start: [f64; 3], end: [f64; 3], rotary_delta: f64) -> Option<Self> {
+        let xyz_length = distance(start, end);
+        let length = if xyz_length > f64::EPSILON {
+            xyz_length
+        } else {
+            rotary_delta.abs()
+        };
         (length > f64::EPSILON).then_some(Self::Linear { start, end, length })
     }
 
@@ -177,6 +186,7 @@ struct PlannedMotion {
     acceleration_mm_per_sec2: f64,
     source_line: Option<u32>,
     kind: MotionKind,
+    rotary: Option<(f64, f64)>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,6 +199,10 @@ struct ActiveMotion {
 
 impl PlannedMotion {
     fn linear_direction(&self) -> Option<[f64; 3]> {
+        // Rotary blocks use exact stops; XYZ collinearity alone is insufficient.
+        if self.rotary.is_some_and(|(start, end)| start != end) {
+            return None;
+        }
         let PlannedGeometry::Path(PathGeometry::Linear { start, end, length }) = &self.geometry
         else {
             return None;
@@ -216,6 +230,10 @@ pub(crate) struct VirtualGrbl {
     next_entry_speed_mm_per_sec: f64,
     last_update: Instant,
     simulation_speed: f64,
+    pub(crate) rotary_enabled: bool,
+    pub(crate) rotary_position: f64,
+    planned_rotary_position: f64,
+    pub(crate) rotary_work_offsets: [f64; 6],
 }
 
 impl VirtualGrbl {
@@ -234,6 +252,10 @@ impl VirtualGrbl {
             next_entry_speed_mm_per_sec: 0.0,
             last_update: Instant::now(),
             simulation_speed: DEFAULT_SIMULATION_SPEED,
+            rotary_enabled: false,
+            rotary_position: 0.0,
+            planned_rotary_position: 0.0,
+            rotary_work_offsets: [0.0; 6],
         }
     }
 
@@ -245,7 +267,28 @@ impl VirtualGrbl {
         limits: MotionLimits,
         check_mode: bool,
     ) -> Result<(), u16> {
+        // Validation must not partially change modal state or queued targets.
+        let modal = self.modal.clone();
+        let previous_wcs = *active_wcs;
+        let result =
+            self.execute_validated_line(command, work_offsets, active_wcs, limits, check_mode);
+        if result.is_err() {
+            self.modal = modal;
+            *active_wcs = previous_wcs;
+        }
+        result
+    }
+
+    fn execute_validated_line(
+        &mut self,
+        command: &str,
+        work_offsets: &[[f64; 3]; 6],
+        active_wcs: &mut usize,
+        limits: MotionLimits,
+        check_mode: bool,
+    ) -> Result<(), u16> {
         let words = parse_words(command)?;
+        validate_axes(&words, self.rotary_enabled)?;
         if words.is_empty() {
             return Ok(());
         }
@@ -257,6 +300,7 @@ impl VirtualGrbl {
         let mut explicit_motion = None;
         let mut dwell_seconds = None;
         let mut program_end = false;
+        let previous_feed_mode = self.modal.feed_mode;
 
         for word in &words {
             match (word.letter, word.value) {
@@ -298,9 +342,6 @@ impl VirtualGrbl {
                     self.modal.coolant_mist = false;
                     self.modal.coolant_flood = false;
                 }
-                ('F', value) if value.is_finite() && value >= 0.0 => {
-                    self.modal.feed = value * self.unit_scale()
-                }
                 ('S', value) if value.is_finite() && value >= 0.0 => self.modal.spindle_rpm = value,
                 ('T', value) if value.is_finite() && value >= 0.0 => {
                     self.modal.tool = value.round() as u16
@@ -310,6 +351,56 @@ impl VirtualGrbl {
         }
         if let Some(motion) = explicit_motion {
             self.modal.motion = motion;
+        }
+
+        if previous_feed_mode != self.modal.feed_mode {
+            self.modal.feed = 0.0;
+            self.modal.angular_feed = 0.0;
+        }
+        if let Some(feed) = word_value(&words, 'F') {
+            if feed < 0.0 {
+                return Err(4);
+            }
+            // Linear feed is canonical mm/min; pure angular feed stays deg/min.
+            // Parse F after modal words so units do not depend on word ordering.
+            self.modal.feed = feed
+                * if self.modal.feed_mode == FeedMode::InverseTime {
+                    1.0
+                } else {
+                    self.unit_scale()
+                };
+            self.modal.angular_feed = feed;
+        }
+        let has_axes = has_axis_words(&words);
+        let rotary_word = word_value(&words, 'A');
+        if rotary_word.is_some()
+            && words.iter().any(|word| {
+                word.letter == 'G'
+                    && ![
+                        0.0, 1.0, 20.0, 21.0, 53.0, 54.0, 55.0, 56.0, 57.0, 58.0, 59.0, 90.0, 91.0,
+                        93.0, 94.0,
+                    ]
+                    .into_iter()
+                    .any(|code| code_is(word.value, code))
+            })
+        {
+            return Err(20);
+        }
+        if rotary_word.is_some()
+            && matches!(
+                self.modal.motion,
+                MotionMode::ClockwiseArc | MotionMode::CounterclockwiseArc
+            )
+        {
+            return Err(20);
+        }
+        if has_axes
+            && self.modal.motion != MotionMode::Rapid
+            && (self.modal.feed <= 0.0
+                || (self.modal.feed_mode == FeedMode::InverseTime
+                    && word_value(&words, 'F').is_none()))
+        {
+            return Err(22);
         }
 
         if check_mode {
@@ -326,11 +417,21 @@ impl VirtualGrbl {
                 acceleration_mm_per_sec2: limits.conservative_arc_acceleration(),
                 source_line,
                 kind: MotionKind::Program { rapid: false },
+                rotary: None,
             });
         }
 
-        if has_axis_words(&words) {
+        if has_axes {
             let start = self.planned_position;
+            let rotary_target = rotary_word.map_or(self.planned_rotary_position, |value| {
+                if machine_coordinates {
+                    value
+                } else if self.modal.absolute {
+                    value + self.rotary_work_offsets[*active_wcs]
+                } else {
+                    self.planned_rotary_position + value
+                }
+            });
             let target = target_position(
                 start,
                 &words,
@@ -341,7 +442,7 @@ impl VirtualGrbl {
             );
             match self.modal.motion {
                 MotionMode::Rapid | MotionMode::Linear => {
-                    self.enqueue_linear(start, target, source_line, limits);
+                    self.enqueue_linear(start, target, rotary_target, source_line, limits);
                 }
                 MotionMode::ClockwiseArc | MotionMode::CounterclockwiseArc => {
                     self.enqueue_arc(
@@ -355,6 +456,7 @@ impl VirtualGrbl {
                 }
             }
             self.planned_position = target;
+            self.planned_rotary_position = rotary_target;
         }
 
         if program_end {
@@ -372,25 +474,54 @@ impl VirtualGrbl {
         feed_mm_per_min: f64,
         limits: MotionLimits,
     ) -> Result<(), u16> {
+        self.enqueue_coordinated_jog(target, self.rotary_position, feed_mm_per_min, limits)
+    }
+
+    pub(crate) fn enqueue_coordinated_jog(
+        &mut self,
+        target: [f64; 3],
+        rotary_target: f64,
+        feed_mm_per_min: f64,
+        limits: MotionLimits,
+    ) -> Result<(), u16> {
+        if !feed_mm_per_min.is_finite() || feed_mm_per_min <= 0.0 || !rotary_target.is_finite() {
+            return Err(22);
+        }
         if self.active.is_some() || !self.queued.is_empty() || self.held {
             return Err(8);
         }
         let start = self.position;
-        let Some(path) = PathGeometry::linear(start, target) else {
+        let rotary_delta = rotary_target - self.rotary_position;
+        let Some(path) = PathGeometry::coordinated_linear(start, target, rotary_delta) else {
             return Ok(());
         };
         let delta = subtract(target, start);
         let length = path.length();
         let maximum_rate = feed_mm_per_min
             .max(0.001)
-            .min(limits.max_path_rate(delta, length));
+            .min(limits.max_path_rate(delta, length))
+            .min(rotary_path_limit(
+                limits.rotary_rate_deg_per_min,
+                rotary_delta,
+                length,
+            ));
         self.planned_position = target;
+        self.planned_rotary_position = rotary_target;
         self.enqueue(PlannedMotion {
             geometry: PlannedGeometry::Path(path),
             maximum_speed_mm_per_sec: maximum_rate / 60.0,
-            acceleration_mm_per_sec2: limits.path_acceleration(delta, length),
+            acceleration_mm_per_sec2: limits.path_acceleration(delta, length).min(
+                rotary_path_limit(
+                    limits.rotary_acceleration_deg_per_sec2,
+                    rotary_delta,
+                    length,
+                ),
+            ),
             source_line: None,
             kind: MotionKind::Jog,
+            rotary: self
+                .rotary_enabled
+                .then_some((self.rotary_position, rotary_target)),
         });
         Ok(())
     }
@@ -538,6 +669,7 @@ impl VirtualGrbl {
         self.jog_cancel_requested = false;
         self.position = position;
         self.planned_position = position;
+        self.planned_rotary_position = self.rotary_position;
         self.current_source_line = None;
         self.next_entry_speed_mm_per_sec = 0.0;
         self.manages_status = false;
@@ -549,6 +681,7 @@ impl VirtualGrbl {
     pub(crate) fn sync_external_position(&mut self, position: [f64; 3]) {
         self.position = position;
         self.planned_position = position;
+        self.planned_rotary_position = self.rotary_position;
         self.queued.clear();
         self.active = None;
         self.held = false;
@@ -560,37 +693,59 @@ impl VirtualGrbl {
 
     pub(crate) fn advance_for_test(&mut self, elapsed: Duration, overrides: [u16; 3]) {
         self.advance(elapsed, overrides);
+        self.last_update = Instant::now();
     }
 
     fn enqueue_linear(
         &mut self,
         start: [f64; 3],
         end: [f64; 3],
+        rotary_end: f64,
         source_line: Option<u32>,
         limits: MotionLimits,
     ) {
-        let Some(path) = PathGeometry::linear(start, end) else {
+        let rotary_delta = rotary_end - self.planned_rotary_position;
+        let Some(path) = PathGeometry::coordinated_linear(start, end, rotary_delta) else {
             return;
         };
         let delta = subtract(end, start);
         let length = path.length();
-        let axis_rate = limits.max_path_rate(delta, length);
+        let axis_rate = limits.max_path_rate(delta, length).min(rotary_path_limit(
+            limits.rotary_rate_deg_per_min,
+            rotary_delta,
+            length,
+        ));
         let requested_rate = if self.modal.motion == MotionMode::Rapid {
             axis_rate
         } else {
             match self.modal.feed_mode {
-                FeedMode::UnitsPerMinute => self.modal.feed.max(0.001),
+                FeedMode::UnitsPerMinute => {
+                    if distance(start, end) > f64::EPSILON {
+                        self.modal.feed
+                    } else {
+                        self.modal.angular_feed
+                    }
+                }
                 FeedMode::InverseTime => length * self.modal.feed.max(0.001),
             }
         };
         self.enqueue(PlannedMotion {
             geometry: PlannedGeometry::Path(path),
             maximum_speed_mm_per_sec: requested_rate.min(axis_rate) / 60.0,
-            acceleration_mm_per_sec2: limits.path_acceleration(delta, length),
+            acceleration_mm_per_sec2: limits.path_acceleration(delta, length).min(
+                rotary_path_limit(
+                    limits.rotary_acceleration_deg_per_sec2,
+                    rotary_delta,
+                    length,
+                ),
+            ),
             source_line,
             kind: MotionKind::Program {
                 rapid: self.modal.motion == MotionMode::Rapid,
             },
+            rotary: self
+                .rotary_enabled
+                .then_some((self.planned_rotary_position, rotary_end)),
         });
     }
 
@@ -638,7 +793,7 @@ impl VirtualGrbl {
             return Err(33);
         }
         let requested_rate = match self.modal.feed_mode {
-            FeedMode::UnitsPerMinute => self.modal.feed.max(0.001),
+            FeedMode::UnitsPerMinute => self.modal.feed,
             FeedMode::InverseTime => length * self.modal.feed.max(0.001),
         };
         let maximum_rate = requested_rate.min(limits.conservative_arc_rate());
@@ -657,6 +812,7 @@ impl VirtualGrbl {
             acceleration_mm_per_sec2: limits.conservative_arc_acceleration(),
             source_line,
             kind: MotionKind::Program { rapid: false },
+            rotary: None,
         });
         Ok(())
     }
@@ -726,6 +882,7 @@ impl VirtualGrbl {
                     self.queued.retain(|motion| motion.kind != MotionKind::Jog);
                     self.jog_cancel_requested = false;
                     self.planned_position = self.position;
+                    self.planned_rotary_position = self.rotary_position;
                 }
             }
         }
@@ -777,6 +934,10 @@ impl VirtualGrbl {
                 let travelled = (previous_speed + active.speed_mm_per_sec) * 0.5 * seconds;
                 active.path_distance_mm = (active.path_distance_mm + travelled).min(total_length);
                 self.position = path.point_at(active.path_distance_mm);
+                if let Some((start, end)) = active.motion.rotary {
+                    let progress = (active.path_distance_mm / total_length).clamp(0.0, 1.0);
+                    self.rotary_position = start + (end - start) * progress;
+                }
 
                 if stopping && active.speed_mm_per_sec <= MIN_SPEED_MM_PER_SEC {
                     if self.jog_cancel_requested {
@@ -788,6 +949,9 @@ impl VirtualGrbl {
                 }
                 if active.path_distance_mm >= total_length - 1e-9 {
                     self.position = path.end();
+                    if let Some((_, end)) = active.motion.rotary {
+                        self.rotary_position = end;
+                    }
                     return true;
                 }
                 false
@@ -888,6 +1052,9 @@ fn parse_words(command: &str) -> Result<Vec<Word>, u16> {
         let value = command[value_start..cursor]
             .parse::<f64>()
             .map_err(|_| 2_u16)?;
+        if !value.is_finite() {
+            return Err(2);
+        }
         words.push(Word { letter, value });
     }
     Ok(words)
@@ -912,7 +1079,34 @@ fn word_value(words: &[Word], letter: char) -> Option<f64> {
 fn has_axis_words(words: &[Word]) -> bool {
     words
         .iter()
-        .any(|word| matches!(word.letter, 'X' | 'Y' | 'Z'))
+        .any(|word| matches!(word.letter, 'X' | 'Y' | 'Z' | 'A'))
+}
+
+pub(crate) fn validate_axis_words(command: &str, rotary_enabled: bool) -> Result<(), u16> {
+    validate_axes(&parse_words(command)?, rotary_enabled)
+}
+
+fn validate_axes(words: &[Word], rotary_enabled: bool) -> Result<(), u16> {
+    if words.iter().any(|word| {
+        matches!(word.letter, 'B' | 'C' | 'U' | 'V' | 'W')
+            || (word.letter == 'A' && !rotary_enabled)
+    }) {
+        return Err(20);
+    }
+    for letter in ['X', 'Y', 'Z', 'A', 'F'] {
+        if words.iter().filter(|word| word.letter == letter).count() > 1 {
+            return Err(25);
+        }
+    }
+    Ok(())
+}
+
+fn rotary_path_limit(limit: f64, delta: f64, length: f64) -> f64 {
+    if delta.abs() > f64::EPSILON {
+        limit * length / delta.abs()
+    } else {
+        f64::INFINITY
+    }
 }
 
 fn target_position(
@@ -1067,6 +1261,8 @@ mod tests {
         MotionLimits {
             max_rate_mm_per_min: [1_000.0, 1_000.0, 500.0],
             acceleration_mm_per_sec2: [50.0, 50.0, 30.0],
+            rotary_rate_deg_per_min: 3600.0,
+            rotary_acceleration_deg_per_sec2: 360.0,
         }
     }
 

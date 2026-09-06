@@ -43,6 +43,8 @@ impl CommandArbiter {
             execution_target,
             sender,
             sender_dispatch_enabled: true,
+            prepared_program_reference: None,
+            rotary_run_reference: None,
             safety: SafetyManager::default(),
             first_cut: FirstCutGate::default(),
             program_check: ProgramCheckGate::default(),
@@ -191,7 +193,7 @@ impl CommandArbiter {
 
     pub async fn preflight_real_run(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         intent: ProgramRunIntent,
     ) -> Result<RunPreflightReport, ArbiterError> {
         self.preflight_real_run_with_options(program, intent, ProgramExecutionOptions::default())
@@ -200,7 +202,7 @@ impl CommandArbiter {
 
     pub async fn preflight_real_run_with_options(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         intent: ProgramRunIntent,
         execution_options: ProgramExecutionOptions,
     ) -> Result<RunPreflightReport, ArbiterError> {
@@ -210,13 +212,13 @@ impl CommandArbiter {
 
     pub async fn preflight_real_run_with_heightmap(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         intent: ProgramRunIntent,
         execution_options: ProgramExecutionOptions,
         heightmap: Option<Heightmap>,
     ) -> Result<RunPreflightReport, ArbiterError> {
         self.call(|response| Request::PreflightRealRun {
-            program,
+            program: program.into(),
             intent,
             execution_options,
             heightmap,
@@ -227,7 +229,7 @@ impl CommandArbiter {
 
     pub async fn authorize_first_cut(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         confirmation: FirstCutConfirmation,
     ) -> Result<FirstCutPreparation, ArbiterError> {
         self.authorize_first_cut_with_heightmap(program, confirmation, None)
@@ -236,12 +238,12 @@ impl CommandArbiter {
 
     pub async fn authorize_first_cut_with_heightmap(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         confirmation: FirstCutConfirmation,
         heightmap: Option<Heightmap>,
     ) -> Result<FirstCutPreparation, ArbiterError> {
         self.call(|response| Request::AuthorizeFirstCut {
-            program,
+            program: program.into(),
             confirmation,
             heightmap,
             require_check_certificate: true,
@@ -253,11 +255,11 @@ impl CommandArbiter {
     #[cfg(test)]
     pub(super) async fn authorize_first_cut_fixture(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         confirmation: FirstCutConfirmation,
     ) -> Result<FirstCutPreparation, ArbiterError> {
         self.call(|response| Request::AuthorizeFirstCut {
-            program,
+            program: program.into(),
             confirmation,
             heightmap: None,
             require_check_certificate: false,
@@ -268,7 +270,7 @@ impl CommandArbiter {
 
     pub async fn start_program_run(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         authorization_id: u64,
     ) -> Result<SenderSnapshot, ArbiterError> {
         self.start_program_run_with_heightmap(program, authorization_id, None, true)
@@ -277,13 +279,13 @@ impl CommandArbiter {
 
     pub async fn start_program_run_with_heightmap(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         authorization_id: u64,
         heightmap: Option<Heightmap>,
         dispatch_immediately: bool,
     ) -> Result<SenderSnapshot, ArbiterError> {
         self.call(|response| Request::StartProgramRun {
-            program,
+            program: program.into(),
             authorization_id,
             heightmap,
             dispatch_immediately,
@@ -294,7 +296,7 @@ impl CommandArbiter {
 
     pub async fn prepare_program_run(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         authorization_id: u64,
     ) -> Result<SenderSnapshot, ArbiterError> {
         self.start_program_run_with_heightmap(program, authorization_id, None, false)
@@ -303,7 +305,7 @@ impl CommandArbiter {
 
     pub async fn prepare_program_run_with_heightmap(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         authorization_id: u64,
         heightmap: Option<Heightmap>,
     ) -> Result<SenderSnapshot, ArbiterError> {
@@ -335,7 +337,7 @@ impl CommandArbiter {
 
     pub async fn start_check_run(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
     ) -> Result<SenderSnapshot, ArbiterError> {
         self.start_check_run_with_options(program, ProgramExecutionOptions::default())
             .await
@@ -343,7 +345,7 @@ impl CommandArbiter {
 
     pub async fn start_check_run_with_options(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         execution_options: ProgramExecutionOptions,
     ) -> Result<SenderSnapshot, ArbiterError> {
         self.start_check_run_with_heightmap(program, execution_options, None)
@@ -352,12 +354,12 @@ impl CommandArbiter {
 
     pub async fn start_check_run_with_heightmap(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         execution_options: ProgramExecutionOptions,
         heightmap: Option<Heightmap>,
     ) -> Result<SenderSnapshot, ArbiterError> {
         self.call(|response| Request::StartCheckRun {
-            program,
+            program: program.into(),
             execution_options,
             heightmap,
             response,
@@ -716,12 +718,12 @@ impl CommandArbiter {
     #[cfg(test)]
     pub(super) async fn start_serial_run_fixture(
         &self,
-        program: GcodeProgram,
+        program: impl Into<Arc<GcodeProgram>>,
         authorization_id: u64,
         dispatch_immediately: bool,
     ) -> Result<SenderSnapshot, ArbiterError> {
         self.call(|response| Request::StartProgramRun {
-            program,
+            program: program.into(),
             authorization_id,
             heightmap: None,
             dispatch_immediately,

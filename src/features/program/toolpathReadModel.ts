@@ -2,6 +2,8 @@ import type {
   GcodeProgram,
   ProgramBounds,
   ProgramPoint,
+  ProgramRotaryMotion,
+  ToolpathSegment,
 } from "../../shared/program";
 import { adjustCuttingZ } from "./depthCorrectionModel";
 import { programSourceIndex } from "./programSourceIndex";
@@ -11,6 +13,8 @@ export interface ToolpathReadModel {
   readonly rapidSourceLines: readonly number[];
   readonly cuttingPositions: Float32Array;
   readonly cuttingSourceLines: readonly number[];
+  readonly rotaryPositions: Float32Array;
+  readonly rotarySourceLines: readonly number[];
   readonly center: ProgramPoint;
   readonly gridSize: number;
   readonly gridZ: number;
@@ -29,6 +33,21 @@ export interface ToolPositionReadModel {
   readonly gridProjection: ProgramPoint;
   readonly overProgram: boolean;
 }
+
+export function buildRotarySelectionReadModel(
+  program: GcodeProgram,
+  sourceLine: number | undefined,
+  selectedToolpath?: readonly ToolpathSegment[],
+): readonly ProgramRotaryMotion[] {
+  if (sourceLine === undefined) return [];
+  return (selectedToolpath ?? programSourceIndex(program).motions.get(sourceLine) ?? [])
+    .flatMap((segment) => segment.sourceLine === sourceLine && segment.rotary ? [segment.rotary] : []);
+}
+
+export const formatRotaryDegrees = (degrees: number | undefined): string =>
+  degrees !== undefined && Number.isFinite(degrees)
+    ? `${degrees.toFixed(3)}°`
+    : "--";
 
 export function buildToolpathReadModel(
   program: GcodeProgram,
@@ -70,8 +89,21 @@ export function buildToolpathReadModel(
   let pointCount = 0;
   let rapidOffset = 0;
   let cuttingOffset = 0;
+  const rotaryPositions: number[] = [];
+  const rotarySourceLines: number[] = [];
 
   for (const segment of program.toolpath) {
+    const anchor = segment.points[0];
+    if (anchor && segment.rotary &&
+      segment.rotary.startDegrees !== segment.rotary.endDegrees &&
+      segment.points.every((point) =>
+        point.x === anchor.x && point.y === anchor.y && point.z === anchor.z)) {
+      rotaryPositions.push(
+        anchor.x - center.x, anchor.y - center.y,
+        adjustCuttingZ(anchor.z, segment.kind, cuttingDepthAdjustmentMm) - center.z,
+      );
+      rotarySourceLines.push(segment.sourceLine);
+    }
     const positions = segment.kind === "rapid" ? rapid : cutting;
     const sourceLines =
       segment.kind === "rapid" ? rapidSourceLines : cuttingSourceLines;
@@ -101,6 +133,8 @@ export function buildToolpathReadModel(
     rapidSourceLines,
     cuttingPositions: cutting,
     cuttingSourceLines,
+    rotaryPositions: new Float32Array(rotaryPositions),
+    rotarySourceLines,
     center,
     gridSize,
     gridZ: (bounds?.min.z ?? 0) - center.z,
@@ -122,6 +156,7 @@ export function buildToolpathHighlightReadModel(
   sourceLine: number | undefined,
   center: ProgramPoint,
   cuttingDepthAdjustmentMm = 0,
+  selectedToolpath?: readonly ToolpathSegment[],
 ): ToolpathHighlightReadModel {
   if (sourceLine === undefined) {
     return {
@@ -134,7 +169,8 @@ export function buildToolpathHighlightReadModel(
   const positions: number[] = [];
   let segmentCount = 0;
   let pointCount = 0;
-  for (const segment of programSourceIndex(program).motions.get(sourceLine) ?? []) {
+  for (const segment of selectedToolpath ?? programSourceIndex(program).motions.get(sourceLine) ?? []) {
+    if (segment.sourceLine !== sourceLine) continue;
     segmentCount += 1;
     for (let index = 1; index < segment.points.length; index += 1) {
       const adjust = (point: ProgramPoint): ProgramPoint => ({

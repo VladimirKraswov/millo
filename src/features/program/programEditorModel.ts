@@ -1,21 +1,36 @@
 import type { GcodeProgram } from "../../shared/program";
+import { buildProgramEditorLineIndex, indexedSourceLine, textChange } from "./programEditorPaging";
 
 export const PROGRAM_EDITOR_HISTORY_LIMIT = 200;
+export const PROGRAM_EDITOR_HISTORY_BYTES = 8 * 1024 * 1024;
+
+interface ProgramEditorPatch {
+  readonly start: number;
+  readonly removed: string;
+  readonly inserted: string;
+  readonly before: TextSelection;
+  readonly after: TextSelection;
+  readonly bytes: number;
+}
 
 export interface ProgramEditorHistory {
   readonly source: string;
-  readonly past: readonly string[];
-  readonly future: readonly string[];
+  readonly past: readonly ProgramEditorPatch[];
+  readonly future: readonly ProgramEditorPatch[];
+  readonly selection: TextSelection;
+  readonly bytes: number;
 }
 
 export interface TextSelection {
   readonly start: number;
   readonly end: number;
+  readonly direction?: "forward" | "backward" | "none";
 }
 
 export interface TextEdit {
   readonly source: string;
   readonly selection: TextSelection;
+  readonly change?: { readonly start: number; readonly end: number; readonly replacement: string };
 }
 
 export type GcodeSyntaxKind =
@@ -40,41 +55,60 @@ export const createProgramEditorHistory = (source: string): ProgramEditorHistory
   source,
   past: [],
   future: [],
+  selection: { start: 0, end: 0 },
+  bytes: 0,
 });
 
 export function commitProgramEditorSource(
   history: ProgramEditorHistory,
   source: string,
+  selection: TextSelection = history.selection,
+  before: TextSelection = history.selection,
+  knownChange?: TextEdit["change"],
 ): ProgramEditorHistory {
   if (source === history.source) return history;
+  const change = knownChange ?? textChange(history.source, source);
+  const bytes = (change.end - change.start + change.replacement.length) * 2 + 64;
+  if (bytes > PROGRAM_EDITOR_HISTORY_BYTES) return { source, selection, past: [], future: [], bytes: 0 };
+  // Copy bounded patch strings so small slices cannot retain an entire large revision.
+  const copy = (value: string): string => JSON.parse(JSON.stringify(value)) as string;
+  const patch: ProgramEditorPatch = {
+    start: change.start, removed: copy(history.source.slice(change.start, change.end)),
+    inserted: copy(change.replacement), before, after: selection, bytes,
+  };
+  const past = [...history.past, patch].slice(-PROGRAM_EDITOR_HISTORY_LIMIT);
+  let retainedBytes = past.reduce((total, entry) => total + entry.bytes, 0);
+  while (retainedBytes > PROGRAM_EDITOR_HISTORY_BYTES) retainedBytes -= past.shift()!.bytes;
   return {
-    source,
-    past: [...history.past, history.source].slice(-PROGRAM_EDITOR_HISTORY_LIMIT),
-    future: [],
+    source, selection, past, future: [], bytes: retainedBytes,
   };
 }
 
 export function undoProgramEditorSource(
   history: ProgramEditorHistory,
 ): ProgramEditorHistory {
-  const source = history.past.at(-1);
-  if (source === undefined) return history;
+  const patch = history.past.at(-1);
+  if (!patch) return history;
   return {
-    source,
+    source: history.source.slice(0, patch.start) + patch.removed + history.source.slice(patch.start + patch.inserted.length),
+    selection: patch.before,
     past: history.past.slice(0, -1),
-    future: [history.source, ...history.future],
+    future: [patch, ...history.future],
+    bytes: history.bytes,
   };
 }
 
 export function redoProgramEditorSource(
   history: ProgramEditorHistory,
 ): ProgramEditorHistory {
-  const source = history.future[0];
-  if (source === undefined) return history;
+  const patch = history.future[0];
+  if (!patch) return history;
   return {
-    source,
-    past: [...history.past, history.source].slice(-PROGRAM_EDITOR_HISTORY_LIMIT),
+    source: history.source.slice(0, patch.start) + patch.inserted + history.source.slice(patch.start + patch.removed.length),
+    selection: patch.after,
+    past: [...history.past, patch],
     future: history.future.slice(1),
+    bytes: history.bytes,
   };
 }
 
@@ -90,25 +124,13 @@ export function normalizeTextSelection(
   return start <= end ? { start, end } : { start: end, end: start };
 }
 
-export function sourceLineAtOffset(source: string, offset: number): number {
-  const end = clampOffset(source, offset);
-  let line = 1;
-  for (let index = 0; index < end; index += 1) {
-    if (source[index] === "\n") line += 1;
-  }
-  return line;
+export function sourceLineAtOffset(source: string, offset: number, offsets = buildProgramEditorLineIndex(source)): number {
+  return indexedSourceLine(offsets, clampOffset(source, offset));
 }
 
-export function sourceOffsetAtLine(source: string, sourceLine: number): number {
+export function sourceOffsetAtLine(source: string, sourceLine: number, offsets = buildProgramEditorLineIndex(source)): number {
   const target = Math.max(1, Math.floor(sourceLine));
-  if (target === 1) return 0;
-  let line = 1;
-  for (let index = 0; index < source.length; index += 1) {
-    if (source[index] !== "\n") continue;
-    line += 1;
-    if (line === target) return index + 1;
-  }
-  return source.length;
+  return offsets[target - 1] ?? source.length;
 }
 
 export function selectedLineSpan(
@@ -153,6 +175,7 @@ export function replaceTextSelection(
     source:
       source.slice(0, normalized.start) + replacement + source.slice(normalized.end),
     selection: { start: nextOffset, end: nextOffset },
+    change: { start: normalized.start, end: normalized.end, replacement },
   };
 }
 
@@ -161,8 +184,10 @@ export function insertProgramLine(
   selection: TextSelection,
 ): TextEdit {
   const span = selectedLineSpan(source, selection);
+  const nextBreak = source.indexOf("\n", span.start);
+  const lineEnding = nextBreak > 0 && source[nextBreak - 1] === "\r" ? "\r\n" : "\n";
   return {
-    source: `${source.slice(0, span.start)}\n${source.slice(span.start)}`,
+    ...replaceTextSelection(source, { start: span.start, end: span.start }, lineEnding),
     selection: { start: span.start, end: span.start },
   };
 }
@@ -172,10 +197,7 @@ export function deleteProgramLines(
   selection: TextSelection,
 ): TextEdit {
   const span = selectedLineSpan(source, selection);
-  return {
-    source: source.slice(0, span.start) + source.slice(span.end),
-    selection: { start: span.start, end: span.start },
-  };
+  return replaceTextSelection(source, span, "");
 }
 
 const numberPattern = /^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))/;
@@ -253,6 +275,7 @@ export function tokenizeGcodeLine(line: string): readonly GcodeSyntaxToken[] {
 }
 
 export function buildProcessedProgramSource(program: GcodeProgram): string {
+  if (program.document) throw new Error("Для постраничной программы требуется сохранение полной обработанной копии через контролируемый gateway");
   const lines = program.lines
     .filter((line) => !line.blockDeleted && line.normalized.length > 0)
     .map((line) => line.normalized);

@@ -1,11 +1,12 @@
 import { Play, X } from "lucide-react";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useMemo } from "react";
 import { FeatureErrorBoundary } from "../../components/FeatureErrorBoundary";
 
 import type { Position } from "../../shared/machine";
-import type { GcodeProgram, ProgramLine } from "../../shared/program";
+import type { GcodeProgram, ProgramLine, ToolpathSegment } from "../../shared/program";
 import type { PreviewView } from "./ToolpathPreview";
 import type { ProgramToolVisualization } from "./programToolVisualizationModel";
+import { buildRotarySelectionReadModel, formatRotaryDegrees } from "./toolpathReadModel";
 
 const ToolpathPreview = lazy(async () => {
   const module = await import("./ToolpathPreview");
@@ -22,6 +23,7 @@ interface ProgramPreviewStageProps {
   readonly selectedMotionCount: number;
   readonly selectedProgramLine?: ProgramLine;
   readonly selectedSourceLine?: number;
+  readonly selectedToolpath?: readonly ToolpathSegment[];
   readonly toolCoordinateSystem?: string;
   readonly toolPosition?: Position;
   readonly toolVisualization: ProgramToolVisualization;
@@ -38,6 +40,7 @@ export function ProgramPreviewStage({
   selectedMotionCount,
   selectedProgramLine,
   selectedSourceLine,
+  selectedToolpath,
   toolCoordinateSystem,
   toolPosition,
   toolVisualization,
@@ -45,9 +48,16 @@ export function ProgramPreviewStage({
 }: ProgramPreviewStageProps) {
   const bounds = program.summary.bounds;
   const pathDistance = program.summary.rapidDistanceMm + program.summary.cuttingDistanceMm;
+  const rotaryBounds = program.summary.rotaryBounds;
+  const hasRotary = Boolean(program.features.usesRotaryA || rotaryBounds);
+  const previewSampled = program.document?.previewSampled;
+  const selectedRotary = useMemo(
+    () => buildRotarySelectionReadModel(program, selectedSourceLine, selectedToolpath),
+    [program, selectedSourceLine, selectedToolpath],
+  );
 
   return (
-    <div className="program-preview-stage">
+    <div className={`program-preview-stage${hasRotary ? " has-rotary" : ""}${previewSampled ? " has-sampled-preview" : ""}`}>
       <FeatureErrorBoundary name="Траекторию">
       <Suspense
         fallback={<div className="toolpath-preview is-loading">Загрузка траектории...</div>}
@@ -57,6 +67,7 @@ export function ProgramPreviewStage({
           onSelectSourceLine={onSelectSourceLine}
           program={program}
           selectedSourceLine={selectedSourceLine}
+          selectedToolpath={selectedToolpath}
           toolCoordinateSystem={toolCoordinateSystem}
           toolPosition={toolPosition}
           toolVisualization={toolVisualization}
@@ -67,6 +78,11 @@ export function ProgramPreviewStage({
       <div className="preview-legend" aria-label="Обозначения траектории">
         <span className="is-cut">Рабочий ход</span>
         <span className="is-rapid">Быстрый ход</span>
+        {previewSampled && (
+          <strong className="preview-sampling" title="Показана выборка траектории. Границы и сводка рассчитаны по всей программе; выполнение использует все строки.">
+            Обзорная траектория
+          </strong>
+        )}
       </div>
       {selectedProgramLine && (
         <div className="preview-selection" role="status">
@@ -98,7 +114,36 @@ export function ProgramPreviewStage({
           >
             <X aria-hidden="true" size={12} />
           </button>
+          {selectedRotary.length > 0 && (
+            <dl className="preview-rotary-selection" aria-label="Поворот A выбранной строки">
+              {selectedRotary.map((rotary, index) => (
+                <div key={index}>
+                  <dt>A{selectedRotary.length > 1 ? ` · ${index + 1}` : ""}</dt>
+                  <dd>
+                    <span>Начало {formatRotaryDegrees(rotary.startDegrees)}</span>
+                    <span>Конец {formatRotaryDegrees(rotary.endDegrees)}</span>
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          )}
         </div>
+      )}
+      {hasRotary && (
+        <dl className="program-rotary-metrics" aria-label="Поворотная ось программы">
+          <div>
+            <dt>Предпросмотр</dt>
+            <dd>Проекция XYZ</dd>
+          </div>
+          <div>
+            <dt>Диапазон A</dt>
+            <dd>{formatRotaryDegrees(rotaryBounds?.minDegrees)} … {formatRotaryDegrees(rotaryBounds?.maxDegrees)}</dd>
+          </div>
+          <div>
+            <dt>Путь A</dt>
+            <dd>{formatRotaryDegrees(program.summary.rotaryTravelDegrees)}</dd>
+          </div>
+        </dl>
       )}
       <dl className="program-metrics">
         <div>

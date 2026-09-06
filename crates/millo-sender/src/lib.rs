@@ -7,8 +7,8 @@ use millo_dry_run::{DryRunLine, DryRunLineKind, DryRunPlan, MAX_DRY_RUN_COMMAND_
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const MAX_SENDER_LINES: usize = 400_004;
-pub const MAX_SENDER_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_SENDER_LINES: usize = 2_000_004;
+pub const MAX_SENDER_BYTES: usize = 128 * 1024 * 1024;
 pub const DEFAULT_GRBL_RX_BUFFER_BYTES: usize = 127;
 pub const MAX_GRBL_RX_BUFFER_BYTES: usize = 4095;
 

@@ -353,7 +353,11 @@ export function ProgramRecoveryDialog({
                       <Check aria-hidden="true" size={12} />
                       <span>
                         <strong>{item.title}</strong>
-                        <small>{item.detail}</small>
+                        <small>{candidate.restartADegrees !== undefined && item.key === "pathClear"
+                          ? "Safe Z выше всей зоны вращения заготовки и крепежа; поворот A и переход XY свободны."
+                          : candidate.restartADegrees !== undefined && item.key === "workZeroRestored"
+                            ? `Индекс и рабочий ноль A восстановлены вместе с XYZ. Угол возврата A: ${candidate.restartADegrees.toFixed(3)}°.`
+                            : item.detail}</small>
                       </span>
                     </span>
                   ))}

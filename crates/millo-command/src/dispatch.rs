@@ -12,6 +12,8 @@ pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
         execution_target,
         sender,
         sender_dispatch_enabled,
+        prepared_program_reference,
+        rotary_run_reference,
         safety,
         first_cut,
         program_check,
@@ -331,11 +333,13 @@ pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
             dispatch_immediately,
             response,
         } => {
+            let uses_rotary = program.features.uses_rotary_a;
             let result = if !execution_target.supports_machine_execution() {
                 Err(ArbiterError::RealRunTransportUnavailable)
             } else {
                 execute_authorized_program_run_start(
                     controller,
+                    hardware_profile,
                     first_cut,
                     sender,
                     program,
@@ -345,6 +349,12 @@ pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
                 .await
             };
             *sender_dispatch_enabled = dispatch_immediately && result.is_ok();
+            if let Ok(active) = &result {
+                *rotary_run_reference =
+                    uses_rotary.then(|| RotaryRunReference::new(active.run_sequence));
+                *prepared_program_reference =
+                    (!dispatch_immediately).then(|| controller.snapshot());
+            }
             publish(snapshots, controller);
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
@@ -362,6 +372,7 @@ pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
             } else {
                 execute_check_run_start(
                     controller,
+                    hardware_profile,
                     sender,
                     &program,
                     execution_options,
@@ -421,7 +432,14 @@ pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
             let result = if !execution_target.supports_machine_execution() {
                 Err(ArbiterError::RealRunTransportUnavailable)
             } else {
-                execute_tool_change_completion(controller, sender, confirmation).await
+                execute_tool_change_completion(
+                    controller,
+                    hardware_profile,
+                    sender,
+                    confirmation,
+                    rotary_run_reference.as_ref(),
+                )
+                .await
             };
             publish(snapshots, controller);
             publish_sender(sender_snapshots, sender);
@@ -686,7 +704,7 @@ pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
             invalidate_authorizations(safety, first_cut);
             let previous_z_datum = *verified_z_datum;
             let axis = request.axis;
-            let result = execute_set_work_zero(controller, request).await;
+            let result = execute_set_work_zero(controller, hardware_profile, request).await;
             if let Ok(outcome) = &result {
                 let current =
                     verified_z_datum_from_snapshot(outcome.coordinate_system, &outcome.snapshot);
@@ -990,9 +1008,20 @@ pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
                 Err(ArbiterError::PreparedRunUnavailable(active.state))
             } else if *sender_dispatch_enabled {
                 Err(ArbiterError::PreparedRunAlreadyCommitted)
+            } else if let Some(reference) = prepared_program_reference.as_ref() {
+                match controller.refresh_status().await {
+                    Ok(current) => match ensure_unchanged_program_reference(reference, &current) {
+                        Ok(()) => {
+                            *sender_dispatch_enabled = true;
+                            *prepared_program_reference = None;
+                            Ok(active)
+                        }
+                        Err(error) => Err(error),
+                    },
+                    Err(error) => Err(error.into()),
+                }
             } else {
-                *sender_dispatch_enabled = true;
-                Ok(active)
+                Err(ArbiterError::PreparedRunUnavailable(active.state))
             };
             publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
@@ -1012,6 +1041,7 @@ pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
             } else if *sender_dispatch_enabled {
                 Err(ArbiterError::PreparedRunAlreadyCommitted)
             } else {
+                *prepared_program_reference = None;
                 sender.cancel().map_err(ArbiterError::from)
             };
             publish_sender(sender_snapshots, sender);

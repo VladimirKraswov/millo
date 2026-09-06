@@ -1,7 +1,10 @@
 use super::*;
 
+const WORK_ZERO_TOLERANCE_DEGREES: f64 = 0.01;
+
 pub(super) async fn execute_set_work_zero(
     controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
     request: WorkZeroRequest,
 ) -> Result<WorkZeroOutcome, ArbiterError> {
     if !request.position_confirmed {
@@ -11,6 +14,18 @@ pub(super) async fn execute_set_work_zero(
     controller.refresh_status().await?;
     ensure_stable_idle(&controller.snapshot())?;
 
+    let rotary_context = if request.axis == WorkAxis::A {
+        let initial = controller.snapshot();
+        let inspection = controller.inspect_device().await?;
+        let current = controller.refresh_status().await?;
+        ensure_stable_idle(&current)?;
+        verify_zero_epoch(&initial, &current)?;
+        super::rotary_program::validate_rotary_capability(hardware_profile, &inspection, &current)?;
+        Some((inspection, current))
+    } else {
+        None
+    };
+
     let modal_response = controller
         .query_device(millo_controller::DeviceQuery::ModalState)
         .await?;
@@ -19,6 +34,10 @@ pub(super) async fn execute_set_work_zero(
         .ok_or(ArbiterError::ActiveWorkCoordinateSystemUnavailable)?;
 
     ensure_stable_idle(&controller.snapshot())?;
+    if let Some((inspection, initial)) = &rotary_context {
+        verify_zero_epoch(initial, &controller.snapshot())?;
+        verified_rotary_work_axis(&controller.snapshot(), inspection, coordinate_system)?;
+    }
     let command_response = controller
         .set_work_zero(request.axis, coordinate_system)
         .await?;
@@ -34,19 +53,32 @@ pub(super) async fn execute_set_work_zero(
         .ok_or_else(|| {
             ArbiterError::WorkZeroVerification(format!("$# did not return {parameter_name}"))
         })?;
-    parse_xyz_parameter(&parameter_value).ok_or_else(|| {
-        ArbiterError::WorkZeroVerification(format!(
+    let valid_parameter = if request.axis == WorkAxis::A {
+        parse_xyza_parameter(&parameter_value).is_some()
+    } else {
+        parse_xyz_parameter(&parameter_value).is_some()
+    };
+    if !valid_parameter {
+        return Err(ArbiterError::WorkZeroVerification(format!(
             "$# returned malformed {parameter_name}: {parameter_value}"
-        ))
-    })?;
+        )));
+    }
 
     let snapshot = controller.refresh_status().await?;
     ensure_stable_idle(&snapshot)?;
+    if let Some((_, initial)) = &rotary_context {
+        verify_zero_epoch(initial, &snapshot)?;
+    }
     let work_position =
         verified_work_axis(&snapshot, &parameters, coordinate_system, request.axis)?;
-    if work_position.abs() > WORK_ZERO_TOLERANCE_MM {
+    let (tolerance, units) = if request.axis == WorkAxis::A {
+        (WORK_ZERO_TOLERANCE_DEGREES, "degrees")
+    } else {
+        (WORK_ZERO_TOLERANCE_MM, "mm")
+    };
+    if !work_position.is_finite() || work_position.abs() > tolerance {
         return Err(ArbiterError::WorkZeroVerification(format!(
-            "expected {:?}=0 in {parameter_name}, read {work_position:.3} mm",
+            "expected {:?}=0 in {parameter_name}, read {work_position:.3} {units}",
             request.axis
         )));
     }
@@ -66,6 +98,12 @@ pub(super) async fn execute_return_to_work_zero(
     hardware_profile: &HardwareProfile,
     request: ReturnToWorkZeroRequest,
 ) -> Result<ReturnToWorkZeroOutcome, ArbiterError> {
+    if request.axis == WorkAxis::A {
+        return Err(ControllerError::JogValidation(
+            millo_grbl::JogValidationError::RotaryClearanceRequired,
+        )
+        .into());
+    }
     validate_jog_pad_motion(0.01, request.feed_mm_per_min)?;
     let snapshot = controller.refresh_status().await?;
     ensure_stable_idle(&snapshot)?;
@@ -311,6 +349,7 @@ pub(super) fn work_axis_to_jog_axis(axis: WorkAxis) -> millo_domain::JogAxis {
         WorkAxis::X => millo_domain::JogAxis::X,
         WorkAxis::Y => millo_domain::JogAxis::Y,
         WorkAxis::Z => millo_domain::JogAxis::Z,
+        WorkAxis::A => millo_domain::JogAxis::A,
     }
 }
 
@@ -319,6 +358,7 @@ pub(super) fn work_axis_value(position: Position, axis: WorkAxis) -> f64 {
         WorkAxis::X => position.x,
         WorkAxis::Y => position.y,
         WorkAxis::Z => position.z,
+        WorkAxis::A => position.a.unwrap_or(f64::NAN),
     }
 }
 
@@ -328,6 +368,9 @@ pub(super) fn verified_work_axis(
     coordinate_system: WorkCoordinateSystem,
     axis: WorkAxis,
 ) -> Result<f64, ArbiterError> {
+    if axis == WorkAxis::A {
+        return verified_rotary_work_axis(snapshot, parameters, coordinate_system);
+    }
     if let Some(work_position) = snapshot.machine.work_position {
         return Ok(position_axis(work_position, axis));
     }
@@ -495,5 +538,364 @@ pub(super) fn position_axis(position: Position, axis: WorkAxis) -> f64 {
         WorkAxis::X => position.x,
         WorkAxis::Y => position.y,
         WorkAxis::Z => position.z,
+        WorkAxis::A => position.a.unwrap_or(f64::NAN),
+    }
+}
+
+fn verify_zero_epoch(
+    before: &ControllerSnapshot,
+    after: &ControllerSnapshot,
+) -> Result<(), ArbiterError> {
+    if before.reset_count != after.reset_count || before.reconnect_count != after.reconnect_count {
+        return Err(ArbiterError::WorkZeroVerification(
+            "Controller reset or reconnected during rotary zero verification.".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn parse_xyza_parameter(value: &str) -> Option<[f64; 4]> {
+    let values = value
+        .split(',')
+        .map(str::parse::<f64>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    if values.len() != 4 || !values.iter().all(|value| value.is_finite()) {
+        return None;
+    }
+    Some([values[0], values[1], values[2], values[3]])
+}
+
+fn verified_rotary_work_axis(
+    snapshot: &ControllerSnapshot,
+    parameters: &DeviceInspection,
+    coordinate_system: WorkCoordinateSystem,
+) -> Result<f64, ArbiterError> {
+    let invalid = || {
+        ArbiterError::WorkZeroVerification("A requires finite, consistent four-coordinate status and $# offsets; missing A is not zero.".to_owned())
+    };
+    let offset = |name: &str| {
+        parameters
+            .parameters
+            .get(name)
+            .and_then(|value| parse_xyza_parameter(value))
+            .ok_or_else(invalid)
+    };
+    let wcs = offset(work_coordinate_parameter(coordinate_system))?;
+    let g92 = offset("G92")?;
+    let machine_a = snapshot
+        .machine
+        .machine_position
+        .and_then(|position| position.a)
+        .filter(|a| a.is_finite())
+        .ok_or_else(invalid)?;
+    let total_offset = wcs[3] + g92[3];
+    let derived = machine_a - total_offset;
+    if !derived.is_finite() || !total_offset.is_finite() {
+        return Err(invalid());
+    }
+    for (position, expected) in [
+        (snapshot.machine.work_position, derived),
+        (snapshot.machine.work_coordinate_offset, total_offset),
+    ] {
+        let a = position
+            .and_then(|position| position.a)
+            .filter(|a| a.is_finite())
+            .ok_or_else(invalid)?;
+        if (a - expected).abs() > WORK_ZERO_TOLERANCE_DEGREES {
+            return Err(invalid());
+        }
+    }
+    Ok(derived)
+}
+
+#[cfg(test)]
+mod rotary_zero_tests {
+    use super::*;
+    use millo_mock::MockTransport;
+
+    fn profile() -> HardwareProfile {
+        let mut profile = HardwareProfile::first_machine();
+        profile.axes.push("A".to_owned());
+        profile.rotary_axis = Some(millo_domain::RotaryAxisProfile {
+            travel_degrees: 720.0,
+            max_jog_degrees: 30.0,
+            max_feed_degrees_per_min: 720.0,
+        });
+        profile
+    }
+
+    fn config() -> ControllerConfig {
+        ControllerConfig {
+            poll_interval: Duration::from_secs(60),
+            status_timeout: Duration::from_millis(100),
+            command_timeout: Duration::from_millis(200),
+            failures_before_recovery: 2,
+        }
+    }
+
+    #[tokio::test]
+    async fn zero_a_is_verified_in_active_wcs_without_moving_or_zeroing_xyz() {
+        let transport = MockTransport::rotary();
+        let control = transport.control();
+        control.set_status("<Idle|MPos:10,20,30,90|WPos:10,20,30,90|FS:0,0>");
+        control.set_active_wcs(55);
+        let (arbiter, worker) = CommandArbiter::new(Box::new(transport), config(), profile());
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        let outcome = arbiter
+            .set_work_zero(WorkZeroRequest {
+                axis: WorkAxis::A,
+                position_confirmed: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(outcome.command, "G10 L20 P2 A0");
+        assert_eq!(outcome.parameter_value, "0.000,0.000,0.000,90.000");
+        assert_eq!(outcome.work_position, 0.0);
+        assert_eq!(
+            outcome.snapshot.machine.machine_position,
+            Some(Position {
+                x: 10.0,
+                y: 20.0,
+                z: 30.0,
+                a: Some(90.0)
+            })
+        );
+        let writes = control.writes();
+        let changes = writes
+            .iter()
+            .filter(|write| write.starts_with(b"G") || write.starts_with(b"$J="))
+            .collect::<Vec<_>>();
+        assert_eq!(changes, vec![&b"G10 L20 P2 A0\n".to_vec()]);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn zero_a_rejects_disabled_profile_and_stock_xyz_before_offset_write() {
+        for (transport, hardware) in [
+            (MockTransport::rotary(), HardwareProfile::first_machine()),
+            (MockTransport::default(), profile()),
+        ] {
+            let control = transport.control();
+            let (arbiter, worker) = CommandArbiter::new(Box::new(transport), config(), hardware);
+            let task = tokio::spawn(worker);
+            arbiter.connect().await.unwrap();
+            assert!(matches!(
+                arbiter
+                    .set_work_zero(WorkZeroRequest {
+                        axis: WorkAxis::A,
+                        position_confirmed: true
+                    })
+                    .await,
+                Err(ArbiterError::RotaryProgramUnavailable(_))
+            ));
+            assert!(
+                !control
+                    .writes()
+                    .iter()
+                    .any(|write| write.starts_with(b"G10") || write.starts_with(b"$J="))
+            );
+            task.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn zero_a_confirmation_and_return_clearance_fail_before_io() {
+        let transport = MockTransport::rotary();
+        let control = transport.control();
+        control.set_status("<Idle|MPos:0,0,10,90|WPos:0,0,10,90|FS:0,0>");
+        let (arbiter, worker) = CommandArbiter::new(Box::new(transport), config(), profile());
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        assert!(matches!(
+            arbiter
+                .set_work_zero(WorkZeroRequest {
+                    axis: WorkAxis::A,
+                    position_confirmed: false
+                })
+                .await,
+            Err(ArbiterError::WorkZeroConfirmationRequired)
+        ));
+        assert!(matches!(
+            arbiter
+                .return_to_work_zero(ReturnToWorkZeroRequest {
+                    axis: WorkAxis::A,
+                    feed_mm_per_min: 360.0
+                })
+                .await,
+            Err(ArbiterError::Controller(ControllerError::JogValidation(
+                millo_grbl::JogValidationError::RotaryClearanceRequired
+            )))
+        ));
+        assert!(control.writes().is_empty());
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn xyz_zero_requests_do_not_change_a_and_missing_post_reset_a_is_rejected() {
+        let transport = MockTransport::rotary();
+        let control = transport.control();
+        control.set_status("<Idle|MPos:10,20,30,90|WPos:10,20,30,90|FS:0,0>");
+        let (arbiter, worker) = CommandArbiter::new(Box::new(transport), config(), profile());
+        let task = tokio::spawn(worker);
+        arbiter.connect().await.unwrap();
+        for axis in [WorkAxis::X, WorkAxis::Y, WorkAxis::Z] {
+            let outcome = arbiter
+                .set_work_zero(WorkZeroRequest {
+                    axis,
+                    position_confirmed: true,
+                })
+                .await
+                .unwrap();
+            assert_eq!(
+                outcome.snapshot.machine.work_position.unwrap().a,
+                Some(90.0)
+            );
+        }
+        assert!(
+            !control
+                .writes()
+                .iter()
+                .any(|write| write.starts_with(b"G10") && write.contains(&b'A'))
+        );
+        task.abort();
+        let mut before = ControllerSnapshot::default();
+        let mut after = before.clone();
+        after.reset_count += 1;
+        assert!(verify_zero_epoch(&before, &after).is_err());
+        before.reconnect_count += 1;
+        assert!(verify_zero_epoch(&before, &after).is_err());
+        assert!(
+            verified_rotary_work_axis(
+                &after,
+                &DeviceInspection::default(),
+                WorkCoordinateSystem::G54
+            )
+            .is_err()
+        );
+    }
+
+    fn verified_fixture() -> (ControllerSnapshot, DeviceInspection) {
+        let mut snapshot = ControllerSnapshot::default();
+        snapshot.machine.machine_position = Some(Position {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            a: Some(90.0),
+        });
+        snapshot.machine.work_position = Some(Position {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            a: Some(0.0),
+        });
+        snapshot.machine.work_coordinate_offset = snapshot.machine.machine_position;
+        let mut inspection = DeviceInspection::default();
+        inspection
+            .parameters
+            .insert("G54".to_owned(), "0,0,0,90".to_owned());
+        inspection
+            .parameters
+            .insert("G92".to_owned(), "0,0,0,0".to_owned());
+        inspection.responses.push(CommandResponse {
+            command: "$I".to_owned(),
+            completion: CommandCompletion::Ok,
+            lines: vec!["[AXS:4:XYZA]".to_owned(), "[FIRMWARE:grblHAL]".to_owned()],
+            code: None,
+        });
+        (snapshot, inspection)
+    }
+
+    #[test]
+    fn zero_a_rejects_missing_non_finite_or_inconsistent_parameter_evidence() {
+        let (snapshot, inspection) = verified_fixture();
+        assert_eq!(
+            verified_rotary_work_axis(&snapshot, &inspection, WorkCoordinateSystem::G54).unwrap(),
+            0.0
+        );
+        for malformed in [
+            "0,0,0",
+            "0,0,0,NaN",
+            "0,0,0,inf",
+            "0,0,0,90,0",
+            "0,0,0,0",
+            "NaN,0,0,90",
+        ] {
+            let mut invalid = inspection.clone();
+            invalid
+                .parameters
+                .insert("G54".to_owned(), malformed.to_owned());
+            assert!(
+                verified_rotary_work_axis(&snapshot, &invalid, WorkCoordinateSystem::G54).is_err(),
+                "{malformed}"
+            );
+        }
+        let mut missing = inspection.clone();
+        missing.parameters.remove("G92");
+        assert!(verified_rotary_work_axis(&snapshot, &missing, WorkCoordinateSystem::G54).is_err());
+        let mut missing = snapshot;
+        missing.machine.work_position.as_mut().unwrap().a = None;
+        assert!(
+            verified_rotary_work_axis(&missing, &inspection, WorkCoordinateSystem::G54).is_err()
+        );
+    }
+
+    #[test]
+    fn angular_capability_requires_external_grblhal_bit_one_and_exact_identity() {
+        let (snapshot, mut inspection) = verified_fixture();
+        for mask in ["0", "2", "8", "NaN", "1.5", "-1"] {
+            inspection
+                .settings
+                .insert("$376".to_owned(), mask.to_owned());
+            assert!(
+                super::super::rotary_program::validate_rotary_capability(
+                    &profile(),
+                    &inspection,
+                    &snapshot
+                )
+                .is_err(),
+                "{mask}"
+            );
+        }
+        inspection
+            .settings
+            .insert("$376".to_owned(), "1".to_owned());
+        assert!(
+            super::super::rotary_program::validate_rotary_capability(
+                &profile(),
+                &inspection,
+                &snapshot
+            )
+            .is_ok()
+        );
+        inspection.responses[0].lines[1] = "[VER:1.1h:User named grblHAL FluidNC]".to_owned();
+        assert!(
+            super::super::rotary_program::validate_rotary_capability(
+                &profile(),
+                &inspection,
+                &snapshot
+            )
+            .is_err()
+        );
+        inspection.responses[0].lines[1] = "[VER:3.9 FluidNC build:machine]".to_owned();
+        assert!(
+            super::super::rotary_program::validate_rotary_capability(
+                &profile(),
+                &inspection,
+                &snapshot
+            )
+            .is_ok()
+        );
+        let mut invalid = profile();
+        invalid.rotary_axis.as_mut().unwrap().travel_degrees = f64::NAN;
+        assert!(
+            super::super::rotary_program::validate_rotary_capability(
+                &invalid,
+                &inspection,
+                &snapshot
+            )
+            .is_err()
+        );
     }
 }

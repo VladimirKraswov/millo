@@ -31,9 +31,12 @@ export interface SelectedRunPreparationRequest {
   readonly safeZMm: number;
   readonly intent: ProgramRunIntent;
   readonly executionOptions: ProgramExecutionOptions;
+  readonly rotaryClearanceConfirmed?: boolean;
+  readonly initialWorkADegrees?: number;
 }
 
 export interface SafeStartPackage {
+  readonly restartADegrees?: number;
   readonly originalSourceName: string;
   readonly selectedSourceLine: number;
   readonly restartSourceLine: number;

@@ -75,11 +75,37 @@ pub async fn prepare_program_recovery(
     {
         return Err("program recovery requires fresh Connected + Idle state".to_owned());
     }
-    state
+    let inspection = state
         .arbiter
         .inspect_device()
         .await
         .map_err(|error| error.to_string())?;
+    let snapshot = state
+        .arbiter
+        .refresh_status()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !snapshot.is_stable_idle() {
+        return Err("program recovery requires fresh Connected + Idle state".to_owned());
+    }
+    let rotary_state = if snapshot
+        .machine
+        .work_position
+        .and_then(|position| position.a)
+        .is_some()
+    {
+        verified_rotary_restart_state(
+            &snapshot,
+            &inspection.device,
+            snapshot
+                .machine
+                .work_position
+                .and_then(|position| position.a),
+            request.path_clear && request.work_zero_restored,
+        )?
+    } else {
+        None
+    };
     let fingerprint = state
         .settings_session
         .lock()
@@ -96,7 +122,12 @@ pub async fn prepare_program_recovery(
             return Err("interrupted job belongs to a different controller".to_owned());
         }
         recovery
-            .prepare(request.recovery_id, request.safe_z_mm, request.continuity)
+            .prepare_with_rotary(
+                request.recovery_id,
+                request.safe_z_mm,
+                request.continuity,
+                rotary_state,
+            )
             .map_err(|error| error.to_string())
     })
     .await

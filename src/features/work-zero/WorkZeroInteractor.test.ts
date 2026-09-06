@@ -21,6 +21,36 @@ const returnOutcome: ReturnToWorkZeroOutcome = {
 };
 
 describe("WorkZeroInteractor", () => {
+  it("requires confirmation for A and never includes A in Cartesian zero", async () => {
+    const setZero = vi.fn(async () => outcome);
+    const interactor = new WorkZeroInteractor({ setZero, returnToZero: vi.fn() });
+    expect(() => interactor.set("a", false)).toThrow("confirmation");
+    await interactor.set("a", true);
+    expect(setZero).toHaveBeenLastCalledWith({ axis: "a", positionConfirmed: true });
+    setZero.mockClear();
+    await interactor.setCartesian(true);
+    expect(setZero).toHaveBeenCalledTimes(3);
+    expect(setZero).toHaveBeenNthCalledWith(1, { axis: "x", positionConfirmed: true });
+    expect(setZero).toHaveBeenNthCalledWith(2, { axis: "y", positionConfirmed: true });
+    expect(setZero).toHaveBeenNthCalledWith(3, { axis: "z", positionConfirmed: true });
+  });
+
+  it("rejects rotary return before sending a motion request", () => {
+    const returnToZero = vi.fn();
+    const interactor = new WorkZeroInteractor({ setZero: vi.fn(), returnToZero });
+    expect(() => interactor.returnToZero("a", 360)).toThrow("rotary clearance");
+    expect(returnToZero).not.toHaveBeenCalled();
+  });
+
+  it("publishes completed Cartesian zeros even when a later axis fails", async () => {
+    const setZero = vi.fn().mockResolvedValueOnce(outcome).mockRejectedValueOnce(new Error("Y failed"));
+    const onOutcome = vi.fn();
+    const interactor = new WorkZeroInteractor({ setZero, returnToZero: vi.fn() });
+    await expect(interactor.setCartesian(true, true, onOutcome)).rejects.toThrow("Y failed");
+    expect(onOutcome).toHaveBeenCalledOnce();
+    expect(onOutcome).toHaveBeenCalledWith(outcome);
+    expect(setZero).toHaveBeenCalledTimes(2);
+  });
   it("rejects missing confirmation before reaching the gateway", () => {
     const setZero = vi.fn(async () => outcome);
     const interactor = new WorkZeroInteractor({ setZero, returnToZero: vi.fn() });

@@ -2,7 +2,7 @@ use super::*;
 
 #[tauri::command]
 pub async fn preflight_real_run(
-    request: ProgramParseRequest,
+    request: ProgramInput,
     intent: ProgramRunIntent,
     execution_options: ProgramExecutionOptions,
     state: State<'_, AppState>,
@@ -11,6 +11,7 @@ pub async fn preflight_real_run(
     let context = json!({
         "sourceName": &request.source_name,
         "sourceBytes": request.source.len(),
+        "programId": &request.program_id,
         "intent": intent,
         "executionOptions": execution_options,
     });
@@ -19,17 +20,14 @@ pub async fn preflight_real_run(
         let heightmap = selected_surface_map_for_active_profile(execution_options, &state)
             .await?
             .map(|stored| stored.map);
-        let program = tokio::task::spawn_blocking(move || {
-            parse_program_with_options(
-                request,
-                ProgramParseOptions {
-                    block_delete: execution_options.block_delete,
-                },
-            )
-        })
-        .await
-        .map_err(|error| format!("real-run parser task failed: {error}"))?
-        .map_err(|error| error.to_string())?;
+        let document = resolve_program(
+            request,
+            ProgramParseOptions {
+                block_delete: execution_options.block_delete,
+            },
+        )
+        .await?;
+        let program = Arc::clone(&document.program);
         state
             .arbiter
             .preflight_real_run_with_heightmap(program, intent, execution_options, heightmap)
@@ -67,7 +65,7 @@ pub async fn preflight_real_run(
 
 #[tauri::command]
 pub async fn authorize_first_cut(
-    request: ProgramParseRequest,
+    request: ProgramInput,
     confirmation: FirstCutConfirmation,
     state: State<'_, AppState>,
 ) -> Result<FirstCutPreparation, String> {
@@ -75,6 +73,7 @@ pub async fn authorize_first_cut(
     let context = json!({
         "sourceName": &request.source_name,
         "sourceBytes": request.source.len(),
+        "programId": &request.program_id,
         "confirmation": &confirmation,
     });
     let result = async {
@@ -83,17 +82,14 @@ pub async fn authorize_first_cut(
         let heightmap = selected_surface_map_for_active_profile(execution_options, &state)
             .await?
             .map(|stored| stored.map);
-        let program = tokio::task::spawn_blocking(move || {
-            parse_program_with_options(
-                request,
-                ProgramParseOptions {
-                    block_delete: execution_options.block_delete,
-                },
-            )
-        })
-        .await
-        .map_err(|error| format!("first-cut parser task failed: {error}"))?
-        .map_err(|error| error.to_string())?;
+        let document = resolve_program(
+            request,
+            ProgramParseOptions {
+                block_delete: execution_options.block_delete,
+            },
+        )
+        .await?;
+        let program = Arc::clone(&document.program);
         state
             .arbiter
             .authorize_first_cut_with_heightmap(program, confirmation, heightmap)
@@ -114,7 +110,7 @@ pub async fn authorize_first_cut(
 
 #[tauri::command]
 pub async fn start_program_run(
-    request: ProgramParseRequest,
+    request: ProgramInput,
     authorization_id: u64,
     execution_options: ProgramExecutionOptions,
     state: State<'_, AppState>,
@@ -122,6 +118,7 @@ pub async fn start_program_run(
     let context = json!({
         "sourceName": &request.source_name,
         "sourceBytes": request.source.len(),
+        "programId": &request.program_id,
         "authorizationId": authorization_id,
         "executionOptions": execution_options,
     });
@@ -145,7 +142,7 @@ pub async fn start_program_run(
 }
 
 pub(super) async fn start_program_run_impl(
-    request: ProgramParseRequest,
+    request: ProgramInput,
     authorization_id: u64,
     execution_options: ProgramExecutionOptions,
     state: &AppState,
@@ -159,18 +156,14 @@ pub(super) async fn start_program_run_impl(
         .as_ref()
         .map(|session| (session.fingerprint.key.clone(), session.profile_id.clone()))
         .ok_or_else(|| "controller settings have not been synchronized".to_owned())?;
-    let source = request.clone();
-    let program = tokio::task::spawn_blocking(move || {
-        parse_program_with_options(
-            request,
-            ProgramParseOptions {
-                block_delete: execution_options.block_delete,
-            },
-        )
-    })
-    .await
-    .map_err(|error| format!("program-run parser task failed: {error}"))?
-    .map_err(|error| error.to_string())?;
+    let document = resolve_program(
+        request,
+        ProgramParseOptions {
+            block_delete: execution_options.block_delete,
+        },
+    )
+    .await?;
+    let program = Arc::clone(&document.program);
     let heightmap = if execution_options.surface_map_id.is_some() {
         let selected_profile_id = profile_id.as_deref().ok_or_else(|| {
             "heightmap compensation requires the controller to be linked to a machine profile"
@@ -185,7 +178,7 @@ pub(super) async fn start_program_run_impl(
     let fingerprint = program_fingerprint(&program);
     let prepared = state
         .arbiter
-        .prepare_program_run_with_heightmap(program, authorization_id, heightmap)
+        .prepare_program_run_with_heightmap(Arc::clone(&program), authorization_id, heightmap)
         .await
         .map_err(|error| error.to_string())?;
     let intent = match prepared.mode {
@@ -204,7 +197,7 @@ pub(super) async fn start_program_run_impl(
         machine_fingerprint,
         profile_id,
         source_name: stored_source_name,
-        source: source.source,
+        source: document.source.to_string(),
         program_fingerprint: fingerprint,
         intent,
         execution_options,
@@ -219,7 +212,13 @@ pub(super) async fn start_program_run_impl(
         recovery
             .lock()
             .map_err(|error| format!("program recovery lock poisoned: {error}"))?
-            .arm(seed, &prepared_for_store, SystemTime::now(), Instant::now())
+            .arm_with_program(
+                seed,
+                program,
+                &prepared_for_store,
+                SystemTime::now(),
+                Instant::now(),
+            )
             .map_err(|error| error.to_string())
     })
     .await;
@@ -396,13 +395,14 @@ pub(super) async fn selected_surface_map_for_active_profile(
 
 #[tauri::command]
 pub async fn start_check_run(
-    request: ProgramParseRequest,
+    request: ProgramInput,
     execution_options: ProgramExecutionOptions,
     state: State<'_, AppState>,
 ) -> Result<SenderSnapshot, String> {
     let context = json!({
         "sourceName": &request.source_name,
         "sourceBytes": request.source.len(),
+        "programId": &request.program_id,
         "executionOptions": execution_options,
     });
     let result = start_check_run_impl(request, execution_options, &state).await;
@@ -418,7 +418,7 @@ pub async fn start_check_run(
 }
 
 pub(super) async fn start_check_run_impl(
-    request: ProgramParseRequest,
+    request: ProgramInput,
     execution_options: ProgramExecutionOptions,
     state: &AppState,
 ) -> Result<SenderSnapshot, String> {
@@ -427,17 +427,14 @@ pub(super) async fn start_check_run_impl(
     let heightmap = selected_surface_map_for_active_profile(execution_options, state)
         .await?
         .map(|stored| stored.map);
-    let program = tokio::task::spawn_blocking(move || {
-        parse_program_with_options(
-            request,
-            ProgramParseOptions {
-                block_delete: execution_options.block_delete,
-            },
-        )
-    })
-    .await
-    .map_err(|error| format!("check-run parser task failed: {error}"))?
-    .map_err(|error| error.to_string())?;
+    let document = resolve_program(
+        request,
+        ProgramParseOptions {
+            block_delete: execution_options.block_delete,
+        },
+    )
+    .await?;
+    let program = Arc::clone(&document.program);
     state
         .arbiter
         .start_check_run_with_heightmap(program, execution_options, heightmap)

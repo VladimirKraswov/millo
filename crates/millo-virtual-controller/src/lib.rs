@@ -33,6 +33,15 @@ mod unix {
 
     impl VirtualController {
         pub async fn start() -> io::Result<Self> {
+            Self::start_configured(false).await
+        }
+
+        /// Starts the explicit angular XYZA mock firmware on a new virtual PTY.
+        pub async fn start_rotary() -> io::Result<Self> {
+            Self::start_configured(true).await
+        }
+
+        async fn start_configured(rotary: bool) -> io::Result<Self> {
             let (master, slave, port_name) = open_raw_pty()?;
             let descriptor = SerialPortDescriptor {
                 port_name: port_name.to_string_lossy().into_owned(),
@@ -40,12 +49,19 @@ mod unix {
                 vendor_id: None,
                 product_id: None,
                 manufacturer: Some("Millo".to_owned()),
-                product: Some(PRODUCT.to_owned()),
-                serial_number: Some(SERIAL.to_owned()),
+                product: Some(
+                    if rotary {
+                        "Millo VMC-4 XYZA Controller"
+                    } else {
+                        PRODUCT
+                    }
+                    .to_owned(),
+                ),
+                serial_number: Some(if rotary { "MILLO-VMC4-0001" } else { SERIAL }.to_owned()),
             };
             let registration =
                 register_external_serial_endpoint(&descriptor).map_err(transport_io_error)?;
-            let task = tokio::spawn(serve(master));
+            let task = tokio::spawn(serve(master, rotary));
             Ok(Self {
                 port_name,
                 task,
@@ -118,9 +134,13 @@ mod unix {
         Ok(())
     }
 
-    async fn serve(master: OwnedFd) -> io::Result<()> {
+    async fn serve(master: OwnedFd, rotary: bool) -> io::Result<()> {
         let io = Arc::new(AsyncFd::new(master)?);
-        let firmware = Arc::new(Mutex::new(MockTransport::default()));
+        let firmware = Arc::new(Mutex::new(if rotary {
+            MockTransport::rotary()
+        } else {
+            MockTransport::default()
+        }));
         firmware
             .lock()
             .await
@@ -131,6 +151,9 @@ mod unix {
         loop {
             let byte = read_byte(&io).await?;
             if is_realtime(byte) {
+                if byte == 0x18 {
+                    input.clear();
+                }
                 dispatch(&io, &firmware, &[byte]).await?;
                 continue;
             }

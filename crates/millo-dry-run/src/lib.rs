@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub const MAX_DRY_RUN_COMMAND_BYTES: usize = 255;
-pub const MAX_COMPENSATED_PROGRAM_LINES: usize = 200_000;
+pub const MAX_COMPENSATED_PROGRAM_LINES: usize = 2_000_000;
 pub const MAX_CUTTING_DEPTH_ADJUSTMENT_UM: i32 = 10_000;
 const SAFETY_PREAMBLE: [&str; 2] = ["M5", "M9"];
 const SAFETY_EPILOGUE: [&str; 2] = ["M5", "M9"];
@@ -47,6 +47,7 @@ pub enum DryRunBlockerKind {
     CommandTooLong,
     HeightmapCompensation,
     CuttingDepthAdjustment,
+    RotaryTransformation,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -430,6 +431,11 @@ fn transform_plan(
         validate_heightmap_contract(heightmap)?;
     }
     let mut segments = BTreeMap::<usize, Vec<&ToolpathSegment>>::new();
+    let checkpoints = program
+        .execution_checkpoints
+        .iter()
+        .map(|checkpoint| (checkpoint.source_line, checkpoint))
+        .collect::<BTreeMap<_, _>>();
     for segment in &program.toolpath {
         segments
             .entry(segment.source_line)
@@ -451,6 +457,9 @@ fn transform_plan(
     let mut transformed = Vec::with_capacity(plan.lines.len());
     let mut known_x = false;
     let mut known_y = false;
+    let mut output_z = None;
+    let rotary_depth = program.features.uses_rotary_a
+        && depth_adjustment_mm.is_some_and(|adjustment| adjustment.abs() > f64::EPSILON);
 
     for line in plan.lines {
         let Some(source_line) = line.source_line else {
@@ -459,15 +468,30 @@ fn transform_plan(
         };
         let Some(source) = program
             .lines
-            .iter()
-            .find(|item| item.source_line == source_line)
+            .get(source_line.saturating_sub(1))
+            .filter(|item| item.source_line == source_line)
         else {
             transformed.push(line);
             continue;
         };
         let axes = explicit_axes(&source.normalized);
+        let explicit_z = source
+            .normalized
+            .split_whitespace()
+            .filter_map(split_word)
+            .find_map(|(letter, value)| (letter == 'Z').then_some(value));
         let line_segments = segments.get(&source_line).cloned().unwrap_or_default();
         if line_segments.is_empty() {
+            if rotary_depth && explicit_z.is_some_and(|z| z < -1e-9) {
+                return Err(transformation_rejection(
+                    Some(source_line),
+                    DryRunBlockerKind::RotaryTransformation,
+                    "A-axis depth adjustment cannot safely rewrite a zero-length negative-Z block; remove the redundant Z block or regenerate the corrected CAM toolpath",
+                ));
+            }
+            if let Some(z) = explicit_z {
+                output_z = Some(z);
+            }
             transformed.push(line);
             known_x |= axes.0;
             known_y |= axes.1;
@@ -507,6 +531,49 @@ fn transform_plan(
         let establishes_x = known_x || axes.0;
         let establishes_y = known_y || axes.1;
 
+        // An A-only block must not acquire an implicit XYZ move from projection.
+        if !axes.0
+            && !axes.1
+            && explicit_z.is_none()
+            && line_segments.iter().all(|segment| {
+                segment.rotary.is_some() && segment.points.windows(2).all(|pair| pair[0] == pair[1])
+            })
+        {
+            if rotary_depth
+                && line_segments.iter().any(|segment| {
+                    segment.kind != ToolpathKind::Rapid
+                        && segment.points.last().is_some_and(|point| {
+                            output_z.is_none_or(|z: f64| {
+                                (z - adjusted_cutting_z(
+                                    point.z,
+                                    segment.kind,
+                                    depth_adjustment_mm.unwrap_or(0.0),
+                                ))
+                                .abs()
+                                    > 1e-9
+                            })
+                        })
+                })
+            {
+                return Err(transformation_rejection(
+                    Some(source_line),
+                    DryRunBlockerKind::RotaryTransformation,
+                    "A-only cutting requires an explicit cutting Z entry at the adjusted depth; add a G1 Z entry before rotation or regenerate the corrected CAM toolpath",
+                ));
+            }
+            transformed.push(line);
+            known_x = establishes_x;
+            known_y = establishes_y;
+            continue;
+        }
+        if rotary_depth && output_z.is_none() && explicit_z.is_none() {
+            return Err(transformation_rejection(
+                Some(source_line),
+                DryRunBlockerKind::RotaryTransformation,
+                "A-axis depth adjustment requires an explicit Z position before transforming XYZ motion; establish Z first or regenerate the corrected CAM toolpath",
+            ));
+        }
+
         if let Some(prefix) = non_motion_prefix(&source.normalized) {
             push_compensated_line(
                 &mut transformed,
@@ -517,13 +584,31 @@ fn transform_plan(
             )?;
         }
         for segment in line_segments {
+            let rotary_feed = source
+                .normalized
+                .split_whitespace()
+                .filter_map(split_word)
+                .find_map(|(letter, value)| (letter == 'F').then_some(value))
+                .or_else(|| {
+                    checkpoints
+                        .get(&source_line)
+                        .and_then(|checkpoint| checkpoint.feed_rate)
+                });
             append_compensated_segment(
                 &mut transformed,
                 segment,
                 transform,
                 establishes_x,
                 establishes_y,
+                rotary_feed,
             )?;
+            if let Some(point) = segment.points.last() {
+                output_z = Some(adjusted_cutting_z(
+                    point.z,
+                    segment.kind,
+                    depth_adjustment_mm.unwrap_or(0.0),
+                ));
+            }
         }
         known_x = establishes_x;
         known_y = establishes_y;
@@ -551,6 +636,24 @@ fn validate_transformation_contract(
     heightmap_enabled: bool,
     depth_adjustment_enabled: bool,
 ) -> Result<(), DryRunPolicyError> {
+    if program.features.uses_rotary_a
+        && (heightmap_enabled
+            || program.features.uses_rotary_arc
+            || program.features.uses_imperial_units
+            || program.features.uses_incremental_distance
+            || program.features.uses_inverse_time_feed
+            || program.execution_checkpoints.iter().any(|checkpoint| {
+                checkpoint.units != ProgramUnitMode::Millimeters
+                    || checkpoint.distance != ProgramDistanceMode::Absolute
+                    || checkpoint.feed_mode != ProgramFeedMode::UnitsPerMinute
+            }))
+    {
+        return Err(transformation_rejection(
+            None,
+            DryRunBlockerKind::RotaryTransformation,
+            "A-axis depth adjustment supports G21 G90 G94 linear/rapid motion only; disable the surface map/depth adjustment or regenerate the CAM toolpath with the required rotary kinematics",
+        ));
+    }
     for checkpoint in &program.execution_checkpoints {
         let supported = checkpoint.units == ProgramUnitMode::Millimeters
             && checkpoint.distance == ProgramDistanceMode::Absolute
@@ -689,6 +792,7 @@ fn append_compensated_segment(
     transform: TrajectoryTransform<'_>,
     known_x: bool,
     known_y: bool,
+    rotary_feed: Option<f64>,
 ) -> Result<(), DryRunPolicyError> {
     let TrajectoryTransform {
         heightmap,
@@ -714,7 +818,7 @@ fn append_compensated_segment(
             if output.len() >= MAX_COMPENSATED_PROGRAM_LINES {
                 return Err(heightmap_rejection(
                     Some(segment.source_line),
-                    "heightmap segmentation exceeds the 200000-line sender limit",
+                    "heightmap segmentation exceeds the 2000000-line sender limit",
                 ));
             }
             let mix = part as f64 / parts as f64;
@@ -735,10 +839,28 @@ fn append_compensated_segment(
                 command.push_str(&format!(" Y{:.4}", point.y));
             }
             command.push_str(&format!(" Z{corrected_z:.4}"));
-            if !rapid && let Some(feed) = segment.feed_rate_mm_per_min {
-                command.push_str(&format!(" F{feed:.3}"));
+            if let Some(rotary) = segment.rotary {
+                command.push_str(&format!(" A{}", rotary.end_degrees));
             }
-            let duration = if !rapid && let Some(feed) = segment.feed_rate_mm_per_min {
+            let rotary_moves = segment
+                .rotary
+                .is_some_and(|rotary| rotary.start_degrees != rotary.end_degrees);
+            let feed = if rotary_moves {
+                rotary_feed
+            } else {
+                segment.feed_rate_mm_per_min
+            };
+            if !rapid && let Some(feed) = feed {
+                if segment.rotary.is_some() {
+                    command.push_str(&format!(" F{feed}"));
+                } else {
+                    command.push_str(&format!(" F{feed:.3}"));
+                }
+            }
+            let duration = if !rapid
+                && !rotary_moves
+                && let Some(feed) = feed
+            {
                 let previous_mix = (part - 1) as f64 / parts as f64;
                 let previous = lerp_point(start, end, previous_mix);
                 let previous_z = compensated_point_z(
@@ -872,11 +994,13 @@ fn non_motion_prefix(normalized: &str) -> Option<String> {
             let Some((letter, value)) = split_word(word) else {
                 return true;
             };
-            !(matches!(letter, 'N' | 'X' | 'Y' | 'Z' | 'I' | 'J' | 'K' | 'R' | 'F')
-                || letter == 'G'
-                    && [0.0, 1.0, 2.0, 3.0]
-                        .iter()
-                        .any(|code| code_is(value, *code)))
+            !(matches!(
+                letter,
+                'N' | 'X' | 'Y' | 'Z' | 'A' | 'I' | 'J' | 'K' | 'R' | 'F'
+            ) || letter == 'G'
+                && [0.0, 1.0, 2.0, 3.0]
+                    .iter()
+                    .any(|code| code_is(value, *code)))
         })
         .collect::<Vec<_>>()
         .join(" ");
@@ -1220,6 +1344,151 @@ mod tests {
                 .unwrap();
         }
         map
+    }
+
+    #[test]
+    fn rotary_programs_preserve_source_and_inverse_time_under_both_policies() {
+        let program = parse("G21 G90 G93 G17\nG1 X1 A90 F2\nG2 X3 I1 A180 F4\nM2");
+        for policy in [ProgramRunPolicy::AirRun, ProgramRunPolicy::Cutting] {
+            let plan = build_program_run_plan(&program, policy).unwrap();
+            assert!(
+                plan.lines()
+                    .iter()
+                    .any(|line| line.command() == "G1 X1 A90 F2")
+            );
+            assert!(
+                plan.lines()
+                    .iter()
+                    .any(|line| line.command() == "G2 X3 I1 A180 F4")
+            );
+            assert_eq!(plan.estimated_total_ms(), 45_000);
+            assert!(plan.time_estimate_complete());
+        }
+    }
+
+    #[test]
+    fn depth_offset_preserves_linear_and_pure_rotary_feed_without_inventing_time() {
+        let program = parse("G21 G90 G94\nG0 Z2\nG1 Z-1 A90 F100\nG1 A180\nG1 X2 A270");
+        let options = ProgramExecutionOptions {
+            cutting_depth_adjustment_um: Some(-200),
+            ..Default::default()
+        };
+        for policy in [ProgramRunPolicy::AirRun, ProgramRunPolicy::Cutting] {
+            let plan = build_program_run_plan_with_options(&program, policy, options).unwrap();
+            let rotary = plan
+                .lines()
+                .iter()
+                .filter(|line| line.command().contains(" A"))
+                .collect::<Vec<_>>();
+            assert_eq!(rotary.len(), 3);
+            assert!(rotary[0].command().contains("Z-1.2000 A90 F100"));
+            assert_eq!(rotary[1].command(), "G1 A180");
+            assert!(rotary[2].command().contains("X2.0000 Z-1.2000 A270 F100"));
+            assert!(
+                rotary
+                    .iter()
+                    .all(|line| line.estimated_duration_ms().is_none())
+            );
+            assert!(!plan.time_estimate_complete());
+        }
+    }
+
+    #[test]
+    fn repeated_explicit_xyz_during_rotation_cannot_undo_depth_correction() {
+        let program = parse("G21 G90 G94\nG1 X0 Y0 Z-1 F100\nG1 X0 Y0 Z-1 A90 F100");
+        for adjustment in [-200, 200] {
+            for policy in [ProgramRunPolicy::AirRun, ProgramRunPolicy::Cutting] {
+                let options = ProgramExecutionOptions {
+                    cutting_depth_adjustment_um: Some(adjustment),
+                    ..Default::default()
+                };
+                let plan = build_program_run_plan_with_options(&program, policy, options).unwrap();
+                let generated = plan
+                    .lines()
+                    .iter()
+                    .map(DryRunLine::command)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let reparsed = parse(&generated);
+                let final_segment = reparsed.toolpath.last().unwrap();
+                assert!(
+                    (final_segment.points.last().unwrap().z
+                        - (-1.0 + f64::from(adjustment) / 1000.0))
+                        .abs()
+                        < 1e-9
+                );
+                assert_eq!(final_segment.rotary.unwrap().end_degrees, 90.0);
+                assert!(!generated.contains("G1 X0 Y0 Z-1 A90"));
+            }
+        }
+    }
+
+    #[test]
+    fn rotary_depth_rejects_unestablished_or_uncorrected_z_without_injecting_motion() {
+        for source in [
+            "G21 G90 G94\nG0 Z-1\nG1 A90 F100",
+            "G21 G90 G94\nG1 A90 F100\nG1 Z-1",
+            "G21 G90 G94\nG1 X1 A90 F100\nG1 Z-1",
+            "G21 G90 G94\nG1 Z-1 F100\nG1 Z-1\nG1 A90",
+        ] {
+            for policy in [ProgramRunPolicy::AirRun, ProgramRunPolicy::Cutting] {
+                let error = build_program_run_plan_with_options(
+                    &parse(source),
+                    policy,
+                    ProgramExecutionOptions {
+                        cutting_depth_adjustment_um: Some(200),
+                        ..Default::default()
+                    },
+                )
+                .unwrap_err();
+                assert_eq!(
+                    error.blockers()[0].kind,
+                    DryRunBlockerKind::RotaryTransformation,
+                    "{source}"
+                );
+                assert!(error.blockers()[0].source_line.is_some());
+            }
+        }
+    }
+
+    #[test]
+    fn unsupported_rotary_transforms_have_an_actionable_typed_blocker() {
+        for source in [
+            "G21 G90 G94\nG1 Z-1 F100\nG93 G1 A90 F2",
+            "G21 G90 G94\nG1 Z-1 F100\nG91 G1 A90",
+            "G21 G90 G94\nG1 Z-1 F100\nG20 G1 A90 F2",
+            "G21 G90 G94 G17\nG1 Z-1 F100\nG2 X2 I1 A90",
+        ] {
+            let error = build_program_run_plan_with_options(
+                &parse(source),
+                ProgramRunPolicy::Cutting,
+                ProgramExecutionOptions {
+                    cutting_depth_adjustment_um: Some(200),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err();
+            assert_eq!(
+                error.blockers()[0].kind,
+                DryRunBlockerKind::RotaryTransformation,
+                "{source}"
+            );
+        }
+        let map = completed_heightmap();
+        let error = build_program_run_plan_with_heightmap(
+            &parse("G21 G90 G94\nG0 Z2\nG0 X0 Y0\nG1 Z-1 A90 F100"),
+            ProgramRunPolicy::Cutting,
+            ProgramExecutionOptions {
+                surface_map_id: Some(1),
+                ..Default::default()
+            },
+            Some(&map),
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.blockers()[0].kind,
+            DryRunBlockerKind::RotaryTransformation
+        );
     }
 
     #[test]

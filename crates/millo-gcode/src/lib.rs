@@ -6,10 +6,14 @@ use geometry::{ArcDefinition, ArcError, plane_offsets, polyline_distance, sample
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 pub const MAX_SOURCE_NAME_BYTES: usize = 255;
-pub const MAX_SOURCE_LINES: usize = 200_000;
-pub const MAX_PREVIEW_POINTS: usize = 500_000;
+pub const MAX_SOURCE_LINES: usize = 2_000_000;
+/// Bounds tokenizer/diagnostic allocation for any one block, including comments.
+pub const MAX_SOURCE_LINE_BYTES: usize = 16 * 1024;
+pub const MAX_PROGRAM_DIAGNOSTICS: usize = 10_000;
+/// Native execution geometry budget, not the decimated display preview budget.
+pub const MAX_PREVIEW_POINTS: usize = 4_000_000;
 const POSITION_EPSILON_MM: f64 = 1e-9;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +45,22 @@ pub struct ProgramBounds {
     pub size: ProgramPoint,
 }
 
+/// Unwrapped A-axis angles. XYZ geometry remains a Cartesian projection.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramRotarySegment {
+    pub start_degrees: f64,
+    pub end_degrees: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProgramRotaryBounds {
+    pub min_degrees: f64,
+    pub max_degrees: f64,
+    pub size_degrees: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ToolpathKind {
@@ -58,6 +78,9 @@ pub struct ToolpathSegment {
     pub optional_block: bool,
     pub kind: ToolpathKind,
     pub points: Vec<ProgramPoint>,
+    /// Synchronous A interpolation over the segment, including held A after first use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotary: Option<ProgramRotarySegment>,
     pub distance_mm: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub feed_rate_mm_per_min: Option<f64>,
@@ -97,6 +120,7 @@ pub enum ProgramWarningCode {
     ArcDefinition,
     DwellDefinition,
     FeedRate,
+    RotaryTimingUnavailable,
     ModalGroupConflict,
     PreviewLimit,
 }
@@ -194,6 +218,11 @@ pub enum ProgramWorkCoordinateSystem {
 pub struct ProgramExecutionCheckpoint {
     pub source_line: usize,
     pub position: ProgramPoint,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub a: Option<f64>,
+    /// False means A is relative to the program's unknown initial work angle.
+    #[serde(default)]
+    pub a_is_absolute: bool,
     pub motion: ProgramMotionMode,
     pub units: ProgramUnitMode,
     pub distance: ProgramDistanceMode,
@@ -210,6 +239,12 @@ pub struct ProgramExecutionCheckpoint {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgramFeatures {
+    #[serde(default)]
+    pub uses_rotary_a: bool,
+    #[serde(default)]
+    pub uses_rotary_arc: bool,
+    #[serde(default)]
+    pub uses_inverse_time_feed: bool,
     pub uses_imperial_units: bool,
     pub uses_incremental_distance: bool,
     pub has_spindle_activation: bool,
@@ -232,6 +267,10 @@ pub struct ProgramSummary {
     pub estimated_total_time_seconds: f64,
     pub time_estimate_complete: bool,
     pub bounds: Option<ProgramBounds>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rotary_bounds: Option<ProgramRotaryBounds>,
+    #[serde(default)]
+    pub rotary_travel_degrees: f64,
     pub preview_complete: bool,
     pub dry_run_eligible: bool,
 }
@@ -262,6 +301,15 @@ pub enum ProgramParseError {
     SourceTooLarge { max_bytes: usize },
     #[error("G-code source exceeds the {max_lines} line limit")]
     TooManyLines { max_lines: usize },
+    #[error("G-code source line {source_line} exceeds the {max_bytes} byte block/comment limit")]
+    SourceLineTooLong {
+        source_line: usize,
+        max_bytes: usize,
+    },
+    #[error(
+        "G-code source exceeds the {max_warnings} diagnostic limit; fix reported syntax or reduce repeated diagnostics before loading"
+    )]
+    TooManyDiagnostics { max_warnings: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -314,6 +362,10 @@ enum Plane {
 struct Parser {
     block_delete: bool,
     position: ProgramPoint,
+    a: Option<f64>,
+    a_is_absolute: bool,
+    rotary_bounds: Option<ProgramRotaryBounds>,
+    rotary_travel_degrees: f64,
     motion: MotionMode,
     units: UnitMode,
     distance: DistanceMode,
@@ -346,6 +398,10 @@ impl Default for Parser {
         Self {
             block_delete: false,
             position: ProgramPoint::default(),
+            a: None,
+            a_is_absolute: false,
+            rotary_bounds: None,
+            rotary_travel_degrees: 0.0,
             motion: MotionMode::Rapid,
             units: UnitMode::Millimeters,
             distance: DistanceMode::Absolute,
@@ -451,7 +507,18 @@ pub fn parse_program_with_options(
         ..Parser::default()
     };
     for (index, raw) in request.source.lines().enumerate() {
+        if raw.len() > MAX_SOURCE_LINE_BYTES {
+            return Err(ProgramParseError::SourceLineTooLong {
+                source_line: index + 1,
+                max_bytes: MAX_SOURCE_LINE_BYTES,
+            });
+        }
         parser.parse_line(index + 1, raw.trim_end_matches('\r'));
+        if parser.warnings.len() > MAX_PROGRAM_DIAGNOSTICS {
+            return Err(ProgramParseError::TooManyDiagnostics {
+                max_warnings: MAX_PROGRAM_DIAGNOSTICS,
+            });
+        }
     }
 
     let has_blocker = parser
@@ -470,6 +537,8 @@ pub fn parse_program_with_options(
             + parser.dwell_time_seconds,
         time_estimate_complete: parser.time_estimate_complete,
         bounds: parser.bounds.finish(),
+        rotary_bounds: parser.rotary_bounds,
+        rotary_travel_degrees: parser.rotary_travel_degrees,
         preview_complete: parser.preview_complete,
         dry_run_eligible: parser.preview_complete && !has_blocker,
     };
@@ -548,6 +617,8 @@ impl Parser {
         ProgramExecutionCheckpoint {
             source_line,
             position: self.position,
+            a: self.a,
+            a_is_absolute: self.a_is_absolute,
             motion: match self.motion {
                 MotionMode::None => ProgramMotionMode::None,
                 MotionMode::Rapid => ProgramMotionMode::Rapid,
@@ -598,6 +669,7 @@ impl Parser {
                     word.letter,
                     'X' | 'Y'
                         | 'Z'
+                        | 'A'
                         | 'I'
                         | 'J'
                         | 'K'
@@ -690,6 +762,7 @@ impl Parser {
                     );
                 }
                 'T' => self.selected_tool = Some(word.value as u8),
+                'A' => self.features.uses_rotary_a = true,
                 'N' | 'O' | 'X' | 'Y' | 'Z' | 'I' | 'J' | 'K' | 'R' | 'F' | 'P' | 'L' | 'H'
                 | 'D' | 'Q' => {}
                 letter => {
@@ -752,7 +825,7 @@ impl Parser {
             }
             if words
                 .iter()
-                .any(|word| matches!(word.letter, 'X' | 'Y' | 'Z' | 'I' | 'J' | 'K' | 'R'))
+                .any(|word| matches!(word.letter, 'X' | 'Y' | 'Z' | 'A' | 'I' | 'J' | 'K' | 'R'))
             {
                 self.preview_complete = false;
                 self.warn(
@@ -768,16 +841,20 @@ impl Parser {
         let x = last('X');
         let y = last('Y');
         let z = last('Z');
+        // Angular words are always degrees, including under G20.
+        let a = last_raw('A');
         let i = last('I');
         let j = last('J');
         let k = last('K');
         let radius = last('R');
-        let has_axis = x.is_some() || y.is_some() || z.is_some();
+        let has_cartesian_axis = x.is_some() || y.is_some() || z.is_some();
+        let has_axis = has_cartesian_axis || a.is_some();
         let arc_definition = i.is_some() || j.is_some() || k.is_some() || radius.is_some();
         let is_arc = matches!(
             block_motion,
             MotionMode::ArcClockwise | MotionMode::ArcCounterclockwise
         );
+        self.features.uses_rotary_arc |= is_arc && a.is_some();
         let has_g10 = words
             .iter()
             .any(|word| word.letter == 'G' && code_is(word.value, 10.0));
@@ -803,7 +880,7 @@ impl Parser {
                 );
             }
         }
-        if is_arc && arc_definition && !has_axis {
+        if is_arc && arc_definition && !has_cartesian_axis {
             self.preview_complete = false;
             self.warn(
                 source_line,
@@ -833,6 +910,15 @@ impl Parser {
             y: resolve_axis(self.position.y, y, self.distance),
             z: resolve_axis(self.position.z, z, self.distance),
         };
+        let rotary = (a.is_some() || self.a.is_some()).then(|| ProgramRotarySegment {
+            start_degrees: self.a.unwrap_or(0.0),
+            end_degrees: resolve_axis(self.a.unwrap_or(0.0), a, self.distance),
+        });
+        self.a = rotary.map(|rotary| rotary.end_degrees);
+        if a.is_some() && self.distance == DistanceMode::Absolute {
+            self.a_is_absolute = true;
+        }
+        let rotary_moves = rotary.is_some_and(|rotary| rotary.start_degrees != rotary.end_degrees);
         if self.preview_budget_exhausted {
             self.position = end;
             return;
@@ -894,7 +980,23 @@ impl Parser {
             }
         };
         self.position = end;
-        if points.windows(2).all(|pair| same_point(pair[0], pair[1])) {
+        if !rotary_moves && points.windows(2).all(|pair| same_point(pair[0], pair[1])) {
+            // Even a zero-length G93 motion block must supply its own F.
+            if block_motion != MotionMode::Rapid
+                && self.feed_mode == FeedMode::InverseTime
+                && block_feed.is_none()
+            {
+                self.time_estimate_complete = false;
+                self.warn(
+                    source_line,
+                    ProgramWarningSeverity::Error,
+                    ProgramWarningCode::FeedRate,
+                    "every G93 motion block requires its own positive F value",
+                );
+            }
+            if let Some(rotary) = rotary {
+                self.include_rotary(rotary);
+            }
             return;
         }
         if self.preview_points + points.len() > MAX_PREVIEW_POINTS {
@@ -903,6 +1005,9 @@ impl Parser {
         }
 
         let distance_mm = polyline_distance(&points);
+        if let Some(rotary) = rotary {
+            self.include_rotary(rotary);
+        }
         for point in &points {
             self.bounds.include(*point);
         }
@@ -925,7 +1030,19 @@ impl Parser {
             MotionMode::Linear | MotionMode::ArcClockwise | MotionMode::ArcCounterclockwise => {
                 match (self.feed_mode, self.feed_rate) {
                     (FeedMode::UnitsPerMinute, Some(feed)) if feed > 0.0 => {
-                        (Some(feed), Some(distance_mm / feed * 60.0))
+                        if rotary_moves {
+                            self.time_estimate_complete = false;
+                            if !self.warnings.iter().any(|warning| {
+                                warning.code == ProgramWarningCode::RotaryTimingUnavailable
+                            }) {
+                                self.warn(source_line, ProgramWarningSeverity::Warning,
+                                    ProgramWarningCode::RotaryTimingUnavailable,
+                                    "G94 A-axis duration is unknown without controller rotary kinematics; use G93 for explicit block timing. Preview and distances are Cartesian projection only");
+                            }
+                            (None, None)
+                        } else {
+                            (Some(feed), Some(distance_mm / feed * 60.0))
+                        }
                     }
                     (FeedMode::InverseTime, Some(feed)) if feed > 0.0 && block_feed.is_some() => {
                         (None, Some(60.0 / feed))
@@ -958,10 +1075,25 @@ impl Parser {
             optional_block,
             kind,
             points,
+            rotary,
             distance_mm,
             feed_rate_mm_per_min,
             estimated_duration_seconds,
         });
+    }
+
+    fn include_rotary(&mut self, rotary: ProgramRotarySegment) {
+        let min = rotary.start_degrees.min(rotary.end_degrees);
+        let max = rotary.start_degrees.max(rotary.end_degrees);
+        let bounds = self.rotary_bounds.get_or_insert(ProgramRotaryBounds {
+            min_degrees: min,
+            max_degrees: max,
+            size_degrees: max - min,
+        });
+        bounds.min_degrees = bounds.min_degrees.min(min);
+        bounds.max_degrees = bounds.max_degrees.max(max);
+        bounds.size_degrees = bounds.max_degrees - bounds.min_degrees;
+        self.rotary_travel_degrees += (rotary.end_degrees - rotary.start_degrees).abs();
     }
 
     fn exhaust_preview_budget(&mut self, source_line: usize) {
@@ -1028,6 +1160,7 @@ impl Parser {
         } else if code_is(value, 91.1) {
             self.arc_distance = ArcDistanceMode::Incremental;
         } else if code_is(value, 93.0) {
+            self.features.uses_inverse_time_feed = true;
             if self.feed_mode != FeedMode::InverseTime {
                 self.feed_rate = None;
             }

@@ -46,6 +46,8 @@ pub enum StatusParseError {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum JogValidationError {
+    #[error("returning rotary A to zero requires explicit rotary clearance")]
+    RotaryClearanceRequired,
     #[error("step jog distance must be finite and non-zero")]
     InvalidDistance,
     #[error("step jog distance must be between {min_mm:.2} and {max_mm:.2} mm")]
@@ -111,6 +113,7 @@ pub fn encode_return_to_work_zero(
         WorkAxis::X => 'X',
         WorkAxis::Y => 'Y',
         WorkAxis::Z => 'Z',
+        WorkAxis::A => return Err(JogValidationError::RotaryClearanceRequired),
     };
     Ok(format!(
         "$J=G90 G21 {axis}0.000 F{:.3}",
@@ -211,6 +214,7 @@ pub fn encode_set_work_zero(axis: WorkAxis, coordinate_system: WorkCoordinateSys
         WorkAxis::X => 'X',
         WorkAxis::Y => 'Y',
         WorkAxis::Z => 'Z',
+        WorkAxis::A => 'A',
     };
     let parameter = coordinate_system_parameter(coordinate_system);
     format!("G10 L20 P{parameter} {axis}0")
@@ -225,6 +229,7 @@ pub fn encode_set_work_value(
         WorkAxis::X => 'X',
         WorkAxis::Y => 'Y',
         WorkAxis::Z => 'Z',
+        WorkAxis::A => 'A',
     };
     let parameter = coordinate_system_parameter(coordinate_system);
     format!("G10 L20 P{parameter} {axis}{value_mm:.3}")
@@ -298,7 +303,10 @@ pub fn parse_incoming_line(line: &str) -> Result<IncomingLine, StatusParseError>
         return parse_status_line(line).map(|state| IncomingLine::Status(Box::new(state)));
     }
 
-    if let Some(remainder) = line.strip_prefix("Grbl ") {
+    if let Some(remainder) = line
+        .strip_prefix("Grbl ")
+        .or_else(|| line.strip_prefix("GrblHAL "))
+    {
         let version = remainder.split_whitespace().next().map(str::to_owned);
         return Ok(IncomingLine::ResetBanner {
             raw: line.to_owned(),
@@ -428,6 +436,67 @@ pub fn build_device_inspection(responses: Vec<CommandResponse>) -> DeviceInspect
     inspection
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RotaryAxisEvidence {
+    ReportedAxes,
+    StatusPosition,
+}
+
+/// Evidence for the four-axis XYZA protocol, not proof of angular configuration
+/// or safe execution. Both inputs must belong to the current connection epoch.
+pub fn rotary_axis_evidence(
+    inspection: Option<&DeviceInspection>,
+    status: Option<&MachineState>,
+) -> Option<RotaryAxisEvidence> {
+    let mut declared = false;
+    for response in inspection.into_iter().flat_map(|value| &value.responses) {
+        if !matches!(response.command.as_str(), "$I" | "$I+") {
+            continue;
+        }
+        for line in &response.lines {
+            if line.starts_with("[AXS:") {
+                if response.completion != millo_domain::CommandCompletion::Ok
+                    || bracket_value(line, "AXS") != Some("4:XYZA")
+                {
+                    return None;
+                }
+                declared = true;
+            }
+        }
+    }
+    let mut fourth_position = false;
+    if let Some(status) = status {
+        for position in [status.machine_position, status.work_position]
+            .into_iter()
+            .flatten()
+        {
+            if ![position.x, position.y, position.z]
+                .into_iter()
+                .all(f64::is_finite)
+                || position.a.is_none_or(|a| !a.is_finite())
+            {
+                return None;
+            }
+            fourth_position = true;
+        }
+        if status.work_coordinate_offset.is_some_and(|offset| {
+            ![offset.x, offset.y, offset.z]
+                .into_iter()
+                .all(f64::is_finite)
+                || offset.a.is_none_or(|a| !a.is_finite())
+        }) {
+            return None;
+        }
+    }
+    if declared {
+        Some(RotaryAxisEvidence::ReportedAxes)
+    } else if fourth_position {
+        Some(RotaryAxisEvidence::StatusPosition)
+    } else {
+        None
+    }
+}
+
 fn parse_identity_line(line: &str, inspection: &mut DeviceInspection) {
     if let Some(value) = bracket_value(line, "VER") {
         let (version, build_info) = value.split_once(':').unwrap_or((value, ""));
@@ -524,6 +593,12 @@ fn machine_mode(value: &str) -> MachineMode {
 
 fn parse_position(field: &str, value: &str) -> Result<Position, StatusParseError> {
     let values = parse_numbers(field, value)?;
+    if let Some(value) = values.iter().find(|value| !value.is_finite()) {
+        return Err(StatusParseError::InvalidNumber {
+            field: field.to_owned(),
+            value: value.to_string(),
+        });
+    }
     if !(3..=4).contains(&values.len()) {
         return Err(StatusParseError::InvalidPosition {
             field: field.to_owned(),

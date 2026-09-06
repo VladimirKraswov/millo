@@ -19,6 +19,7 @@ export type RecoveryInterruptionKind =
   | "unknown";
 
 export interface ProgramRecoveryCandidate {
+  readonly restartADegrees?: number;
   readonly id: number;
   readonly sourceName: string;
   readonly intent: ProgramRunIntent;
@@ -50,6 +51,7 @@ export interface ProgramRecoveryPreparationRequest {
 }
 
 export interface ProgramRecoveryPackage {
+  readonly restartADegrees?: number;
   readonly recoveryId: number;
   readonly originalSourceName: string;
   readonly interruptedSourceLine?: number;

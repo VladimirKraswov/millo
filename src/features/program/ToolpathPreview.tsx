@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-import type { GcodeProgram, ProgramPoint } from "../../shared/program";
+import type { GcodeProgram, ToolpathSegment } from "../../shared/program";
+import type { Position } from "../../shared/machine";
 import { toolKindLabels } from "../../shared/tooling";
 import type { ProgramToolVisualization } from "./programToolVisualizationModel";
 import { toolRenderProfile } from "./toolGeometryModel";
@@ -12,6 +13,7 @@ import {
   buildToolpathHighlightReadModel,
   buildToolpathReadModel,
   buildToolPositionReadModel,
+  formatRotaryDegrees,
   sourceLineForIntersection,
   type ToolpathReadModel,
 } from "./toolpathReadModel";
@@ -23,8 +25,9 @@ interface ToolpathPreviewProps {
   readonly onSelectSourceLine?: (sourceLine: number) => void;
   readonly program: GcodeProgram;
   readonly selectedSourceLine?: number;
+  readonly selectedToolpath?: readonly ToolpathSegment[];
   readonly toolCoordinateSystem?: string;
-  readonly toolPosition?: ProgramPoint;
+  readonly toolPosition?: Position;
   readonly toolVisualization: ProgramToolVisualization;
   readonly view: PreviewView;
 }
@@ -128,6 +131,7 @@ export function ToolpathPreview({
   onSelectSourceLine,
   program,
   selectedSourceLine,
+  selectedToolpath,
   toolCoordinateSystem = "G54",
   toolPosition,
   toolVisualization,
@@ -136,6 +140,9 @@ export function ToolpathPreview({
   const hostRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<PreviewRuntime | undefined>(undefined);
   const selectSourceLineRef = useRef(onSelectSourceLine);
+  const rotaryVisible = toolPosition?.a !== undefined || Boolean(
+    program.features.usesRotaryA || program.summary.rotaryBounds,
+  );
   useEffect(() => {
     selectSourceLineRef.current = onSelectSourceLine;
   }, [onSelectSourceLine]);
@@ -214,6 +221,15 @@ export function ToolpathPreview({
     };
     const rapidPath = addPath(model.rapidPositions, 0xffb454, 0.68);
     const cuttingPath = addPath(model.cuttingPositions, 0x77d6b3, 1);
+    const rotaryPoints = new THREE.Points(
+      new THREE.BufferGeometry().setAttribute(
+        "position", new THREE.BufferAttribute(model.rotaryPositions, 3),
+      ),
+      new THREE.PointsMaterial({
+        color: 0xffca73, size: 7, sizeAttenuation: false,
+      }),
+    );
+    scene.add(rotaryPoints);
 
     const selectionLine = new THREE.LineSegments(
       new THREE.BufferGeometry(),
@@ -321,12 +337,18 @@ export function ToolpathPreview({
       );
       raycaster.params.Line.threshold =
         Math.max(model.gridSize * 0.008, 0.12) / camera.zoom;
+      raycaster.params.Points.threshold = raycaster.params.Line.threshold;
       raycaster.setFromCamera(pointer, camera);
       const paths = [rapidPath?.line, cuttingPath?.line].filter(
         (line): line is THREE.LineSegments => line !== undefined,
       );
-      const hit = raycaster.intersectObjects(paths, false)[0];
+      const hit = raycaster.intersectObjects<THREE.Object3D>([rotaryPoints, ...paths], false)[0];
       if (!hit) return;
+      if (hit.object === rotaryPoints) {
+        const sourceLine = hit.index === undefined ? undefined : model.rotarySourceLines[hit.index];
+        if (sourceLine !== undefined) selectSourceLineRef.current?.(sourceLine);
+        return;
+      }
       const sourceLines =
         hit.object === rapidPath?.line
           ? model.rapidSourceLines
@@ -454,6 +476,7 @@ export function ToolpathPreview({
       selectedSourceLine,
       runtime.model.center,
       cuttingDepthAdjustmentMm,
+      selectedToolpath,
     );
     const hasSelection = selection.positions.length > 0;
     const replaceGeometry = (object: THREE.LineSegments | THREE.Points) => {
@@ -480,7 +503,7 @@ export function ToolpathPreview({
         ? "Предпросмотр траектории G-code"
         : `Предпросмотр траектории G-code, выбрана строка ${selectedSourceLine}`,
     );
-  }, [cuttingDepthAdjustmentMm, program, selectedSourceLine, view]);
+  }, [cuttingDepthAdjustmentMm, program, selectedSourceLine, selectedToolpath, view]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -557,7 +580,7 @@ export function ToolpathPreview({
       <div className="toolpath-canvas" ref={hostRef} />
       {toolPosition && (
         <aside
-          className={`tool-position-hud is-${toolVisualization.state}${toolOverProgram ? "" : " is-outside"}`}
+          className={`tool-position-hud is-${toolVisualization.state}${toolOverProgram ? "" : " is-outside"}${rotaryVisible ? " has-rotary" : ""}`}
           aria-label="Текущее положение фрезы"
         >
           <Crosshair aria-hidden="true" size={18} />
@@ -580,6 +603,11 @@ export function ToolpathPreview({
             <span>X {formatCoordinate(toolPosition.x)}</span>
             <span>Y {formatCoordinate(toolPosition.y)}</span>
             <span>Z {formatCoordinate(toolPosition.z)}</span>
+            {rotaryVisible && (
+              <span aria-label="Текущее положение оси A" title="A · Контроллер">
+                A {formatRotaryDegrees(toolPosition.a)}
+              </span>
+            )}
           </code>
           <div className="tool-position-actions">
             <button

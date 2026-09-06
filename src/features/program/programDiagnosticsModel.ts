@@ -41,6 +41,7 @@ const warningTitles: Readonly<Record<ProgramWarningCode, string>> = {
   "feed-rate": "Некорректная подача",
   "modal-group-conflict": "Конфликт режимов",
   "preview-limit": "Лимит предпросмотра",
+  "rotary-timing-unavailable": "Время движения A приблизительное",
 };
 
 export function isManagedToolChange(warning: ProgramWarning): boolean {
@@ -48,22 +49,25 @@ export function isManagedToolChange(warning: ProgramWarning): boolean {
 }
 
 export function hasActionableProgramWarnings(program: GcodeProgram): boolean {
+  if (program.document) return program.document.warningCount > program.document.managedToolChangeCount;
   return program.warnings.some((warning) => !isManagedToolChange(warning));
 }
 
 export function programCanEnterPreflight(program: GcodeProgram): boolean {
   return program.summary.previewComplete &&
+    (program.document?.errorCount ?? 0) === 0 &&
     !program.warnings.some((warning) => warning.severity === "error");
 }
 
 export function programDiagnosticsSummary(
   program: GcodeProgram,
 ): ProgramDiagnosticsSummary {
-  const managedToolChangeCount = program.warnings.filter(isManagedToolChange).length;
+  const managedToolChangeCount = program.document?.managedToolChangeCount ?? program.warnings.filter(isManagedToolChange).length;
+  const totalCount = program.document?.warningCount ?? program.warnings.length;
   return {
-    actionableCount: program.warnings.length - managedToolChangeCount,
+    actionableCount: totalCount - managedToolChangeCount,
     managedToolChangeCount,
-    totalCount: program.warnings.length,
+    totalCount,
   };
 }
 

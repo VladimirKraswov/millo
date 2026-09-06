@@ -12,6 +12,7 @@ export interface DepthCorrectionView {
 
 export function deepestCuttingZ(program: GcodeProgram | undefined): number | undefined {
   if (!program) return undefined;
+  if (program.document) return program.document.deepestCuttingZ ?? undefined;
   let deepest: number | undefined;
   for (const segment of program.toolpath) {
     if (segment.kind === "rapid") continue;

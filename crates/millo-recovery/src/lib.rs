@@ -1,6 +1,8 @@
 use std::{
     fs,
+    io::Read,
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -10,14 +12,19 @@ use millo_gcode::{
     GcodeProgram, ProgramExecutionCheckpoint, ProgramParseOptions, ProgramParseRequest,
     ProgramPoint, ProgramSpindleMode, ToolpathKind, parse_program_with_options,
 };
-use millo_restart::{modal_restore, wcs_word};
+use millo_restart::{
+    RotaryRestartError, RotaryRestartState, modal_restore, rotary_restart_angle,
+    validate_rotary_cartesian_anchor, wcs_word,
+};
 use millo_run::{ProgramRunIntent, program_fingerprint};
 use millo_sender::{SenderFailure, SenderFailureKind, SenderMode, SenderSnapshot, SenderState};
 use millo_storage::{backup_path, write_atomically};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-const RECOVERY_SCHEMA_VERSION: u16 = 1;
+const RECOVERY_SCHEMA_VERSION: u16 = 2;
+const MAX_RECOVERY_METADATA_BYTES: usize = millo_gcode::MAX_SOURCE_BYTES + 1024 * 1024;
 const CHECKPOINT_INTERVAL: Duration = Duration::from_secs(1);
 const CLEARANCE_EPSILON_MM: f64 = 0.002;
 const MAX_SAFE_Z_MM: f64 = 10_000.0;
@@ -45,7 +52,16 @@ struct RecoveryRecord {
     machine_fingerprint: String,
     profile_id: Option<String>,
     source_name: String,
-    source: String,
+    #[serde(
+        default,
+        skip_serializing,
+        deserialize_with = "deserialize_legacy_source"
+    )]
+    source: Arc<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    source_ref: Option<RecoverySourceRef>,
+    #[serde(skip)]
+    cache: Option<Arc<RecoveryProgramCache>>,
     program_fingerprint: String,
     intent: ProgramRunIntent,
     execution_options: ProgramExecutionOptions,
@@ -63,6 +79,74 @@ struct RecoveryRecord {
     start_work_coordinate_offset: Option<Position>,
     #[serde(default)]
     prepared_recovery_fingerprint: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RecoverySourceRef {
+    sha256: String,
+    bytes: usize,
+}
+
+#[derive(Debug, PartialEq)]
+struct RecoveryProgramCache {
+    program: Arc<GcodeProgram>,
+    clearance_entries: Vec<usize>,
+}
+
+impl RecoveryProgramCache {
+    fn new(program: Arc<GcodeProgram>) -> Self {
+        let clearance = program.summary.bounds.map(|bounds| bounds.max.z);
+        let clearance_entries = program
+            .toolpath
+            .iter()
+            .filter(|segment| {
+                segment.kind == ToolpathKind::Rapid
+                    && segment
+                        .points
+                        .first()
+                        .zip(clearance)
+                        .is_some_and(|(point, z)| point.z + CLEARANCE_EPSILON_MM >= z)
+            })
+            .map(|segment| segment.source_line)
+            .collect();
+        Self {
+            program,
+            clearance_entries,
+        }
+    }
+
+    fn anchor(&self, interrupted: usize) -> Result<RecoveryAnchor, ProgramRecoveryError> {
+        let index = self
+            .clearance_entries
+            .partition_point(|line| *line <= interrupted);
+        let source_line = index
+            .checked_sub(1)
+            .map(|index| self.clearance_entries[index])
+            .or_else(|| {
+                self.program
+                    .toolpath
+                    .first()
+                    .filter(|segment| segment.source_line <= interrupted)
+                    .map(|segment| segment.source_line)
+            })
+            .ok_or(ProgramRecoveryError::CheckpointUnavailable)?;
+        let index = self
+            .program
+            .execution_checkpoints
+            .binary_search_by_key(&source_line, |checkpoint| checkpoint.source_line)
+            .map_err(|_| ProgramRecoveryError::CheckpointUnavailable)?;
+        Ok(RecoveryAnchor {
+            source_line,
+            checkpoint: self.program.execution_checkpoints[index],
+        })
+    }
+}
+
+fn deserialize_legacy_source<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Arc<String>, D::Error> {
+    String::deserialize(deserializer).map(Arc::from)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +169,8 @@ pub struct ProgramRecoveryCandidate {
     pub executing_source_line: Option<usize>,
     pub restart_source_line: Option<usize>,
     pub restart_position: Option<ProgramPoint>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restart_a_degrees: Option<f64>,
     pub minimum_safe_z_mm: Option<f64>,
     pub checkpoint_restart_available: bool,
     pub full_restart_available: bool,
@@ -122,6 +208,8 @@ pub struct ProgramRecoveryPackage {
     pub interrupted_source_line: Option<usize>,
     pub restart_source_line: usize,
     pub restart_position: ProgramPoint,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restart_a_degrees: Option<f64>,
     pub clearance_z_mm: f64,
     pub repeated_source_lines: usize,
     pub continuity: RecoveryContinuity,
@@ -132,6 +220,14 @@ pub struct ProgramRecoveryPackage {
 
 #[derive(Debug, Error)]
 pub enum ProgramRecoveryError {
+    #[error("recovery source sidecar is missing: {0}")]
+    MissingSource(PathBuf),
+    #[error("recovery source sidecar is corrupt or does not match its content fingerprint")]
+    SourceCorrupt,
+    #[error("recovery file exceeds the {max_bytes} byte read limit")]
+    FileTooLarge { max_bytes: usize },
+    #[error(transparent)]
+    Rotary(#[from] RotaryRestartError),
     #[error("program recovery I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("program recovery JSON failed: {0}")]
@@ -193,14 +289,22 @@ impl ProgramRecoveryStore {
         let path = path.into();
         let loaded = load_with_backup(&path)?;
         let recovered_from_backup = loaded.as_ref().is_some_and(|loaded| loaded.1);
-        let store = Self {
+        let legacy = loaded
+            .as_ref()
+            .is_some_and(|loaded| loaded.0.schema_version == 1);
+        let mut store = Self {
             path: Some(path),
             record: loaded.and_then(|loaded| loaded.0.record),
             checkpoint: None,
             pending_arm: None,
         };
+        if let Some(record) = store.record.as_mut() {
+            ensure_source_sidecar(store.path.as_deref(), record)?;
+        }
         if recovered_from_backup {
             store.remove_corrupt_primary()?;
+        }
+        if recovered_from_backup || legacy {
             store.persist()?;
         }
         Ok(store)
@@ -209,6 +313,19 @@ impl ProgramRecoveryStore {
     pub fn arm(
         &mut self,
         seed: RecoverySeed,
+        snapshot: &SenderSnapshot,
+        now: SystemTime,
+        monotonic: Instant,
+    ) -> Result<ProgramRecoveryCandidate, ProgramRecoveryError> {
+        let program = Arc::new(parse_seed(&seed)?);
+        self.arm_with_program(seed, program, snapshot, now, monotonic)
+    }
+
+    /// Reuses an already parsed native program; no full-program clone or reparse.
+    pub fn arm_with_program(
+        &mut self,
+        seed: RecoverySeed,
+        program: Arc<GcodeProgram>,
         snapshot: &SenderSnapshot,
         now: SystemTime,
         monotonic: Instant,
@@ -241,18 +358,56 @@ impl ProgramRecoveryStore {
                     source_name: active.source_name.clone(),
                 });
             }
+            if active
+                .cache
+                .as_ref()
+                .ok_or(ProgramRecoveryError::CheckpointUnavailable)?
+                .program
+                .features
+                .uses_rotary_a
+            {
+                // Preparation binds the old datum; do not replace it with a later re-zero.
+                let recorded_a = active
+                    .start_work_coordinate_offset
+                    .and_then(|position| position.a)
+                    .ok_or(RotaryRestartError::StateRequired)?;
+                let current_a = seed
+                    .start_work_coordinate_offset
+                    .and_then(|position| position.a)
+                    .ok_or(RotaryRestartError::StateRequired)?;
+                if !recorded_a.is_finite() || !current_a.is_finite() {
+                    return Err(RotaryRestartError::InvalidState.into());
+                }
+                if (recorded_a - current_a).abs() > 1e-6 {
+                    return Err(RotaryRestartError::WorkOffsetChanged.into());
+                }
+            }
         }
-        let program = parse_seed(&seed)?;
-        if program_fingerprint(&program) != seed.program_fingerprint {
+        if seed.source.len() > millo_gcode::MAX_SOURCE_BYTES {
+            return Err(ProgramRecoveryError::FileTooLarge {
+                max_bytes: millo_gcode::MAX_SOURCE_BYTES,
+            });
+        }
+        if program.source_name != seed.source_name
+            || program.block_delete_enabled != seed.execution_options.block_delete
+            || !seed
+                .source
+                .lines()
+                .map(|line| line.trim_end_matches('\r'))
+                .eq(program.lines.iter().map(|line| line.source.as_str()))
+            || program_fingerprint(&program) != seed.program_fingerprint
+        {
             return Err(ProgramRecoveryError::ProgramChanged);
         }
         let now_unix_ms = unix_millis(now);
-        let record = RecoveryRecord {
+        let mut record = RecoveryRecord {
             id: unix_micros(now),
             machine_fingerprint: seed.machine_fingerprint,
             profile_id: seed.profile_id,
             source_name: seed.source_name,
-            source: seed.source,
+            source: seed.source.into(),
+            source_ref: None,
+            cache: Some(Arc::new(RecoveryProgramCache::new(program))),
             program_fingerprint: seed.program_fingerprint,
             intent: seed.intent,
             execution_options: seed.execution_options,
@@ -270,8 +425,9 @@ impl ProgramRecoveryStore {
             prepared_recovery_fingerprint: None,
         };
         let candidate = candidate_for_record(&record)?.ok_or(ProgramRecoveryError::Missing)?;
+        ensure_source_sidecar(self.path.as_deref(), &mut record)?;
         let previous = self.record.clone();
-        self.persist_record(Some(record.clone()))?;
+        self.persist_record(Some(&record))?;
         self.pending_arm = Some((record.id, previous));
         self.record = Some(record);
         self.checkpoint = Some(PersistedCheckpoint {
@@ -303,7 +459,7 @@ impl ProgramRecoveryStore {
                 .is_some_and(|record| record.id == *pending_id)
         {
             let previous = previous.clone();
-            self.persist_record(Some(previous.clone()))?;
+            self.persist_record(Some(&previous))?;
             self.record = Some(previous);
             self.checkpoint = None;
             self.pending_arm = None;
@@ -335,6 +491,16 @@ impl ProgramRecoveryStore {
         if !should_persist {
             return Ok(false);
         }
+        // Keep the durable parent backup until a recovery executes a source block.
+        if !terminal
+            && executing_source_line.is_none()
+            && self
+                .pending_arm
+                .as_ref()
+                .is_some_and(|(_, previous)| previous.is_some())
+        {
+            return Ok(false);
+        }
         self.persist()?;
         self.checkpoint = Some(PersistedCheckpoint {
             run_sequence: snapshot.run_sequence,
@@ -361,6 +527,17 @@ impl ProgramRecoveryStore {
         safe_z_mm: f64,
         continuity: RecoveryContinuity,
     ) -> Result<ProgramRecoveryPackage, ProgramRecoveryError> {
+        self.prepare_with_rotary(recovery_id, safe_z_mm, continuity, None)
+    }
+
+    /// Rotary state must come from verified telemetry after any necessary reindex.
+    pub fn prepare_with_rotary(
+        &mut self,
+        recovery_id: u64,
+        safe_z_mm: f64,
+        continuity: RecoveryContinuity,
+        rotary_state: Option<RotaryRestartState>,
+    ) -> Result<ProgramRecoveryPackage, ProgramRecoveryError> {
         let record = self.record.as_ref().ok_or(ProgramRecoveryError::Missing)?;
         if record.id != recovery_id {
             return Err(ProgramRecoveryError::RecordMismatch {
@@ -368,21 +545,38 @@ impl ProgramRecoveryStore {
                 actual: record.id,
             });
         }
-        let program = parse_record(record)?;
-        if program_fingerprint(&program) != record.program_fingerprint {
-            return Err(ProgramRecoveryError::ProgramChanged);
-        }
+        let cache = record
+            .cache
+            .as_ref()
+            .ok_or(ProgramRecoveryError::CheckpointUnavailable)?;
+        let program = cache.program.as_ref();
         let checkpoint_restart =
             !matches!(continuity, RecoveryContinuity::MotionPowerLostOrUnknown);
         let interrupted = record.executing_source_line;
-        let anchor = if checkpoint_restart {
-            recovery_anchor(
-                &program,
-                interrupted.ok_or(ProgramRecoveryError::ExecutingLineUnavailable)?,
-            )?
+        let mut anchor = if checkpoint_restart {
+            cache.anchor(interrupted.ok_or(ProgramRecoveryError::ExecutingLineUnavailable)?)?
         } else {
-            first_recovery_anchor(&program)?
+            first_recovery_anchor(program)?
         };
+        let rotary_state = if program.features.uses_rotary_a {
+            let mut state = rotary_state.ok_or(RotaryRestartError::StateRequired)?;
+            state.reference_work_offset_a_degrees = record
+                .start_work_coordinate_offset
+                .and_then(|position| position.a)
+                .ok_or(RotaryRestartError::StateRequired)?;
+            state.initial_work_a_degrees = record
+                .start_work_position
+                .and_then(|position| position.a)
+                .ok_or(RotaryRestartError::StateRequired)?;
+            Some(state)
+        } else {
+            None
+        };
+        let restart_a_degrees = rotary_restart_angle(program, anchor.checkpoint, rotary_state)?;
+        if checkpoint_restart {
+            validate_rotary_cartesian_anchor(program, anchor.checkpoint)?;
+        }
+        anchor.checkpoint.a = restart_a_degrees;
         let minimum_safe_z = program
             .summary
             .bounds
@@ -418,6 +612,7 @@ impl ProgramRecoveryStore {
             interrupted_source_line: interrupted,
             restart_source_line: anchor.source_line,
             restart_position: anchor.checkpoint.position,
+            restart_a_degrees,
             clearance_z_mm: safe_z_mm,
             repeated_source_lines: interrupted
                 .map(|line| line.saturating_sub(anchor.source_line))
@@ -429,7 +624,7 @@ impl ProgramRecoveryStore {
         };
         let mut updated = record.clone();
         updated.prepared_recovery_fingerprint = Some(program_fingerprint(&prepared_program));
-        self.persist_record(Some(updated.clone()))?;
+        self.persist_record(Some(&updated))?;
         self.record = Some(updated);
         Ok(package)
     }
@@ -455,7 +650,7 @@ impl ProgramRecoveryStore {
             return Err(ProgramRecoveryError::ArmNotPending(recovery_id));
         }
         let previous = previous.clone();
-        self.persist_record(previous.clone())?;
+        self.persist_record(previous.as_ref())?;
         self.record = previous;
         self.checkpoint = None;
         self.pending_arm = None;
@@ -478,14 +673,20 @@ impl ProgramRecoveryStore {
     }
 
     fn persist(&self) -> Result<(), ProgramRecoveryError> {
-        self.persist_record(self.record.clone())
+        self.persist_record(self.record.as_ref())
     }
 
-    fn persist_record(&self, record: Option<RecoveryRecord>) -> Result<(), ProgramRecoveryError> {
+    fn persist_record(&self, record: Option<&RecoveryRecord>) -> Result<(), ProgramRecoveryError> {
         let Some(path) = self.path.as_ref() else {
             return Ok(());
         };
-        let bytes = serde_json::to_vec_pretty(&RecoveryFile {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct CheckpointFile<'a> {
+            schema_version: u16,
+            record: Option<&'a RecoveryRecord>,
+        }
+        let bytes = serde_json::to_vec_pretty(&CheckpointFile {
             schema_version: RECOVERY_SCHEMA_VERSION,
             record,
         })?;
@@ -517,6 +718,11 @@ fn candidate_for_record(
     if record.state == SenderState::Completed {
         return Ok(None);
     }
+    let cache = record
+        .cache
+        .as_ref()
+        .ok_or(ProgramRecoveryError::CheckpointUnavailable)?;
+    let program = cache.program.as_ref();
     let interruption = recovery_interruption(record);
     let base = |ready,
                 detail,
@@ -534,6 +740,19 @@ fn candidate_for_record(
             acknowledged_lines: record.acknowledged_lines,
             executing_source_line: record.executing_source_line,
             restart_source_line: restart.as_ref().map(|anchor| anchor.source_line),
+            restart_a_degrees: restart.as_ref().and_then(|anchor| {
+                if !program.features.uses_rotary_a {
+                    return None;
+                }
+                if anchor.checkpoint.a_is_absolute {
+                    anchor.checkpoint.a
+                } else {
+                    record
+                        .start_work_position
+                        .and_then(|position| position.a)
+                        .map(|initial| initial + anchor.checkpoint.a.unwrap_or(0.0))
+                }
+            }),
             restart_position: restart.map(|anchor| anchor.checkpoint.position),
             minimum_safe_z_mm,
             checkpoint_restart_available,
@@ -543,18 +762,21 @@ fn candidate_for_record(
             detail,
         }
     };
-    let program = parse_record(record)?;
-    if program_fingerprint(&program) != record.program_fingerprint {
-        return Ok(Some(base(
-            false,
-            "Stored source fingerprint mismatch; recovery is blocked".to_owned(),
-            None,
-            None,
-            false,
-            false,
-        )));
+    let first_anchor = first_recovery_anchor(program)?;
+    if program.features.uses_rotary_a
+        && (record
+            .start_work_position
+            .and_then(|position| position.a)
+            .is_none()
+            || record
+                .start_work_coordinate_offset
+                .and_then(|position| position.a)
+                .is_none())
+    {
+        return Ok(Some(base(false,
+            "A-axis recovery has no recorded A/WCO datum; reindex A and start a newly verified full program run".to_owned(),
+            None, None, false, false)));
     }
-    let first_anchor = first_recovery_anchor(&program)?;
     let minimum_safe_z_mm = program
         .summary
         .bounds
@@ -563,13 +785,18 @@ fn candidate_for_record(
         .max(first_anchor.checkpoint.position.z);
     match record.executing_source_line {
         Some(executing) => {
-            let anchor = recovery_anchor(&program, executing)?;
+            let anchor = cache.anchor(executing)?;
             Ok(Some(base(
                 true,
                 format!(
-                    "Checkpoint restart from source line {} replays {} line(s); full restart remains available",
+                    "Checkpoint restart from source line {} replays {} line(s); full restart remains available{}",
                     anchor.source_line,
-                    executing.saturating_sub(anchor.source_line)
+                    executing.saturating_sub(anchor.source_line),
+                    if program.features.uses_rotary_a {
+                        "; A requires verified A/WCO and confirmed rotary-safe clearance"
+                    } else {
+                        ""
+                    }
                 ),
                 Some(anchor),
                 Some(minimum_safe_z_mm),
@@ -629,48 +856,6 @@ fn first_recovery_anchor(program: &GcodeProgram) -> Result<RecoveryAnchor, Progr
     })
 }
 
-fn recovery_anchor(
-    program: &GcodeProgram,
-    interrupted_source_line: usize,
-) -> Result<RecoveryAnchor, ProgramRecoveryError> {
-    let clearance_z = program
-        .summary
-        .bounds
-        .map(|bounds| bounds.max.z)
-        .ok_or(ProgramRecoveryError::CheckpointUnavailable)?;
-    let preferred_line = program
-        .toolpath
-        .iter()
-        .filter(|segment| segment.source_line <= interrupted_source_line)
-        .filter(|segment| segment.kind == ToolpathKind::Rapid)
-        .filter(|segment| {
-            segment
-                .points
-                .first()
-                .is_some_and(|point| point.z + CLEARANCE_EPSILON_MM >= clearance_z)
-        })
-        .map(|segment| segment.source_line)
-        .next_back()
-        .or_else(|| {
-            program
-                .toolpath
-                .iter()
-                .find(|segment| segment.source_line <= interrupted_source_line)
-                .map(|segment| segment.source_line)
-        })
-        .ok_or(ProgramRecoveryError::CheckpointUnavailable)?;
-    let checkpoint = program
-        .execution_checkpoints
-        .iter()
-        .find(|checkpoint| checkpoint.source_line == preferred_line)
-        .copied()
-        .ok_or(ProgramRecoveryError::CheckpointUnavailable)?;
-    Ok(RecoveryAnchor {
-        source_line: preferred_line,
-        checkpoint,
-    })
-}
-
 fn build_recovery_source(
     record: &RecoveryRecord,
     anchor: &RecoveryAnchor,
@@ -684,9 +869,12 @@ fn build_recovery_source(
         "G21 G90 G94".to_owned(),
         wcs_word(anchor.checkpoint.work_coordinate_system).to_owned(),
         format!("G0 Z{safe_z_mm:.4}"),
-        format!("G0 X{:.4} Y{:.4}", point.x, point.y),
-        format!("G0 Z{:.4}", point.z),
     ];
+    if let Some(a) = anchor.checkpoint.a {
+        lines.push(format!("G0 A{a}"));
+    }
+    lines.push(format!("G0 X{:.4} Y{:.4}", point.x, point.y));
+    lines.push(format!("G0 Z{:.4}", point.z));
     if let Some(tool) = anchor.checkpoint.selected_tool {
         lines.push(format!("T{tool}"));
     }
@@ -727,6 +915,9 @@ fn build_full_restart_source(
         wcs_word(anchor.checkpoint.work_coordinate_system).to_owned(),
         format!("G0 Z{safe_z_mm:.4}"),
     ];
+    if let Some(a) = anchor.checkpoint.a {
+        lines.push(format!("G0 A{a}"));
+    }
     lines.extend(record.source.lines().map(str::to_owned));
     lines.join("\n")
 }
@@ -757,7 +948,7 @@ fn parse_record(record: &RecoveryRecord) -> Result<GcodeProgram, ProgramRecovery
     parse_program_with_options(
         ProgramParseRequest {
             source_name: record.source_name.clone(),
-            source: record.source.clone(),
+            source: record.source.to_string(),
         },
         ProgramParseOptions {
             block_delete: record.execution_options.block_delete,
@@ -769,31 +960,154 @@ fn parse_record(record: &RecoveryRecord) -> Result<GcodeProgram, ProgramRecovery
 fn load_with_backup(path: &Path) -> Result<Option<(RecoveryFile, bool)>, ProgramRecoveryError> {
     let primary = read_recovery_file(path);
     let backup = read_recovery_file(&backup_path(path));
+    if let (Ok(Some(primary)), Ok(Some(backup))) = (&primary, &backup)
+        && should_restore_interrupted_parent(primary, backup)
+        && let Ok(file) = hydrate_recovery_file(backup.clone(), path)
+    {
+        return Ok(Some((file, true)));
+    }
     match primary {
-        Ok(Some(primary)) => match backup {
-            Ok(Some(backup)) if should_restore_interrupted_parent(&primary, &backup) => {
-                Ok(Some((backup, true)))
-            }
-            _ => Ok(Some((primary, false))),
+        Ok(Some(primary)) => match hydrate_recovery_file(primary, path) {
+            Ok(file) => Ok(Some((file, false))),
+            Err(error) => match backup {
+                Ok(Some(backup)) => hydrate_recovery_file(backup, path)
+                    .map(|file| Some((file, true)))
+                    .or(Err(error)),
+                _ => Err(error),
+            },
         },
-        Ok(None) => backup.map(|backup| backup.map(|backup| (backup, true))),
+        Ok(None) => match backup? {
+            Some(backup) => hydrate_recovery_file(backup, path).map(|file| Some((file, true))),
+            None => Ok(None),
+        },
         Err(primary_error) => match backup {
-            Ok(Some(backup)) => Ok(Some((backup, true))),
+            Ok(Some(backup)) => hydrate_recovery_file(backup, path)
+                .map(|file| Some((file, true)))
+                .or(Err(primary_error)),
             _ => Err(primary_error),
         },
     }
 }
 
 fn read_recovery_file(path: &Path) -> Result<Option<RecoveryFile>, ProgramRecoveryError> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let bytes = fs::read(path)?;
+    let bytes = match read_bounded(path, MAX_RECOVERY_METADATA_BYTES) {
+        Err(ProgramRecoveryError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(None);
+        }
+        result => result?,
+    };
     let file: RecoveryFile = serde_json::from_slice(&bytes)?;
-    if file.schema_version != RECOVERY_SCHEMA_VERSION {
+    if file.schema_version != RECOVERY_SCHEMA_VERSION && file.schema_version != 1 {
         return Err(ProgramRecoveryError::UnsupportedSchema(file.schema_version));
     }
     Ok(Some(file))
+}
+
+fn read_bounded(path: &Path, max_bytes: usize) -> Result<Vec<u8>, ProgramRecoveryError> {
+    let file = fs::File::open(path)?;
+    if file.metadata()?.len() > max_bytes as u64 {
+        return Err(ProgramRecoveryError::FileTooLarge { max_bytes });
+    }
+    let mut bytes = Vec::new();
+    file.take(max_bytes as u64 + 1).read_to_end(&mut bytes)?;
+    if bytes.len() > max_bytes {
+        return Err(ProgramRecoveryError::FileTooLarge { max_bytes });
+    }
+    Ok(bytes)
+}
+
+fn source_sidecar_path(
+    path: &Path,
+    reference: &RecoverySourceRef,
+) -> Result<PathBuf, ProgramRecoveryError> {
+    if reference.sha256.len() != 64
+        || !reference
+            .sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err(ProgramRecoveryError::SourceCorrupt);
+    }
+    if reference.bytes > millo_gcode::MAX_SOURCE_BYTES {
+        return Err(ProgramRecoveryError::FileTooLarge {
+            max_bytes: millo_gcode::MAX_SOURCE_BYTES,
+        });
+    }
+    Ok(path
+        .with_extension("sources")
+        .join(format!("{}.nc", reference.sha256)))
+}
+
+fn ensure_source_sidecar(
+    path: Option<&Path>,
+    record: &mut RecoveryRecord,
+) -> Result<(), ProgramRecoveryError> {
+    if record.source_ref.is_some() {
+        return Ok(());
+    }
+    if record.source.len() > millo_gcode::MAX_SOURCE_BYTES {
+        return Err(ProgramRecoveryError::FileTooLarge {
+            max_bytes: millo_gcode::MAX_SOURCE_BYTES,
+        });
+    }
+    let reference = RecoverySourceRef {
+        sha256: format!("{:x}", Sha256::digest(record.source.as_bytes())),
+        bytes: record.source.len(),
+    };
+    if let Some(path) = path {
+        let sidecar = source_sidecar_path(path, &reference)?;
+        if sidecar.exists() {
+            if read_bounded(&sidecar, millo_gcode::MAX_SOURCE_BYTES)? != record.source.as_bytes() {
+                return Err(ProgramRecoveryError::SourceCorrupt);
+            }
+        } else {
+            // Durable source is published before metadata can reference it.
+            write_atomically(&sidecar, record.source.as_bytes())?;
+        }
+    }
+    record.source_ref = Some(reference);
+    Ok(())
+}
+
+fn hydrate_recovery_file(
+    mut file: RecoveryFile,
+    path: &Path,
+) -> Result<RecoveryFile, ProgramRecoveryError> {
+    let Some(record) = file.record.as_mut() else {
+        return Ok(file);
+    };
+    if let Some(reference) = record.source_ref.as_ref() {
+        let sidecar = source_sidecar_path(path, reference)?;
+        let bytes = match read_bounded(&sidecar, millo_gcode::MAX_SOURCE_BYTES) {
+            Err(ProgramRecoveryError::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                return Err(ProgramRecoveryError::MissingSource(sidecar));
+            }
+            result => result?,
+        };
+        if bytes.len() != reference.bytes
+            || format!("{:x}", Sha256::digest(&bytes)) != reference.sha256
+        {
+            return Err(ProgramRecoveryError::SourceCorrupt);
+        }
+        record.source = String::from_utf8(bytes)
+            .map_err(|_| ProgramRecoveryError::SourceCorrupt)?
+            .into();
+    } else if file.schema_version != 1 {
+        return Err(ProgramRecoveryError::SourceCorrupt);
+    }
+    if record.source.len() > millo_gcode::MAX_SOURCE_BYTES {
+        return Err(ProgramRecoveryError::FileTooLarge {
+            max_bytes: millo_gcode::MAX_SOURCE_BYTES,
+        });
+    }
+    let program = Arc::new(parse_record(record)?);
+    if program_fingerprint(&program) != record.program_fingerprint {
+        return Err(ProgramRecoveryError::ProgramChanged);
+    }
+    record.cache = Some(Arc::new(RecoveryProgramCache::new(program)));
+    Ok(file)
 }
 
 fn should_restore_interrupted_parent(current: &RecoveryFile, backup: &RecoveryFile) -> bool {
@@ -850,6 +1164,320 @@ mod tests {
 
     const SOURCE: &str = "G21 G90 G94 G17 G54\nG0 Z5\nG0 X0 Y0\nG1 Z-1 F100\nG1 X10\nG0 Z5\nG0 X20 Y0\nG1 Z-1 F100\nG1 X30\nM30";
 
+    struct TestDirectory(PathBuf);
+
+    impl TestDirectory {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "millo-recovery-sidecar-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> PathBuf {
+            self.0.join("recovery.json")
+        }
+    }
+
+    impl Drop for TestDirectory {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    #[ignore = "million-line recovery sidecar/cache performance regression"]
+    fn million_line_recovery_candidates_and_ticks_use_cached_geometry() {
+        let directory = TestDirectory::new();
+        let path = directory.path();
+        let source = format!("G21 G91 G93\n{}", "G1 X0.01 A0.1 F60\n".repeat(999_999));
+        let program = Arc::new(
+            parse_program_with_options(
+                ProgramParseRequest {
+                    source_name: "million.nc".into(),
+                    source: source.clone(),
+                },
+                ProgramParseOptions::default(),
+            )
+            .unwrap(),
+        );
+        let mut snapshot = running_snapshot();
+        snapshot.source_name = Some(program.source_name.clone());
+        snapshot.total_lines = 1_000_002;
+        snapshot.executing_source_line = Some(999_900);
+        let mut seed = seed(&snapshot);
+        seed.source_name = program.source_name.clone();
+        seed.source = source;
+        seed.program_fingerprint = program_fingerprint(&program);
+        seed.start_work_position = Some(Position {
+            a: Some(0.0),
+            ..Position::default()
+        });
+        seed.start_work_coordinate_offset = Some(Position {
+            a: Some(0.0),
+            ..Position::default()
+        });
+        let mut store = ProgramRecoveryStore::load(&path).unwrap();
+        let now = Instant::now();
+        store
+            .arm_with_program(
+                seed,
+                Arc::clone(&program),
+                &snapshot,
+                SystemTime::now(),
+                now,
+            )
+            .unwrap();
+        let sidecar = source_sidecar_path(
+            &path,
+            store.record.as_ref().unwrap().source_ref.as_ref().unwrap(),
+        )
+        .unwrap();
+        let modified = fs::metadata(&sidecar).unwrap().modified().unwrap();
+        let start = Instant::now();
+        for _ in 0..10_000 {
+            assert!(store.candidate().unwrap().unwrap().ready);
+        }
+        eprintln!(
+            "million-line recovery: 10000 cached candidates in {:?}",
+            start.elapsed()
+        );
+        let start = Instant::now();
+        for tick in 1..=10 {
+            snapshot.executing_source_line = Some(999_900 + tick);
+            store
+                .observe(
+                    &snapshot,
+                    SystemTime::now(),
+                    now + Duration::from_secs(tick as u64),
+                )
+                .unwrap();
+        }
+        eprintln!(
+            "million-line recovery: 10 durable metadata ticks in {:?}; metadata {} bytes",
+            start.elapsed(),
+            fs::metadata(&path).unwrap().len()
+        );
+        assert!(fs::metadata(&path).unwrap().len() < 4096);
+        assert_eq!(
+            fs::metadata(&sidecar).unwrap().modified().unwrap(),
+            modified
+        );
+        assert!(Arc::ptr_eq(
+            &store
+                .record
+                .as_ref()
+                .unwrap()
+                .cache
+                .as_ref()
+                .unwrap()
+                .program,
+            &program
+        ));
+    }
+
+    #[test]
+    fn checkpoint_ticks_share_native_program_and_never_rewrite_source() {
+        let directory = TestDirectory::new();
+        let path = directory.path();
+        let mut store = ProgramRecoveryStore::load(&path).unwrap();
+        let mut snapshot = running_snapshot();
+        snapshot.executing_source_line = Some(5);
+        let program = Arc::new(parsed());
+        let now = Instant::now();
+        store
+            .arm_with_program(
+                seed(&snapshot),
+                Arc::clone(&program),
+                &snapshot,
+                SystemTime::now(),
+                now,
+            )
+            .unwrap();
+        let record = store.record.as_ref().unwrap();
+        let sidecar = source_sidecar_path(&path, record.source_ref.as_ref().unwrap()).unwrap();
+        let modified = fs::metadata(&sidecar).unwrap().modified().unwrap();
+        let source = Arc::clone(&record.source);
+        let cache = Arc::clone(record.cache.as_ref().unwrap());
+        assert!(Arc::ptr_eq(&cache.program, &program));
+        for line in 6..=9 {
+            snapshot.executing_source_line = Some(line);
+            store
+                .observe(
+                    &snapshot,
+                    SystemTime::now(),
+                    now + Duration::from_secs(line as u64),
+                )
+                .unwrap();
+            let candidate = store.candidate().unwrap().unwrap();
+            assert_eq!(candidate.executing_source_line, Some(line));
+        }
+        assert!(Arc::ptr_eq(
+            &cache,
+            store.record.as_ref().unwrap().cache.as_ref().unwrap()
+        ));
+        assert!(Arc::ptr_eq(&source, &store.record.as_ref().unwrap().source));
+        assert_eq!(
+            fs::metadata(&sidecar).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(fs::read(&sidecar).unwrap(), SOURCE.as_bytes());
+        assert_eq!(
+            fs::read_dir(path.with_extension("sources"))
+                .unwrap()
+                .count(),
+            1
+        );
+        let bytes = fs::read(&path).unwrap();
+        assert!(bytes.len() < 4096);
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["schemaVersion"], 2);
+        assert!(json["record"].get("source").is_none());
+        assert_eq!(json["record"]["sourceRef"]["bytes"], SOURCE.len());
+        let loaded = ProgramRecoveryStore::load(&path).unwrap();
+        assert_eq!(loaded.candidate().unwrap(), store.candidate().unwrap());
+    }
+
+    #[test]
+    fn sidecar_corruption_missing_source_and_oversized_reads_fail_closed() {
+        for failure in ["corrupt", "missing", "oversized", "traversal"] {
+            let directory = TestDirectory::new();
+            let path = directory.path();
+            let mut store = ProgramRecoveryStore::load(&path).unwrap();
+            let snapshot = running_snapshot();
+            store
+                .arm(
+                    seed(&snapshot),
+                    &snapshot,
+                    SystemTime::now(),
+                    Instant::now(),
+                )
+                .unwrap();
+            let sidecar = source_sidecar_path(
+                &path,
+                store.record.as_ref().unwrap().source_ref.as_ref().unwrap(),
+            )
+            .unwrap();
+            match failure {
+                "corrupt" => fs::write(&sidecar, "G0 X999").unwrap(),
+                "missing" => fs::remove_file(&sidecar).unwrap(),
+                "oversized" => fs::OpenOptions::new()
+                    .write(true)
+                    .open(&sidecar)
+                    .unwrap()
+                    .set_len(millo_gcode::MAX_SOURCE_BYTES as u64 + 1)
+                    .unwrap(),
+                _ => {
+                    let mut json: serde_json::Value =
+                        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                    json["record"]["sourceRef"]["sha256"] = "../outside".into();
+                    fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+                }
+            }
+            let error = ProgramRecoveryStore::load(&path).err().unwrap();
+            assert!(
+                match failure {
+                    "missing" => matches!(error, ProgramRecoveryError::MissingSource(_)),
+                    "oversized" => matches!(error, ProgramRecoveryError::FileTooLarge { .. }),
+                    _ => matches!(error, ProgramRecoveryError::SourceCorrupt),
+                },
+                "{failure}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_embedded_source_migrates_atomically_and_remains_recoverable() {
+        let directory = TestDirectory::new();
+        let path = directory.path();
+        let snapshot = running_snapshot();
+        let mut legacy = ProgramRecoveryStore::in_memory();
+        legacy
+            .arm(
+                seed(&snapshot),
+                &snapshot,
+                SystemTime::now(),
+                Instant::now(),
+            )
+            .unwrap();
+        let mut json = serde_json::to_value(RecoveryFile {
+            schema_version: 1,
+            record: legacy.record.clone(),
+        })
+        .unwrap();
+        json["record"].as_object_mut().unwrap().remove("sourceRef");
+        json["record"]["source"] = SOURCE.into();
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        let migrated = ProgramRecoveryStore::load(&path).unwrap();
+        assert_eq!(migrated.candidate().unwrap(), legacy.candidate().unwrap());
+        let metadata: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(metadata["schemaVersion"], 2);
+        assert!(metadata["record"].get("source").is_none());
+        let backup: serde_json::Value =
+            serde_json::from_slice(&fs::read(backup_path(&path)).unwrap()).unwrap();
+        assert_eq!(backup["record"]["source"], SOURCE);
+        assert_eq!(
+            ProgramRecoveryStore::load(&path)
+                .unwrap()
+                .candidate()
+                .unwrap(),
+            migrated.candidate().unwrap()
+        );
+    }
+
+    #[test]
+    fn failed_metadata_arm_keeps_previous_record_and_sidecar_rollback_is_cheap() {
+        let directory = TestDirectory::new();
+        let path = directory.path();
+        let snapshot = running_snapshot();
+        let mut store = ProgramRecoveryStore::load(&path).unwrap();
+        let candidate = store
+            .arm(
+                seed(&snapshot),
+                &snapshot,
+                SystemTime::now(),
+                Instant::now(),
+            )
+            .unwrap();
+        store.rollback_arm(candidate.id).unwrap();
+        assert!(store.candidate().unwrap().is_none());
+        assert!(
+            ProgramRecoveryStore::load(&path)
+                .unwrap()
+                .candidate()
+                .unwrap()
+                .is_none()
+        );
+        // The unreferenced immutable blob is retained; no backup can lose its source.
+        assert_eq!(
+            fs::read_dir(path.with_extension("sources"))
+                .unwrap()
+                .count(),
+            1
+        );
+        let obstruction = directory.0.join("not-a-directory");
+        fs::write(&obstruction, b"file").unwrap();
+        store.path = Some(obstruction.join("recovery.json"));
+        assert!(
+            store
+                .arm(
+                    seed(&snapshot),
+                    &snapshot,
+                    SystemTime::now(),
+                    Instant::now()
+                )
+                .is_err()
+        );
+        assert!(store.record.is_none());
+    }
+
     fn parsed() -> GcodeProgram {
         parse_program_with_options(
             ProgramParseRequest {
@@ -886,6 +1514,207 @@ mod tests {
             start_work_position: None,
             start_work_coordinate_offset: None,
         }
+    }
+
+    #[test]
+    fn rotary_recovery_binds_persisted_datum_and_preserves_anchor_and_options() {
+        let source =
+            "G21 G90 G94 G17 G54\nG0 X0 Y0 Z5 A90\nG1 X10 A180 F100\nG0 X20\nG1 X30 A270\nM2";
+        let program = parse_program_with_options(
+            ProgramParseRequest {
+                source_name: "rotary.nc".into(),
+                source: source.into(),
+            },
+            ProgramParseOptions::default(),
+        )
+        .unwrap();
+        let plan = build_program_run_plan(&program, ProgramRunPolicy::Cutting).unwrap();
+        let mut sender = Sender::default();
+        sender.load_cut_run(plan).unwrap();
+        let mut snapshot = sender.start().unwrap();
+        snapshot.executing_source_line = Some(5);
+        let mut seed = seed(&snapshot);
+        seed.source_name = program.source_name.clone();
+        seed.source = source.into();
+        seed.program_fingerprint = program_fingerprint(&program);
+        seed.start_work_position = Some(Position {
+            a: Some(20.0),
+            ..Position::default()
+        });
+        seed.start_work_coordinate_offset = Some(Position {
+            a: Some(12.0),
+            ..Position::default()
+        });
+        let mut store = ProgramRecoveryStore::in_memory();
+        let candidate = store
+            .arm(seed.clone(), &snapshot, SystemTime::now(), Instant::now())
+            .unwrap();
+        assert_eq!(candidate.restart_a_degrees, Some(180.0));
+        assert!(matches!(
+            store.prepare(candidate.id, 8.0, RecoveryContinuity::ControllerInterrupted),
+            Err(ProgramRecoveryError::Rotary(
+                RotaryRestartError::StateRequired
+            ))
+        ));
+        let state = RotaryRestartState {
+            work_a_degrees: 200.0,
+            work_offset_a_degrees: 12.0,
+            reference_work_offset_a_degrees: 999.0,
+            initial_work_a_degrees: 999.0,
+            work_coordinate_system: millo_gcode::ProgramWorkCoordinateSystem::G54,
+            clearance_confirmed: true,
+        };
+        let package = store
+            .prepare_with_rotary(
+                candidate.id,
+                8.0,
+                RecoveryContinuity::ControllerInterrupted,
+                Some(state),
+            )
+            .unwrap();
+        assert_eq!(package.restart_a_degrees, Some(180.0));
+        assert_eq!(
+            package.execution_options,
+            ProgramExecutionOptions::default()
+        );
+        assert!(
+            package
+                .request
+                .source
+                .contains("G0 Z8.0000\nG0 A180\nG0 X10.0000 Y0.0000")
+        );
+        assert!(package.request.source.ends_with("G0 X20\nG1 X30 A270\nM2"));
+        let full = store
+            .prepare_with_rotary(
+                candidate.id,
+                8.0,
+                RecoveryContinuity::MotionPowerLostOrUnknown,
+                Some(state),
+            )
+            .unwrap();
+        assert_eq!(full.restart_a_degrees, Some(20.0));
+        assert!(full.request.source.contains("G0 Z8.0000\nG0 A20\nG21 G90"));
+        assert!(matches!(
+            store.prepare_with_rotary(
+                candidate.id,
+                8.0,
+                RecoveryContinuity::ControllerInterrupted,
+                Some(RotaryRestartState {
+                    work_offset_a_degrees: 13.0,
+                    ..state
+                })
+            ),
+            Err(ProgramRecoveryError::Rotary(
+                RotaryRestartError::WorkOffsetChanged
+            ))
+        ));
+
+        let prepared = Arc::new(
+            parse_program_with_options(
+                full.request.clone(),
+                ProgramParseOptions {
+                    block_delete: full.execution_options.block_delete,
+                },
+            )
+            .unwrap(),
+        );
+        snapshot.source_name = Some(prepared.source_name.clone());
+        snapshot.run_sequence += 1;
+        snapshot.executing_source_line = None;
+        snapshot.acknowledged_lines = 0;
+        seed.source_name = prepared.source_name.clone();
+        seed.source = full.request.source;
+        seed.program_fingerprint = program_fingerprint(&prepared);
+        seed.execution_options = full.execution_options;
+        seed.run_sequence = snapshot.run_sequence;
+        for (offset, expected) in [
+            (None, RotaryRestartError::StateRequired),
+            (Some(f64::NAN), RotaryRestartError::InvalidState),
+            (Some(13.0), RotaryRestartError::WorkOffsetChanged),
+        ] {
+            seed.start_work_coordinate_offset.as_mut().unwrap().a = offset;
+            assert!(matches!(
+                store.arm_with_program(
+                    seed.clone(),
+                    Arc::clone(&prepared),
+                    &snapshot,
+                    SystemTime::now(),
+                    Instant::now()
+                ),
+                Err(ProgramRecoveryError::Rotary(error)) if error == expected
+            ));
+            assert_eq!(store.candidate().unwrap().unwrap().id, candidate.id);
+        }
+        seed.start_work_coordinate_offset.as_mut().unwrap().a = Some(12.0);
+        let next = store
+            .arm_with_program(seed, prepared, &snapshot, SystemTime::now(), Instant::now())
+            .unwrap();
+        store.rollback_arm(next.id).unwrap();
+        assert_eq!(store.candidate().unwrap().unwrap().id, candidate.id);
+    }
+
+    #[test]
+    fn pure_rotary_recovery_requires_full_restart_instead_of_inventing_xyz_zero() {
+        let source = "G21 G90 G93\nG1 A90 F2\nG1 A180 F2";
+        let program = Arc::new(
+            parse_program_with_options(
+                ProgramParseRequest {
+                    source_name: "pure-a.nc".into(),
+                    source: source.into(),
+                },
+                ProgramParseOptions::default(),
+            )
+            .unwrap(),
+        );
+        let mut snapshot = running_snapshot();
+        snapshot.source_name = Some(program.source_name.clone());
+        snapshot.executing_source_line = Some(3);
+        let mut seed = seed(&snapshot);
+        seed.source_name = program.source_name.clone();
+        seed.source = source.into();
+        seed.program_fingerprint = program_fingerprint(&program);
+        seed.start_work_position = Some(Position {
+            a: Some(20.0),
+            ..Position::default()
+        });
+        seed.start_work_coordinate_offset = Some(Position {
+            a: Some(12.0),
+            ..Position::default()
+        });
+        let mut store = ProgramRecoveryStore::in_memory();
+        let candidate = store
+            .arm_with_program(seed, program, &snapshot, SystemTime::now(), Instant::now())
+            .unwrap();
+        let state = RotaryRestartState {
+            work_a_degrees: 100.0,
+            work_offset_a_degrees: 12.0,
+            reference_work_offset_a_degrees: 12.0,
+            initial_work_a_degrees: 20.0,
+            work_coordinate_system: millo_gcode::ProgramWorkCoordinateSystem::G54,
+            clearance_confirmed: true,
+        };
+        assert!(matches!(
+            store.prepare_with_rotary(
+                candidate.id,
+                8.0,
+                RecoveryContinuity::ControllerInterrupted,
+                Some(state)
+            ),
+            Err(ProgramRecoveryError::Rotary(
+                RotaryRestartError::CartesianAnchorUnknown
+            ))
+        ));
+        let full = store
+            .prepare_with_rotary(
+                candidate.id,
+                8.0,
+                RecoveryContinuity::MotionPowerLostOrUnknown,
+                Some(state),
+            )
+            .unwrap();
+        assert!(!full.request.source.contains("G0 X"));
+        assert!(!full.request.source.contains("G0 Z0"));
+        assert!(full.request.source.contains("G0 A20\nG21 G90 G93"));
     }
 
     #[test]
@@ -1189,6 +2018,16 @@ mod tests {
                 Instant::now(),
             )
             .unwrap();
+        approved_snapshot.state = SenderState::Paused;
+        assert!(
+            !store
+                .observe(
+                    &approved_snapshot,
+                    wall + Duration::from_secs(2),
+                    Instant::now() + Duration::from_secs(2)
+                )
+                .unwrap()
+        );
         drop(store);
 
         let restored = ProgramRecoveryStore::load(&path).unwrap();
@@ -1197,6 +2036,7 @@ mod tests {
         let _ = fs::remove_file(&path);
         let _ = fs::remove_file(backup_path(&path));
         let _ = fs::remove_file(millo_storage::temporary_path(&path));
+        let _ = fs::remove_dir_all(path.with_extension("sources"));
     }
 
     #[test]

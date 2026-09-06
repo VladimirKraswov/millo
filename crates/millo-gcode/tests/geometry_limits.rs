@@ -72,7 +72,10 @@ fn arc_radius_tolerance_matches_grbl_for_small_and_large_circles() {
 
 #[test]
 fn remaining_arc_budget_is_global_and_omitted_motion_is_not_reported_complete() {
-    let program = parse("G21 G90 G94 G17\nG1 X1 F100\nG2 X1 I20000\nG2 X1 I20000\nG1 X2");
+    let radius = millo_gcode::MAX_PREVIEW_POINTS as f64 * 0.6 * 0.5 / std::f64::consts::TAU;
+    let program = parse(&format!(
+        "G21 G90 G94 G17\nG1 X1 F100\nG2 X1 I{radius}\nG2 X1 I{radius}\nG1 X2"
+    ));
     assert_eq!(program.toolpath.len(), 2);
     assert!(
         program
@@ -123,4 +126,34 @@ fn duplicate_value_words_fail_before_firmware_check() {
             "{block}"
         );
     }
+}
+
+#[test]
+fn malformed_source_has_bounded_line_and_diagnostic_allocation() {
+    use millo_gcode::{MAX_PROGRAM_DIAGNOSTICS, MAX_SOURCE_LINE_BYTES, ProgramParseError};
+    let request = |source: String| ProgramParseRequest {
+        source_name: "malformed.nc".into(),
+        source,
+    };
+    for source in [
+        "!".repeat(MAX_SOURCE_LINE_BYTES + 1),
+        format!("({})", "x".repeat(MAX_SOURCE_LINE_BYTES)),
+    ] {
+        assert_eq!(
+            parse_program(request(source)).unwrap_err(),
+            ProgramParseError::SourceLineTooLong {
+                source_line: 1,
+                max_bytes: MAX_SOURCE_LINE_BYTES
+            }
+        );
+    }
+    let mut source = ")\n".repeat(MAX_PROGRAM_DIAGNOSTICS);
+    assert!(parse_program(request(source.clone())).is_ok());
+    source.push_str("G1 Xbad\n");
+    assert_eq!(
+        parse_program(request(source)).unwrap_err(),
+        ProgramParseError::TooManyDiagnostics {
+            max_warnings: MAX_PROGRAM_DIAGNOSTICS
+        }
+    );
 }

@@ -22,6 +22,153 @@ pub struct SafeStartRequest {
     pub intent: SafeStartIntent,
 }
 
+/// Supplied by the command boundary from fresh controller telemetry and an
+/// operator-confirmed rotary clearance/reindex operation, never from preview.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RotaryRestartState {
+    pub work_a_degrees: f64,
+    pub work_offset_a_degrees: f64,
+    pub reference_work_offset_a_degrees: f64,
+    pub initial_work_a_degrees: f64,
+    pub work_coordinate_system: ProgramWorkCoordinateSystem,
+    pub clearance_confirmed: bool,
+}
+
+#[derive(Debug, Error, PartialEq)]
+pub enum RotaryRestartError {
+    #[error(
+        "A-axis restart requires verified A position/WCO and a confirmed rotary-safe Z clearance; reindex A and refresh controller coordinates"
+    )]
+    StateRequired,
+    #[error(
+        "A-axis restart state is non-finite or rotary-safe clearance is not confirmed; verify A/WCO and confirm clearance"
+    )]
+    InvalidState,
+    #[error("A work offset changed; restore the recorded rotary datum or reindex before restart")]
+    WorkOffsetChanged,
+    #[error(
+        "A-axis restart coordinate system does not match the verified rotary datum; select and verify the anchor WCS"
+    )]
+    CoordinateSystemMismatch,
+    #[error(
+        "A-axis restart requires complete geometry and a single verified WCS; regenerate a single-WCS program or restart manually after reindexing"
+    )]
+    UnsupportedProgram,
+    #[error(
+        "A-axis checkpoint restart requires explicit absolute X, Y and Z before the entry; use a full restart from a verified position or establish a Cartesian entry in CAM"
+    )]
+    CartesianAnchorUnknown,
+}
+
+/// Never turn the parser's implicit XYZ origin into a physical re-entry target.
+pub fn validate_rotary_cartesian_anchor(
+    program: &GcodeProgram,
+    checkpoint: ProgramExecutionCheckpoint,
+) -> Result<(), RotaryRestartError> {
+    if !program.features.uses_rotary_a {
+        return Ok(());
+    }
+    let mut absolute = true;
+    let mut known = [false; 3];
+    for line in program
+        .lines
+        .iter()
+        .take_while(|line| line.source_line < checkpoint.source_line)
+        .filter(|line| line.executable && !line.block_deleted)
+    {
+        let words = line
+            .normalized
+            .split_whitespace()
+            .filter_map(|word| {
+                let letter = word.chars().next()?;
+                let value = word.get(1..)?.parse::<f64>().ok()?;
+                Some((letter, value))
+            })
+            .collect::<Vec<_>>();
+        for (letter, value) in &words {
+            if *letter == 'G' && *value == 90.0 {
+                absolute = true;
+            }
+            if *letter == 'G' && *value == 91.0 {
+                absolute = false;
+            }
+        }
+        if absolute {
+            for (letter, _) in words {
+                match letter {
+                    'X' => known[0] = true,
+                    'Y' => known[1] = true,
+                    'Z' => known[2] = true,
+                    _ => {}
+                }
+            }
+        }
+    }
+    if known.into_iter().all(|known| known) {
+        Ok(())
+    } else {
+        Err(RotaryRestartError::CartesianAnchorUnknown)
+    }
+}
+
+pub fn rotary_restart_angle(
+    program: &GcodeProgram,
+    checkpoint: ProgramExecutionCheckpoint,
+    state: Option<RotaryRestartState>,
+) -> Result<Option<f64>, RotaryRestartError> {
+    if !program.features.uses_rotary_a {
+        return Ok(None);
+    }
+    let state = state.ok_or(RotaryRestartError::StateRequired)?;
+    if !state.clearance_confirmed
+        || ![
+            state.work_a_degrees,
+            state.work_offset_a_degrees,
+            state.reference_work_offset_a_degrees,
+            state.initial_work_a_degrees,
+        ]
+        .iter()
+        .all(|value| value.is_finite())
+    {
+        return Err(RotaryRestartError::InvalidState);
+    }
+    if (state.work_offset_a_degrees - state.reference_work_offset_a_degrees).abs() > 1e-6 {
+        return Err(RotaryRestartError::WorkOffsetChanged);
+    }
+    if state.work_coordinate_system != checkpoint.work_coordinate_system {
+        return Err(RotaryRestartError::CoordinateSystemMismatch);
+    }
+    let wcs = wcs_word(state.work_coordinate_system)
+        .strip_prefix('G')
+        .unwrap()
+        .parse::<f64>()
+        .unwrap();
+    if !program.summary.preview_complete
+        || program
+            .lines
+            .iter()
+            .filter(|line| !line.block_deleted)
+            .flat_map(|line| line.normalized.split_whitespace())
+            .filter_map(|word| {
+                word.strip_prefix('G')
+                    .and_then(|value| value.parse::<f64>().ok())
+            })
+            .any(|value| (54.0..=59.0).contains(&value) && value != wcs)
+    {
+        return Err(RotaryRestartError::UnsupportedProgram);
+    }
+    let angle = checkpoint.a.unwrap_or(0.0)
+        + if checkpoint.a_is_absolute {
+            0.0
+        } else {
+            state.initial_work_a_degrees
+        };
+    if !angle.is_finite() {
+        return Err(RotaryRestartError::InvalidState);
+    }
+    Ok(Some(angle))
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SafeStartPackage {
@@ -29,6 +176,8 @@ pub struct SafeStartPackage {
     pub selected_source_line: usize,
     pub restart_source_line: usize,
     pub restart_position: ProgramPoint,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restart_a_degrees: Option<f64>,
     pub safe_z_mm: f64,
     pub minimum_safe_z_mm: f64,
     pub replayed_executable_lines: usize,
@@ -41,6 +190,8 @@ pub struct SafeStartPackage {
 
 #[derive(Debug, Error, PartialEq)]
 pub enum SafeStartError {
+    #[error(transparent)]
+    Rotary(#[from] RotaryRestartError),
     #[error("selected source line {0} is not executable")]
     LineNotExecutable(usize),
     #[error("selected source line {0} has no preview motion")]
@@ -61,6 +212,15 @@ pub fn build_safe_start(
     program: &GcodeProgram,
     source: &str,
     request: SafeStartRequest,
+) -> Result<SafeStartPackage, SafeStartError> {
+    build_safe_start_with_rotary(program, source, request, None)
+}
+
+pub fn build_safe_start_with_rotary(
+    program: &GcodeProgram,
+    source: &str,
+    request: SafeStartRequest,
+    rotary_state: Option<RotaryRestartState>,
 ) -> Result<SafeStartPackage, SafeStartError> {
     let selected_line = program
         .lines
@@ -146,6 +306,8 @@ pub fn build_safe_start(
         })
         .count();
 
+    let restart_a_degrees = rotary_restart_angle(program, anchor, rotary_state)?;
+    validate_rotary_cartesian_anchor(program, anchor)?;
     let generated_source = safe_start_source(
         program,
         source,
@@ -153,12 +315,14 @@ pub fn build_safe_start(
         request.safe_z_mm,
         request.intent,
         request.selected_source_line,
+        restart_a_degrees,
     );
     Ok(SafeStartPackage {
         original_source_name: program.source_name.clone(),
         selected_source_line: request.selected_source_line,
         restart_source_line: anchor.source_line,
         restart_position: anchor.position,
+        restart_a_degrees,
         safe_z_mm: request.safe_z_mm,
         minimum_safe_z_mm,
         replayed_executable_lines,
@@ -204,6 +368,7 @@ fn safe_start_source(
     safe_z_mm: f64,
     intent: SafeStartIntent,
     selected_source_line: usize,
+    restart_a_degrees: Option<f64>,
 ) -> String {
     let mut lines = vec![
         format!(
@@ -215,8 +380,14 @@ fn safe_start_source(
         "G21 G90 G94".to_owned(),
         wcs_word(anchor.work_coordinate_system).to_owned(),
         format!("G0 Z{safe_z_mm:.4}"),
-        format!("G0 X{:.4} Y{:.4}", anchor.position.x, anchor.position.y),
     ];
+    if let Some(a) = restart_a_degrees {
+        lines.push(format!("G0 A{a}"));
+    }
+    lines.push(format!(
+        "G0 X{:.4} Y{:.4}",
+        anchor.position.x, anchor.position.y
+    ));
     if (safe_z_mm - anchor.position.z).abs() > CLEARANCE_EPSILON_MM {
         lines.push(format!("G0 Z{:.4}", anchor.position.z));
     }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ProgramLine } from "../../shared/program";
+import type { ProgramDocumentMetadata, ProgramLine } from "../../shared/program";
 import {
   initialProgramToolNumber,
   programToolNumberAtSourceLine,
@@ -42,5 +42,19 @@ describe("program tool plan model", () => {
     expect(programToolNumberAtSourceLine(multiTool, 2)).toBe(1);
     expect(programToolNumberAtSourceLine(multiTool, 3)).toBe(2);
     expect(programToolNumberAtSourceLine(multiTool, 4)).toBe(2);
+  });
+
+  it("uses full native tool metadata beyond the first page, without guessing beyond its coverage", () => {
+    const document: ProgramDocumentMetadata = {
+      id: "large", sourceBytes: 10000, pageSize: 512, previewSampled: true,
+      warningCount: 0, blockingWarningCount: 0, errorCount: 0, managedToolChangeCount: 2,
+      initialToolNumber: 7, toolSelections: [{ sourceLine: 601, tool: 7 }, { sourceLine: 900000, tool: 2 }],
+      toolSelectionCoverageLine: 1000000,
+    };
+    const large = { ...program(["(header)"]), document };
+    expect(initialProgramToolNumber(large)).toBe(7);
+    expect(programToolNumberAtSourceLine(large, 899999)).toBe(7);
+    expect(programToolNumberAtSourceLine(large, 900000)).toBe(2);
+    expect(programToolNumberAtSourceLine(large, 1000001)).toBeUndefined();
   });
 });

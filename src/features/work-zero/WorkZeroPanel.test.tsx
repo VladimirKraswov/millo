@@ -34,8 +34,23 @@ describe("WorkZeroPanel", () => {
     expect(markup).toContain("Только X");
     expect(markup).toContain("Только Y");
     expect(markup).toContain("Только Z");
+    expect(markup).not.toContain("Только A");
     expect(markup).toContain("Вернуться к сохранённому нулю");
     expect(markup).toContain("Вернуться в рабочий ноль");
+  });
+
+  it("offers separately confirmed A zero only with finite reported A and no rotary return", () => {
+    const position = { x: 0, y: 0, z: 10, a: 90 };
+    const markup = renderToStaticMarkup(<WorkZeroPanel desktopRuntime
+      gateway={{ setZero: async () => { throw new Error("unused"); }, returnToZero: async () => { throw new Error("unused"); } }}
+      onError={() => undefined} onSnapshot={() => undefined}
+      snapshot={{ ...emptySnapshot, connection: "connected", machine: { ...emptySnapshot.machine, mode: "idle", reportedMode: "Idle",
+        machinePosition: position, workPosition: position, workCoordinateOffset: { ...position, a: 0 } } }} />);
+    expect(markup).toContain("Только A");
+    expect(markup).toContain("Подтверждаю текущий угол A");
+    expect(markup).toContain("90.000°");
+    expect(markup).toContain("Установить XYZ = 0");
+    expect(markup).not.toContain("Вернуть A");
   });
 
   it("keeps manual Z zero out of the combined action when probe mode is enabled", () => {

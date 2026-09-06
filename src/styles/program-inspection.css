@@ -242,6 +242,7 @@ button.real-run-check:hover {
 }
 
 .program-lines-panel {
+  flex-direction: column;
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
@@ -528,4 +529,3 @@ button.real-run-check:hover {
   background: transparent;
   cursor: pointer;
 }
-

@@ -467,7 +467,7 @@ async fn machine_run_preflight_performs_read_only_fresh_queries() {
         .unwrap();
 
     assert!(report.ready);
-    assert_eq!(report.poll_sequence, 2);
+    assert_eq!(report.poll_sequence, 3);
     assert_eq!(
         control.writes(),
         vec![
@@ -476,6 +476,7 @@ async fn machine_run_preflight_performs_read_only_fresh_queries() {
             b"$$\n".to_vec(),
             b"$G\n".to_vec(),
             b"$#\n".to_vec(),
+            b"?".to_vec(),
             b"?".to_vec(),
         ]
     );

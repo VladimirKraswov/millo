@@ -1,7 +1,7 @@
 import type { ProgramGateway } from "../../platform/program/ProgramGateway";
 import type { GcodeProgram } from "../../shared/program";
 
-export const MAX_PROGRAM_FILE_BYTES = 2 * 1024 * 1024;
+export const MAX_PROGRAM_FILE_BYTES = 64 * 1024 * 1024;
 const supportedExtensions = new Set(["nc", "ngc", "gcode", "tap", "cnc"]);
 
 export interface ProgramSourceFile {
@@ -28,7 +28,7 @@ export class ProgramLoader {
       throw new Error("G-code файл пуст");
     }
     if (file.size > MAX_PROGRAM_FILE_BYTES) {
-      throw new Error("G-code файл превышает лимит 2 MB");
+      throw new Error("G-code файл превышает лимит 64 MiB");
     }
     const source = await file.text();
     if (!source.trim()) {

@@ -97,6 +97,7 @@ export function ProgramWorkspace(props: ProgramWorkspaceProps) {
     safeStartOpen,
     selectedMotionCount,
     selectedProgramLine,
+    selectedToolpath,
     selectedSourceLine,
     sender,
     senderActive,
@@ -294,6 +295,7 @@ export function ProgramWorkspace(props: ProgramWorkspaceProps) {
       {program ? (
         <div className="program-body">
           <ProgramPreviewStage
+            selectedToolpath={selectedToolpath}
             cuttingDepthAdjustmentMm={
               depthCorrection.enabled ? depthCorrection.adjustmentMm : 0
             }
@@ -487,6 +489,7 @@ export function ProgramWorkspace(props: ProgramWorkspaceProps) {
               </div>
             ) : null}
             <ProgramInspection
+              gateway={gateway}
               diagnosticView={diagnosticView}
               motionSourceLines={motionSourceLines}
               onOpenChange={setDiagnosticsOpen}
@@ -495,6 +498,7 @@ export function ProgramWorkspace(props: ProgramWorkspaceProps) {
               open={diagnosticsOpen}
               program={program}
               realRunTarget={realRunTarget}
+              source={loaded?.source}
               report={reportForProgram}
               selectedSourceLine={selectedSourceLine}
             />
@@ -539,6 +543,7 @@ export function ProgramWorkspace(props: ProgramWorkspaceProps) {
 
       {selectedProgramLine && (
         <SafeStartDialog
+          rotaryProgram={program?.features.usesRotaryA}
           minimumSafeZ={bounds?.max.z ?? 0}
           motionCount={selectedMotionCount}
           onClose={() => setSafeStartOpen(false)}
@@ -566,6 +571,7 @@ export function ProgramWorkspace(props: ProgramWorkspaceProps) {
       {firstCutOpen && (
         <Suspense fallback={null}>
           <FirstCutAuthorizationDialog
+            rotaryProgram={program?.features.usesRotaryA}
             depthCorrection={
               depthCorrection.enabled
                 ? { adjustmentMm: depthCorrection.adjustmentMm }

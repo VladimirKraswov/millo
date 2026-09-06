@@ -67,6 +67,7 @@ npm run virtual-controller
 | Переработка и оставшиеся ограничения | [PRODUCT_REVIEW](docs/PRODUCT_REVIEW.md) |
 | Закрытие технического долга | [TECHNICAL_DEBT](docs/TECHNICAL_DEBT.md) |
 | Аудит ядра и сравнение с Candle/cncjs | [PRODUCT_AUDIT_2026_09](docs/PRODUCT_AUDIT_2026_09.md) |
+| Большие файлы и четырёхосевое выполнение | [LARGE_PROGRAMS_AND_ROTARY](docs/LARGE_PROGRAMS_AND_ROTARY.md) |
 | Сторонние компоненты и тексты лицензий | [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md) |
 | Сценарии оператора | [OPERATOR_WORKFLOW](docs/OPERATOR_WORKFLOW.md) |
 | Архитектура | [ARCHITECTURE](docs/ARCHITECTURE.md) |

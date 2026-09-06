@@ -43,15 +43,26 @@ export function WorkZeroPanel({
 }: WorkZeroPanelProps) {
   const interactor = useMemo(() => new WorkZeroInteractor(gateway), [gateway]);
   const [positionConfirmed, setPositionConfirmed] = useState(false);
+  const [rotaryConfirmed, setRotaryConfirmed] = useState(false);
   const [busyAxis, setBusyAxis] = useState<BusyOperation>();
   const [outcome, setOutcome] = useState<WorkZeroOutcome>();
   const [, setReturnOutcome] = useState<ReturnToWorkZeroOutcome>();
   const [originOutcome, setOriginOutcome] = useState<ReturnToWorkOriginOutcome>();
   const connected = isControllerConnected(snapshot);
   const stableIdle = isControllerStableIdle(snapshot);
+  const rotaryReported = [snapshot.machine.machinePosition, snapshot.machine.workPosition,
+    snapshot.machine.workCoordinateOffset].every((position) => Number.isFinite(position?.a));
   const canSet =
     desktopRuntime && stableIdle && positionConfirmed && !disabled && !busyAxis;
   const canReturn = desktopRuntime && stableIdle && !disabled && !busyAxis && gateway.returnToOrigin !== undefined;
+  const canSetRotary = desktopRuntime && stableIdle && rotaryReported && rotaryConfirmed && !disabled && !busyAxis;
+
+  useEffect(() => {
+    setPositionConfirmed(false);
+    setRotaryConfirmed(false);
+    setOutcome(undefined);
+  }, [snapshot.resetCount, snapshot.reconnectCount, connected, rotaryReported, stableIdle,
+    snapshot.machine.machinePosition?.a]);
 
   useEffect(() => {
     if (!connected) {
@@ -63,12 +74,12 @@ export function WorkZeroPanel({
   }, [connected]);
 
   const setZero = async (axis: WorkAxis) => {
-    if (!canSet) return;
+    if (axis === "a" ? !canSetRotary : !canSet) return;
     setBusyAxis(axis);
     setOutcome(undefined);
     onError(undefined);
     try {
-      const next = await interactor.set(axis, positionConfirmed);
+      const next = await interactor.set(axis, axis === "a" ? rotaryConfirmed : positionConfirmed);
       setOutcome(next);
       onSnapshot(next.snapshot);
       onOutcome?.(next);
@@ -76,6 +87,7 @@ export function WorkZeroPanel({
       onError(String(error));
     } finally {
       setPositionConfirmed(false);
+      setRotaryConfirmed(false);
       setBusyAxis(undefined);
     }
   };
@@ -108,11 +120,9 @@ export function WorkZeroPanel({
     setOutcome(undefined);
     onError(undefined);
     try {
-      let next: WorkZeroOutcome | undefined;
-      for (const axis of useProbeForZ ? axes.slice(0, 2) : axes) {
-        next = await interactor.set(axis, true);
-        onSnapshot(next.snapshot);
-      }
+      const results = await interactor.setCartesian(positionConfirmed, !useProbeForZ,
+        (next) => onSnapshot(next.snapshot));
+      const next = results.at(-1);
       if (next) {
         setOutcome(next);
         onOutcome?.(next);
@@ -198,12 +208,30 @@ export function WorkZeroPanel({
         ))}
       </div>
 
+      {rotaryReported && <div>
+        <label className="work-zero-confirmation">
+          <input
+            checked={rotaryConfirmed}
+            disabled={!stableIdle || disabled || busyAxis !== undefined}
+            onChange={(event) => setRotaryConfirmed(event.target.checked)}
+            type="checkbox"
+          />
+          <span>Подтверждаю текущий угол A как рабочий ноль <code>A {snapshot.machine.workPosition?.a?.toFixed(3)}°</code></span>
+        </label>
+        <div className="work-zero-actions" role="group" aria-label="Рабочий ноль A">
+          <button disabled={!canSetRotary} onClick={() => void setZero("a")} type="button">
+            <Crosshair aria-hidden="true" size={15} />
+            Только A
+          </button>
+        </div>
+      </div>}
+
       <div className="work-zero-status" aria-live="polite">
         {busyAxis && <span>Запись {busyAxis.toUpperCase()} и проверка через $G / $#...</span>}
         {!busyAxis && outcome && (
           <span>
             {outcome.coordinateSystem.toUpperCase()} {outcome.axis.toUpperCase()} ={" "}
-            {outcome.workPosition.toFixed(3)} mm
+            {outcome.workPosition.toFixed(3)} {outcome.axis === "a" ? "°" : "mm"}
           </span>
         )}
         {!busyAxis && !outcome && <span>{useProbeForZ

@@ -12,7 +12,7 @@ pub(super) async fn execute_real_run_preflight(
     controller: &mut Controller<BoxedTransport>,
     hardware_profile: &HardwareProfile,
     program_check: &mut ProgramCheckGate,
-    program: GcodeProgram,
+    program: Arc<GcodeProgram>,
     context: RealRunPreflightContext<'_>,
 ) -> Result<RunPreflightReport, ArbiterError> {
     let RealRunPreflightContext {
@@ -36,12 +36,18 @@ pub(super) async fn execute_real_run_preflight(
         execution_options,
     );
     apply_heightmap_preflight(&mut report, &program, intent, execution_options, heightmap);
+    apply_rotary_preflight(&mut report, &program, hardware_profile, &snapshot);
+    let current = controller.refresh_status().await?;
+    ensure_unchanged_program_reference(&snapshot, &current)?;
+    report.poll_sequence = current.poll_sequence;
     if require_check_certificate
-        && (intent == ProgramRunIntent::Cutting || requires_safe_start_check(&program))
+        && (intent == ProgramRunIntent::Cutting
+            || requires_safe_start_check(&program)
+            || program.features.uses_rotary_a)
     {
         apply_program_check_requirement(
             &mut report,
-            program_check.validate(&binding, &snapshot, Instant::now()),
+            program_check.validate(&binding, &current, Instant::now()),
         );
     }
     Ok(report)
@@ -145,7 +151,7 @@ pub(super) fn apply_heightmap_preflight(
 }
 
 pub(super) struct FirstCutAuthorizationContext<'a> {
-    pub(super) program: GcodeProgram,
+    pub(super) program: Arc<GcodeProgram>,
     pub(super) confirmation: FirstCutConfirmation,
     pub(super) heightmap: Option<&'a Heightmap>,
     pub(super) require_check_certificate: bool,
@@ -191,9 +197,10 @@ pub(super) async fn execute_first_cut_authorization(
 
 pub(super) async fn execute_authorized_program_run_start(
     controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
     first_cut: &mut FirstCutGate,
     sender: &mut Sender,
-    program: GcodeProgram,
+    program: Arc<GcodeProgram>,
     authorization_id: u64,
     heightmap: Option<&Heightmap>,
 ) -> Result<SenderSnapshot, ArbiterError> {
@@ -208,6 +215,12 @@ pub(super) async fn execute_authorized_program_run_start(
         return Err(SenderError::Busy(sender_state).into());
     }
     let fingerprint = program_fingerprint(&program);
+    if program.features.uses_rotary_a {
+        let inspection = controller.inspect_device().await?;
+        let current = controller.refresh_status().await?;
+        ensure_stable_idle(&current)?;
+        validate_rotary_program(&program, hardware_profile, &inspection, &current)?;
+    }
     let snapshot = controller.refresh_status().await?;
     ensure_stable_idle(&snapshot)?;
     let authorization =
@@ -222,6 +235,8 @@ pub(super) async fn execute_authorized_program_run_start(
         authorization.execution_options,
         heightmap,
     )?;
+    let current = controller.refresh_status().await?;
+    ensure_unchanged_program_reference(&snapshot, &current)?;
     sender.configure_rx_buffer_capacity(usable_rx_buffer_capacity(
         authorization.reported_rx_buffer_bytes,
     ))?;
@@ -232,8 +247,26 @@ pub(super) async fn execute_authorized_program_run_start(
     sender.start().map_err(ArbiterError::from)
 }
 
+pub(super) fn ensure_unchanged_program_reference(
+    before: &ControllerSnapshot,
+    after: &ControllerSnapshot,
+) -> Result<(), ArbiterError> {
+    ensure_stable_idle(after)?;
+    if before.reset_count != after.reset_count || before.reconnect_count != after.reconnect_count {
+        return Err(FirstCutAuthorizationError::ControllerSessionChanged.into());
+    }
+    if before.machine.machine_position != after.machine.machine_position
+        || before.machine.work_position != after.machine.work_position
+        || before.machine.work_coordinate_offset != after.machine.work_coordinate_offset
+    {
+        return Err(FirstCutAuthorizationError::ControllerPositionChanged.into());
+    }
+    Ok(())
+}
+
 pub(super) async fn execute_check_run_start(
     controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
     sender: &mut Sender,
     program: &GcodeProgram,
     execution_options: ProgramExecutionOptions,
@@ -261,6 +294,7 @@ pub(super) async fn execute_check_run_start(
     let inspection = controller.inspect_device().await?;
     let final_idle = controller.refresh_status().await?;
     ensure_stable_idle(&final_idle)?;
+    validate_rotary_program(program, hardware_profile, &inspection, &final_idle)?;
 
     sender.configure_rx_buffer_capacity(usable_rx_buffer_capacity(
         inspection
@@ -445,8 +479,10 @@ pub(super) async fn execute_program_run_abort(
 
 pub(super) async fn execute_tool_change_completion(
     controller: &mut Controller<BoxedTransport>,
+    hardware_profile: &HardwareProfile,
     sender: &mut Sender,
     confirmation: ToolChangeConfirmation,
+    rotary_reference: Option<&RotaryRunReference>,
 ) -> Result<SenderSnapshot, ArbiterError> {
     let active = sender.snapshot();
     if active.state != SenderState::ToolChange {
@@ -479,6 +515,11 @@ pub(super) async fn execute_tool_change_completion(
         ));
     }
     ensure_stable_idle(&final_snapshot)?;
+
+    if let Some(reference) = rotary_reference {
+        validate_rotary_capability(hardware_profile, &inspection, &final_snapshot)?;
+        reference.verify(&active, &inspection, &final_snapshot)?;
+    }
 
     sender.complete_tool_change().map_err(ArbiterError::from)
 }

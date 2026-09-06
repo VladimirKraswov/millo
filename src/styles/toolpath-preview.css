@@ -317,3 +317,92 @@
   background: #11171b;
 }
 
+.program-preview-stage.has-rotary,
+.workstation .program-preview-stage.has-rotary {
+  grid-template-rows: minmax(220px, 1fr) auto auto;
+}
+
+.has-sampled-preview .preview-legend {
+  max-width: calc(100% - 24px);
+  flex-wrap: wrap;
+  gap: 5px 12px;
+}
+
+.preview-sampling {
+  flex-basis: 100%;
+  color: #ffca73;
+  font-weight: 500;
+}
+
+.has-sampled-preview .preview-selection {
+  top: 62px;
+}
+
+.program-rotary-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 0;
+  padding: 8px 10px;
+  border-top: 1px solid #3b484e;
+  background: #10171b;
+}
+
+.program-rotary-metrics > div {
+  min-width: 0;
+}
+
+.program-rotary-metrics dt {
+  color: #94a1a9;
+  font-size: 9px;
+}
+
+.program-rotary-metrics dd {
+  margin: 3px 0 0;
+  color: #ffca73;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.preview-rotary-selection {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.preview-rotary-selection > div,
+.preview-rotary-selection dd {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+}
+
+.preview-rotary-selection dd {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tool-position-hud.has-rotary > code {
+  grid-template-columns: repeat(4, minmax(80px, 1fr));
+}
+
+@container (max-width: 680px) {
+  .tool-position-hud.has-rotary > code {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 5px 0;
+  }
+
+  .tool-position-hud.has-rotary > code span {
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .tool-position-hud.has-rotary > code span:nth-child(odd) {
+    border-left: 0;
+  }
+}

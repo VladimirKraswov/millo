@@ -22,7 +22,7 @@ export interface ProgramToolVisualization {
 }
 
 export function programToolVisualization(
-  program: Pick<GcodeProgram, "lines">,
+  program: Pick<GcodeProgram, "lines" | "document">,
   sender: SenderSnapshot,
   intent: ProgramRunIntent,
   assignments: readonly JobToolAssignment[],
@@ -32,10 +32,11 @@ export function programToolVisualization(
     sender.lastAcknowledgedSourceLine ??
     sender.currentSourceLine;
   const inferredToolNumber = programToolNumberAtSourceLine(program, executionLine);
+  const unknownIndexedTool = program.document !== undefined && executionLine !== undefined && executionLine > program.document.toolSelectionCoverageLine;
   const toolNumber = sender.state === "toolChange"
     ? (sender.requestedTool ?? inferredToolNumber)
-    : (inferredToolNumber ?? assignments[0]?.toolNumber);
-  const assignment = assignments.find((candidate) => candidate.toolNumber === toolNumber) ??
+    : (inferredToolNumber ?? (unknownIndexedTool ? undefined : assignments[0]?.toolNumber));
+  const assignment = unknownIndexedTool ? undefined : assignments.find((candidate) => candidate.toolNumber === toolNumber) ??
     (toolNumber === undefined ? assignments[0] : undefined);
   const tool = tools.find((candidate) => candidate.id === assignment?.toolId);
   const showCutter = intent === "cutting" && sender.mode !== "airRun";
