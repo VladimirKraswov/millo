@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useAsyncScope } from "../../components/useAsyncScope";
 import { bindSnapshotStream } from "../../platform/state/bindSnapshotStream";
 import type { SurfaceSession } from "../../shared/heightmap";
 import type {
@@ -32,7 +33,15 @@ export function useProgramSurface({
 }: ProgramSurfaceOptions) {
   const [surfaceSession, setSurfaceSession] = useState<SurfaceSession>();
   const [surfaceMapBusy, setSurfaceMapBusy] = useState(false);
+  const captureScope = useAsyncScope([heightmapGateway, machineProfileId, program]);
+  const optionsRef = useRef(programExecutionOptions);
+  optionsRef.current = programExecutionOptions;
+  useEffect(() => setSurfaceMapBusy(false), [captureScope]);
   useEffect(() => {
+    setSurfaceSession(undefined);
+    setProgramExecutionOptions((current) => current.surfaceMapId === undefined
+      ? current : { ...current, surfaceMapId: undefined });
+    setRealRunReport(undefined);
     if (!heightmapGateway) return;
     const accept = (session: SurfaceSession) => {
       setSurfaceSession(session);
@@ -91,26 +100,28 @@ export function useProgramSurface({
       );
     }
     setSurfaceMapBusy(true);
+    const isCurrent = captureScope();
     setError(undefined);
     setRealRunReport(undefined);
     try {
       const session = await heightmapGateway.setApplication(enabled, enabled);
+      if (!isCurrent()) throw new Error("Surface-map context changed");
       const surfaceMapId = enabled ? session.active?.mapId : undefined;
       if (enabled && surfaceMapId === undefined) {
         throw new Error("Контроллер не подтвердил активную карту высот");
       }
       const executionOptions = {
-        ...programExecutionOptions,
+        ...optionsRef.current,
         surfaceMapId,
       };
       setSurfaceSession(session);
       setProgramExecutionOptions(executionOptions);
       return executionOptions;
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrent()) setError(String(reason));
       throw reason;
     } finally {
-      setSurfaceMapBusy(false);
+      if (isCurrent()) setSurfaceMapBusy(false);
     }
   };
 

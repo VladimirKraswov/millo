@@ -1,4 +1,5 @@
 import { DialogSurface } from "../../components/DialogSurface";
+import { useAsyncScope } from "../../components/useAsyncScope";
 import {
   Check,
   CircleAlert,
@@ -122,6 +123,7 @@ export function ProgramRecoveryDialog({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const captureScope = useAsyncScope([candidate, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -138,29 +140,33 @@ export function ProgramRecoveryDialog({
 
   const prepare = async () => {
     if (!canPrepareRecovery(candidate, request, busy)) return;
+    const isCurrent = captureScope();
     setBusy(true);
     setError(undefined);
     try {
-      await onPrepared(await onPrepare(request));
-      onClose();
+      const prepared = await onPrepare(request);
+      if (!isCurrent()) return;
+      await onPrepared(prepared);
+      if (isCurrent()) onClose();
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrent()) setError(String(reason));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
 
   const dismiss = async () => {
     if (busy) return;
+    const isCurrent = captureScope();
     setBusy(true);
     setError(undefined);
     try {
       await onDismiss(candidate.id);
-      onClose();
+      if (isCurrent()) onClose();
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrent()) setError(String(reason));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
 

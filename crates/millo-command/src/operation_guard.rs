@@ -1,5 +1,27 @@
 use super::*;
 
+pub(super) fn request_conflicts_with_sender(sender: &Sender, request: &Request) -> bool {
+    if !sender_is_active(&sender.snapshot()) {
+        return false;
+    }
+    match request {
+        Request::InspectDevice { .. }
+        | Request::PreflightRealRun { .. }
+        | Request::AuthorizeFirstCut { .. }
+        | Request::UpdateControllerSetting { .. }
+        | Request::ConfigureUnhomedOperation { .. }
+        | Request::UnlockAlarm { .. } => true,
+        // Drained setup operations remain available at a pause/tool-change
+        // barrier, but their synchronous readers must never consume stream ACKs.
+        Request::PrepareTestJog { .. }
+        | Request::StepJog { .. }
+        | Request::JogPadStep { .. }
+        | Request::SetWorkZero { .. }
+        | Request::ReturnToWorkZero { .. } => sender.has_in_flight(),
+        _ => false,
+    }
+}
+
 pub(super) fn request_allowed_during_machine_operation(
     actor: &ActorState,
     request: &Request,

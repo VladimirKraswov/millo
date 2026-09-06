@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { bindSnapshotStream } from "../../platform/state/bindSnapshotStream";
+import { useAsyncScope } from "../../components/useAsyncScope";
 import { idleSenderSnapshot, type SenderSnapshot } from "../../shared/dryRun";
 import type { JobToolAssignment } from "../../shared/jobs";
 import type {
@@ -35,6 +35,7 @@ import {
 } from "./operatorLayoutModel";
 import { hasActionableProgramWarnings } from "./programDiagnosticsModel";
 import { programReadinessView } from "./programReadinessView";
+import { programSourceIndex } from "./programSourceIndex";
 import { programToolVisualization } from "./programToolVisualizationModel";
 import type {
   ProgramWorkspaceProps,
@@ -42,6 +43,7 @@ import type {
 } from "./programWorkspaceTypes";
 import { isSenderActive } from "./senderStateModel";
 import { useProgramSurface } from "./useProgramSurface";
+import { useProgramSender } from "./useProgramSender";
 
 export function useProgramWorkspace({
   desktopRuntime,
@@ -72,9 +74,6 @@ export function useProgramWorkspace({
   useEffect(() => {
     onProgramChange?.(loaded?.program);
   }, [loaded?.program, onProgramChange]);
-  const [sender, setSender] = useState<SenderSnapshot>(
-    initialSender ?? idleSenderSnapshot,
-  );
   const [toolAssignments, setToolAssignments] = useState<
     readonly JobToolAssignment[]
   >(initialToolAssignments);
@@ -108,13 +107,40 @@ export function useProgramWorkspace({
     useState<number>();
   const [preflightLoading, setPreflightLoading] = useState(false);
   const [error, setError] = useState<string>();
+  const { sender, setSender, captureSenderResult } = useProgramSender({
+    desktopRuntime, senderGateway, initialSender, onError: setError,
+  });
   useEffect(() => {
     if (error) onError?.(error);
   }, [error, onError]);
   const handledIncomingJob = useRef(0);
   const reopenFirstCutAfterCheck = useRef(false);
+  const recoveryRequestSequence = useRef(0);
+  const openRecoveryAfterStop = useRef(false);
   const program = loaded?.program;
   const senderActive = isSenderActive(sender.state);
+  const senderActiveRef = useRef(senderActive);
+  senderActiveRef.current = senderActive;
+  const captureScope = useAsyncScope([
+    loaded, gateway, realRunGateway,
+    machineContext?.machineProfileId, incomingJob?.sequence,
+    programRunIntent, programExecutionOptions,
+  ]);
+  const capturePreflightScope = useAsyncScope([captureScope, realRunAvailable]);
+  useEffect(() => {
+    setPreflightLoading(false);
+    setRealRunReport(undefined);
+  }, [capturePreflightScope]);
+  useEffect(() => {
+    setLoading(false);
+    setPreflightLoading(false);
+    setRealRunReport(undefined);
+    setFirstCutOpen(false);
+    setSafeStartOpen(false);
+  }, [captureScope]);
+  useEffect(() => {
+    reopenFirstCutAfterCheck.current = false;
+  }, [loaded, machineContext?.machineProfileId, incomingJob?.sequence]);
   const {
     surfaceSession,
     surfaceMap,
@@ -182,35 +208,30 @@ export function useProgramWorkspace({
   ]);
 
   useEffect(() => {
-    if (!desktopRuntime || !senderGateway) return;
-    return bindSnapshotStream({
-      stream: {
-        readCurrent: () => senderGateway.snapshot(),
-        listen: (handler) => senderGateway.subscribe(handler),
-      },
-      onSnapshot: setSender,
-      onError: (reason) => setError(String(reason)),
-    });
-  }, [desktopRuntime, senderGateway]);
-
-  useEffect(() => {
+    const sequence = ++recoveryRequestSequence.current;
     if (!realRunGateway) {
+      setRecoveryCandidate(undefined);
       setRecoveryChecked(true);
       return;
     }
     let active = true;
     setRecoveryChecked(false);
     setRecoveryCandidate(undefined);
+    if (senderActive) return;
     void realRunGateway
       .recoveryCandidate()
       .then((candidate) => {
-        if (active) {
+        if (active && sequence === recoveryRequestSequence.current) {
           setRecoveryCandidate(candidate ?? undefined);
           setRecoveryChecked(true);
+          if (openRecoveryAfterStop.current) {
+            openRecoveryAfterStop.current = false;
+            setRecoveryOpen(candidate !== null);
+          }
         }
       })
       .catch((reason: unknown) => {
-        if (active) {
+        if (active && sequence === recoveryRequestSequence.current) {
           setError(String(reason));
           setRecoveryChecked(true);
         }
@@ -218,36 +239,7 @@ export function useProgramWorkspace({
     return () => {
       active = false;
     };
-  }, [realRunGateway]);
-
-  useEffect(() => {
-    if (
-      !realRunGateway ||
-      (sender.state !== "failed" && sender.state !== "cancelled") ||
-      (sender.mode !== "airRun" && sender.mode !== "cutRun")
-    ) {
-      return;
-    }
-    let active = true;
-    setRecoveryChecked(false);
-    void realRunGateway
-      .recoveryCandidate()
-      .then((candidate) => {
-        if (active) {
-          setRecoveryCandidate(candidate ?? undefined);
-          setRecoveryChecked(true);
-        }
-      })
-      .catch((reason: unknown) => {
-        if (active) {
-          setError(String(reason));
-          setRecoveryChecked(true);
-        }
-      });
-    return () => {
-      active = false;
-    };
-  }, [realRunGateway, sender.mode, sender.runSequence, sender.state]);
+  }, [realRunGateway, senderActive, sender.runSequence, sender.state]);
 
   useEffect(() => {
     if (!realRunTarget || !realRunAvailable) {
@@ -264,14 +256,16 @@ export function useProgramWorkspace({
     } else {
       setToolChangeOpen(false);
     }
-  }, [sender.currentSourceLine, sender.requestedTool, sender.state]);
+  }, [sender.currentSourceLine, sender.requestedTool, sender.runSequence, sender.state]);
 
   const loadFile = async (file?: File) => {
-    if (!file || loading || !desktopRuntime) return;
+    if (!file || loading || senderActive || senderCommandBusy || !desktopRuntime) return;
+    const isCurrent = captureScope();
     setLoading(true);
     setError(undefined);
     try {
       const next = await loader.load(file);
+      if (!isCurrent() || senderActiveRef.current) return;
       setLoaded(next);
       setToolAssignments([]);
       setProgramExecutionOptions(executionOptionsForNewProgram);
@@ -283,12 +277,14 @@ export function useProgramWorkspace({
       setDiagnosticsOpen(hasWarnings);
       setRealRunReport(undefined);
       setFirstCutOpen(false);
+      setSafeStartOpen(false);
+      setSafeStartContext(undefined);
       setToolChangeOpen(false);
       setEditorOpen(false);
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrent()) setError(String(reason));
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
@@ -306,12 +302,15 @@ export function useProgramWorkspace({
   };
 
   const loadRecoveryPackage = async (prepared: ProgramRecoveryPackage) => {
+    if (loading || senderActive || senderCommandBusy) return;
+    const isCurrent = captureScope();
     setLoading(true);
     setError(undefined);
     try {
       const program = await gateway.parse(prepared.request, {
         blockDelete: prepared.executionOptions.blockDelete,
       });
+      if (!isCurrent() || senderActiveRef.current) return;
       setLoaded({ program, source: prepared.request.source });
       setToolAssignments([]);
       setProgramRunIntent(prepared.intent);
@@ -339,10 +338,11 @@ export function useProgramWorkspace({
       setEditorOpen(false);
       setRecoveryCandidate(undefined);
     } catch (reason) {
+      if (!isCurrent()) return;
       setError(String(reason));
       throw reason;
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
@@ -363,22 +363,26 @@ export function useProgramWorkspace({
   };
 
   const loadSafeStartPackage = async (prepared: SafeStartPackage) => {
-    if (!loaded || !realRunGateway) return;
+    if (!loaded || !realRunGateway || loading || senderActive || senderCommandBusy) return;
+    const isCurrent = captureScope();
     setLoading(true);
     setError(undefined);
     try {
       const nextProgram = await gateway.parse(prepared.request, {
         blockDelete: programExecutionOptions.blockDelete,
       });
+      if (!isCurrent() || senderActiveRef.current) return;
+      const reconcileSenderResult = captureSenderResult();
       const checkSnapshot = await realRunGateway.startCheck(
         prepared.request,
         programExecutionOptions,
       );
+      if (!isCurrent()) return;
       const original = safeStartContext?.original ?? loaded;
       setLoaded({ program: nextProgram, source: prepared.request.source });
       setSafeStartContext({ original, package: prepared });
       setClearedSenderRunSequence(undefined);
-      setSender(checkSnapshot);
+      setSender(reconcileSenderResult(checkSnapshot));
       setSelectedSourceLine(undefined);
       setDiagnosticView("lines");
       setDiagnosticsOpen(false);
@@ -386,10 +390,11 @@ export function useProgramWorkspace({
       setFirstCutOpen(false);
       setRecoveryCandidate(undefined);
     } catch (reason) {
+      if (!isCurrent()) return;
       setError(String(reason));
       throw reason;
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
@@ -426,7 +431,9 @@ export function useProgramWorkspace({
 
   const dismissRecovery = async (recoveryId: number) => {
     if (!realRunGateway) throw new Error("Recovery gateway is unavailable");
+    const sequence = ++recoveryRequestSequence.current;
     await realRunGateway.dismissRecovery(recoveryId);
+    if (sequence !== recoveryRequestSequence.current) return;
     setRecoveryCandidate(undefined);
     setRecoveryChecked(true);
     setClearedSenderRunSequence(sender.runSequence || undefined);
@@ -438,31 +445,33 @@ export function useProgramWorkspace({
   };
 
   const bounds = program?.summary.bounds;
+  const sourceIndex = useMemo(() => program ? programSourceIndex(program) : undefined, [program]);
   const motionSourceLines = useMemo(
-    () => new Set(program?.toolpath.map((segment) => segment.sourceLine) ?? []),
-    [program],
+    () => new Set(sourceIndex?.motions.keys()),
+    [sourceIndex],
   );
   const selectedProgramLine = useMemo(
-    () => program?.lines.find((line) => line.sourceLine === selectedSourceLine),
-    [program, selectedSourceLine],
+    () => selectedSourceLine === undefined ? undefined : sourceIndex?.lines.get(selectedSourceLine),
+    [sourceIndex, selectedSourceLine],
   );
   const selectedMotionCount = useMemo(
     () =>
       selectedSourceLine === undefined
         ? 0
-        : (program?.toolpath.filter(
-            (segment) => segment.sourceLine === selectedSourceLine,
-          ).length ?? 0),
-    [program, selectedSourceLine],
+        : (sourceIndex?.motions.get(selectedSourceLine)?.length ?? 0),
+    [sourceIndex, selectedSourceLine],
   );
   const runSenderAction = async (action: () => Promise<SenderSnapshot>) => {
     if (senderCommandBusy) return;
+    const isCurrent = captureScope();
+    const reconcileSenderResult = captureSenderResult();
     setSenderCommandBusy(true);
     setError(undefined);
     try {
-      setSender(await action());
+      const snapshot = await action();
+      if (isCurrent()) setSender(reconcileSenderResult(snapshot));
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrent()) setError(String(reason));
     } finally {
       setSenderCommandBusy(false);
     }
@@ -485,17 +494,17 @@ export function useProgramWorkspace({
 
   const stopProgramRun = async () => {
     if (!realRunGateway || senderCommandBusy) return;
+    const reconcileSenderResult = captureSenderResult();
     setSenderCommandBusy(true);
     setError(undefined);
     setRecoveryChecked(false);
+    openRecoveryAfterStop.current = true;
     try {
-      setSender(await realRunGateway.abortProgram());
+      const snapshot = await realRunGateway.abortProgram();
+      setSender(reconcileSenderResult(snapshot));
       setRealRunReport(undefined);
-      const candidate = await realRunGateway.recoveryCandidate();
-      setRecoveryCandidate(candidate ?? undefined);
-      setRecoveryChecked(true);
-      setRecoveryOpen(candidate !== null);
     } catch (reason) {
+      openRecoveryAfterStop.current = false;
       setError(String(reason));
       setRecoveryChecked(true);
     } finally {
@@ -535,6 +544,8 @@ export function useProgramWorkspace({
     key: keyof ProgramExecutionOptions,
     value: boolean,
   ) => {
+    if (loading || senderActive || senderCommandBusy || preflightLoading) return;
+    const isCurrent = captureScope();
     setRealRunReport(undefined);
     if (key !== "blockDelete" || !loaded) {
       setProgramExecutionOptions((current) => ({ ...current, [key]: value }));
@@ -551,12 +562,13 @@ export function useProgramWorkspace({
         },
         { blockDelete: value },
       );
+      if (!isCurrent() || senderActiveRef.current) return;
       setLoaded({ ...loaded, program: reparsed });
       setProgramExecutionOptions((current) => ({ ...current, [key]: value }));
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrent()) setError(String(reason));
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
   const reportForProgram =
@@ -611,7 +623,8 @@ export function useProgramWorkspace({
   const runRealPreflight = async (): Promise<
     RunPreflightReport | undefined
   > => {
-    if (!loaded || !realRunGateway || !preflightControls.canCheck) return;
+    if (!loaded || !realRunGateway || !preflightControls.canCheck || loading || senderActive || senderCommandBusy) return;
+    const isCurrent = capturePreflightScope();
     setPreflightLoading(true);
     setError(undefined);
     setRealRunReport(undefined);
@@ -624,16 +637,17 @@ export function useProgramWorkspace({
         programRunIntent,
         programExecutionOptions,
       );
+      if (!isCurrent() || senderActiveRef.current) return;
       setRealRunReport(report);
       onInspection?.(report.hardware);
       setDiagnosticView("preflight");
       setDiagnosticsOpen(!report.ready);
       return report;
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrent()) setError(String(reason));
       return undefined;
     } finally {
-      setPreflightLoading(false);
+      if (isCurrent()) setPreflightLoading(false);
     }
   };
   const authorizeFirstCut = async (
@@ -656,8 +670,9 @@ export function useProgramWorkspace({
     if (!loaded || !realRunGateway) {
       throw new Error("Program-run gateway is unavailable");
     }
+    const reconcileSenderResult = captureSenderResult();
     try {
-      return await realRunGateway.startProgram(
+      const snapshot = await realRunGateway.startProgram(
         {
           sourceName: loaded.program.sourceName,
           source: loaded.source,
@@ -665,6 +680,7 @@ export function useProgramWorkspace({
         preparation.authorization.id,
         programExecutionOptions,
       );
+      return reconcileSenderResult(snapshot);
     } catch (reason) {
       if (String(reason).includes("unfinished recovery record")) {
         try {
@@ -681,7 +697,7 @@ export function useProgramWorkspace({
     }
   };
   const startCheckRun = () => {
-    if (!loaded || !realRunGateway) return;
+    if (!loaded || !realRunGateway || !checkRunAvailable) return;
     setDiagnosticsOpen(false);
     void runSenderAction(() =>
       realRunGateway.startCheck(
@@ -703,6 +719,7 @@ export function useProgramWorkspace({
     setSenderCommandBusy(true);
     setError(undefined);
     reopenFirstCutAfterCheck.current = true;
+    const reconcileSenderResult = captureSenderResult();
     try {
       const checkSnapshot = await realRunGateway.startCheck(
         {
@@ -712,7 +729,7 @@ export function useProgramWorkspace({
         executionOptions,
       );
       setClearedSenderRunSequence(undefined);
-      setSender(checkSnapshot);
+      setSender(reconcileSenderResult(checkSnapshot));
       setDiagnosticsOpen(false);
       setFirstCutOpen(false);
     } catch (reason) {
@@ -748,7 +765,10 @@ export function useProgramWorkspace({
     if (!realRunGateway) {
       throw new Error("Tool-change gateway is unavailable");
     }
-    setSender(await realRunGateway.completeToolChange(confirmation));
+    const reconcileSenderResult = captureSenderResult();
+    const isCurrent = captureScope();
+    const snapshot = await realRunGateway.completeToolChange(confirmation);
+    if (isCurrent()) setSender(reconcileSenderResult(snapshot));
   };
   const programRunVisible =
     senderForProgram && (sender.mode === "airRun" || sender.mode === "cutRun");
@@ -768,9 +788,9 @@ export function useProgramWorkspace({
     : safeStartCheckPassed
       ? "GRBL Check пройден"
       : "Требуется GRBL Check";
-  const checkRunAvailable = canStartCheckRun(displayedSender, {
+  const checkRunAvailable = canStartCheckRun(sender, {
     gatewayAvailable: realRunGateway !== undefined,
-    loading,
+    loading: loading || preflightLoading || senderCommandBusy || surfaceMapBusy || (machineContext?.busy ?? false),
     programLoaded: loaded !== undefined,
     serialAvailable: realRunAvailable,
   });
@@ -803,6 +823,7 @@ export function useProgramWorkspace({
       return;
     }
     if (sender.state !== "completed" || !realRunAvailable) return;
+    if (preflightLoading || loading || senderCommandBusy) return;
     setClearedSenderRunSequence(sender.runSequence);
     setRealRunReport(undefined);
     void runRealPreflight().then((report) => {
@@ -810,7 +831,7 @@ export function useProgramWorkspace({
       reopenFirstCutAfterCheck.current = false;
       if (report?.ready) setFirstCutOpen(true);
     });
-  }, [checkRunVisible, realRunAvailable, sender.runSequence, sender.state]);
+  }, [checkRunVisible, realRunAvailable, sender.runSequence, sender.state, preflightLoading, loading, senderCommandBusy]);
 
   useEffect(() => {
     if (!recoveryCandidate || !firstCutOpen) return;

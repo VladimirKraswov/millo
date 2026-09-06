@@ -1,3 +1,4 @@
+mod background_compute;
 mod tooling;
 pub use tooling::*;
 mod recovery;

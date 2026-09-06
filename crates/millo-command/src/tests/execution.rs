@@ -1,5 +1,469 @@
 use super::*;
 
+struct FifoTransport {
+    reads: std::collections::VecDeque<String>,
+    writes: std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
+}
+
+type IoFuture<'a, T> =
+    std::pin::Pin<Box<dyn Future<Output = Result<T, TransportError>> + Send + 'a>>;
+
+impl millo_transport::Transport for FifoTransport {
+    fn connect<'a, 'b>(&'a mut self) -> IoFuture<'b, ()>
+    where
+        'a: 'b,
+        Self: 'b,
+    {
+        Box::pin(async { Ok(()) })
+    }
+    fn disconnect<'a, 'b>(&'a mut self) -> IoFuture<'b, ()>
+    where
+        'a: 'b,
+        Self: 'b,
+    {
+        Box::pin(async { Ok(()) })
+    }
+    fn write<'a, 'd, 'b>(&'a mut self, data: &'d [u8]) -> IoFuture<'b, ()>
+    where
+        'a: 'b,
+        'd: 'b,
+        Self: 'b,
+    {
+        Box::pin(async move {
+            self.writes.lock().unwrap().push(data.to_vec());
+            Ok(())
+        })
+    }
+    fn read_line<'a, 'b>(&'a mut self) -> IoFuture<'b, String>
+    where
+        'a: 'b,
+        Self: 'b,
+    {
+        Box::pin(async move {
+            match self.reads.pop_front() {
+                Some(line) => Ok(line),
+                None => std::future::pending().await,
+            }
+        })
+    }
+    fn is_connected(&self) -> bool {
+        true
+    }
+}
+
+#[test]
+fn inspector_admission_covers_ready_running_paused_draining_and_tool_change() {
+    let mut sender = Sender::default();
+    sender
+        .load_cut_run(
+            build_program_run_plan(
+                &parsed_program("G21 G90 G94\nG1 X1 F10\nT2 M6\nG1 X2 F10"),
+                ProgramRunPolicy::Cutting,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let (response, _) = oneshot::channel();
+    let request = Request::InspectDevice { response };
+    assert!(request_conflicts_with_sender(&sender, &request));
+    sender.start().unwrap();
+    assert!(request_conflicts_with_sender(&sender, &request));
+    sender.pause().unwrap();
+    assert!(request_conflicts_with_sender(&sender, &request));
+    sender.resume().unwrap();
+    while sender.next_line().is_some() {
+        sender.acknowledge_ok().unwrap();
+    }
+    assert_eq!(sender.snapshot().state, SenderState::Draining);
+    assert!(request_conflicts_with_sender(&sender, &request));
+    sender.complete_draining().unwrap();
+    assert_eq!(sender.snapshot().state, SenderState::ToolChange);
+    assert!(request_conflicts_with_sender(&sender, &request));
+    sender.cancel().unwrap();
+    assert!(!request_conflicts_with_sender(&sender, &request));
+}
+
+#[tokio::test]
+async fn ordinary_readers_reject_an_active_sender_even_with_a_cached_idle_status() {
+    let source = "G21 G90 G94\nG1 X1 F10";
+    let (arbiter, control, worker) = serial_preflight_arbiter();
+    let task = tokio::spawn(worker);
+    arbiter.connect().await.unwrap();
+    authorize_and_start_serial_fixture(&arbiter, source, false).await;
+    assert_eq!(arbiter.snapshot().machine.mode, MachineMode::Idle);
+    let before = control.writes();
+
+    assert!(matches!(
+        arbiter.inspect_device().await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
+    assert!(matches!(
+        arbiter.configure_unhomed_operation().await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
+    assert!(matches!(
+        arbiter.unlock_alarm(true).await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
+    assert!(matches!(
+        arbiter
+            .preflight_real_run(parsed_program(source), ProgramRunIntent::AirRun)
+            .await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
+    assert!(matches!(
+        arbiter
+            .authorize_first_cut_fixture(parsed_program(source), first_cut_confirmation())
+            .await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
+    assert!(matches!(
+        arbiter
+            .update_controller_setting(ControllerSettingEditRequest {
+                key: "$120".to_owned(),
+                value: "600".to_owned(),
+                confirmed: true,
+                expected_value: Some("50".to_owned()),
+                expected_revision: Some(7),
+            })
+            .await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
+
+    assert_eq!(control.writes(), before);
+    assert_eq!(arbiter.sender_snapshot().state, SenderState::Running);
+    arbiter.abort_program_run().await.unwrap();
+    arbiter.refresh_status().await.unwrap();
+    arbiter.acknowledge_reset().await.unwrap();
+    assert_eq!(
+        arbiter
+            .inspect_device()
+            .await
+            .unwrap()
+            .device
+            .responses
+            .len(),
+        4
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn ordinary_readers_cannot_steal_a_paused_senders_acknowledgements() {
+    let (arbiter, control, worker) = serial_preflight_arbiter_for_realtime_preemption();
+    control.queue_program_delay(40);
+    control.queue_program_error(20);
+    let task = tokio::spawn(worker);
+    arbiter.connect().await.unwrap();
+    authorize_and_start_serial_fixture(&arbiter, "G21 G90 G94\nG1 X1 F10", true).await;
+    let mut snapshots = arbiter.subscribe_sender();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while snapshots.borrow().in_flight_lines == 0 {
+            snapshots.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    arbiter.feed_hold().await.unwrap();
+    assert!(arbiter.sender_snapshot().in_flight_lines > 0);
+    let before = control.writes();
+
+    assert!(matches!(
+        arbiter.inspect_device().await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
+    assert!(matches!(
+        arbiter.prepare_test_jog(operator_confirmation()).await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
+    assert!(matches!(
+        arbiter
+            .jog_pad_step(JogPadStepRequest {
+                confirmation: operator_confirmation(),
+                axis: millo_domain::JogAxis::Z,
+                distance_mm: 0.01,
+                feed_mm_per_min: 100.0,
+            })
+            .await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
+    assert!(matches!(
+        arbiter
+            .step_jog(StepJogRequest {
+                authorization_id: 1,
+                axis: millo_domain::JogAxis::Z,
+                distance_mm: 0.01,
+                feed_mm_per_min: 100.0,
+            })
+            .await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
+    assert!(matches!(
+        arbiter
+            .set_work_zero(work_zero_request(WorkAxis::Z, true))
+            .await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
+    assert!(matches!(
+        arbiter
+            .return_to_work_zero(return_to_zero_request(WorkAxis::Z))
+            .await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
+    assert_eq!(control.writes(), before);
+
+    let failed = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let snapshot = snapshots.borrow_and_update().clone();
+            if snapshot.state == SenderState::Failed {
+                return snapshot;
+            }
+            snapshots.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(failed.acknowledged_lines, 1);
+    let failure = failed.failure.unwrap();
+    assert_eq!(failure.command.as_deref(), Some("M9"));
+    assert_eq!(failure.grbl_code, Some(20));
+    task.abort();
+}
+
+#[tokio::test]
+async fn resume_accounts_for_acknowledgements_before_the_hold_status() {
+    let transport = FifoTransport {
+        reads: ["ok", "<Hold:0|MPos:0,0,0|FS:0,0>"]
+            .map(str::to_owned)
+            .into(),
+        writes: Default::default(),
+    };
+    let writes = transport.writes.clone();
+    let mut controller: Controller<BoxedTransport> = Controller::new(Box::new(transport));
+    controller.connect().await.unwrap();
+    let mut sender = Sender::default();
+    sender
+        .load_cut_run(
+            build_program_run_plan(&parsed_program("G1 X1 F10"), ProgramRunPolicy::Cutting)
+                .unwrap(),
+        )
+        .unwrap();
+    sender.start().unwrap();
+    let line = sender.next_line().unwrap();
+    controller.write_program_line(&line).await.unwrap();
+    sender.pause().unwrap();
+
+    execute_program_run_resume(&mut controller, &mut sender)
+        .await
+        .unwrap();
+
+    assert_eq!(sender.snapshot().acknowledged_lines, 1);
+    assert!(!sender.has_in_flight());
+    assert_eq!(sender.snapshot().state, SenderState::Running);
+    assert_eq!(writes.lock().unwrap().last(), Some(&b"~".to_vec()));
+}
+
+#[tokio::test]
+async fn resume_rejects_a_reset_banner_even_when_followed_by_idle() {
+    let transport = FifoTransport {
+        reads: ["Grbl 1.1h ['$' for help]", "<Idle|MPos:0,0,0|FS:0,0>"]
+            .map(str::to_owned)
+            .into(),
+        writes: Default::default(),
+    };
+    let writes = transport.writes.clone();
+    let mut controller: Controller<BoxedTransport> = Controller::new(Box::new(transport));
+    controller.connect().await.unwrap();
+    let mut sender = Sender::default();
+    sender
+        .load_cut_run(
+            build_program_run_plan(&parsed_program("G1 X1 F10"), ProgramRunPolicy::Cutting)
+                .unwrap(),
+        )
+        .unwrap();
+    sender.start().unwrap();
+    sender.pause().unwrap();
+
+    assert!(
+        execute_program_run_resume(&mut controller, &mut sender)
+            .await
+            .is_err()
+    );
+    assert_eq!(sender.snapshot().state, SenderState::Failed);
+    assert!(!writes.lock().unwrap().contains(&b"~".to_vec()));
+}
+
+#[tokio::test]
+async fn resume_aborts_on_a_correlated_error_before_the_hold_status() {
+    let transport = FifoTransport {
+        reads: ["ok", "error:20", "<Hold:0|MPos:0,0,0|FS:0,0>"]
+            .map(str::to_owned)
+            .into(),
+        writes: Default::default(),
+    };
+    let writes = transport.writes.clone();
+    let mut controller: Controller<BoxedTransport> = Controller::new(Box::new(transport));
+    controller.connect().await.unwrap();
+    let mut sender = Sender::default();
+    sender
+        .load_cut_run(
+            build_program_run_plan(&parsed_program("G1 X1 F10"), ProgramRunPolicy::Cutting)
+                .unwrap(),
+        )
+        .unwrap();
+    sender.start().unwrap();
+    for _ in 0..2 {
+        controller
+            .write_program_line(&sender.next_line().unwrap())
+            .await
+            .unwrap();
+    }
+    sender.pause().unwrap();
+
+    assert!(
+        execute_program_run_resume(&mut controller, &mut sender)
+            .await
+            .is_err()
+    );
+
+    let failure = sender.snapshot().failure.unwrap();
+    assert_eq!(failure.kind, SenderFailureKind::GrblError);
+    assert_eq!(failure.command.as_deref(), Some("M9"));
+    assert_eq!(sender.snapshot().acknowledged_lines, 1);
+    let writes = writes.lock().unwrap();
+    assert!(!writes.contains(&b"~".to_vec()));
+    assert_eq!(
+        &writes[writes.len() - 2..],
+        &[b"!".to_vec(), b"\x18".to_vec()]
+    );
+}
+
+#[tokio::test]
+async fn disconnect_aborts_a_physical_stream_before_closing_the_link() {
+    let (arbiter, control, worker) = serial_preflight_arbiter();
+    let task = tokio::spawn(worker);
+    arbiter.connect().await.unwrap();
+    authorize_and_start_serial_fixture(&arbiter, "G21 G90 G94\nG1 X1 F10", false).await;
+    let before = control.writes().len();
+
+    arbiter.disconnect().await.unwrap();
+
+    assert_eq!(
+        &control.writes()[before..],
+        &[b"!".to_vec(), b"\x18".to_vec()]
+    );
+    assert_eq!(arbiter.sender_snapshot().state, SenderState::Cancelled);
+    assert_eq!(arbiter.snapshot().connection, ConnectionState::Disconnected);
+    task.abort();
+}
+
+#[tokio::test]
+async fn typed_pause_delivery_failure_quarantines_the_sender() {
+    let (arbiter, control, worker) = serial_preflight_arbiter();
+    let task = tokio::spawn(worker);
+    arbiter.connect().await.unwrap();
+    authorize_and_start_serial_fixture(&arbiter, "G21 G90 G94\nG1 X1 F10", false).await;
+    control.drop_link();
+
+    assert!(arbiter.pause_program_run().await.is_err());
+    assert_eq!(arbiter.sender_snapshot().state, SenderState::Failed);
+    assert_eq!(arbiter.snapshot().connection, ConnectionState::Disconnected);
+    task.abort();
+}
+
+#[tokio::test]
+async fn externally_observed_hold_preserves_the_draining_phase() {
+    let (arbiter, control, worker) = serial_preflight_arbiter();
+    let task = tokio::spawn(worker);
+    arbiter.connect().await.unwrap();
+    authorize_and_start_serial_fixture(&arbiter, "G21 G90 G94\nG1 X1 F10", true).await;
+    wait_for_sender(&arbiter, SenderState::Draining).await;
+    control.set_status("<Hold:0|MPos:0,0,0|FS:0,0>");
+
+    arbiter.refresh_status().await.unwrap();
+
+    assert_eq!(arbiter.sender_snapshot().state, SenderState::Paused);
+    assert_eq!(
+        arbiter.resume_program_run().await.unwrap().state,
+        SenderState::Draining
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn door_status_pauses_dispatch_but_does_not_discard_pending_acknowledgements() {
+    let transport = FifoTransport {
+        reads: ["<Idle|MPos:0,0,0>", "<Door:0|MPos:0,0,0>", "ok"]
+            .map(str::to_owned)
+            .into(),
+        writes: Default::default(),
+    };
+    let mut controller: Controller<BoxedTransport> = Controller::new(Box::new(transport));
+    controller.connect().await.unwrap();
+    controller.refresh_status().await.unwrap();
+    let mut sender = Sender::default();
+    sender
+        .load_cut_run(
+            build_program_run_plan(&parsed_program("G1 X1 F10"), ProgramRunPolicy::Cutting)
+                .unwrap(),
+        )
+        .unwrap();
+    sender.start().unwrap();
+    let (snapshots, _) = watch::channel(controller.snapshot());
+    let (sender_snapshots, _) = watch::channel(sender.snapshot());
+    let mut program_check = ProgramCheckGate::default();
+    let mut pending_check = None;
+
+    for _ in 0..2 {
+        execute_sender_step(
+            &mut controller,
+            &mut sender,
+            &mut program_check,
+            &mut pending_check,
+            &snapshots,
+            &sender_snapshots,
+        )
+        .await;
+        assert_eq!(sender.snapshot().state, SenderState::Paused);
+    }
+    assert_eq!(sender.snapshot().acknowledged_lines, 1);
+    assert!(sender.has_in_flight());
+}
+
+#[tokio::test]
+async fn disconnect_reports_stop_delivery_failure_and_still_closes_the_link() {
+    let (arbiter, control, worker) = serial_preflight_arbiter();
+    let task = tokio::spawn(worker);
+    arbiter.connect().await.unwrap();
+    authorize_and_start_serial_fixture(&arbiter, "G21 G90 G94\nG1 X1 F10", false).await;
+    control.drop_link();
+
+    assert!(arbiter.disconnect().await.is_err());
+    assert_eq!(arbiter.sender_snapshot().state, SenderState::Failed);
+    assert_eq!(arbiter.snapshot().connection, ConnectionState::Disconnected);
+    task.abort();
+}
+
+#[tokio::test]
+async fn realtime_status_reconciles_reset_before_it_can_be_acknowledged_away() {
+    let (arbiter, control, worker) = serial_preflight_arbiter();
+    let task = tokio::spawn(worker);
+    arbiter.connect().await.unwrap();
+    authorize_and_start_serial_fixture(&arbiter, "G21 G90 G94\nG1 X1 F10", true).await;
+    wait_for_sender(&arbiter, SenderState::Draining).await;
+    control.queue_reset("1.1h");
+
+    arbiter
+        .send_realtime(RealtimeCommand::Status)
+        .await
+        .unwrap();
+    assert_eq!(arbiter.sender_snapshot().state, SenderState::Failed);
+    arbiter.acknowledge_reset().await.unwrap();
+    arbiter.refresh_status().await.unwrap();
+    assert_eq!(arbiter.sender_snapshot().state, SenderState::Failed);
+    task.abort();
+}
+
 #[tokio::test]
 async fn invalid_soft_reset_confirmation_cannot_cancel_an_active_sender() {
     let (arbiter, control, worker) = serial_preflight_arbiter();

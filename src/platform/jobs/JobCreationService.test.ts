@@ -128,7 +128,9 @@ describe("JobCreationService", () => {
     };
     const service = new JobCreationService(gateway, store);
 
-    const job = await service.generateSurfacing(request);
+    const pending = service.generateSurfacing(request);
+    Object.assign(request, { toolId: "different-cutter" });
+    const job = await pending;
     service.open(job);
     await service.save(job);
 

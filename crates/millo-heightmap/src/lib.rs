@@ -165,47 +165,44 @@ pub struct HeightmapSurfaceQuality {
 
 impl Heightmap {
     pub fn reference_z(&self) -> Result<f64, HeightmapError> {
-        self.samples
+        self.validate_layout()?;
+        let (sequence, sample) = self
+            .samples
             .iter()
-            .flatten()
-            .find(|sample| sample.triggered)
-            .map(|sample| sample.z_mm)
-            .ok_or(HeightmapError::Incomplete)
+            .enumerate()
+            .filter_map(|(sequence, sample)| sample.as_ref().map(|sample| (sequence, sample)))
+            .find(|(_, sample)| sample.triggered)
+            .ok_or(HeightmapError::Incomplete)?;
+        self.validate_sample(sequence, sample)?;
+        Ok(sample.z_mm)
     }
 
     pub fn interpolate_delta_z(&self, x_mm: f64, y_mm: f64) -> Result<f64, HeightmapError> {
-        Ok(self.interpolate_z(x_mm, y_mm)? - self.reference_z()?)
+        let delta = self.interpolate_z(x_mm, y_mm)? - self.reference_z()?;
+        if !delta.is_finite() {
+            return Err(HeightmapError::InvalidSample);
+        }
+        Ok(delta)
     }
 
     pub fn surface_quality(&self) -> Result<HeightmapSurfaceQuality, HeightmapError> {
+        self.validate_layout()?;
         let columns = self.plan.request.columns;
         let rows = self.plan.request.rows;
-        let mut grid = vec![None; columns.saturating_mul(rows)];
-        if grid.is_empty() {
-            return Err(HeightmapError::Incomplete);
-        }
+        let mut grid = Vec::with_capacity(columns * rows);
         let mut minimum = f64::INFINITY;
         let mut maximum = f64::NEG_INFINITY;
 
-        for sample in self
-            .samples
-            .iter()
-            .flatten()
-            .filter(|sample| sample.triggered)
-        {
-            let index = sample
-                .point
-                .row
-                .checked_mul(columns)
-                .and_then(|row| row.checked_add(sample.point.column))
-                .filter(|index| *index < grid.len())
-                .ok_or(HeightmapError::Incomplete)?;
-            grid[index] = Some(sample.z_mm);
-            minimum = minimum.min(sample.z_mm);
-            maximum = maximum.max(sample.z_mm);
+        for row in 0..rows {
+            for column in 0..columns {
+                let z = self.sample_at(row, column)?;
+                grid.push(z);
+                minimum = minimum.min(z);
+                maximum = maximum.max(z);
+            }
         }
-        if grid.iter().any(Option::is_none) {
-            return Err(HeightmapError::Incomplete);
+        if !(maximum - minimum).is_finite() {
+            return Err(HeightmapError::InvalidSample);
         }
 
         let mut neighbor_deltas = Vec::with_capacity(
@@ -214,15 +211,13 @@ impl Heightmap {
         );
         for row in 0..rows {
             for column in 0..columns {
-                let current = grid[row * columns + column].ok_or(HeightmapError::Incomplete)?;
+                let current = grid[row * columns + column];
                 if column + 1 < columns {
-                    let right =
-                        grid[row * columns + column + 1].ok_or(HeightmapError::Incomplete)?;
+                    let right = grid[row * columns + column + 1];
                     neighbor_deltas.push((current - right).abs());
                 }
                 if row + 1 < rows {
-                    let below =
-                        grid[(row + 1) * columns + column].ok_or(HeightmapError::Incomplete)?;
+                    let below = grid[(row + 1) * columns + column];
                     neighbor_deltas.push((current - below).abs());
                 }
             }
@@ -835,6 +830,35 @@ fn validate_request(
     {
         return Err(HeightmapError::TooManyPoints);
     }
+    for (name, origin, span, count) in [
+        (
+            "X spacing",
+            request.origin_x_mm,
+            request.width_mm,
+            request.columns,
+        ),
+        (
+            "Y spacing",
+            request.origin_y_mm,
+            request.height_mm,
+            request.rows,
+        ),
+    ] {
+        let spacing = span / (count - 1) as f64;
+        let end = origin + span;
+        let magnitude = origin.abs().max(end.abs());
+        // A full ULP at the largest endpoint also rules out duplicate interior points.
+        let resolution = f64::from_bits(magnitude.to_bits() + 1) - magnitude;
+        let last = origin + spacing * (count - 1) as f64;
+        let penultimate = origin + spacing * (count - 2) as f64;
+        if spacing < resolution
+            || origin + spacing <= origin
+            || last <= penultimate
+            || end <= penultimate
+        {
+            return Err(HeightmapError::InvalidSetting(name));
+        }
+    }
     if let Some(travel) = travel {
         if !travel.x_mm.is_finite() || travel.x_mm <= 0.0 {
             return Err(HeightmapError::InvalidSetting("machine X travel"));
@@ -891,16 +915,19 @@ impl Heightmap {
         if !z_mm.is_finite() {
             return Err(HeightmapError::InvalidSample);
         }
+        self.validate_layout()?;
         let point = *self
             .plan
             .points
             .get(sequence)
             .ok_or(HeightmapError::UnknownPoint(sequence))?;
-        self.samples[sequence] = Some(ProbeSample {
+        let sample = ProbeSample {
             point,
             z_mm,
             triggered,
-        });
+        };
+        self.validate_sample(sequence, &sample)?;
+        self.samples[sequence] = Some(sample);
         Ok(self.progress())
     }
 
@@ -940,6 +967,7 @@ impl Heightmap {
         if !x_mm.is_finite() || !y_mm.is_finite() {
             return Err(HeightmapError::OutsideArea);
         }
+        self.validate_layout()?;
         let request = self.plan.request;
         let x_offset = x_mm - request.origin_x_mm;
         let y_offset = y_mm - request.origin_y_mm;
@@ -965,9 +993,77 @@ impl Heightmap {
         let z10 = self.sample_at(bottom, right)?;
         let z01 = self.sample_at(top, left)?;
         let z11 = self.sample_at(top, right)?;
-        let bottom_z = z00 + (z10 - z00) * x_mix;
-        let top_z = z01 + (z11 - z01) * x_mix;
-        Ok(bottom_z + (top_z - bottom_z) * y_mix)
+        let bottom_z = z00 * (1.0 - x_mix) + z10 * x_mix;
+        let top_z = z01 * (1.0 - x_mix) + z11 * x_mix;
+        let z = bottom_z * (1.0 - y_mix) + top_z * y_mix;
+        if !z.is_finite() {
+            return Err(HeightmapError::InvalidSample);
+        }
+        Ok(z)
+    }
+
+    fn validate_layout(&self) -> Result<(), HeightmapError> {
+        let request = self.plan.request;
+        validate_request(request, None)?;
+        let total = request.columns * request.rows;
+        if self.schema_version != HEIGHTMAP_SCHEMA_VERSION
+            || self.plan.schema_version != HEIGHTMAP_SCHEMA_VERSION
+            || self.plan.points.len() != total
+            || self.samples.len() != total
+        {
+            return Err(HeightmapError::Incomplete);
+        }
+        for (actual, expected) in [
+            (
+                self.plan.spacing.x_mm,
+                request.width_mm / (request.columns - 1) as f64,
+            ),
+            (
+                self.plan.spacing.y_mm,
+                request.height_mm / (request.rows - 1) as f64,
+            ),
+        ] {
+            if !actual.is_finite() || actual <= 0.0 || (actual - expected).abs() > expected * 1e-12
+            {
+                return Err(HeightmapError::InvalidSetting("grid spacing"));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_sample(&self, sequence: usize, sample: &ProbeSample) -> Result<(), HeightmapError> {
+        let request = self.plan.request;
+        let row = sequence / request.columns;
+        let index = sequence % request.columns;
+        let column = if row % 2 == 0 {
+            index
+        } else {
+            request.columns - 1 - index
+        };
+        let x = request.origin_x_mm + self.plan.spacing.x_mm * column as f64;
+        let y = request.origin_y_mm + self.plan.spacing.y_mm * row as f64;
+        for point in [
+            &sample.point,
+            self.plan
+                .points
+                .get(sequence)
+                .ok_or(HeightmapError::Incomplete)?,
+        ] {
+            if point.sequence != sequence
+                || point.row != row
+                || point.column != column
+                || !point.x_mm.is_finite()
+                || !point.y_mm.is_finite()
+                || (point.x_mm - x).abs() > x.abs().max(1.0) * 1e-12
+                || (point.y_mm - y).abs() > y.abs().max(1.0) * 1e-12
+            {
+                return Err(HeightmapError::InvalidSample);
+            }
+        }
+        if !sample.z_mm.is_finite() {
+            return Err(HeightmapError::InvalidSample);
+        }
+        Ok(())
     }
 
     fn sample_at(&self, row: usize, column: usize) -> Result<f64, HeightmapError> {
@@ -985,6 +1081,7 @@ impl Heightmap {
         if !sample.triggered {
             return Err(HeightmapError::ProbeMiss(sequence));
         }
+        self.validate_sample(sequence, sample)?;
         Ok(sample.z_mm)
     }
 }
@@ -1088,6 +1185,79 @@ mod tests {
         }
         assert!((map.interpolate_z(5.0, 2.5).unwrap() - 2.0).abs() < 1e-9);
         assert!((map.interpolate_z(20.0, 10.0).unwrap() - 5.0).abs() < 1e-9);
+    }
+
+    fn measured_map() -> Heightmap {
+        let mut map = Heightmap::new(plan(2, 2));
+        for point in map.plan.points.clone() {
+            map.record_sample(point.sequence, point.x_mm * 0.1, true)
+                .unwrap();
+        }
+        map
+    }
+
+    #[test]
+    fn interpolation_rejects_corrupt_grid_spacing() {
+        for spacing in [0.0, f64::NAN, f64::INFINITY, 40.0] {
+            let mut map = measured_map();
+            map.plan.spacing.x_mm = spacing;
+            assert!(
+                map.interpolate_z(10.0, 5.0).is_err(),
+                "accepted spacing {spacing}"
+            );
+        }
+        let mut map = measured_map();
+        map.plan.request.columns = 0;
+        assert!(map.interpolate_z(10.0, 5.0).is_err());
+    }
+
+    #[test]
+    fn interpolation_and_quality_reject_misplaced_or_nonfinite_samples() {
+        for corrupt in [
+            |sample: &mut ProbeSample| sample.z_mm = f64::NAN,
+            |sample: &mut ProbeSample| sample.point.column = 1,
+            |sample: &mut ProbeSample| sample.point.x_mm += 1.0,
+        ] {
+            let mut map = measured_map();
+            corrupt(map.samples[0].as_mut().unwrap());
+            assert!(map.interpolate_delta_z(10.0, 5.0).is_err());
+            assert!(map.surface_quality().is_err());
+        }
+    }
+
+    #[test]
+    fn recording_into_a_truncated_map_returns_an_error() {
+        let mut map = measured_map();
+        map.samples.clear();
+        assert!(map.record_sample(0, 0.0, true).is_err());
+    }
+
+    #[test]
+    fn rejects_unrepresentable_grid_spacing() {
+        for (origin, width) in [(0.0, f64::from_bits(1)), (100.0, 1e-20)] {
+            let mut request = plan(3, 3).request;
+            request.origin_x_mm = origin;
+            request.width_mm = width;
+            assert!(plan_heightmap(request, None).is_err());
+        }
+    }
+
+    #[test]
+    fn spacing_validation_covers_interior_rounding_and_large_negative_origins() {
+        for origin in [100.0, -100.0] {
+            let resolution = f64::from_bits(100.0_f64.to_bits() + 1) - 100.0;
+            let mut request = plan(5, 2).request;
+            request.origin_x_mm = origin;
+            request.width_mm = resolution * 3.0;
+            assert!(plan_heightmap(request, None).is_err());
+            request.width_mm = resolution * 4.0;
+            let plan = plan_heightmap(request, None).unwrap();
+            assert!(
+                plan.points[..5]
+                    .windows(2)
+                    .all(|pair| pair[0].x_mm < pair[1].x_mm)
+            );
+        }
     }
 
     #[test]

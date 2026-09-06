@@ -1,4 +1,5 @@
 import type { ControllerSnapshot } from "../../shared/machine";
+import { notifyListeners } from "../state/notifyListeners";
 
 export type DeepReadonly<T> = T extends (...args: never[]) => unknown
   ? T
@@ -44,18 +45,7 @@ export class MachineSnapshotStore implements MachineStateSource {
   publish = (snapshot: ControllerSnapshot): void => {
     this.snapshot = freezeSnapshot(snapshot);
     const current = this.snapshot;
-    for (const listener of [...this.listeners]) {
-      if (!this.listeners.has(listener)) continue;
-      try {
-        listener(current);
-      } catch (error) {
-        try {
-          this.onListenerError(error);
-        } catch {
-          // Diagnostics must not interrupt delivery to the remaining observers.
-        }
-      }
-    }
+    notifyListeners(this.listeners, current, this.onListenerError);
   };
 }
 

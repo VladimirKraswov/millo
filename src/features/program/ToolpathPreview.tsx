@@ -135,6 +135,10 @@ export function ToolpathPreview({
 }: ToolpathPreviewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const runtimeRef = useRef<PreviewRuntime | undefined>(undefined);
+  const selectSourceLineRef = useRef(onSelectSourceLine);
+  useEffect(() => {
+    selectSourceLineRef.current = onSelectSourceLine;
+  }, [onSelectSourceLine]);
   const toolOverProgram = useMemo(() => {
     const bounds = program.summary.bounds;
     return Boolean(
@@ -328,7 +332,7 @@ export function ToolpathPreview({
           ? model.rapidSourceLines
           : model.cuttingSourceLines;
       const sourceLine = sourceLineForIntersection(sourceLines, hit.index);
-      if (sourceLine !== undefined) onSelectSourceLine?.(sourceLine);
+      if (sourceLine !== undefined) selectSourceLineRef.current?.(sourceLine);
     };
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
     renderer.domElement.addEventListener("pointerup", onPointerUp);
@@ -440,7 +444,7 @@ export function ToolpathPreview({
       renderer.domElement.remove();
       if (runtimeRef.current === runtime) runtimeRef.current = undefined;
     };
-  }, [cuttingDepthAdjustmentMm, onSelectSourceLine, program, view]);
+  }, [cuttingDepthAdjustmentMm, program, view]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -491,7 +495,7 @@ export function ToolpathPreview({
     runtime.toolRotor = mesh.rotor;
     runtime.toolSweep = mesh.sweep;
     runtime.toolAngularSpeed = profile.angularSpeedRadPerSecond;
-  }, [toolVisualization.tool, view]);
+  }, [cuttingDepthAdjustmentMm, program, toolVisualization.tool, view]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -499,7 +503,7 @@ export function ToolpathPreview({
     runtime.toolSpinning = toolVisualization.spinning;
     if (runtime.toolSweep) runtime.toolSweep.visible = toolVisualization.spinning;
     runtime.toolAssembly.visible = runtime.toolHasPosition && toolVisualization.showCutter;
-  }, [toolVisualization.showCutter, toolVisualization.spinning, view]);
+  }, [cuttingDepthAdjustmentMm, program, toolVisualization.tool, toolVisualization.showCutter, toolVisualization.spinning, view]);
 
   useEffect(() => {
     const runtime = runtimeRef.current;
@@ -539,6 +543,7 @@ export function ToolpathPreview({
       `Предпросмотр траектории G-code${selectedSourceLine === undefined ? "" : `, выбрана строка ${selectedSourceLine}`}, фреза ${toolCoordinateSystem} X ${toolPosition.x.toFixed(3)}, Y ${toolPosition.y.toFixed(3)}, Z ${toolPosition.z.toFixed(3)}`,
     );
   }, [
+    cuttingDepthAdjustmentMm,
     program,
     selectedSourceLine,
     toolCoordinateSystem,

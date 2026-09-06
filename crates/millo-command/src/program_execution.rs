@@ -294,17 +294,88 @@ pub(super) async fn execute_program_run_resume(
         }
         .into());
     }
-    let snapshot = controller.refresh_status().await?;
+    let snapshot = match refresh_paused_sender_status(controller, sender).await {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            handle_sender_controller_failure(
+                controller,
+                sender,
+                &error,
+                "program resume status failed",
+            )
+            .await;
+            return Err(error.into());
+        }
+    };
+    if snapshot.connection != ConnectionState::Connected
+        || snapshot.reset_notice.is_some()
+        || snapshot.alarm.is_some()
+        || snapshot.machine.mode == MachineMode::Alarm
+    {
+        sender.fail_with(SenderFailure::new(
+            SenderFailureKind::UnsafeState,
+            "controller became unsafe while resuming the program",
+        ));
+        return Err(SafetyError::UnsafeControllerState.into());
+    }
     match snapshot.machine.mode {
         MachineMode::Hold => {
-            controller
-                .send_realtime(RealtimeCommand::CycleStart)
-                .await?;
+            if let Err(error) = controller.send_realtime(RealtimeCommand::CycleStart).await {
+                handle_sender_controller_failure(
+                    controller,
+                    sender,
+                    &error,
+                    "program resume could not be delivered",
+                )
+                .await;
+                return Err(error.into());
+            }
         }
         MachineMode::Idle => {}
         mode => return Err(ArbiterError::ProgramRunResumeUnavailable(mode)),
     }
     sender.resume().map_err(ArbiterError::from)
+}
+
+async fn refresh_paused_sender_status(
+    controller: &mut Controller<BoxedTransport>,
+    sender: &mut Sender,
+) -> Result<ControllerSnapshot, ControllerError> {
+    if !sender.has_in_flight() {
+        return controller.refresh_status().await;
+    }
+    let timeout = controller.status_timeout();
+    match tokio::time::timeout(timeout, async {
+        controller.request_interleaved_status().await?;
+        // Status and terminal replies share a FIFO. Account for every ACK that
+        // precedes the requested status instead of letting refresh_status discard it.
+        loop {
+            let Some(line) = sender.oldest_in_flight() else {
+                return controller.refresh_status().await;
+            };
+            match controller
+                .poll_program_response(&line, SENDER_RESPONSE_SLICE)
+                .await?
+            {
+                ProgramResponsePoll::Terminal(_) => {
+                    sender.acknowledge_ok().map_err(|_| {
+                        ControllerError::ProgramResponseState(
+                            "resume acknowledgement has no sender line",
+                        )
+                    })?;
+                }
+                ProgramResponsePoll::StatusObserved => return Ok(controller.snapshot()),
+                ProgramResponsePoll::Pending => {}
+            }
+        }
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(ControllerError::StatusTimeout {
+            timeout_ms: timeout.as_millis().min(u128::from(u64::MAX)) as u64,
+        }),
+    }
 }
 
 pub(super) fn ensure_active_physical_sender(
@@ -332,7 +403,16 @@ pub(super) async fn execute_program_run_pause(
     if !matches!(state, SenderState::Running | SenderState::Draining) {
         return Err(ArbiterError::ProgramRunPauseUnavailable(state));
     }
-    controller.send_realtime(RealtimeCommand::FeedHold).await?;
+    if let Err(error) = controller.send_realtime(RealtimeCommand::FeedHold).await {
+        handle_sender_controller_failure(
+            controller,
+            sender,
+            &error,
+            "program pause could not be delivered",
+        )
+        .await;
+        return Err(error.into());
+    }
     sender.pause().map_err(ArbiterError::from)
 }
 
@@ -446,7 +526,10 @@ pub(super) async fn reconcile_physical_sender(
         ));
     } else {
         match (sender_state, snapshot.machine.mode) {
-            (SenderState::Running, MachineMode::Hold | MachineMode::Door) => {
+            (
+                SenderState::Running | SenderState::Draining,
+                MachineMode::Hold | MachineMode::Door,
+            ) => {
                 let _ = sender.pause();
             }
             (SenderState::Draining, MachineMode::Idle) => {
@@ -489,6 +572,16 @@ pub(super) async fn fail_and_quarantine_physical_sender(
     context: &str,
     sender_snapshots: &watch::Sender<SenderSnapshot>,
 ) {
+    handle_sender_controller_failure(controller, sender, error, context).await;
+    publish_sender(sender_snapshots, sender);
+}
+
+async fn handle_sender_controller_failure(
+    controller: &mut Controller<BoxedTransport>,
+    sender: &mut Sender,
+    error: &ControllerError,
+    context: &str,
+) {
     let physical_run = physical_sender_active(sender);
     if matches!(
         sender.snapshot().state,
@@ -498,10 +591,12 @@ pub(super) async fn fail_and_quarantine_physical_sender(
             | SenderState::Draining
     ) {
         sender.fail_with(controller_sender_failure(error, context));
-        publish_sender(sender_snapshots, sender);
     }
-    if physical_run && controller_failure_requires_manual_reconnect(error) {
-        let _ = controller.disconnect().await;
+    if physical_run {
+        let stop = controller.abort_program_stream().await;
+        if controller_failure_requires_manual_reconnect(error) || stop.is_err() {
+            let _ = controller.disconnect().await;
+        }
     }
 }
 
@@ -666,10 +761,13 @@ pub(super) fn ensure_sender_dispatch_ready(
         return Err(SafetyError::UnsafeControllerState.into());
     }
     let mode_ready = match sender.snapshot().mode {
-        Some(millo_sender::SenderMode::AirRun | millo_sender::SenderMode::CutRun) => matches!(
-            snapshot.machine.mode,
-            MachineMode::Idle | MachineMode::Run | MachineMode::Hold
-        ),
+        Some(millo_sender::SenderMode::AirRun | millo_sender::SenderMode::CutRun) => {
+            matches!(
+                snapshot.machine.mode,
+                MachineMode::Idle | MachineMode::Run | MachineMode::Hold
+            ) || (sender.snapshot().state == SenderState::Paused
+                && snapshot.machine.mode == MachineMode::Door)
+        }
         Some(millo_sender::SenderMode::CheckRun) => snapshot.machine.mode == MachineMode::Check,
         _ => snapshot.machine.mode == MachineMode::Idle,
     };

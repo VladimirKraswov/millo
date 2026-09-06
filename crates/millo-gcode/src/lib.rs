@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
-use std::f64::consts::{PI, TAU};
+
+mod geometry;
+use geometry::{ArcDefinition, ArcError, plane_offsets, polyline_distance, sample_arc};
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -8,8 +10,6 @@ pub const MAX_SOURCE_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_SOURCE_NAME_BYTES: usize = 255;
 pub const MAX_SOURCE_LINES: usize = 200_000;
 pub const MAX_PREVIEW_POINTS: usize = 500_000;
-const ARC_MAX_ANGLE_RAD: f64 = PI / 36.0;
-const ARC_MAX_CHORD_MM: f64 = 0.5;
 const POSITION_EPSILON_MM: f64 = 1e-9;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -328,6 +328,7 @@ struct Parser {
     bounds: BoundsAccumulator,
     preview_points: usize,
     preview_complete: bool,
+    preview_budget_exhausted: bool,
     rapid_distance_mm: f64,
     cutting_distance_mm: f64,
     estimated_motion_time_seconds: f64,
@@ -359,6 +360,7 @@ impl Default for Parser {
             bounds: BoundsAccumulator::default(),
             preview_points: 0,
             preview_complete: true,
+            preview_budget_exhausted: false,
             rapid_distance_mm: 0.0,
             cutting_distance_mm: 0.0,
             estimated_motion_time_seconds: 0.0,
@@ -594,15 +596,32 @@ impl Parser {
             if !seen.insert(word.letter)
                 && matches!(
                     word.letter,
-                    'X' | 'Y' | 'Z' | 'I' | 'J' | 'K' | 'R' | 'F' | 'S'
+                    'X' | 'Y'
+                        | 'Z'
+                        | 'I'
+                        | 'J'
+                        | 'K'
+                        | 'R'
+                        | 'F'
+                        | 'S'
+                        | 'T'
+                        | 'N'
+                        | 'P'
+                        | 'L'
+                        | 'H'
+                        | 'D'
+                        | 'Q'
+                        | 'O'
                 )
             {
+                skip_motion = true;
+                self.preview_complete = false;
                 self.warn(
                     source_line,
-                    ProgramWarningSeverity::Warning,
+                    ProgramWarningSeverity::Error,
                     ProgramWarningCode::DuplicateWord,
                     format!(
-                        "{} appears more than once; the final value is used",
+                        "{} appears more than once; GRBL rejects repeated value words",
                         word.letter
                     ),
                 );
@@ -814,6 +833,10 @@ impl Parser {
             y: resolve_axis(self.position.y, y, self.distance),
             z: resolve_axis(self.position.z, z, self.distance),
         };
+        if self.preview_budget_exhausted {
+            self.position = end;
+            return;
+        }
         if skip_motion {
             self.preview_complete = false;
             self.position = end;
@@ -848,9 +871,15 @@ impl Parser {
                         clockwise: block_motion == MotionMode::ArcClockwise,
                         distance_mode: self.arc_distance,
                     },
+                    MAX_PREVIEW_POINTS.saturating_sub(self.preview_points),
                 ) {
-                    Some(points) => points,
-                    None => {
+                    Ok(points) => points,
+                    Err(ArcError::PreviewLimit) => {
+                        self.exhaust_preview_budget(source_line);
+                        self.position = end;
+                        return;
+                    }
+                    Err(ArcError::InvalidDefinition) => {
                         self.preview_complete = false;
                         self.warn(
                             source_line,
@@ -869,15 +898,7 @@ impl Parser {
             return;
         }
         if self.preview_points + points.len() > MAX_PREVIEW_POINTS {
-            if self.preview_complete {
-                self.warn(
-                    source_line,
-                    ProgramWarningSeverity::Error,
-                    ProgramWarningCode::PreviewLimit,
-                    format!("preview exceeds the {MAX_PREVIEW_POINTS} point limit"),
-                );
-            }
-            self.preview_complete = false;
+            self.exhaust_preview_budget(source_line);
             return;
         }
 
@@ -941,6 +962,20 @@ impl Parser {
             feed_rate_mm_per_min,
             estimated_duration_seconds,
         });
+    }
+
+    fn exhaust_preview_budget(&mut self, source_line: usize) {
+        if !self.preview_budget_exhausted {
+            self.warn(
+                source_line,
+                ProgramWarningSeverity::Error,
+                ProgramWarningCode::PreviewLimit,
+                format!("preview exceeds the {MAX_PREVIEW_POINTS} point limit"),
+            );
+        }
+        self.preview_budget_exhausted = true;
+        self.preview_complete = false;
+        self.time_estimate_complete = false;
     }
 
     fn apply_g_code(
@@ -1331,16 +1366,22 @@ fn tokenize(code: &str, source_line: usize, warnings: &mut Vec<ProgramWarning>) 
         }
         let number = characters[number_start..index].iter().collect::<String>();
         match number.parse::<f64>() {
-            Ok(value) if value.is_finite() => words.push(Word {
-                letter,
-                value,
-                lexeme: format!("{letter}{number}"),
-            }),
+            Ok(value)
+                if value.is_finite()
+                    && (value as f32).is_finite()
+                    && (value == 0.0 || value as f32 != 0.0) =>
+            {
+                words.push(Word {
+                    letter,
+                    value,
+                    lexeme: format!("{letter}{number}"),
+                })
+            }
             _ => warnings.push(ProgramWarning {
                 source_line,
                 severity: ProgramWarningSeverity::Error,
                 code: ProgramWarningCode::InvalidToken,
-                message: format!("{letter}{number} is not a finite number"),
+                message: format!("{letter}{number} is outside the finite GRBL numeric range"),
             }),
         }
     }
@@ -1423,186 +1464,4 @@ fn same_point(left: ProgramPoint, right: ProgramPoint) -> bool {
     (left.x - right.x).abs() <= POSITION_EPSILON_MM
         && (left.y - right.y).abs() <= POSITION_EPSILON_MM
         && (left.z - right.z).abs() <= POSITION_EPSILON_MM
-}
-
-fn plane_offsets(
-    plane: Plane,
-    i: Option<f64>,
-    j: Option<f64>,
-    k: Option<f64>,
-) -> (Option<f64>, Option<f64>, bool) {
-    match plane {
-        Plane::Xy => (i, j, k.is_some()),
-        Plane::Xz => (k, i, j.is_some()),
-        Plane::Yz => (j, k, i.is_some()),
-    }
-}
-
-fn plane_components(point: ProgramPoint, plane: Plane) -> (f64, f64, f64) {
-    match plane {
-        Plane::Xy => (point.x, point.y, point.z),
-        Plane::Xz => (point.z, point.x, point.y),
-        Plane::Yz => (point.y, point.z, point.x),
-    }
-}
-
-fn point_from_plane(u: f64, v: f64, linear: f64, plane: Plane) -> ProgramPoint {
-    match plane {
-        Plane::Xy => ProgramPoint {
-            x: u,
-            y: v,
-            z: linear,
-        },
-        Plane::Xz => ProgramPoint {
-            x: v,
-            y: linear,
-            z: u,
-        },
-        Plane::Yz => ProgramPoint {
-            x: linear,
-            y: u,
-            z: v,
-        },
-    }
-}
-
-struct ArcDefinition {
-    plane: Plane,
-    offset_u: Option<f64>,
-    offset_v: Option<f64>,
-    radius: Option<f64>,
-    clockwise: bool,
-    distance_mode: ArcDistanceMode,
-}
-
-fn sample_arc(
-    start: ProgramPoint,
-    end: ProgramPoint,
-    definition: ArcDefinition,
-) -> Option<Vec<ProgramPoint>> {
-    let (start_u, start_v, start_linear) = plane_components(start, definition.plane);
-    let (end_u, end_v, end_linear) = plane_components(end, definition.plane);
-    let (center_u, center_v) = if definition.offset_u.is_some() || definition.offset_v.is_some() {
-        match definition.distance_mode {
-            ArcDistanceMode::Incremental => (
-                start_u + definition.offset_u.unwrap_or(0.0),
-                start_v + definition.offset_v.unwrap_or(0.0),
-            ),
-            ArcDistanceMode::Absolute => (definition.offset_u?, definition.offset_v?),
-        }
-    } else {
-        center_from_radius(
-            start_u,
-            start_v,
-            end_u,
-            end_v,
-            definition.radius?,
-            definition.clockwise,
-        )?
-    };
-    let arc_radius = (start_u - center_u).hypot(start_v - center_v);
-    if arc_radius <= POSITION_EPSILON_MM {
-        return None;
-    }
-    let end_radius = (end_u - center_u).hypot(end_v - center_v);
-    if (arc_radius - end_radius).abs() > arc_radius.max(1.0) * 0.002 {
-        return None;
-    }
-
-    let start_angle = (start_v - center_v).atan2(start_u - center_u);
-    let end_angle = (end_v - center_v).atan2(end_u - center_u);
-    let full_circle = (start_u - end_u).abs() <= POSITION_EPSILON_MM
-        && (start_v - end_v).abs() <= POSITION_EPSILON_MM;
-    let sweep = directed_sweep(start_angle, end_angle, definition.clockwise, full_circle);
-    if sweep <= POSITION_EPSILON_MM {
-        return None;
-    }
-    let angle_steps = (sweep / ARC_MAX_ANGLE_RAD).ceil() as usize;
-    let chord_steps = (arc_radius * sweep / ARC_MAX_CHORD_MM).ceil() as usize;
-    let steps = angle_steps.max(chord_steps).clamp(2, MAX_PREVIEW_POINTS);
-    let mut points = Vec::with_capacity(steps + 1);
-    for step in 0..=steps {
-        let progress = step as f64 / steps as f64;
-        let angle = if definition.clockwise {
-            start_angle - sweep * progress
-        } else {
-            start_angle + sweep * progress
-        };
-        points.push(point_from_plane(
-            center_u + arc_radius * angle.cos(),
-            center_v + arc_radius * angle.sin(),
-            start_linear + (end_linear - start_linear) * progress,
-            definition.plane,
-        ));
-    }
-    if let Some(first) = points.first_mut() {
-        *first = start;
-    }
-    if let Some(last) = points.last_mut() {
-        *last = end;
-    }
-    Some(points)
-}
-
-fn center_from_radius(
-    start_u: f64,
-    start_v: f64,
-    end_u: f64,
-    end_v: f64,
-    signed_radius: f64,
-    clockwise: bool,
-) -> Option<(f64, f64)> {
-    let dx = end_u - start_u;
-    let dy = end_v - start_v;
-    let chord = dx.hypot(dy);
-    let radius = signed_radius.abs();
-    if chord <= POSITION_EPSILON_MM || radius + POSITION_EPSILON_MM < chord / 2.0 {
-        return None;
-    }
-    let midpoint = ((start_u + end_u) / 2.0, (start_v + end_v) / 2.0);
-    let height = (radius * radius - chord * chord / 4.0).max(0.0).sqrt();
-    let perpendicular = (-dy / chord, dx / chord);
-    let candidates = [
-        (
-            midpoint.0 + perpendicular.0 * height,
-            midpoint.1 + perpendicular.1 * height,
-        ),
-        (
-            midpoint.0 - perpendicular.0 * height,
-            midpoint.1 - perpendicular.1 * height,
-        ),
-    ];
-    let wants_major = signed_radius < 0.0;
-    candidates.into_iter().min_by(|left, right| {
-        let score = |center: &(f64, f64)| {
-            let start_angle = (start_v - center.1).atan2(start_u - center.0);
-            let end_angle = (end_v - center.1).atan2(end_u - center.0);
-            let sweep = directed_sweep(start_angle, end_angle, clockwise, false);
-            let is_major = sweep > PI + 1e-6;
-            if is_major == wants_major { 0 } else { 1 }
-        };
-        score(left).cmp(&score(right))
-    })
-}
-
-fn directed_sweep(start_angle: f64, end_angle: f64, clockwise: bool, full: bool) -> f64 {
-    if full {
-        TAU
-    } else if clockwise {
-        (start_angle - end_angle).rem_euclid(TAU)
-    } else {
-        (end_angle - start_angle).rem_euclid(TAU)
-    }
-}
-
-fn polyline_distance(points: &[ProgramPoint]) -> f64 {
-    points
-        .windows(2)
-        .map(|pair| {
-            let dx = pair[1].x - pair[0].x;
-            let dy = pair[1].y - pair[0].y;
-            let dz = pair[1].z - pair[0].z;
-            (dx * dx + dy * dy + dz * dz).sqrt()
-        })
-        .sum()
 }

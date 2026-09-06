@@ -96,6 +96,32 @@ function moduleWith(
 }
 
 describe("InMemoryPluginLoader", () => {
+  it("fences reload and repeated unload until asynchronous deactivation finishes", async () => {
+    const { loader, uiRegistry } = createLoader(["ui.contribute", "machine.jog"]);
+    let finish!: () => void;
+    const barrier = new Promise<void>((resolve) => { finish = resolve; });
+    let context!: PluginActivationContext;
+    const deactivate = vi.fn(() => barrier);
+    const plugin = moduleWith(TEST_PLUGIN_ID, ["ui.contribute", "machine.jog"], (value) => {
+      context = value;
+      context.ui!.register({ id: `${TEST_PLUGIN_ID}.panel`, slot: uiSlots.controlMachine, render: () => null });
+      return deactivate;
+    });
+    await loader.load(plugin);
+    const first = loader.unload(TEST_PLUGIN_ID);
+    const second = loader.unload(TEST_PLUGIN_ID);
+    expect(() => context.machineJog!.step({} as JogPadStepRequest)).toThrow("no longer active");
+    expect(uiRegistry.list(uiSlots.controlMachine).map(({ id }) => id)).toEqual([CORE_JOG_PAD_CONTRIBUTION]);
+    await expect(loader.load(plugin)).rejects.toThrow("already loaded");
+    finish();
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(true);
+    expect(deactivate).toHaveBeenCalledOnce();
+    await loader.load(plugin);
+    expect(uiRegistry.list(uiSlots.controlMachine)).toHaveLength(2);
+    await loader.unloadAll();
+  });
+
   it("loads and unloads the fixture while restoring the core contribution", async () => {
     const { loader, uiRegistry } = createLoader(["ui.contribute"]);
     const { plugin, observations } = createTestUiPlugin();

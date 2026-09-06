@@ -14,6 +14,8 @@ import {
   WandSparkles,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useAsyncScope } from "../../components/useAsyncScope";
+import { bindSnapshotStream } from "../../platform/state/bindSnapshotStream";
 
 import type { HeightmapGateway } from "../../platform/machine/HeightmapGateway";
 import type { ZProbeGateway } from "../../platform/machine/ZProbeGateway";
@@ -21,7 +23,6 @@ import type { ControllerSnapshot, MachineTravel, Position, WorkCoordinateSystem,
 import type { HeightmapOperationSnapshot, HeightmapPlanRequest, SurfaceSession } from "../../shared/heightmap";
 import type { GcodeProgram } from "../../shared/program";
 import {
-  defaultHeightmapRequest,
   emptyHeightmapOperation,
   emptySurfaceSession,
 } from "./heightmapDefaults";
@@ -151,6 +152,7 @@ export function HeightmapPanel({
   const [pausePending, setPausePending] = useState(false);
   const [stopPending, setStopPending] = useState(false);
   const [localError, setLocalError] = useState<string>();
+  const captureScope = useAsyncScope([gateway, zProbeGateway, machineProfileId, activeCoordinateSystem]);
 
   useEffect(() => {
     saveHeightmapDraft(machineProfileId, {
@@ -166,36 +168,40 @@ export function HeightmapPanel({
   useEffect(() => {
     if (!desktopRuntime) return;
     setRuntimeReady(false);
-    let disposed = false;
-    const unlisteners: Array<() => void> = [];
-    void Promise.all([gateway.getSession(), gateway.getOperation()])
-      .then(([nextSession, nextOperation]) => {
-        if (disposed) return;
-        setSession(nextSession);
-        setOperation(nextOperation);
-        setRuntimeReady(true);
-        const restoredRequest = requestFromSession(nextSession);
-        const nextActive = nextOperation.state === "running" || nextOperation.state === "paused";
-        if ((!nextActive && resumableDraft(nextSession, machineProfileId)) || !hadStoredDraft) {
-          setRequest(restoredRequest ?? defaultHeightmapRequest());
-        }
-      })
-      .catch((error) => {
-        if (disposed) return;
-        setRuntimeReady(true);
-        setLocalError(String(error));
-      });
-    void gateway.subscribeSession((next) => {
-      if (!disposed) setSession(next);
-    }).then((unlisten) => unlisteners.push(unlisten));
-    void gateway.subscribeOperation((next) => {
-      if (!disposed) setOperation(next);
-    }).then((unlisten) => unlisteners.push(unlisten));
+    let initialSession: SurfaceSession | undefined;
+    let initialOperation: HeightmapOperationSnapshot | undefined;
+    let initialized = false;
+    const ready = () => {
+      if (initialized || !initialSession || !initialOperation) return;
+      initialized = true;
+      setRuntimeReady(true);
+      const nextActive = initialOperation.state === "running" || initialOperation.state === "paused";
+      if ((!nextActive && resumableDraft(initialSession, machineProfileId)) || !hadStoredDraft) {
+        const restoredRequest = requestFromSession(initialSession);
+        if (restoredRequest) setRequest(restoredRequest);
+      }
+    };
+    const onStreamError = (error: unknown) => setLocalError(String(error));
+    const stopSession = bindSnapshotStream({
+      stream: { readCurrent: () => gateway.getSession(), listen: (handler) => gateway.subscribeSession(handler) },
+      onSnapshot: (next) => { setSession(next); initialSession = next; ready(); },
+      onError: onStreamError,
+    });
+    const stopOperation = bindSnapshotStream({
+      stream: { readCurrent: () => gateway.getOperation(), listen: (handler) => gateway.subscribeOperation(handler) },
+      onSnapshot: (next) => { setOperation(next); initialOperation = next; ready(); },
+      onError: onStreamError,
+    });
     return () => {
-      disposed = true;
-      unlisteners.forEach((unlisten) => unlisten());
+      stopSession();
+      stopOperation();
     };
   }, [desktopRuntime, gateway, hadStoredDraft, machineProfileId]);
+
+  useEffect(() => {
+    setSurfaceCalibration(undefined);
+    setBusy(false);
+  }, [captureScope]);
 
   useEffect(() => {
     if (surfaceCalibration && (
@@ -274,18 +280,21 @@ export function HeightmapPanel({
       clearanceZMm,
     }));
   };
-  const runAction = async (action: () => Promise<void>) => {
+  const runAction = async (action: (isCurrent: () => boolean) => Promise<void>) => {
+    if (controlsBlocked) return;
+    const isCurrent = captureScope();
     setBusy(true);
     setLocalError(undefined);
     onError(undefined);
     try {
-      await action();
+      await action(isCurrent);
     } catch (error) {
+      if (!isCurrent()) return;
       const message = String(error);
       setLocalError(message);
       onError(message);
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
   const autoPerimeter = () => {
@@ -295,7 +304,7 @@ export function HeightmapPanel({
       return density === "custom" ? perimeter : applyDensity(perimeter, density);
     });
   };
-  const locateSurface = () => runAction(async () => {
+  const locateSurface = () => runAction(async (isCurrent) => {
     if (!machineProfileId) throw new Error("Сначала выберите профиль станка");
     if (snapshot.connection !== "connected" || snapshot.machine.mode !== "idle") {
       throw new Error("Для поиска поверхности нужен подключённый контроллер в состоянии Idle");
@@ -306,6 +315,7 @@ export function HeightmapPanel({
       throw new Error("Диапазон поиска должен быть от 0.1 до 100 mm");
     }
     await onSaveMode();
+    if (!isCurrent()) return;
     const outcome = await zProbeGateway.run({
       settings: {
         mode: "heightmap",
@@ -317,6 +327,7 @@ export function HeightmapPanel({
       },
       setupConfirmed: true,
     });
+    if (!isCurrent()) return;
     onSnapshot(outcome.snapshot);
     onZeroEstablished?.(outcome, "heightmap");
     const calibration = {
@@ -335,11 +346,11 @@ export function HeightmapPanel({
     setSurfaceCalibration(calibration);
     setOperation(emptyHeightmapOperation);
   });
-  const unlock = () => runAction(async () => {
+  const unlock = () => runAction(async (isCurrent) => {
     const next = await onUnlock();
-    onSnapshot(next);
+    if (isCurrent()) onSnapshot(next);
   });
-  const start = () => runAction(async () => {
+  const start = () => runAction(async (isCurrent) => {
     if (!machineProfileId) throw new Error("Сначала выберите профиль станка");
     if (snapshot.connection !== "connected" || snapshot.machine.mode !== "idle") {
       throw new Error("Для снятия карты нужен подключённый контроллер в состоянии Idle");
@@ -349,13 +360,15 @@ export function HeightmapPanel({
     if (programOutside) throw new Error("Часть задания находится за периметром карты");
     if (!zDatumReady) throw new Error("Сначала найдите поверхность и установите Z0");
     await onSaveMode();
-    setOperation(await gateway.start({
+    if (!isCurrent()) return;
+    const next = await gateway.start({
       plan: request,
       setupConfirmed: true,
       contactAvailableAtEveryPoint: true,
-    }, machineProfileId));
+    }, machineProfileId);
+    if (isCurrent()) setOperation(next);
   });
-  const resumeDraft = () => runAction(async () => {
+  const resumeDraft = () => runAction(async (isCurrent) => {
     if (!machineProfileId || !pendingDraft) throw new Error("Нет незавершённой карты для продолжения");
     if (snapshot.connection !== "connected" || snapshot.machine.mode !== "idle") {
       throw new Error("Для продолжения нужен подключённый контроллер в состоянии Idle");
@@ -365,46 +378,60 @@ export function HeightmapPanel({
       throw new Error("Запас поиска ниже Z0 должен быть от 0.1 до 100 mm");
     }
     await onSaveMode();
-    setOperation(await gateway.resumeDraft({
+    if (!isCurrent()) return;
+    const next = await gateway.resumeDraft({
       maxProbeDepthMm: request.maxProbeDepthMm,
       setupConfirmed: true,
       contactAvailableAtEveryPoint: true,
-    }, machineProfileId));
+    }, machineProfileId);
+    if (isCurrent()) setOperation(next);
   });
-  const clearSavedMap = () => runAction(async () => {
-    setSession(await gateway.clear());
+  const clearSavedMap = () => runAction(async (isCurrent) => {
+    const next = await gateway.clear();
+    if (!isCurrent()) return;
+    setSession(next);
     setOperation(emptyHeightmapOperation);
   });
-  const discardDraft = () => runAction(async () => {
-    setSession(await gateway.discardDraft());
+  const discardDraft = () => runAction(async (isCurrent) => {
+    const next = await gateway.discardDraft();
+    if (!isCurrent()) return;
+    setSession(next);
     setOperation(emptyHeightmapOperation);
   });
   const togglePause = async () => {
+    if (pausePending || stopPending) return;
+    const isCurrent = captureScope();
     setPausePending(true);
     setLocalError(undefined);
     onError(undefined);
     try {
-      setOperation(operation.state === "paused" ? await gateway.resume() : await gateway.pause());
+      const next = operation.state === "paused" ? await gateway.resume() : await gateway.pause();
+      if (isCurrent()) setOperation(next);
     } catch (error) {
+      if (!isCurrent()) return;
       const message = String(error);
       setLocalError(message);
       onError(message);
     } finally {
-      setPausePending(false);
+      if (isCurrent()) setPausePending(false);
     }
   };
   const stop = async () => {
+    if (stopPending) return;
+    const isCurrent = captureScope();
     setStopPending(true);
     setLocalError(undefined);
     onError(undefined);
     try {
-      setOperation(await gateway.cancel());
+      const next = await gateway.cancel();
+      if (isCurrent()) setOperation(next);
     } catch (error) {
+      if (!isCurrent()) return;
       const message = String(error);
       setLocalError(message);
       onError(message);
     } finally {
-      setStopPending(false);
+      if (isCurrent()) setStopPending(false);
     }
   };
 

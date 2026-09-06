@@ -1,6 +1,10 @@
 use super::*;
 
 pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
+    if request_conflicts_with_sender(&actor.sender, &request) {
+        reject_request_during_machine_operation(request);
+        return;
+    }
     let ActorState {
         controller,
         config,
@@ -117,6 +121,13 @@ pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
         }
         Request::Disconnect { response } => {
             invalidate_authorizations(safety, first_cut);
+            let stop_result = if physical_sender_active(sender) {
+                execute_program_run_abort(controller, sender)
+                    .await
+                    .map(|_| ())
+            } else {
+                Ok(())
+            };
             cancel_check_run(
                 controller,
                 sender,
@@ -136,8 +147,10 @@ pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
             }
             cancel_active_sender(sender, sender_snapshots);
             *sender_dispatch_enabled = true;
-            let result = controller.disconnect().await.map_err(ArbiterError::from);
+            let disconnect_result = controller.disconnect().await.map_err(ArbiterError::from);
+            let result = stop_result.and(disconnect_result);
             publish(snapshots, controller);
+            publish_sender(sender_snapshots, sender);
             let _ = response.send(result);
         }
         Request::RefreshStatus { response } => {
@@ -426,14 +439,14 @@ pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
                 *machine_envelope = None;
                 *active_continuous_jog = None;
             }
-            let controller_result = if command == RealtimeCommand::Status
+            let interleaved_status = command == RealtimeCommand::Status
                 && (sender.has_in_flight()
                     || active_z_probe.is_some()
                     || active_homing.is_some()
                     || active_continuous_jog.is_some()
                     || prepared_heightmap.is_some()
-                    || active_heightmap.is_some())
-            {
+                    || active_heightmap.is_some());
+            let controller_result = if interleaved_status {
                 controller
                     .request_interleaved_status()
                     .await
@@ -442,6 +455,9 @@ pub(super) async fn handle_request(request: Request, actor: &mut ActorState) {
                 controller.send_realtime(command).await
             };
             match &controller_result {
+                Ok(_) if command == RealtimeCommand::Status && !interleaved_status => {
+                    reconcile_physical_sender(controller, sender, sender_snapshots).await;
+                }
                 Ok(_) if command == RealtimeCommand::SoftReset => {
                     finish_active_z_probe(active_z_probe, Err(ArbiterError::ZProbeReset));
                     *prepared_heightmap = None;

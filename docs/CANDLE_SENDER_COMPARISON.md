@@ -1,5 +1,9 @@
 # Millo sender compared with Candle
 
+Current whole-product comparison and explicitly open gaps are tracked in
+[PRODUCT_AUDIT_2026_09](PRODUCT_AUDIT_2026_09.md). The implementation-level
+comparison below does not imply full feature parity with Candle or cncjs.
+
 This document compares execution-core behavior, not UI appearance or total
 application feature count. Candle is the compatibility reference; Millo keeps
 useful GRBL behavior while replacing unsafe coupling with explicit Rust use

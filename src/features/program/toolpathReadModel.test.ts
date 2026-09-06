@@ -9,6 +9,22 @@ import {
 } from "./toolpathReadModel";
 
 describe("buildToolpathReadModel", () => {
+  it("frames both Z extrema after raising a negative cutting path", () => {
+    const program = {
+      ...previewFixtureProgram,
+      summary: { ...previewFixtureProgram.summary, bounds: {
+        min: { x: 0, y: 0, z: -1 }, max: { x: 10, y: 0, z: -1 },
+        size: { x: 10, y: 0, z: 0 },
+      } },
+      toolpath: [{ ...previewFixtureProgram.toolpath[1], points: [
+        { x: 0, y: 0, z: -1 }, { x: 10, y: 0, z: -1 },
+      ] }],
+    };
+    const model = buildToolpathReadModel(program, 0.5);
+    expect(model.center.z).toBe(-0.5);
+    expect(model.gridZ).toBe(0);
+    expect([...model.cuttingPositions]).toEqual([-5, 0, 0, 5, 0, 0]);
+  });
   it("separates rapid and cutting pairs around a stable program center", () => {
     const model = buildToolpathReadModel(previewFixtureProgram);
 

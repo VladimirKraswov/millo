@@ -153,6 +153,7 @@ export class InMemoryPluginLoader {
   private readonly onPluginError?: (pluginId: string, error: unknown) => void;
   private readonly active = new Map<string, ActivePlugin>();
   private readonly loading = new Map<string, LoadingPlugin>();
+  private readonly unloading = new Map<string, Promise<boolean>>();
 
   constructor(options: InMemoryPluginLoaderOptions) {
     this.uiRegistry = options.uiRegistry;
@@ -172,7 +173,7 @@ export class InMemoryPluginLoader {
         `plugin ${manifest.id} requires API ${manifest.apiVersion}, host provides ${PLUGIN_API_VERSION}`,
       );
     }
-    if (this.active.has(manifest.id) || this.loading.has(manifest.id)) {
+    if (this.active.has(manifest.id) || this.loading.has(manifest.id) || this.unloading.has(manifest.id)) {
       throw new PluginLoadError(`plugin is already loaded: ${manifest.id}`);
     }
 
@@ -250,6 +251,8 @@ export class InMemoryPluginLoader {
   }
 
   async unload(pluginId: string): Promise<boolean> {
+    const unloading = this.unloading.get(pluginId);
+    if (unloading) return unloading;
     const loading = this.loading.get(pluginId);
     if (loading) {
       loading.cancelled = true;
@@ -262,20 +265,37 @@ export class InMemoryPluginLoader {
     }
     const plugin = this.active.get(pluginId);
     if (!plugin) return false;
+    // Reserve this ID before cleanup calls observers or asynchronous plugin code.
+    let resolve!: (value: boolean) => void;
+    let reject!: (error: unknown) => void;
+    const outcome = new Promise<boolean>((onResolve, onReject) => {
+      resolve = onResolve;
+      reject = onReject;
+    });
+    this.unloading.set(pluginId, outcome);
     this.active.delete(pluginId);
+    void this.deactivate(pluginId, plugin).then(resolve, reject);
+    try {
+      return await outcome;
+    } finally {
+      this.unloading.delete(pluginId);
+    }
+  }
+
+  private async deactivate(pluginId: string, plugin: ActivePlugin): Promise<boolean> {
     let cleanupError: unknown;
     try {
       plugin.resources.dispose();
     } catch (error) {
       cleanupError = error;
+    } finally {
+      this.uiRegistry.unregisterOwner(pluginId);
     }
     let deactivationError: unknown;
     try {
       await plugin.deactivate?.();
     } catch (error) {
       deactivationError = error;
-    } finally {
-      this.uiRegistry.unregisterOwner(pluginId);
     }
     if (deactivationError !== undefined) throw deactivationError;
     if (cleanupError !== undefined) throw cleanupError;
@@ -283,7 +303,7 @@ export class InMemoryPluginLoader {
   }
 
   async unloadAll(): Promise<void> {
-    const pluginIds = new Set([...this.loading.keys(), ...this.active.keys()]);
+    const pluginIds = new Set([...this.loading.keys(), ...this.active.keys(), ...this.unloading.keys()]);
     const outcomes = await Promise.allSettled(
       [...pluginIds].map((pluginId) => this.unload(pluginId)),
     );
@@ -421,7 +441,14 @@ export class InMemoryPluginLoader {
               if (typeof listener !== "function") {
                 throw new PluginLoadError("tools.read listener must be a function");
               }
-              return resources.track(this.tools!.subscribe(listener));
+              return resources.track(this.tools!.subscribe((snapshot) => {
+                if (!resources.isOpen()) return;
+                try {
+                  listener(snapshot);
+                } catch (error) {
+                  this.reportPluginError(manifest.id, error);
+                }
+              }));
             },
           })
         : undefined;
@@ -454,6 +481,7 @@ export class InMemoryPluginLoader {
           throw new PluginLoadError("machine.read listener must be a function");
         }
         const unsubscribe = this.machineState!.subscribe((snapshot) => {
+          if (!resources.isOpen()) return;
           try {
             listener(snapshot);
           } catch (error) {
@@ -504,6 +532,10 @@ class PluginResourceScope {
 
   constructor(private readonly pluginId: string) {}
 
+  isOpen(): boolean {
+    return this.open;
+  }
+
   assertOpen(): void {
     if (!this.open) {
       throw new PluginLoadError(`plugin is no longer active: ${this.pluginId}`);
@@ -511,6 +543,7 @@ class PluginResourceScope {
   }
 
   track(disposer: () => void): () => void {
+    if (!this.open) disposer();
     this.assertOpen();
     let active = true;
     const trackedDisposer = () => {

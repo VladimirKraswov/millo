@@ -335,6 +335,9 @@ export function HeightmapScene({
         }
       });
       renderer.dispose();
+      renderer.forceContextLoss();
+      renderer.domElement.remove();
+      labels.domElement.remove();
     };
   }, [currentSequence, draftPlan, interpolationColumns, interpolationRows, map, program, request, showInterpolation, showInterpolationGrid, showJob, showPerimeter, showProbeGrid, view]);
 

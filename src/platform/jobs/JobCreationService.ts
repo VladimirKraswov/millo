@@ -55,10 +55,11 @@ export class JobCreationService implements JobCreationCapability {
   }
 
   async generateSurfacing(request: SurfacingJobRequest): Promise<GeneratedSurfacingJob> {
+    const toolId = request.toolId;
     const generated = await this.gateway.generateSurfacing(request);
     const result = deepFreeze({
       ...generated,
-      toolAssignments: [{ toolNumber: 1, toolId: request.toolId }],
+      toolAssignments: [{ toolNumber: 1, toolId }],
     });
     this.issuedJobs.add(result);
     return result;

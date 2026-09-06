@@ -3,15 +3,20 @@ import type {
   ToolLibraryState,
 } from "../../shared/tooling";
 import { emptyToolLibrary } from "../../shared/tooling";
+import { notifyListeners } from "../state/notifyListeners";
 import type { ToolLibraryGateway } from "./ToolLibraryGateway";
 
 export type ToolLibraryListener = (state: ToolLibraryState) => void;
 
 export class ToolLibraryService {
   private snapshot: ToolLibraryState = emptyToolLibrary;
+  private initialized = false;
   private readonly listeners = new Set<ToolLibraryListener>();
 
-  constructor(private readonly gateway: ToolLibraryGateway) {}
+  constructor(
+    private readonly gateway: ToolLibraryGateway,
+    private readonly onListenerError: (error: unknown) => void = console.error,
+  ) {}
 
   readonly current = (): ToolLibraryState => this.snapshot;
 
@@ -41,18 +46,18 @@ export class ToolLibraryService {
   }
 
   private publish(state: ToolLibraryState): ToolLibraryState {
-    this.snapshot = deepFreeze({
-      tools: [...state.tools],
-      revision: state.revision,
-    });
-    for (const listener of this.listeners) listener(this.snapshot);
-    return this.snapshot;
+    if (this.initialized && state.revision <= this.snapshot.revision) return this.snapshot;
+    const current = deepFreeze(structuredClone(state));
+    this.initialized = true;
+    this.snapshot = current;
+    notifyListeners(this.listeners, current, this.onListenerError);
+    return current;
   }
 }
 
 function deepFreeze<T>(value: T): T {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
-  Object.freeze(value);
+  if (typeof value !== "object" || value === null) return value;
   for (const child of Object.values(value)) deepFreeze(child);
+  Object.freeze(value);
   return value;
 }

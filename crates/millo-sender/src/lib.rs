@@ -220,6 +220,7 @@ pub struct Sender {
     in_flight: VecDeque<DryRunLine>,
     in_flight_bytes: usize,
     deferred_program_end: Option<DryRunLine>,
+    deferred_tool_change: Option<DryRunLine>,
     last_line: Option<DryRunLine>,
     last_acknowledged_line: Option<DryRunLine>,
     last_acknowledged_at: Option<Instant>,
@@ -256,6 +257,7 @@ impl Sender {
             in_flight: VecDeque::new(),
             in_flight_bytes: 0,
             deferred_program_end: None,
+            deferred_tool_change: None,
             last_line: None,
             last_acknowledged_line: None,
             last_acknowledged_at: None,
@@ -343,6 +345,7 @@ impl Sender {
         self.in_flight.clear();
         self.in_flight_bytes = 0;
         self.deferred_program_end = None;
+        self.deferred_tool_change = None;
         self.last_line = None;
         self.last_acknowledged_line = None;
         self.last_acknowledged_at = None;
@@ -418,6 +421,7 @@ impl Sender {
         self.in_flight.clear();
         self.in_flight_bytes = 0;
         self.deferred_program_end = None;
+        self.deferred_tool_change = None;
         self.paused_from = None;
         Ok(self.snapshot())
     }
@@ -432,9 +436,12 @@ impl Sender {
             .in_flight
             .pop_front()
             .or_else(|| self.deferred_program_end.take())
+            .or_else(|| self.deferred_tool_change.take())
             .or_else(|| self.last_line.take());
         self.in_flight.clear();
         self.in_flight_bytes = 0;
+        self.deferred_program_end = None;
+        self.deferred_tool_change = None;
         let failure = failure.attach_line(self.last_line.as_ref());
         self.last_error = Some(failure.message.clone());
         self.failure = Some(failure);
@@ -464,6 +471,7 @@ impl Sender {
         self.in_flight.clear();
         self.in_flight_bytes = 0;
         self.deferred_program_end = None;
+        self.deferred_tool_change = None;
         let failure = failure.attach_line(self.last_line.as_ref());
         self.last_error = Some(failure.message.clone());
         self.failure = Some(failure);
@@ -558,8 +566,13 @@ impl Sender {
                     }
                     continue;
                 }
-                self.state = SenderState::ToolChange;
-                self.pause_clock();
+                if self.requires_motion_drain() {
+                    self.deferred_tool_change = self.last_line.take();
+                    self.state = SenderState::Draining;
+                } else {
+                    self.state = SenderState::ToolChange;
+                    self.pause_clock();
+                }
                 return None;
             }
             break;
@@ -610,7 +623,12 @@ impl Sender {
                 self.acknowledged_lines == plan.lines().len() && self.in_flight.is_empty()
             })
         {
-            self.state = self.finished_state();
+            let finished = self.finished_state();
+            if self.state == SenderState::Paused && self.requires_motion_drain() {
+                self.paused_from = Some(finished);
+            } else {
+                self.state = finished;
+            }
             if self.state == SenderState::Completed {
                 self.freeze_clock();
             }
@@ -648,8 +666,14 @@ impl Sender {
         if !self.in_flight.is_empty() || self.deferred_program_end.is_some() {
             return Err(SenderError::CommandInFlight);
         }
-        self.freeze_clock();
-        self.state = SenderState::Completed;
+        if let Some(line) = self.deferred_tool_change.take() {
+            self.last_line = Some(line);
+            self.state = SenderState::ToolChange;
+            self.pause_clock();
+        } else {
+            self.freeze_clock();
+            self.state = SenderState::Completed;
+        }
         Ok(self.snapshot())
     }
 
@@ -674,6 +698,7 @@ impl Sender {
         self.in_flight.clear();
         self.in_flight_bytes = 0;
         self.deferred_program_end = None;
+        self.deferred_tool_change = None;
         let failure = failure.attach_line(self.last_line.as_ref());
         self.last_error = Some(failure.message.clone());
         self.failure = Some(failure);
@@ -687,6 +712,7 @@ impl Sender {
             .in_flight
             .front()
             .or(self.deferred_program_end.as_ref())
+            .or(self.deferred_tool_change.as_ref())
             .or(self.last_line.as_ref());
         let estimated_total_ms = self.plan.as_ref().map_or(0, DryRunPlan::estimated_total_ms);
         SenderSnapshot {
@@ -993,6 +1019,41 @@ mod tests {
     }
 
     #[test]
+    fn final_acknowledgement_preserves_hold_until_explicit_resume() {
+        for program_end in [false, true] {
+            let mut sender = Sender::default();
+            sender
+                .load_cut_run(cutting_plan(if program_end {
+                    "G1 X1 F10\nM30"
+                } else {
+                    "G1 X1 F10"
+                }))
+                .unwrap();
+            sender.start().unwrap();
+            while sender.next_line().is_some() {
+                if !program_end {
+                    continue;
+                }
+                sender.acknowledge_ok().unwrap();
+            }
+            if program_end {
+                sender.dispatch_deferred_program_end().unwrap();
+            }
+            sender.pause().unwrap();
+            while sender.has_in_flight() {
+                sender.acknowledge_ok().unwrap();
+            }
+            assert_eq!(sender.snapshot().state, SenderState::Paused);
+            assert!(sender.complete_draining().is_err());
+            assert_eq!(sender.resume().unwrap().state, SenderState::Draining);
+            assert_eq!(
+                sender.complete_draining().unwrap().state,
+                SenderState::Completed
+            );
+        }
+    }
+
+    #[test]
     fn program_pause_is_an_acknowledged_barrier() {
         let mut sender = Sender::default();
         sender
@@ -1067,6 +1128,8 @@ mod tests {
             sender.acknowledge_ok().unwrap();
         }
         assert!(sender.next_line().is_none());
+        assert_eq!(sender.snapshot().state, SenderState::Draining);
+        sender.complete_draining().unwrap();
         let barrier = sender.snapshot();
         assert_eq!(barrier.state, SenderState::ToolChange);
         assert_eq!(barrier.current_source_line, Some(3));
@@ -1122,7 +1185,8 @@ mod tests {
         loop {
             if sender.next_line().is_some() {
                 sender.acknowledge_ok().unwrap();
-            } else if sender.snapshot().state == SenderState::ToolChange {
+            } else if sender.snapshot().state == SenderState::Draining {
+                sender.complete_draining().unwrap();
                 break;
             }
         }

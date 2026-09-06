@@ -113,10 +113,12 @@ pub async fn export_script_plugin(
     };
     let path = path.into_path().map_err(|error| error.to_string())?;
     let output_path = path.clone();
-    tokio::task::spawn_blocking(move || std::fs::write(output_path, package_json))
-        .await
-        .map_err(|error| format!("plugin export task failed: {error}"))?
-        .map_err(|error| format!("failed to export plugin: {error}"))?;
+    tokio::task::spawn_blocking(move || {
+        millo_storage::replace_file_atomically(&output_path, package_json.as_bytes())
+    })
+    .await
+    .map_err(|error| format!("plugin export task failed: {error}"))?
+    .map_err(|error| format!("failed to export plugin: {error}"))?;
     state.audit.record(
         AuditLevel::Info,
         AuditCategory::Storage,

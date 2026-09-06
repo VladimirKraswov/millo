@@ -77,11 +77,24 @@ impl CuttingTool {
     }
 
     pub fn cutting_diameter_at_depth_mm(&self, depth_mm: f64) -> Option<f64> {
-        if !depth_mm.is_finite() || depth_mm < 0.0 {
+        if !depth_mm.is_finite()
+            || depth_mm < 0.0
+            || !self.diameter_mm.is_finite()
+            || self.diameter_mm <= 0.0
+        {
+            return None;
+        }
+        if self
+            .tip_diameter_mm
+            .is_some_and(|tip| !tip.is_finite() || tip < 0.0 || tip > self.diameter_mm)
+        {
             return None;
         }
         match self.included_angle_degrees {
             Some(angle) => {
+                if !angle.is_finite() || !(1.0..=179.0).contains(&angle) {
+                    return None;
+                }
                 let tip = self.tip_diameter_mm.unwrap_or(0.0);
                 let diameter = tip + 2.0 * depth_mm * (angle.to_radians() / 2.0).tan();
                 Some(diameter.min(self.diameter_mm).max(tip))
@@ -941,8 +954,11 @@ fn validate_draft(draft: &CuttingToolDraft) -> Result<(), ToolLibraryError> {
             1.0,
             179.0,
         )?;
-    } else if draft.kind != ToolKind::Engraving && draft.included_angle_degrees.is_some() {
-        return Err(ToolLibraryError::UnexpectedAngle);
+    } else if let Some(angle) = draft.included_angle_degrees {
+        if draft.kind != ToolKind::Engraving {
+            return Err(ToolLibraryError::UnexpectedAngle);
+        }
+        validate_range("includedAngleDegrees", angle, 1.0, 179.0)?;
     }
     if let Some(tip_diameter_mm) = draft.tip_diameter_mm {
         if !matches!(draft.kind, ToolKind::VBit | ToolKind::Engraving) {
@@ -1224,6 +1240,31 @@ mod tests {
         assert!((tool.cutting_diameter_at_depth_mm(0.05).unwrap() - 0.117_633).abs() < 0.000_01);
         assert!((tool.cutting_diameter_at_depth_mm(0.08).unwrap() - 0.128_212).abs() < 0.000_01);
         assert!(tool.cutting_diameter_at_depth_mm(-0.01).is_none());
+    }
+
+    #[test]
+    fn rejects_invalid_engraving_angles_and_cutting_geometry() {
+        let mut store = ToolLibraryStore::in_memory();
+        let tool = store.get("preset-xc-nlj3-2001").unwrap().clone();
+        for angle in [f64::NAN, f64::INFINITY, -20.0, 0.0, 180.0] {
+            let mut draft = CuttingToolDraft::from(&tool);
+            draft.name = "Invalid engraving angle".into();
+            draft.included_angle_degrees = Some(angle);
+            assert!(store.create(draft).is_err(), "accepted angle {angle}");
+            let mut invalid = tool.clone();
+            invalid.included_angle_degrees = Some(angle);
+            assert!(invalid.cutting_diameter_at_depth_mm(0.1).is_none());
+        }
+        for invalid in [f64::NAN, f64::INFINITY, -1.0, 0.0] {
+            let mut broken = tool.clone();
+            broken.diameter_mm = invalid;
+            assert!(broken.cutting_diameter_at_depth_mm(0.1).is_none());
+        }
+        let mut broken = tool.clone();
+        broken.tip_diameter_mm = Some(f64::NAN);
+        assert!(broken.cutting_diameter_at_depth_mm(0.1).is_none());
+        broken.tip_diameter_mm = Some(tool.diameter_mm + 1.0);
+        assert!(broken.cutting_diameter_at_depth_mm(0.1).is_none());
     }
 
     #[test]

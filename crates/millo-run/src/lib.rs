@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use millo_domain::{
-    ConnectionState, ControllerSnapshot, HardwareInspection, Position, ReadinessLevel,
+    ConnectionState, ControllerSnapshot, HardwareInspection, HomingState, Position, ReadinessLevel,
     SpindleControl,
 };
 use millo_dry_run::{
@@ -691,12 +691,13 @@ pub fn assess_real_run_preflight_with_options(
 
     if !hardware.readiness.profile.homing_installed
         || !hardware.readiness.profile.limit_switches_installed
+        || snapshot.homing.state != HomingState::Homed
     {
         checks.push(check(
             "unhomed-envelope",
             RunPreflightLevel::Caution,
             "Unverified machine envelope",
-            "Without homing and limit switches, preview bounds do not prove physical clearance"
+            "Without verified homing in this controller session, preview bounds do not prove physical clearance"
                 .to_owned(),
             None,
         ));
@@ -1177,6 +1178,34 @@ mod tests {
                 .iter()
                 .any(|blocker| blocker.kind == "spindle-activation")
         );
+    }
+
+    #[test]
+    fn installed_switches_do_not_imply_the_machine_was_homed_in_this_session() {
+        for homing in [
+            HomingState::Unreferenced,
+            HomingState::Invalidated,
+            HomingState::Failed,
+        ] {
+            let mut hardware = hardware(Vec::new());
+            hardware.readiness.profile.homing_installed = true;
+            hardware.readiness.profile.limit_switches_installed = true;
+            let mut snapshot = snapshot(MachineMode::Idle);
+            snapshot.homing.state = homing;
+            let report = assess_real_run_preflight(
+                &program("G21 G90 G94\nG1 X1 F100"),
+                hardware,
+                &snapshot,
+                ProgramRunIntent::Cutting,
+            );
+            assert!(
+                report
+                    .checks
+                    .iter()
+                    .any(|item| item.id == "unhomed-envelope"
+                        && item.level == RunPreflightLevel::Caution)
+            );
+        }
     }
 
     #[test]

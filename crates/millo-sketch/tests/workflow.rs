@@ -253,3 +253,18 @@ fn comments_cannot_inject_commands_and_contract_roundtrips_camel_case() {
     assert!(!job.source.lines().any(|l| l == "G0 X999" || l == "M3"));
     assert_eq!(job.program.summary.bounds.unwrap().max.x, 39.0);
 }
+
+#[test]
+fn rejects_nonfinite_cutting_length_before_depth_clamping() {
+    for length in [f64::NAN, f64::INFINITY] {
+        let mut tools = tools();
+        tools[0].cutting_length_mm = length;
+        assert!(
+            generate_sketch_job(
+                request(vec![shape("pocket", SketchOperationKind::Pocket)]),
+                &tools,
+            )
+            .is_err()
+        );
+    }
+}

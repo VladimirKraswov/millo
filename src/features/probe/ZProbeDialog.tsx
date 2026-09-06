@@ -1,4 +1,5 @@
 import { DialogSurface } from "../../components/DialogSurface";
+import { useAsyncScope } from "../../components/useAsyncScope";
 import { ArrowUp, CircleDot, MoveDown, Ruler, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
@@ -86,6 +87,7 @@ export function ZProbeDialog({
   const [heightmapActive, setHeightmapActive] = useState(false);
   const [localError, setLocalError] = useState<string>();
   const abortRequested = useRef(false);
+  const captureScope = useAsyncScope([open, profileId, gateway, activeCoordinateSystem]);
 
   useEffect(() => {
     if (!open) return;
@@ -95,7 +97,7 @@ export function ZProbeDialog({
     setHeightmapActive(false);
     setLocalError(undefined);
     abortRequested.current = false;
-  }, [open, profileId]);
+  }, [open, profileId, gateway, activeCoordinateSystem]);
 
   if (!open) return null;
 
@@ -119,12 +121,15 @@ export function ZProbeDialog({
     confirmed;
 
   const update = (key: keyof ZProbeSettings, value: string) => {
+    if (busy) return;
     setDraft((current) => ({ ...current, [key]: numeric(value) }));
     setStatus("idle");
     setLocalError(undefined);
   };
 
   const selectMode = (mode: ZProbeSettings["mode"]) => {
+    if (busy) return;
+    const isCurrent = captureScope();
     const next = { ...draft, mode };
     setDraft(next);
     setConfirmed(false);
@@ -132,8 +137,9 @@ export function ZProbeDialog({
     setStatus("saving");
     onError(undefined);
     void onSaveSettings(next)
-      .then(() => setStatus("idle"))
+      .then(() => { if (isCurrent()) setStatus("idle"); })
       .catch((error) => {
+        if (!isCurrent()) return;
         const message =
           describeProbeReadinessFailure(error, "касанию") ?? String(error);
         setStatus("error");
@@ -143,6 +149,8 @@ export function ZProbeDialog({
   };
 
   const save = async () => {
+    if (!canSave) return false;
+    const isCurrent = captureScope();
     if (validationError) {
       setLocalError(validationError);
       return false;
@@ -152,9 +160,11 @@ export function ZProbeDialog({
     onError(undefined);
     try {
       await onSaveSettings(draft);
+      if (!isCurrent()) return false;
       setStatus("idle");
       return true;
     } catch (error) {
+      if (!isCurrent()) return false;
       const message =
         describeProbeReadinessFailure(error, "касанию") ?? String(error);
       setStatus("error");
@@ -165,7 +175,10 @@ export function ZProbeDialog({
   };
 
   const run = async () => {
+    if (!canProbe) return;
+    const isCurrent = captureScope();
     if (!(await save())) return;
+    if (!isCurrent()) return;
     abortRequested.current = false;
     setStatus("probing");
     try {
@@ -173,11 +186,13 @@ export function ZProbeDialog({
         settings: draft,
         setupConfirmed: true,
       });
+      if (!isCurrent() || abortRequested.current) return;
       onSnapshot(outcome.snapshot);
       onZeroEstablished?.(outcome, "probe");
       setStatus("complete");
       setConfirmed(false);
     } catch (error) {
+      if (!isCurrent()) return;
       const message =
         describeProbeReadinessFailure(error, "касанию") ?? String(error);
       if (
@@ -197,14 +212,19 @@ export function ZProbeDialog({
   };
 
   const abort = async () => {
+    if (abortRequested.current) return;
+    const isCurrent = captureScope();
     abortRequested.current = true;
     setLocalError(undefined);
     try {
-      onSnapshot(await onAbort());
+      const next = await onAbort();
+      if (!isCurrent()) return;
+      onSnapshot(next);
       setStatus("stopped");
       setConfirmed(false);
       onError(undefined);
     } catch (error) {
+      if (!isCurrent()) return;
       abortRequested.current = false;
       const message =
         describeProbeReadinessFailure(error, "касанию") ?? String(error);
@@ -220,7 +240,7 @@ export function ZProbeDialog({
     >
       <DialogSurface
         onDismiss={onClose}
-        dismissible={!(draft.mode === "workZero" && status === "probing")}
+        dismissible={!(draft.mode === "workZero" && (status === "saving" || status === "probing"))}
         modal={false}
         aria-labelledby="z-probe-title"
         className={`machine-dialog z-probe-dialog${draft.mode === "heightmap" ? " is-heightmap" : ""}`}
@@ -232,7 +252,7 @@ export function ZProbeDialog({
           </div>
           <button
             aria-label="Закрыть"
-            disabled={draft.mode === "workZero" && status === "probing"}
+            disabled={draft.mode === "workZero" && (status === "saving" || status === "probing")}
             onClick={onClose}
             title="Закрыть"
             type="button"
@@ -349,6 +369,7 @@ export function ZProbeDialog({
                   </span>
                   <span className="z-probe-input">
                     <input
+                      disabled={busy}
                       max="100"
                       min="0.01"
                       onChange={(event) =>
@@ -373,6 +394,7 @@ export function ZProbeDialog({
                   </span>
                   <span className="z-probe-input">
                     <input
+                      disabled={busy}
                       max="100"
                       min="0.1"
                       onChange={(event) =>
@@ -394,6 +416,7 @@ export function ZProbeDialog({
                     <span>Подача касания</span>
                     <span className="z-probe-input">
                       <input
+                        disabled={busy}
                         max="500"
                         min="1"
                         onChange={(event) =>
@@ -410,6 +433,7 @@ export function ZProbeDialog({
                     <span>Поднять после касания</span>
                     <span className="z-probe-input">
                       <input
+                        disabled={busy}
                         max="100"
                         min="0.1"
                         onChange={(event) =>
@@ -426,6 +450,7 @@ export function ZProbeDialog({
                     <span>Подача отвода</span>
                     <span className="z-probe-input">
                       <input
+                        disabled={busy}
                         max="2000"
                         min="1"
                         onChange={(event) =>

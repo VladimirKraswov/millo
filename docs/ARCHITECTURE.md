@@ -1010,8 +1010,10 @@ Returning to an existing zero uses a distinct boundary:
 - An external command returns exactly one typed action. `createProgram` is
   reparsed by `millo-gcode` and published as an ordinary Program job. `jog`,
   `setZero`, and `returnZero` require a fresh operator confirmation and then
-  delegate to existing command-actor use cases. A script cannot issue a raw
-  G-code line or realtime byte. `machine.read` controls whether the detached
+  delegate to existing command-actor use cases. A `machine.commands` grant can
+  request one actor-validated expert line only with global safe mode disabled
+  and operator confirmation; scripts never own serial or select realtime bytes.
+  `machine.read` controls whether the detached
   controller snapshot is passed into evaluation at all.
 - Imported and edited packages are disabled. Enabling binds grants to the exact
   package digest; any source or manifest update creates a new digest, clears
@@ -1045,14 +1047,20 @@ Returning to an existing zero uses a distinct boundary:
   stable separation between both tiers is recorded in
   `docs/decisions/0053-two-tier-plugin-contract.md`.
 
-## Near-term sequence
+## Current verification boundaries
 
-1. Create and review a bounded `20 x 20 mm` square `.nc` fixture with explicit
-   `G21 G90 G94 G17`, conservative feed, and safe Z.
-2. Perform an operator-confirmed Air run from that file with no tool and manual
-   spindle power off; measure Hold response and verify final position plus Idle.
-3. Only after that evidence, prepare a shallow engraving file and complete a new
-   Cutting authorization. Keep probing unavailable until sensor hardware exists.
+The historical first-air-run sequence is complete; probing, heightmap and CAM
+are implemented, subject to their own hardware/profile guards. Current audit,
+competitor comparison and remaining acceptance criteria live in
+`docs/PRODUCT_AUDIT_2026_09.md`. In particular, continuous-Jog machine-envelope
+protection is not a full-program collision/envelope proof.
+
+CPU-heavy parse/CAM IPC uses `commands/background_compute.rs`: two workers,
+no unbounded pending queue, admission retained inside the blocking closure
+after caller cancellation. The serial actor and realtime requests do not acquire
+these permits. G-code arc sampling checks its remaining budget before allocation
+and includes cardinal extrema for bounds; it never silently calls an incomplete
+preview complete.
 
 Three.js is now isolated behind the program preview adapter and a lazy bundle.
 Ant Design remains absent until a workflow needs its component contracts rather

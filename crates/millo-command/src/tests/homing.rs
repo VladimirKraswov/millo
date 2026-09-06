@@ -1,5 +1,51 @@
 use super::*;
 
+#[test]
+fn homing_timeout_handles_overflow_before_clamping_the_duration() {
+    for (travel, seek, locate, expected) in [
+        ([f64::MAX; 3], "500", "25", HOMING_MAX_TIMEOUT),
+        ([1.0; 3], "1e-300", "25", HOMING_MAX_TIMEOUT),
+        ([1.0; 3], "500", "1e-300", HOMING_MAX_TIMEOUT),
+        ([1.0; 3], "1e300", "1e300", HOMING_MIN_TIMEOUT),
+        ([100.0; 3], "500", "25", Duration::from_secs(123)),
+    ] {
+        let mut inspection = DeviceInspection::default();
+        inspection
+            .settings
+            .insert("$25".to_owned(), seek.to_owned());
+        inspection
+            .settings
+            .insert("$24".to_owned(), locate.to_owned());
+        assert_eq!(homing_timeout(&inspection, travel), expected);
+    }
+}
+
+#[tokio::test]
+async fn extreme_homing_rate_does_not_panic_the_actor() {
+    let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));
+    let mut profile = HardwareProfile::first_machine();
+    profile.homing_installed = true;
+    control.set_setting(22, "1");
+    control.set_setting(25, "1e-300");
+    let task = tokio::spawn(worker);
+    arbiter.set_hardware_profile(profile).await.unwrap();
+    arbiter.connect().await.unwrap();
+
+    let started = arbiter
+        .start_homing(HomingRequest {
+            operator_confirmed: true,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(started.timeout_ms, HOMING_MAX_TIMEOUT.as_millis() as u64);
+    arbiter
+        .send_realtime(RealtimeCommand::SoftReset)
+        .await
+        .unwrap();
+    task.abort();
+}
+
 #[tokio::test]
 async fn homing_is_actor_owned_and_reset_invalidates_the_reference() {
     let (arbiter, control, worker) = test_arbiter(Duration::from_secs(60));

@@ -181,7 +181,7 @@ export function ProgramRunCard({
         {programRun && physicalActions.primary === "resolveInterruption" && (
           <button
             className="is-terminal-action"
-            disabled={!recoveryChecked}
+            disabled={busy || !recoveryChecked}
             onClick={onResolveInterruption}
             type="button"
           >

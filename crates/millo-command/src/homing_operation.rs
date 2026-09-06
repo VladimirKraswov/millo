@@ -175,5 +175,7 @@ pub(super) fn homing_timeout(inspection: &DeviceInspection, travel_mm: [f64; 3])
     let locate = positive_device_setting(inspection, "$24").unwrap_or(25.0);
     let travel = travel_mm.into_iter().sum::<f64>();
     let seconds = travel / seek * 60.0 + travel.min(30.0) / locate * 60.0 + 15.0;
-    Duration::from_secs_f64(seconds).clamp(HOMING_MIN_TIMEOUT, HOMING_MAX_TIMEOUT)
+    Duration::try_from_secs_f64(seconds)
+        .unwrap_or(HOMING_MAX_TIMEOUT)
+        .clamp(HOMING_MIN_TIMEOUT, HOMING_MAX_TIMEOUT)
 }

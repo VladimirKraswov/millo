@@ -1,4 +1,5 @@
 import { DialogSurface } from "../../components/DialogSurface";
+import { useAsyncScope } from "../../components/useAsyncScope";
 import { Check, CircleAlert, Play, Wrench, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -67,6 +68,7 @@ export function ToolChangeDialog({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const captureScope = useAsyncScope([open, sourceLine, requestedTool]);
 
   useEffect(() => {
     if (!open) return;
@@ -80,15 +82,16 @@ export function ToolChangeDialog({
 
   const complete = async () => {
     if (!progress.complete || busy) return;
+    const isCurrent = captureScope();
     setBusy(true);
     setError(undefined);
     try {
       await onComplete(confirmation);
-      onClose();
+      if (isCurrent()) onClose();
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrent()) setError(String(reason));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
 

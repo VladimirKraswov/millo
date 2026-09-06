@@ -1,3 +1,5 @@
+import { notifyListeners } from "../state/notifyListeners";
+
 export interface ExtensionContribution<TSlot extends string, TExtension> {
   readonly id: string;
   readonly owner: string;
@@ -18,6 +20,8 @@ export class ExtensionRegistry<TSlot extends string, TExtension> {
   >();
   private readonly listeners = new Set<() => void>();
   private revision = 0;
+
+  constructor(private readonly onListenerError: (error: unknown) => void = console.error) {}
 
   readonly getSnapshot = (): number => this.revision;
 
@@ -47,7 +51,7 @@ export class ExtensionRegistry<TSlot extends string, TExtension> {
       dispose: () => {
         if (!active) return;
         active = false;
-        this.unregister(stored.id);
+        if (this.contributions.get(stored.id) === stored) this.unregister(stored.id);
       },
     };
   }
@@ -118,10 +122,20 @@ export class ExtensionRegistry<TSlot extends string, TExtension> {
     ) {
       throw new Error("extension replacement ids must be non-empty strings");
     }
+    const pending = [...(contribution.replaces ?? [])];
+    const visited = new Set<string>();
+    while (pending.length > 0) {
+      const id = pending.pop()!;
+      if (id === contribution.id) throw new Error("extension replacement cycle is not allowed");
+      if (visited.has(id)) continue;
+      visited.add(id);
+      const existing = this.contributions.get(id);
+      if (existing?.slot === contribution.slot) pending.push(...(existing.replaces ?? []));
+    }
   }
 
   private changed(): void {
     this.revision += 1;
-    for (const listener of this.listeners) listener();
+    notifyListeners(this.listeners, undefined, this.onListenerError);
   }
 }

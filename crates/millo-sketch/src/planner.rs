@@ -130,6 +130,7 @@ fn plan_shape<'a>(
         "Для кармана и реза нужна плоская концевая фреза, для сверления нужно сверло",
     )?;
     range(tool.diameter_mm, 0.05, 100.0, "Диаметр инструмента")?;
+    range(tool.cutting_length_mm, 0.1, 1_000.0, "Длина режущей части")?;
     let depth = if op.through {
         request.stock.thickness_mm + request.stock.breakthrough_mm
     } else {

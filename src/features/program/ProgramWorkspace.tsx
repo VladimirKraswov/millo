@@ -175,7 +175,7 @@ export function ProgramWorkspace(props: ProgramWorkspaceProps) {
             <button
               aria-label="Редактировать G-code"
               className="program-icon-action"
-              disabled={senderActive || safeStartContext !== undefined}
+              disabled={loading || senderCommandBusy || senderActive || safeStartContext !== undefined}
               onClick={() => setEditorOpen(true)}
               title={
                 safeStartContext
@@ -191,7 +191,7 @@ export function ProgramWorkspace(props: ProgramWorkspaceProps) {
             <button
               aria-label="Закрыть программу"
               className="program-icon-action"
-              disabled={senderActive}
+              disabled={loading || senderCommandBusy || senderActive}
               onClick={() => {
                 setLoaded(undefined);
                 setToolAssignments([]);
@@ -214,7 +214,7 @@ export function ProgramWorkspace(props: ProgramWorkspaceProps) {
           )}
           {program && (
             <ProgramFilePicker
-              disabled={!desktopRuntime || senderActive}
+              disabled={!desktopRuntime || senderCommandBusy || senderActive}
               loading={loading}
               onSelect={(file) => void loadFile(file)}
               variant="toolbar"
@@ -308,6 +308,8 @@ export function ProgramWorkspace(props: ProgramWorkspaceProps) {
                 realRunAvailable &&
                 selectedMotionCount > 0 &&
                 !recoveryCandidate &&
+                !loading &&
+                !senderCommandBusy &&
                 !senderActive,
             )}
             selectedMotionCount={selectedMotionCount}
@@ -380,6 +382,8 @@ export function ProgramWorkspace(props: ProgramWorkspaceProps) {
                   busy={
                     preflightLoading ||
                     loading ||
+                    senderCommandBusy ||
+                    surfaceMapBusy ||
                     senderActive ||
                     (machineContext?.busy ?? false)
                   }
@@ -614,6 +618,7 @@ export function ProgramWorkspace(props: ProgramWorkspaceProps) {
         displayedSender.currentSourceLine !== undefined &&
         realRunGateway && (
           <ToolChangeDialog
+            key={`${displayedSender.runSequence}:${displayedSender.currentSourceLine}:${displayedSender.requestedTool}`}
             onClose={() => setToolChangeOpen(false)}
             onComplete={completeToolChange}
             open={toolChangeOpen}

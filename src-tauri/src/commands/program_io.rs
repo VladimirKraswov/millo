@@ -6,19 +6,12 @@ pub async fn generate_sketch_job(
     request: SketchJobRequest,
     state: State<'_, AppState>,
 ) -> Result<GeneratedSketchJob, String> {
-    static GENERATION: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
-    let permit = GENERATION
-        .try_acquire()
-        .map_err(|_| "Расчёт чертежа уже выполняется")?;
     let tools = state.tools.lock().await.state().tools;
     let context = json!({ "sourceName": request.source_name, "shapes": request.shapes.len(), "stock": request.stock });
-    let result = tokio::task::spawn_blocking(move || {
-        let _permit = permit;
+    let result = background_compute::run("Sketch CAM task failed", move || {
         millo_sketch::generate_sketch_job(request, &tools)
     })
-    .await
-    .map_err(|e| format!("Sketch CAM task failed: {e}"))?
-    .map_err(|e| e.to_string());
+    .await;
     audit_operation(
         &state.audit,
         AuditCategory::Program,
@@ -35,12 +28,10 @@ pub async fn parse_gcode_program(
     request: ProgramParseRequest,
     options: Option<ProgramParseOptions>,
 ) -> Result<GcodeProgram, String> {
-    tokio::task::spawn_blocking(move || {
+    background_compute::run("G-code parser task failed", move || {
         parse_program_with_options(request, options.unwrap_or_default())
     })
     .await
-    .map_err(|error| format!("G-code parser task failed: {error}"))?
-    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -54,10 +45,10 @@ pub async fn generate_image_job(
         "encodedBytes": request.source_base64.len(),
         "settings": &request.settings,
     });
-    let result = tokio::task::spawn_blocking(move || generate_image_job_core(request))
-        .await
-        .map_err(|error| format!("image job generation task failed: {error}"))?
-        .map_err(|error| error.to_string());
+    let result = background_compute::run("Image job generation task failed", move || {
+        generate_image_job_core(request)
+    })
+    .await;
     audit_operation(
         &state.audit,
         AuditCategory::Program,
@@ -86,10 +77,10 @@ pub async fn generate_surfacing_job(
         "toolId": &request.tool_id,
         "settings": &request.settings,
     });
-    let result = tokio::task::spawn_blocking(move || generate_surfacing_job_core(request, &tool))
-        .await
-        .map_err(|error| format!("surfacing job generation task failed: {error}"))?
-        .map_err(|error| error.to_string());
+    let result = background_compute::run("Surfacing job generation task failed", move || {
+        generate_surfacing_job_core(request, &tool)
+    })
+    .await;
     audit_operation(
         &state.audit,
         AuditCategory::Program,
@@ -114,10 +105,10 @@ pub async fn inspect_pcb_job(
         })).collect::<Vec<_>>(),
         "transform": &request.transform,
     });
-    let result = tokio::task::spawn_blocking(move || inspect_pcb_core(request))
-        .await
-        .map_err(|error| format!("PCB inspection task failed: {error}"))?
-        .map_err(|error| error.to_string());
+    let result = background_compute::run("PCB inspection task failed", move || {
+        inspect_pcb_core(request)
+    })
+    .await;
     audit_operation(
         &state.audit,
         AuditCategory::Program,
@@ -144,10 +135,10 @@ pub async fn generate_pcb_job(
         })).collect::<Vec<_>>(),
         "settings": &request.settings,
     });
-    let result = tokio::task::spawn_blocking(move || generate_pcb_job_core(request, &tools))
-        .await
-        .map_err(|error| format!("PCB generation task failed: {error}"))?
-        .map_err(|error| error.to_string());
+    let result = background_compute::run("PCB generation task failed", move || {
+        generate_pcb_job_core(request, &tools)
+    })
+    .await;
     audit_operation(
         &state.audit,
         AuditCategory::Program,
@@ -206,10 +197,10 @@ async fn save_validated_gcode(
         return Err("G-code file name is invalid".to_owned());
     }
     let validation = request.clone();
-    tokio::task::spawn_blocking(move || parse_program(validation))
-        .await
-        .map_err(|error| format!("G-code validation task failed: {error}"))?
-        .map_err(|error| format!("G-code is invalid: {error}"))?;
+    background_compute::run("G-code validation task failed", move || {
+        parse_program(validation).map_err(|error| format!("G-code is invalid: {error}"))
+    })
+    .await?;
 
     let (selection, selected) = tokio::sync::oneshot::channel();
     app.dialog()
@@ -274,9 +265,10 @@ pub async fn prepare_selected_program_run(
         "intent": request.intent,
         "executionOptions": request.execution_options,
     });
-    let result = tokio::task::spawn_blocking(move || prepare_selected_run(request))
-        .await
-        .map_err(|error| format!("selected-run planner task failed: {error}"))?;
+    let result = background_compute::run("Selected-run planner task failed", move || {
+        prepare_selected_run(request)
+    })
+    .await;
     audit_operation(
         &state.audit,
         AuditCategory::Program,

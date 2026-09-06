@@ -1,4 +1,5 @@
 import { DialogSurface } from "../../components/DialogSurface";
+import { useAsyncScope } from "../../components/useAsyncScope";
 import { CornerDownRight, Play, Route, ScanSearch, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -31,6 +32,7 @@ export function SafeStartDialog({
   const [safeZ, setSafeZ] = useState(suggestedSafeZ);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const captureScope = useAsyncScope([open, sourceLine, suggestedSafeZ]);
 
   useEffect(() => {
     if (!open) return;
@@ -54,14 +56,17 @@ export function SafeStartDialog({
       return;
     }
     setBusy(true);
+    const isCurrent = captureScope();
     setError(undefined);
     try {
-      await onPrepared(await onPrepare(safeZ));
-      onClose();
+      const prepared = await onPrepare(safeZ);
+      if (!isCurrent()) return;
+      await onPrepared(prepared);
+      if (isCurrent()) onClose();
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrent()) setError(String(reason));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
 

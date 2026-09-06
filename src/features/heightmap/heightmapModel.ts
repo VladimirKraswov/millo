@@ -71,6 +71,12 @@ export const buildHeightmapPlan = (request: HeightmapPlanRequest): HeightmapPlan
     yMm: request.heightMm / Math.max(1, request.rows - 1),
   };
   const points: ProbePoint[] = [];
+  // Draft numeric inputs can be invalid before the UI displays validation.
+  if (!Number.isInteger(request.columns) || !Number.isInteger(request.rows) ||
+    request.columns < 2 || request.rows < 2 || request.columns > 101 ||
+    request.rows > 101 || request.columns * request.rows > 10_000) {
+    return { schemaVersion: 1, request, spacing, points };
+  }
   for (let row = 0; row < request.rows; row += 1) {
     const columns = Array.from({ length: request.columns }, (_, index) => index);
     if (row % 2 === 1) columns.reverse();

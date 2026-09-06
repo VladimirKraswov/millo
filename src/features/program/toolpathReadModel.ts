@@ -4,6 +4,7 @@ import type {
   ProgramPoint,
 } from "../../shared/program";
 import { adjustCuttingZ } from "./depthCorrectionModel";
+import { programSourceIndex } from "./programSourceIndex";
 
 export interface ToolpathReadModel {
   readonly rapidPositions: Float32Array;
@@ -33,30 +34,28 @@ export function buildToolpathReadModel(
   program: GcodeProgram,
   cuttingDepthAdjustmentMm = 0,
 ): ToolpathReadModel {
-  const adjustedPoint = (
-    point: ProgramPoint,
-    kind: GcodeProgram["toolpath"][number]["kind"],
-  ): ProgramPoint => ({
-    ...point,
-    z: adjustCuttingZ(point.z, kind, cuttingDepthAdjustmentMm),
-  });
-  const adjustedPoints = program.toolpath.flatMap((segment) =>
-    segment.points.map((point) => adjustedPoint(point, segment.kind)),
-  );
-  const bounds = Math.abs(cuttingDepthAdjustmentMm) < Number.EPSILON
-    ? program.summary.bounds
-    : adjustedPoints.length === 0 || !program.summary.bounds
-    ? program.summary.bounds
-    : (() => {
-        const minZ = adjustedPoints.reduce((minimum, point) => Math.min(minimum, point.z), Infinity);
-        const min = { ...program.summary.bounds.min, z: minZ };
-        const max = program.summary.bounds.max;
-        return {
-          min,
-          max,
-          size: { x: max.x - min.x, y: max.y - min.y, z: max.z - min.z },
-        };
-      })();
+  let bounds = program.summary.bounds;
+  let rapidVertexCount = 0;
+  let cuttingVertexCount = 0;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const segment of program.toolpath) {
+    const vertices = Math.max(0, segment.points.length - 1) * 2;
+    if (segment.kind === "rapid") rapidVertexCount += vertices;
+    else cuttingVertexCount += vertices;
+    if (bounds && Math.abs(cuttingDepthAdjustmentMm) >= Number.EPSILON) {
+      for (const point of segment.points) {
+        const z = adjustCuttingZ(point.z, segment.kind, cuttingDepthAdjustmentMm);
+        minZ = Math.min(minZ, z);
+        maxZ = Math.max(maxZ, z);
+      }
+    }
+  }
+  if (bounds && minZ !== Infinity) {
+    const min = { ...bounds.min, z: minZ };
+    const max = { ...bounds.max, z: maxZ };
+    bounds = { min, max, size: { ...bounds.size, z: maxZ - minZ } };
+  }
   const center: ProgramPoint = bounds
     ? {
         x: (bounds.min.x + bounds.max.x) / 2,
@@ -64,27 +63,30 @@ export function buildToolpathReadModel(
         z: (bounds.min.z + bounds.max.z) / 2,
       }
     : { x: 0, y: 0, z: 0 };
-  const rapid: number[] = [];
+  const rapid = new Float32Array(rapidVertexCount * 3);
   const rapidSourceLines: number[] = [];
-  const cutting: number[] = [];
+  const cutting = new Float32Array(cuttingVertexCount * 3);
   const cuttingSourceLines: number[] = [];
   let pointCount = 0;
+  let rapidOffset = 0;
+  let cuttingOffset = 0;
 
   for (const segment of program.toolpath) {
     const positions = segment.kind === "rapid" ? rapid : cutting;
     const sourceLines =
       segment.kind === "rapid" ? rapidSourceLines : cuttingSourceLines;
     for (let index = 1; index < segment.points.length; index += 1) {
-      const start = adjustedPoint(segment.points[index - 1], segment.kind);
-      const end = adjustedPoint(segment.points[index], segment.kind);
-      positions.push(
-        start.x - center.x,
-        start.y - center.y,
-        start.z - center.z,
-        end.x - center.x,
-        end.y - center.y,
-        end.z - center.z,
-      );
+      const start = segment.points[index - 1];
+      const end = segment.points[index];
+      let offset = segment.kind === "rapid" ? rapidOffset : cuttingOffset;
+      positions[offset++] = start.x - center.x;
+      positions[offset++] = start.y - center.y;
+      positions[offset++] = adjustCuttingZ(start.z, segment.kind, cuttingDepthAdjustmentMm) - center.z;
+      positions[offset++] = end.x - center.x;
+      positions[offset++] = end.y - center.y;
+      positions[offset++] = adjustCuttingZ(end.z, segment.kind, cuttingDepthAdjustmentMm) - center.z;
+      if (segment.kind === "rapid") rapidOffset = offset;
+      else cuttingOffset = offset;
       sourceLines.push(segment.sourceLine);
       pointCount += 2;
     }
@@ -95,9 +97,9 @@ export function buildToolpathReadModel(
     : 10;
   const gridSize = Math.ceil((span * 1.3) / 10) * 10;
   return {
-    rapidPositions: new Float32Array(rapid),
+    rapidPositions: rapid,
     rapidSourceLines,
-    cuttingPositions: new Float32Array(cutting),
+    cuttingPositions: cutting,
     cuttingSourceLines,
     center,
     gridSize,
@@ -132,8 +134,7 @@ export function buildToolpathHighlightReadModel(
   const positions: number[] = [];
   let segmentCount = 0;
   let pointCount = 0;
-  for (const segment of program.toolpath) {
-    if (segment.sourceLine !== sourceLine) continue;
+  for (const segment of programSourceIndex(program).motions.get(sourceLine) ?? []) {
     segmentCount += 1;
     for (let index = 1; index < segment.points.length; index += 1) {
       const adjust = (point: ProgramPoint): ProgramPoint => ({

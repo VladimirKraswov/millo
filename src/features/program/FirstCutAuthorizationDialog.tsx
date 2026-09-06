@@ -1,4 +1,5 @@
 import { DialogSurface } from "../../components/DialogSurface";
+import { useAsyncScope } from "../../components/useAsyncScope";
 import { Check, CircleAlert, Power, RefreshCw, Waves, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
@@ -71,6 +72,7 @@ export function FirstCutAuthorizationDialog({
     surfaceMap?.enabled ?? false,
   );
   const [surfaceQualityConfirmed, setSurfaceQualityConfirmed] = useState(false);
+  const captureScope = useAsyncScope([open, intent, executionOptions, report?.programFingerprint]);
 
   useEffect(() => {
     if (!open) return;
@@ -79,7 +81,7 @@ export function FirstCutAuthorizationDialog({
     setSurfaceQualityConfirmed(false);
     setBusy(false);
     setError(undefined);
-  }, [open, intent, report?.programFingerprint]);
+  }, [open, intent, executionOptions, report?.programFingerprint]);
 
   if (!open) return null;
 
@@ -109,32 +111,37 @@ export function FirstCutAuthorizationDialog({
           : "Начать обработку";
 
   const authorizeAndStart = async () => {
-    if (!controls.canAuthorize) return;
+    if (!canAuthorize) return;
+    const isCurrent = captureScope();
     setBusy(true);
     setError(undefined);
     try {
       const next = await onAuthorize(confirmation);
+      if (!isCurrent()) return;
       onAuthorized(next);
-      onStarted(await onStart(next));
+      const snapshot = await onStart(next);
+      if (!isCurrent()) return;
+      onStarted(snapshot);
       onClose();
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrent()) setError(String(reason));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
 
   const applySurfaceMapSelection = async () => {
-    if (!surfaceMap || !surfaceMapCanChange || !surfaceMapSelectionChanged)
+    if (operationBusy || !surfaceMap || !surfaceMapCanChange || !surfaceMapSelectionChanged)
       return;
+    const isCurrent = captureScope();
     setBusy(true);
     setError(undefined);
     try {
       await surfaceMap.onApply(surfaceMapSelected);
     } catch (reason) {
-      setError(String(reason));
+      if (isCurrent()) setError(String(reason));
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   };
 

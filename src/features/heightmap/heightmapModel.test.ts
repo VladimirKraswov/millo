@@ -20,6 +20,13 @@ import {
 } from "./heightmapModel";
 
 describe("heightmapModel", () => {
+  it.each([Infinity, NaN, 1_000_000_000, -1, 2.5])("does not allocate preview points for invalid draft dimensions (%s)", (value) => {
+    for (const key of ["columns", "rows"] as const) {
+      const request = { ...defaultHeightmapRequest(), [key]: value };
+      expect(buildHeightmapPlan(request).points).toEqual([]);
+      expect(validateHeightmapRequest(request)).toBeDefined();
+    }
+  });
   it("derives a padded perimeter from the loaded job", () => {
     const bounds: ProgramBounds = {
       min: { x: -14.85, y: -5.22, z: -0.1 },

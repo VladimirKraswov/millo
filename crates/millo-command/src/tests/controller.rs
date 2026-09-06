@@ -490,6 +490,18 @@ async fn serial_tool_change_is_host_managed_verified_and_cannot_be_plain_resumed
     arbiter.connect().await.unwrap();
 
     authorize_and_start_serial_fixture(&arbiter, source, true).await;
+    wait_for_sender(&arbiter, SenderState::Draining).await;
+    control.set_status("<Run|MPos:0,0,0|FS:20,0>");
+    arbiter.refresh_status().await.unwrap();
+    assert_eq!(arbiter.sender_snapshot().state, SenderState::Draining);
+    assert!(
+        arbiter
+            .complete_tool_change(tool_change_confirmation(3, Some(2)))
+            .await
+            .is_err()
+    );
+    control.set_status("<Idle|MPos:1,0,0|FS:0,0>");
+    arbiter.refresh_status().await.unwrap();
     let barrier = wait_for_sender(&arbiter, SenderState::ToolChange).await;
     assert_eq!(barrier.current_source_line, Some(3));
     assert_eq!(barrier.requested_tool, Some(2));
@@ -497,6 +509,10 @@ async fn serial_tool_change_is_host_managed_verified_and_cannot_be_plain_resumed
     assert!(!control.writes().contains(&b"N3 T2 M6\n".to_vec()));
 
     let writes_before_resume = control.writes();
+    assert!(matches!(
+        arbiter.inspect_device().await,
+        Err(ArbiterError::MachineOperationBusy)
+    ));
     assert!(matches!(
         arbiter.resume_program_run().await.unwrap_err(),
         ArbiterError::Sender(SenderError::InvalidTransition {
@@ -519,6 +535,12 @@ async fn serial_tool_change_is_host_managed_verified_and_cannot_be_plain_resumed
             .unwrap_err(),
         ArbiterError::ToolChangeMismatch
     ));
+
+    arbiter
+        .set_work_zero(work_zero_request(WorkAxis::Z, true))
+        .await
+        .unwrap();
+    assert_eq!(arbiter.sender_snapshot().state, SenderState::ToolChange);
 
     let resumed = arbiter
         .complete_tool_change(tool_change_confirmation(3, Some(2)))

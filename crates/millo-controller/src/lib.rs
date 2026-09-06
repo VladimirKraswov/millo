@@ -218,6 +218,10 @@ impl<T: Transport> Controller<T> {
         self.config.poll_interval
     }
 
+    pub fn status_timeout(&self) -> Duration {
+        self.config.status_timeout
+    }
+
     pub async fn connect(&mut self) -> Result<ControllerSnapshot, ControllerError> {
         self.pending_program_response = None;
         self.snapshot.connection = ConnectionState::Connecting;
@@ -776,12 +780,7 @@ impl<T: Transport> Controller<T> {
         if self.snapshot.connection != ConnectionState::Connected {
             return Err(ControllerError::NotReady(self.snapshot.connection));
         }
-        if let Err(error) = self.transport.write(b"?").await {
-            let error = ControllerError::from(error);
-            self.record_poll_failure(&error);
-            return Err(error);
-        }
-        Ok(())
+        self.write_realtime_byte(RealtimeCommand::Status).await
     }
 
     pub async fn send_realtime(
@@ -794,7 +793,7 @@ impl<T: Transport> Controller<T> {
         if self.snapshot.connection != ConnectionState::Connected {
             return Err(ControllerError::NotReady(self.snapshot.connection));
         }
-        self.transport.write(&[command.byte()]).await?;
+        self.write_realtime_byte(command).await?;
         if command == RealtimeCommand::SoftReset {
             self.pending_program_response = None;
             self.invalidate_machine_reference("Coordinates invalidated by soft reset");
@@ -807,29 +806,38 @@ impl<T: Transport> Controller<T> {
             return Err(ControllerError::NotReady(self.snapshot.connection));
         }
 
-        if let Err(error) = self
-            .transport
-            .write(&[RealtimeCommand::FeedHold.byte()])
-            .await
-        {
-            let error = ControllerError::from(error);
-            self.record_poll_failure(&error);
-            return Err(error);
+        let hold = self.write_realtime_byte(RealtimeCommand::FeedHold).await;
+        // A failed Hold must not prevent the independent reset attempt.
+        let reset = self.write_realtime_byte(RealtimeCommand::SoftReset).await;
+        if reset.is_ok() {
+            self.pending_program_response = None;
+            self.invalidate_machine_reference("Coordinates invalidated by program abort");
         }
-        if let Err(error) = self
-            .transport
-            .write(&[RealtimeCommand::SoftReset.byte()])
-            .await
-        {
-            let error = ControllerError::from(error);
-            self.record_poll_failure(&error);
-            return Err(error);
-        }
+        hold?;
+        reset?;
 
         self.snapshot.consecutive_failures = 0;
         self.snapshot.last_error = None;
         self.pending_program_response = None;
         Ok(self.snapshot())
+    }
+
+    async fn write_realtime_byte(
+        &mut self,
+        command: RealtimeCommand,
+    ) -> Result<(), ControllerError> {
+        let timeout = self.config.command_timeout;
+        let result =
+            match tokio::time::timeout(timeout, self.transport.write(&[command.byte()])).await {
+                Ok(result) => result.map_err(ControllerError::from),
+                Err(_) => Err(ControllerError::CommandTimeout {
+                    timeout_ms: duration_ms(timeout),
+                }),
+            };
+        if let Err(error) = &result {
+            self.record_poll_failure(error);
+        }
+        result
     }
 
     fn finish_program_response(
@@ -892,6 +900,9 @@ impl<T: Transport> Controller<T> {
     async fn recover(&mut self) -> Result<ControllerSnapshot, ControllerError> {
         self.snapshot.connection = ConnectionState::Recovering;
         self.invalidate_machine_reference("Coordinates invalidated after transport reconnect");
+        self.pending_program_response = None;
+        self.snapshot.machine = MachineState::default();
+        self.snapshot.alarm = None;
         let _ = self.transport.disconnect().await;
 
         if let Err(error) = self.transport.connect().await {
@@ -1173,6 +1184,150 @@ mod tests {
             },
         );
         (controller, control)
+    }
+
+    struct StalledWriteTransport {
+        writes: Vec<Vec<u8>>,
+        stall_byte: u8,
+    }
+
+    type IoFuture<'a, T> =
+        std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, TransportError>> + Send + 'a>>;
+
+    impl Transport for StalledWriteTransport {
+        fn connect<'a, 'b>(&'a mut self) -> IoFuture<'b, ()>
+        where
+            'a: 'b,
+            Self: 'b,
+        {
+            Box::pin(async { Ok(()) })
+        }
+        fn disconnect<'a, 'b>(&'a mut self) -> IoFuture<'b, ()>
+        where
+            'a: 'b,
+            Self: 'b,
+        {
+            Box::pin(async { Ok(()) })
+        }
+        fn write<'a, 'd, 'b>(&'a mut self, data: &'d [u8]) -> IoFuture<'b, ()>
+        where
+            'a: 'b,
+            'd: 'b,
+            Self: 'b,
+        {
+            Box::pin(async move {
+                self.writes.push(data.to_vec());
+                if data == [self.stall_byte] {
+                    std::future::pending::<()>().await;
+                }
+                Ok(())
+            })
+        }
+        fn read_line<'a, 'b>(&'a mut self) -> IoFuture<'b, String>
+        where
+            'a: 'b,
+            Self: 'b,
+        {
+            Box::pin(std::future::pending())
+        }
+        fn is_connected(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn realtime_and_interleaved_writes_have_a_deadline() {
+        for byte in [b'!', b'?'] {
+            let mut controller = Controller::with_config(
+                StalledWriteTransport {
+                    writes: Vec::new(),
+                    stall_byte: byte,
+                },
+                ControllerConfig {
+                    command_timeout: Duration::from_millis(5),
+                    ..ControllerConfig::default()
+                },
+            );
+            controller.connect().await.unwrap();
+            let result = tokio::time::timeout(Duration::from_millis(200), async {
+                if byte == b'?' {
+                    controller.request_interleaved_status().await
+                } else {
+                    controller
+                        .send_realtime(RealtimeCommand::FeedHold)
+                        .await
+                        .map(|_| ())
+                }
+            })
+            .await
+            .expect("a stalled realtime write must release the actor");
+            assert!(matches!(
+                result,
+                Err(ControllerError::CommandTimeout { .. })
+            ));
+            assert_eq!(controller.snapshot().consecutive_failures, 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn abort_attempts_reset_after_hold_times_out_and_invalidates_reference() {
+        let mut controller = Controller::with_config(
+            StalledWriteTransport {
+                writes: Vec::new(),
+                stall_byte: b'!',
+            },
+            ControllerConfig {
+                command_timeout: Duration::from_millis(5),
+                ..ControllerConfig::default()
+            },
+        );
+        controller.connect().await.unwrap();
+        controller.mark_homing_completed();
+        let result = tokio::time::timeout(
+            Duration::from_millis(200),
+            controller.abort_program_stream(),
+        )
+        .await
+        .expect("abort must have a bounded write deadline");
+        assert!(matches!(
+            result,
+            Err(ControllerError::CommandTimeout { .. })
+        ));
+        assert_eq!(
+            controller.transport.writes,
+            [b"!".to_vec(), b"\x18".to_vec()]
+        );
+        assert_eq!(controller.snapshot().homing.state, HomingState::Invalidated);
+    }
+
+    #[tokio::test]
+    async fn successful_abort_invalidates_reference_before_the_reset_banner() {
+        let (mut controller, _) = test_controller();
+        controller.connect().await.unwrap();
+        controller.mark_homing_completed();
+        let snapshot = controller.abort_program_stream().await.unwrap();
+        assert_eq!(snapshot.homing.state, HomingState::Invalidated);
+    }
+
+    #[tokio::test]
+    async fn recovery_drops_sparse_status_and_pending_response_from_the_old_session() {
+        let (mut controller, control) = test_controller();
+        controller.connect().await.unwrap();
+        control.set_status("<Idle|MPos:10,20,30|WCO:1,2,3|Ov:80,50,90>");
+        controller.refresh_status().await.unwrap();
+        controller
+            .begin_homing(Duration::from_secs(30))
+            .await
+            .unwrap();
+        controller.snapshot.connection = ConnectionState::Recovering;
+        control.set_status("<Idle|MPos:0,0,0>");
+
+        let recovered = controller.lifecycle_tick().await.unwrap();
+
+        assert!(recovered.machine.work_coordinate_offset.is_none());
+        assert!(recovered.machine.work_position.is_none());
+        assert!(recovered.machine.overrides.is_none());
+        assert!(controller.pending_program_response.is_none());
     }
 
     #[tokio::test]

@@ -545,3 +545,121 @@ fn rejects_an_empty_excellon_layer_instead_of_silently_omitting_it() {
         Err(PcbError::EmptyLayer(name)) if name == "empty.drl"
     ));
 }
+
+fn single_drill_request(tool_id: &str) -> PcbJobRequest {
+    PcbJobRequest {
+        source_name: "drill.nc".into(),
+        board: PcbInspectRequest {
+            files: vec![source(
+                "drill.drl",
+                PcbLayerRole::Drill,
+                b"M48\nMETRIC,LZ,000.000\nT1C1.000\n%\nT1\nX001000Y001000\nM30\n",
+            )],
+            transform: PcbTransform::default(),
+        },
+        settings: drilling_settings("drill.drl::T1", tool_id, 1.0),
+    }
+}
+
+#[test]
+fn tool_comments_cannot_inject_motion_or_tool_changes() {
+    let mut tool = factory_presets()
+        .into_iter()
+        .find(|tool| tool.id == "preset-dreanique-sp1f-d1-0-l03")
+        .unwrap();
+    tool.name = "Tool\nG0 X999\r\nT9 M6".into();
+    let job = generate_pcb_job(single_drill_request(&tool.id), &[tool]).unwrap();
+    assert!(
+        !job.source
+            .lines()
+            .any(|line| line == "G0 X999" || line.starts_with("T9"))
+    );
+    assert_eq!(job.summary.tool_change_count, 0);
+}
+
+#[test]
+fn drilling_rejects_invalid_tool_values_and_excess_cutting_depth() {
+    let tool = factory_presets()
+        .into_iter()
+        .find(|tool| tool.id == "preset-dreanique-sp1f-d1-0-l03")
+        .unwrap();
+    for mutate in [
+        |t: &mut millo_tooling::CuttingTool| t.cutting_length_mm = 0.5,
+        |t: &mut millo_tooling::CuttingTool| t.cutting_length_mm = f64::NAN,
+        |t: &mut millo_tooling::CuttingTool| t.diameter_mm = f64::NAN,
+        |t: &mut millo_tooling::CuttingTool| t.plunge_mm_per_min = 0.0,
+    ] {
+        let mut invalid = tool.clone();
+        mutate(&mut invalid);
+        assert!(generate_pcb_job(single_drill_request(&invalid.id), &[invalid]).is_err());
+    }
+}
+
+#[test]
+fn outline_tabs_preserve_the_requested_bridge_width_after_cutter_sweep() {
+    let tool = factory_presets()
+        .into_iter()
+        .find(|tool| tool.id == "preset-dreanique-sp1f-d1-0-l03")
+        .unwrap();
+    let mut request = single_drill_request(&tool.id);
+    request.board = board();
+    request.settings.drilling.enabled = false;
+    request.settings.outline = PcbOutlineSettings {
+        enabled: true,
+        tool_id: tool.id.clone(),
+        depth_mm: 1.0,
+        depth_per_pass_mm: 1.0,
+        tab_count: 4,
+        tab_width_mm: 2.3,
+        tab_height_mm: 0.4,
+    };
+    let job = generate_pcb_job(request, std::slice::from_ref(&tool)).unwrap();
+    let raised_distance: f64 = job
+        .program
+        .toolpath
+        .iter()
+        .filter(|segment| {
+            segment.points.len() >= 2
+                && segment
+                    .points
+                    .iter()
+                    .all(|point| (point.z + 0.6).abs() < 1e-8)
+        })
+        .map(|segment| segment.distance_mm)
+        .sum();
+    let expected = 4.0 * (2.3 + tool.diameter_mm);
+    assert!(
+        (raised_distance - expected).abs() < 0.005,
+        "raised travel {raised_distance} must include cutter diameter: {expected}"
+    );
+}
+
+#[test]
+fn zero_length_slots_keep_the_milling_tools_depth_passes() {
+    let mut tool = factory_presets()
+        .into_iter()
+        .find(|tool| tool.id == "preset-dreanique-sp1f-d1-0-l03")
+        .unwrap();
+    tool.stepdown_mm = 0.3;
+    let mut request = single_drill_request(&tool.id);
+    request.board.files = vec![source(
+        "drill.drl",
+        PcbLayerRole::Drill,
+        b"M48\nMETRIC,LZ,000.000\nT1C1.000\n%\nT1\nX001000Y001000G85X001000Y001000\nM30\n",
+    )];
+    let job = generate_pcb_job(request, &[tool]).unwrap();
+    for depth in ["-0.3", "-0.6", "-0.9", "-1"] {
+        assert!(
+            job.source.contains(&format!("G1 Z{depth} F")),
+            "{}",
+            job.source
+        );
+    }
+    assert_eq!(
+        job.source
+            .lines()
+            .filter(|line| line.starts_with("G1 Z"))
+            .count(),
+        4
+    );
+}

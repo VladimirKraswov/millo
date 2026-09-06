@@ -22,6 +22,15 @@ const actions = {
 };
 
 describe("ProgramRunCard", () => {
+  it("locks interruption resolution while another sender action is pending", () => {
+    const markup = renderToStaticMarkup(
+      <ProgramRunCard {...actions} busy checkAction="none" checkControlsAvailable
+        checkRun={false} machineContextAvailable physicalActions={physicalSenderActionLayout("failed")}
+        programControlsAvailable programRun progressPercent={50} recoveryAvailable recoveryChecked
+        sender={{ ...previewFixtureCompletedSender, state: "failed" }} />,
+    );
+    expect(markup).toMatch(/class="is-terminal-action" disabled=""/);
+  });
   it("offers rerun and safe work-zero return after completed processing", () => {
     const markup = renderToStaticMarkup(
       <ProgramRunCard

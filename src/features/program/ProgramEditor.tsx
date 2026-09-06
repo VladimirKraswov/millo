@@ -85,6 +85,8 @@ export function ProgramEditor({
   );
   const [preview, setPreview] = useState<GcodeProgram>(document.program);
   const [previewSource, setPreviewSource] = useState(document.source);
+  const [previewBlockDelete, setPreviewBlockDelete] = useState(blockDelete);
+  const [previewGateway, setPreviewGateway] = useState(() => gateway);
   const [parseState, setParseState] = useState<ParseState>("ready");
   const [parseError, setParseError] = useState<string>();
   const [selectedSourceLine, setSelectedSourceLine] = useState(1);
@@ -101,7 +103,8 @@ export function ProgramEditor({
   const source = history.source;
   const dirty = source !== document.source;
   const currentRevisionReady =
-    parseState === "ready" && previewSource === source;
+    parseState === "ready" && previewSource === source &&
+    previewBlockDelete === blockDelete && previewGateway === gateway;
   const sourceLines = useMemo(() => source.split("\n"), [source]);
   const firstVisibleLine = Math.min(
     Math.max(0, sourceLines.length - 1),
@@ -126,8 +129,8 @@ export function ProgramEditor({
   }, []);
 
   useEffect(() => {
-    if (previewSource === source && parseState === "ready") return;
     const sequence = ++parseSequence.current;
+    if (currentRevisionReady) return;
     setParseState("parsing");
     setParseError(undefined);
     const timer = window.setTimeout(() => {
@@ -140,6 +143,8 @@ export function ProgramEditor({
           if (parseSequence.current !== sequence) return;
           setPreview(program);
           setPreviewSource(source);
+          setPreviewBlockDelete(blockDelete);
+          setPreviewGateway(gateway);
           setParseState("ready");
         })
         .catch((reason: unknown) => {
@@ -148,7 +153,10 @@ export function ProgramEditor({
           setParseError(formatParseError(reason));
         });
     }, PARSE_DELAY_MS);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      parseSequence.current += 1;
+    };
   }, [blockDelete, document.program.sourceName, gateway, source]);
 
   useEffect(() => {

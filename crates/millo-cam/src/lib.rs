@@ -180,6 +180,13 @@ pub fn generate_surfacing_job(
     if request.tool_id != tool.id || !tool.supports_surfacing() {
         return Err(SurfacingJobError::IncompatibleTool(tool.name.clone()));
     }
+    surfacing_range(tool.diameter_mm, 0.01, 500.0, "tool.diameterMm")?;
+    surfacing_range(tool.cutting_length_mm, 0.1, 1_000.0, "tool.cuttingLengthMm")?;
+    if request.settings.removal_mm > tool.cutting_length_mm {
+        return Err(SurfacingJobError::InvalidSetting(
+            "removalMm exceeds cutting length",
+        ));
+    }
     if request.settings.width_mm < tool.diameter_mm || request.settings.height_mm < tool.diameter_mm
     {
         return Err(SurfacingJobError::AreaSmallerThanTool);
@@ -999,9 +1006,17 @@ fn point_line_distance(point: MillPoint, start: MillPoint, end: MillPoint) -> f6
     if line_length <= f64::EPSILON {
         return distance(point, start);
     }
-    let area_twice =
-        ((end.x - start.x) * (start.y - point.y) - (start.x - point.x) * (end.y - start.y)).abs();
-    area_twice / line_length
+    // Distance to the finite chord also detects collinear curves that double back.
+    let dx = (end.x - start.x) / line_length;
+    let dy = (end.y - start.y) / line_length;
+    let projection = ((point.x - start.x) * dx + (point.y - start.y) * dy).clamp(0.0, line_length);
+    distance(
+        point,
+        MillPoint {
+            x: start.x + projection * dx,
+            y: start.y + projection * dy,
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1013,6 +1028,45 @@ mod tests {
 
     fn encoded(bytes: &[u8]) -> String {
         base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[test]
+    fn flattening_preserves_collinear_bezier_reversals() {
+        let start = MillPoint { x: 0.0, y: 0.0 };
+        let end = MillPoint { x: 1.0, y: 0.0 };
+        let mut quadratic = vec![start];
+        flatten_quadratic(
+            start,
+            MillPoint { x: 10.0, y: 0.0 },
+            end,
+            0.005,
+            0,
+            &mut quadratic,
+        )
+        .unwrap();
+        assert!(quadratic.iter().any(|point| point.x > 5.0));
+        let mut cubic = vec![start];
+        flatten_cubic(
+            start,
+            MillPoint { x: 10.0, y: 0.0 },
+            MillPoint { x: -10.0, y: 0.0 },
+            end,
+            0.005,
+            0,
+            &mut cubic,
+        )
+        .unwrap();
+        assert!(cubic.iter().any(|point| point.x > 2.0));
+        assert!(cubic.iter().any(|point| point.x < -2.0));
+    }
+
+    #[test]
+    fn surfacing_rejects_invalid_or_insufficient_cutting_length() {
+        for length in [f64::NAN, f64::INFINITY, 0.0, 0.01] {
+            let mut tool = surfacing_tool();
+            tool.cutting_length_mm = length;
+            assert!(generate_surfacing_job(surfacing_request(), &tool).is_err());
+        }
     }
 
     fn surfacing_tool() -> CuttingTool {
