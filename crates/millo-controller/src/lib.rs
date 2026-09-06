@@ -1237,7 +1237,7 @@ mod tests {
 
     #[tokio::test]
     async fn realtime_and_interleaved_writes_have_a_deadline() {
-        for byte in [b'!', b'?'] {
+        for byte in *b"!?" {
             let mut controller = Controller::with_config(
                 StalledWriteTransport {
                     writes: Vec::new(),
