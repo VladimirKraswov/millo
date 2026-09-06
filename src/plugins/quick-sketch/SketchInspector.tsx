@@ -9,6 +9,7 @@ import type {
 import { ToolSchematic } from "../../features/tool-library/ToolSchematic";
 import { SketchNumber } from "./SketchNumber";
 import { SketchPositionPanel } from "./SketchPositionPanel";
+import { resizeSketchGeometry } from "./sketchDimensionModel";
 import {
   changeOperation,
   compatibleTools,
@@ -48,6 +49,8 @@ export function SketchInspector({
   const op = shape.operation,
     geometry = shape.geometry;
   const tool = tools.find((t) => t.id === op.toolId);
+  const availableTools = compatibleTools(tools, op.kind);
+  const toolCompatible = tool && availableTools.some((t) => t.id === tool.id);
   const operation = (update: Partial<SketchOperation>) =>
     onChange({ ...shape, operation: { ...op, ...update } });
   const actualDepth = op.through
@@ -59,7 +62,7 @@ export function SketchInspector({
         <input
           aria-label="Название фигуры"
           value={shape.name}
-          maxLength={80}
+          maxLength={120}
           onChange={(e) => onChange({ ...shape, name: e.target.value })}
         />
         <button
@@ -115,11 +118,7 @@ export function SketchInspector({
                   onChange={(width) =>
                     onChange({
                       ...shape,
-                      geometry: {
-                        ...geometry,
-                        width,
-                        radius: Math.min(geometry.radius, width / 2),
-                      },
+                      geometry: resizeSketchGeometry(geometry, "x", width),
                     })
                   }
                 />
@@ -130,11 +129,7 @@ export function SketchInspector({
                   onChange={(height) =>
                     onChange({
                       ...shape,
-                      geometry: {
-                        ...geometry,
-                        height,
-                        radius: Math.min(geometry.radius, height / 2),
-                      },
+                      geometry: resizeSketchGeometry(geometry, "y", height),
                     })
                   }
                 />
@@ -154,7 +149,10 @@ export function SketchInspector({
                 min={0.1}
                 value={geometry.diameter}
                 onChange={(diameter) =>
-                  onChange({ ...shape, geometry: { ...geometry, diameter } })
+                  onChange({
+                    ...shape,
+                    geometry: resizeSketchGeometry(geometry, "x", diameter),
+                  })
                 }
               />
             )}
@@ -268,14 +266,19 @@ export function SketchInspector({
                   Инструмент отсутствует в библиотеке
                 </option>
               )}
-              {compatibleTools(tools, op.kind).map((t) => (
+              {tool && !toolCompatible && (
+                <option value={tool.id}>
+                  {tool.name} · не подходит для этой обработки
+                </option>
+              )}
+              {availableTools.map((t) => (
                 <option key={t.id} value={t.id}>
                   Ø{t.diameterMm} · {t.name}
                 </option>
               ))}
             </select>
           </label>
-          {tool && (
+          {toolCompatible && (
             <div className="sketch-tool">
               <ToolSchematic tool={tool} compact />
               <span>

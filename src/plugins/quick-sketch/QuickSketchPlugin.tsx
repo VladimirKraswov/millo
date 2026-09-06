@@ -19,8 +19,9 @@ import {
   Redo2,
   Ruler,
   Move,
-  LockKeyhole,
-  Link2,
+  Blend,
+  Maximize2,
+  Minimize2,
   ListChecks,
   Save,
   Square,
@@ -44,6 +45,8 @@ import { SketchCanvas } from "./SketchCanvas";
 import { SketchInspector } from "./SketchInspector";
 import { SketchStockPanel } from "./SketchStockPanel";
 import { SketchAlignmentPanel } from "./SketchAlignmentPanel";
+import { SketchProjectExplorer } from "./SketchProjectExplorer";
+import { applySketchDimension } from "./sketchDimensionModel";
 import {
   arrangeShapes,
   moveSketchShape,
@@ -53,7 +56,6 @@ import {
 import {
   createShape,
   emptySketch,
-  operationLabels,
   preferredTool,
   validateSketch,
   type DrawMode,
@@ -61,6 +63,8 @@ import {
 import { sketchHistory } from "./sketchHistory";
 import { decodeSketch, loadDraft, saveDraft } from "./sketchStorage";
 import "./sketch.css";
+import "./sketch-visuals.css";
+import "./sketch-explorer.css";
 
 interface Props {
   readonly jobs: PluginJobsCapability;
@@ -92,6 +96,12 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
   const [mode, setMode] = useState<DrawMode>("select");
   const [dragEnabled, setDragEnabled] = useState(false);
   const [showDimensions, setShowDimensions] = useState(true);
+  const [showOperations, setShowOperations] = useState(true);
+  const [expanded, setExpanded] = useState(false);
+  const [explorerOpen, setExplorerOpen] = useState(
+    () => window.matchMedia("(min-width: 1051px)").matches,
+  );
+  const [explorerEditing, setExplorerEditing] = useState(false);
   const [drawing, setDrawing] = useState(false);
   const [cancelDrawing, setCancelDrawing] = useState(0);
   const [grid, setGrid] = useState(1),
@@ -129,11 +139,14 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
       : undefined;
   const selected = doc.shapes.find((s) => s.id === selectedId);
   const validation = validateSketch(doc, library.tools);
+  const commit = (document: SketchJobRequest) => {
+    dispatch({ type: "edit", document });
+    setNotice(undefined);
+    setError(undefined);
+  };
   const edit = (document: SketchJobRequest) => {
     try {
-      dispatch({ type: "edit", document: resolveSketch(document) });
-      setNotice(undefined);
-      setError(undefined);
+      commit(resolveSketch(document));
     } catch (reason) {
       setError(String(reason).replace(/^Error:\s*/, ""));
     }
@@ -197,7 +210,7 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
     );
   };
   const generate = async () => {
-    if (busy || validation) return;
+    if (busy || validation || drawing || explorerEditing) return;
     setBusy("generate");
     setError(undefined);
     setNotice(undefined);
@@ -224,7 +237,7 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
     }
   };
   const save = async () => {
-    if (!job || busy) return;
+    if (!job || busy || drawing || explorerEditing) return;
     setBusy("save");
     setError(undefined);
     try {
@@ -238,7 +251,7 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
     }
   };
   const saveProject = async () => {
-    if (busy) return;
+    if (busy || drawing || explorerEditing) return;
     const snapshot = doc;
     setBusy("project");
     setError(undefined);
@@ -294,7 +307,7 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
     }
   };
   const launch = () => {
-    if (!job || busy) return;
+    if (!job || busy || drawing || explorerEditing) return;
     try {
       jobs.open(job);
       setOpen(false);
@@ -314,16 +327,26 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
       </button>
       {open &&
         createPortal(
-          <div className="sketch-backdrop">
+          <div className={`sketch-backdrop${expanded ? " is-expanded" : ""}`}>
             <DialogSurface
-              className="sketch-dialog"
+              className={`sketch-dialog${expanded ? " is-expanded" : ""}`}
               aria-labelledby="sketch-title"
               onDismiss={() =>
-                drawing ? setCancelDrawing((v) => v + 1) : setOpen(false)
+                drawing || explorerEditing
+                  ? setCancelDrawing((v) => v + 1)
+                  : expanded
+                    ? setExpanded(false)
+                    : setOpen(false)
               }
               onKeyDown={keyDown}
             >
-              <header className="sketch-header">
+              <header
+                className="sketch-header"
+                onDoubleClick={(e) => {
+                  if (!(e.target as Element).closest("input,button"))
+                    setExpanded((v) => !v);
+                }}
+              >
                 <div>
                   <span>2D CAD / CAM</span>
                   <h2 id="sketch-title">Чертёж и раскрой</h2>
@@ -336,6 +359,22 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                   maxLength={100}
                   onChange={(e) => edit({ ...doc, sourceName: e.target.value })}
                 />
+                <button
+                  type="button"
+                  title={
+                    expanded
+                      ? "Восстановить размер редактора"
+                      : "Развернуть редактор"
+                  }
+                  aria-label={
+                    expanded
+                      ? "Восстановить размер редактора"
+                      : "Развернуть редактор"
+                  }
+                  onClick={() => setExpanded((v) => !v)}
+                >
+                  {expanded ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                </button>
                 <button
                   title="Закрыть чертёж"
                   aria-label="Закрыть чертёж"
@@ -365,7 +404,7 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                   type="button"
                   title="Открыть проект"
                   aria-label="Открыть проект"
-                  disabled={Boolean(busy)}
+                  disabled={Boolean(busy) || drawing || explorerEditing}
                   onClick={() => projectInput.current?.click()}
                 >
                   <FolderOpen size={19} />
@@ -374,7 +413,7 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                   type="button"
                   title="Сохранить проект"
                   aria-label="Сохранить проект"
-                  disabled={Boolean(busy)}
+                  disabled={Boolean(busy) || drawing || explorerEditing}
                   onClick={() => void saveProject()}
                 >
                   <Save size={19} />
@@ -426,6 +465,15 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                   onClick={() => setShowDimensions((v) => !v)}
                 >
                   <Ruler size={19} />
+                </button>
+                <button
+                  type="button"
+                  title="Показать обработки и фрезы"
+                  aria-label="Показать обработки и фрезы"
+                  aria-pressed={showOperations}
+                  onClick={() => setShowOperations((v) => !v)}
+                >
+                  <Blend size={19} />
                 </button>
                 <span className="sketch-toolbar-divider" />
                 <button
@@ -503,13 +551,52 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                   </button>
                 </div>
               )}
-              <div className="sketch-body">
+              <div
+                className={`sketch-body${explorerOpen ? " explorer-open" : ""}`}
+              >
+                <SketchProjectExplorer
+                  shapes={doc.shapes}
+                  selection={selection}
+                  expanded={explorerOpen}
+                  cancelEditing={cancelDrawing}
+                  onEditingChange={setExplorerEditing}
+                  onToggle={() => setExplorerOpen((v) => !v)}
+                  onSelect={select}
+                  onRename={(id, name) =>
+                    edit({
+                      ...doc,
+                      shapes: doc.shapes.map((s) =>
+                        s.id === id ? { ...s, name } : s,
+                      ),
+                    })
+                  }
+                  onDelete={remove}
+                  onDuplicate={() => copies(1, 10, 10)}
+                  onLock={() => {
+                    const locked = !selectedShapes.every((s) => s.locked);
+                    edit({
+                      ...doc,
+                      shapes: doc.shapes.map((s) =>
+                        selection.includes(s.id) ? { ...s, locked } : s,
+                      ),
+                    });
+                  }}
+                />
                 <div className="sketch-workarea">
                   <SketchCanvas
                     document={doc}
                     selection={selection}
                     dragEnabled={dragEnabled && !multiSelect}
                     showDimensions={showDimensions}
+                    showOperations={showOperations}
+                    tools={library.tools}
+                    onDimensionEdit={(target, value, baseline) => {
+                      if (baseline !== current.current.doc)
+                        throw new Error(
+                          "Чертёж изменился. Отмените ввод и откройте размер снова",
+                        );
+                      commit(applySketchDimension(baseline, target, value));
+                    }}
                     mode={mode}
                     grid={grid}
                     resetView={resetView}
@@ -523,36 +610,6 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                       if (s) updateShape(moveSketchShape(s, p));
                     }}
                   />
-                  <div
-                    className="sketch-operations"
-                    aria-label="Фигуры и операции"
-                  >
-                    {doc.shapes.map((s) => (
-                      <button
-                        key={s.id}
-                        type="button"
-                        className={`is-${s.operation.kind}`}
-                        aria-pressed={selection.includes(s.id)}
-                        onClick={(e) =>
-                          select(s.id, e.shiftKey || e.metaKey || e.ctrlKey)
-                        }
-                      >
-                        <span>
-                          {s.locked && <LockKeyhole size={12} />}{" "}
-                          {(s.constraints?.x || s.constraints?.y) && (
-                            <Link2 size={12} />
-                          )}{" "}
-                          {s.name}
-                        </span>
-                        <small>
-                          {operationLabels[s.operation.kind]} ·{" "}
-                          {s.operation.through
-                            ? "насквозь"
-                            : `${s.operation.depthMm} мм`}
-                        </small>
-                      </button>
-                    ))}
-                  </div>
                 </div>
                 <aside className="sketch-sidebar">
                   <SketchStockPanel document={doc} onChange={edit} />
@@ -630,7 +687,7 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                 </span>
                 <button
                   type="button"
-                  disabled={!job || Boolean(busy)}
+                  disabled={!job || Boolean(busy) || drawing || explorerEditing}
                   onClick={() => void save()}
                 >
                   <Download size={16} />
@@ -638,7 +695,12 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                 </button>
                 <button
                   type="button"
-                  disabled={Boolean(validation) || Boolean(busy)}
+                  disabled={
+                    Boolean(validation) ||
+                    Boolean(busy) ||
+                    drawing ||
+                    explorerEditing
+                  }
                   onClick={() => void generate()}
                 >
                   <Ruler size={16} />
@@ -651,7 +713,7 @@ export function QuickSketchPlugin({ jobs, tools, initialOpen = false }: Props) {
                 <button
                   className="primary-action"
                   type="button"
-                  disabled={!job || Boolean(busy)}
+                  disabled={!job || Boolean(busy) || drawing || explorerEditing}
                   onClick={launch}
                 >
                   <FolderOpen size={16} />

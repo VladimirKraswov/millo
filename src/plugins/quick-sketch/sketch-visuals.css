@@ -1,0 +1,95 @@
+.sketch-pocket-hatch {
+  opacity: 0.5;
+}
+.sketch-cutter {
+  color: #edb56c;
+  opacity: 0.7;
+}
+.sketch-cutter.is-selected {
+  opacity: 1;
+}
+.sketch-cutter.is-pocket {
+  color: #8cc6ef;
+}
+.sketch-cutter.is-engrave {
+  color: #debae8;
+}
+.sketch-cutter.is-drill {
+  color: #f0d487;
+}
+.sketch-cutter.is-warning {
+  color: #f68f86;
+}
+.sketch-cutter circle {
+  fill: currentColor;
+  fill-opacity: 0.12;
+  stroke: currentColor;
+  stroke-width: 1.2px;
+}
+.sketch-cutter.is-selected circle {
+  stroke-width: 1.8px;
+}
+.sketch-cutter path,
+.sketch-cutter line {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1px;
+}
+.sketch-canvas-status .is-warning {
+  color: #f0b07e;
+  pointer-events: auto;
+}
+.sketch-dimension-label rect {
+  fill: transparent;
+  stroke: transparent;
+}
+.sketch-dimension-label.is-editable {
+  pointer-events: all;
+  cursor: text;
+}
+.sketch-dimension-label.is-editable:hover rect,
+.sketch-dimension-label.is-editable:focus-visible rect {
+  fill: #183d4b;
+  stroke: #81d8ed;
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+.sketch-dimension-label.is-editable:hover text,
+.sketch-dimension-label.is-editable:focus-visible text {
+  fill: #b9f2ff;
+  stroke: #183d4b;
+}
+.sketch-dimension-editor {
+  position: absolute;
+  z-index: 3;
+  width: 248px;
+  max-width: calc(100% - 16px);
+  padding: 10px;
+  border: 1px solid #81cce0;
+  border-radius: 4px;
+  background: #11252d;
+  box-shadow: 0 4px 14px #0008;
+}
+.sketch-dimension-editor label {
+  display: block;
+  color: #b4dce6;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+.sketch-dimension-editor > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sketch-dimension-editor button {
+  width: 30px;
+  padding: 4px;
+  flex-shrink: 0;
+}
+.sketch-dimension-editor [role="alert"] {
+  color: #ffb4ad;
+  font-size: 11px;
+  line-height: 1.4;
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+}

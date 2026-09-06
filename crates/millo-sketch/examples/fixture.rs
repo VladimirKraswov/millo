@@ -2,7 +2,16 @@ use std::io::{self, Read};
 
 // Test adapter: no controller, transport, or filesystem access.
 fn main() {
-    let tools = millo_tooling::factory_presets();
+    let mut tools = millo_tooling::factory_presets();
+    // A user-added drill fixture, not a new factory preset in the application.
+    let mut drill = tools[0].clone();
+    drill.id = "test-drill-08".into();
+    drill.name = "Сверло 0,8 мм".into();
+    drill.kind = millo_tooling::ToolKind::Drill;
+    drill.diameter_mm = 0.8;
+    drill.cutting_length_mm = 8.0;
+    drill.factory_preset = false;
+    tools.push(drill);
     if std::env::args().nth(1).as_deref() == Some("tools") {
         println!("{}", serde_json::to_string(&tools).unwrap());
         return;

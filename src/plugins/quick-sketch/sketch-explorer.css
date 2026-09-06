@@ -1,0 +1,157 @@
+.sketch-body {
+  position: relative;
+  grid-template-columns: 44px minmax(0, 1fr) 340px;
+}
+.sketch-body.explorer-open {
+  grid-template-columns: 210px minmax(0, 1fr) 340px;
+}
+.sketch-explorer {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: #101a1e;
+  border-right: 1px solid #2d3d44;
+  overflow: hidden;
+}
+.sketch-explorer > header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px;
+  height: 44px;
+  flex-shrink: 0;
+}
+.sketch-explorer > header button {
+  width: 32px;
+  padding: 5px;
+  flex-shrink: 0;
+}
+.sketch-explorer > header strong {
+  font-size: 12px;
+}
+.sketch-explorer > header span {
+  color: #8fa6ae;
+  font-size: 11px;
+  margin-left: auto;
+  margin-right: 8px;
+}
+.sketch-explorer:not(.is-expanded) > header > :not(button) {
+  display: none;
+}
+.sketch-explorer-actions {
+  display: flex;
+  justify-content: space-between;
+  padding: 0 8px 7px;
+  border-bottom: 1px solid #2d3d44;
+  flex-shrink: 0;
+}
+.sketch-explorer-actions button {
+  width: 34px;
+  padding: 5px;
+}
+.sketch-project-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.sketch-project-item {
+  border-bottom: 1px solid #203037;
+}
+.sketch-project-item .sketch-shape-select {
+  width: 100%;
+  height: 54px;
+  padding: 7px 10px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  justify-content: flex-start;
+  background: transparent;
+  text-align: left;
+  gap: 8px;
+}
+.sketch-project-item .sketch-shape-select[aria-pressed="true"] {
+  border-left-color: #7bd2b3;
+}
+.sketch-shape-select > span {
+  flex: 1;
+  min-width: 0;
+}
+.sketch-shape-select strong,
+.sketch-shape-select small {
+  display: block;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+.sketch-shape-select strong {
+  font-size: 12px;
+  font-weight: 550;
+}
+.sketch-shape-select small {
+  font-size: 10px;
+  color: #a0b5bc;
+  margin-top: 4px;
+}
+.sketch-shape-select > i {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #9ebdc4;
+}
+.sketch-project-item.is-pocket .sketch-shape-select > svg {
+  color: #8cc6ef;
+}
+.sketch-project-item.is-drill .sketch-shape-select > svg {
+  color: #f0d487;
+}
+.sketch-project-item.is-engrave .sketch-shape-select > svg {
+  color: #debae8;
+}
+.sketch-explorer-empty {
+  color: #8fa6ae;
+  padding: 4px 12px;
+  font-size: 12px;
+}
+.sketch-rename {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 8px 5px;
+  min-height: 54px;
+}
+.sketch-rename button {
+  width: 25px;
+  padding: 2px;
+  flex-shrink: 0;
+}
+@media (min-width: 701px) and (max-width: 1050px) {
+  .sketch-body,
+  .sketch-body.explorer-open {
+    grid-template-columns: 44px minmax(0, 1fr) 300px;
+  }
+  .sketch-explorer.is-expanded {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 210px;
+    z-index: 5;
+    box-shadow: 5px 0 12px #0005;
+  }
+  .sketch-body.explorer-open .sketch-workarea {
+    grid-column: 2;
+  }
+}
+@media (max-width: 700px) {
+  .sketch-explorer {
+    border-right: 0;
+    border-bottom: 1px solid #2d3d44;
+  }
+  .sketch-explorer:not(.is-expanded) > header > :not(button) {
+    display: block;
+  }
+  .sketch-project-list {
+    max-height: 180px;
+  }
+}

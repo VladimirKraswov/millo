@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useId,
   useLayoutEffect,
   useRef,
   useState,
@@ -20,12 +21,22 @@ import {
   resolveSketch,
 } from "./sketchConstraints";
 import { SketchDimensions } from "./SketchDimensions";
+import {
+  SketchDimensionEditor,
+  type SketchDimensionEditorState,
+} from "./SketchDimensionEditor";
+import type { SketchDimensionTarget } from "./sketchDimensionModel";
+import { SketchOperationOverlay } from "./SketchOperationOverlay";
+import type { CuttingTool } from "../../shared/tooling";
+import { sketchCutterVisual } from "./sketchOperationVisual";
 
 interface Props {
   readonly document: SketchJobRequest;
   readonly selection: readonly string[];
   readonly dragEnabled: boolean;
   readonly showDimensions: boolean;
+  readonly showOperations: boolean;
+  readonly tools: readonly CuttingTool[];
   readonly mode: DrawMode;
   readonly grid: number;
   readonly resetView: number;
@@ -35,6 +46,11 @@ interface Props {
   readonly onSelect: (id?: string, additive?: boolean) => void;
   readonly onMove: (id: string, point: SketchPoint) => void;
   readonly onCreate: (geometry: SketchGeometry, point: SketchPoint) => void;
+  readonly onDimensionEdit: (
+    target: SketchDimensionTarget,
+    value: number,
+    baseline: SketchJobRequest,
+  ) => void;
 }
 type Gesture = {
   readonly start: SketchPoint;
@@ -49,6 +65,8 @@ export function SketchCanvas({
   selection,
   dragEnabled,
   showDimensions,
+  showOperations,
+  tools,
   mode,
   grid,
   resetView,
@@ -58,9 +76,21 @@ export function SketchCanvas({
   onSelect,
   onMove,
   onCreate,
+  onDimensionEdit,
 }: Props) {
   const selectedId = selection[selection.length - 1];
   const svg = useRef<SVGSVGElement>(null);
+  const wrap = useRef<HTMLDivElement>(null);
+  const hatchId = `sketch-pocket-${useId().replaceAll(":", "")}`;
+  const [editor, setEditor] = useState<
+    SketchDimensionEditorState & { baseline: SketchJobRequest }
+  >();
+  const editorRef = useRef(editor);
+  editorRef.current = editor;
+  const closeEditor = () => {
+    setEditor(undefined);
+    svg.current?.focus({ preventScroll: true });
+  };
   const [viewport, setViewport] = useState({ width: 800, height: 500 });
   useLayoutEffect(() => {
     const element = svg.current;
@@ -83,13 +113,15 @@ export function SketchCanvas({
   const [gesture, setGesture] = useState<Gesture>();
   const [polygon, setPolygon] = useState<SketchPoint[]>([]);
   const [cursor, setCursor] = useState<SketchPoint>();
-  const drawing = polygon.length > 0 || Boolean(gesture);
+  const drawing = polygon.length > 0 || Boolean(gesture) || Boolean(editor);
   useLayoutEffect(() => {
     onDrawingChange(drawing);
+    return () => onDrawingChange(false);
   }, [drawing, onDrawingChange]);
   useEffect(() => {
     setPolygon([]);
     setGesture(undefined);
+    if (editorRef.current) closeEditor();
   }, [cancelDrawing]);
   useEffect(() => {
     setView({
@@ -114,6 +146,7 @@ export function SketchCanvas({
     if (!element) return;
     const zoom = (event: WheelEvent) => {
       event.preventDefault();
+      if (editorRef.current) return;
       const p = coordinates(event.clientX, event.clientY);
       const scale = event.deltaY > 0 ? 1.12 : 1 / 1.12;
       setView((v) => {
@@ -150,6 +183,7 @@ export function SketchCanvas({
     setPolygon([]);
   };
   const start = (event: PointerEvent<SVGSVGElement>) => {
+    if (editorRef.current) return;
     if (event.button !== 0 && event.button !== 1) return;
     event.preventDefault();
     svg.current?.focus();
@@ -265,8 +299,21 @@ export function SketchCanvas({
     grid || 1,
     10 ** Math.ceil(Math.log10(view.width / 40)),
   );
+  const unit =
+    3.5 /
+    Math.max(
+      0.01,
+      Math.min(viewport.width / view.width, viewport.height / view.height),
+    );
+  const cutter =
+    selected &&
+    sketchCutterVisual(
+      selected,
+      doc.stock,
+      tools.find((t) => t.id === selected.operation.toolId),
+    );
   return (
-    <div className="sketch-canvas-wrap">
+    <div className="sketch-canvas-wrap" ref={wrap}>
       {generated && (
         <div className="sketch-legend">
           <span>Траектория</span>
@@ -298,6 +345,20 @@ export function SketchCanvas({
         }}
       >
         <defs>
+          <pattern
+            id={hatchId}
+            width={unit * 4}
+            height={unit * 4}
+            patternUnits="userSpaceOnUse"
+          >
+            <path
+              d={`M ${-unit} ${unit} L ${unit} ${-unit} M 0 ${unit * 4} L ${unit * 4} 0 M ${unit * 3} ${unit * 5} L ${unit * 5} ${unit * 3}`}
+              fill="none"
+              stroke="#80b7d2"
+              strokeWidth="1"
+              vectorEffect="non-scaling-stroke"
+            />
+          </pattern>
           <pattern
             id="sketch-grid"
             width={minorGrid}
@@ -350,6 +411,14 @@ export function SketchCanvas({
                   points={svgPoints(points)}
                   vectorEffect="non-scaling-stroke"
                 />
+                {showOperations && shape.operation.kind === "pocket" && (
+                  <polygon
+                    className="sketch-pocket-hatch"
+                    points={svgPoints(points)}
+                    style={{ fill: `url(#${hatchId})`, stroke: "none" }}
+                    pointerEvents="none"
+                  />
+                )}
                 <polygon
                   className="sketch-hit-outline"
                   points={svgPoints(points)}
@@ -369,6 +438,14 @@ export function SketchCanvas({
               </g>
             );
           })}
+        {showOperations && (
+          <SketchOperationOverlay
+            document={displayDoc}
+            tools={tools}
+            selection={selection}
+            unit={unit}
+          />
+        )}
         {generated?.summary.paths.map((path, i) => (
           <polyline
             key={i}
@@ -391,16 +468,26 @@ export function SketchCanvas({
           <SketchDimensions
             document={displayDoc}
             selection={selection}
-            unit={
-              3.5 /
-              Math.max(
-                0.01,
-                Math.min(
-                  viewport.width / view.width,
-                  viewport.height / view.height,
+            unit={unit}
+            onEdit={(edit, bounds) => {
+              const box = wrap.current?.getBoundingClientRect();
+              if (!box) return;
+              setEditor({
+                ...edit,
+                baseline: doc,
+                left: Math.max(
+                  8,
+                  Math.min(
+                    box.width - 256,
+                    bounds.x + bounds.width / 2 - box.x - 124,
+                  ),
                 ),
-              )
-            }
+                top: Math.max(
+                  8,
+                  Math.min(box.height - 155, bounds.bottom - box.y + 8),
+                ),
+              });
+            }}
           />
         )}
         {gesture && mode === "rectangle" && (
@@ -449,13 +536,35 @@ export function SketchCanvas({
           </text>
         </g>
       </svg>
+      {editor && (
+        <SketchDimensionEditor
+          key={`${editor.target.shapeId}-${editor.target.kind}-${editor.target.axis}`}
+          edit={{
+            ...editor,
+            left: Math.max(8, Math.min(editor.left, viewport.width - 256)),
+            top: Math.max(8, Math.min(editor.top, viewport.height - 155)),
+          }}
+          onCancel={closeEditor}
+          onCommit={(value) => {
+            onDimensionEdit(editor.target, value, editor.baseline);
+            closeEditor();
+          }}
+        />
+      )}
       <div className="sketch-canvas-status">
         <span>
           {cursor
             ? `X ${cursor.x.toFixed(2)} · Y ${cursor.y.toFixed(2)}`
             : "X0 Y0 · левый нижний угол"}
         </span>
-        <span>{selected?.name ?? `${doc.shapes.length} фигур`}</span>
+        <span
+          title={cutter?.warning}
+          className={cutter?.warning ? "is-warning" : undefined}
+        >
+          {selected
+            ? `${selected.name}${showOperations && cutter ? (cutter.warning ? ` · ${cutter.warning}` : ` · фреза Ø${Number(cutter.diameterMm?.toFixed(3))} мм`) : ""}`
+            : `${doc.shapes.length} фигур`}
+        </span>
       </div>
       {polygon.length > 0 && (
         <div className="sketch-polygon-actions">
